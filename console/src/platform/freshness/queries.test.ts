@@ -12,8 +12,10 @@ import { createStore } from "jotai";
 import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MzDataType } from "~/api/materialize/types";
 import {
   buildColumns,
+  buildSqlQueryHandlerV2,
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
@@ -27,9 +29,11 @@ import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
 
 import { FreshnessScope } from "./constants";
 import {
+  freshnessQueryKeys,
   inFreshnessScope,
   useFreshnessHydration,
   useLatestLag,
+  useObjectLagPercentiles,
 } from "./queries";
 
 const objects: FreshnessObject[] = [
@@ -68,12 +72,13 @@ describe("freshness queries", () => {
       () => {
         useClusterFreshness({ lookbackMs: 3_600_000, objects });
         useLatestLag(["u1"]);
+        useObjectLagPercentiles({ objectIds: ["u1"], lookbackMs: 3_600_000 });
         useFreshnessHydration(["u1"]);
       },
       { wrapper: ProviderWrapper },
     );
 
-    await waitFor(() => expect(pending).toHaveLength(3));
+    await waitFor(() => expect(pending).toHaveLength(4));
   });
 
   it("asks only for the series when only the graph is shown", async () => {
@@ -142,6 +147,60 @@ describe("freshness queries", () => {
       await openPage();
       expect(requests).toBe(1);
     });
+  });
+});
+
+describe("useObjectLagPercentiles", () => {
+  it("passes a NULL lag through and leaves out an object with no readings", async () => {
+    const params = { objectIds: ["u1", "u2", "u3"], lookbackMs: 3_600_000 };
+    const interval = { type_oid: MzDataType.interval };
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: freshnessQueryKeys.objectLagPercentiles(params),
+        results: mapKyselyToTabular({
+          columns: buildColumns([
+            { name: "peak", ...interval },
+            { name: "p90", ...interval },
+            { name: "p99", ...interval },
+            { name: "p99_9", ...interval },
+          ]),
+          rows: [
+            {
+              objectId: "u1",
+              peak: "00:00:09",
+              p90: "00:00:00.43",
+              p99: "00:00:09",
+              p99_9: "00:00:09",
+            },
+            {
+              objectId: "u2",
+              peak: null,
+              p90: "00:00:00.4",
+              p99: null,
+              p99_9: null,
+            },
+          ],
+        }),
+      }),
+    );
+
+    const ProviderWrapper = await createProviderWrapper();
+    const { result } = renderHook(() => useObjectLagPercentiles(params), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual(
+        new Map([
+          ["u1", { peak: 9_000, p90: 430, p99: 9_000, p99_9: 9_000 }],
+          [
+            "u2",
+            // Unreadable readings arrive as null. `computeStats` marks them.
+            { peak: null, p90: 400, p99: null, p99_9: null },
+          ],
+        ]),
+      ),
+    );
   });
 });
 

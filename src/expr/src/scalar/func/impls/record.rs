@@ -36,7 +36,7 @@ pub struct CastRecordToString {
 #[sqlfunc(
     CastRecordToString,
     sqlname = "recordtostr",
-    preserves_uniqueness = true
+    preserves_uniqueness = super::text_preserves_uniqueness(&self.ty)
 )]
 fn cast_record_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
     let mut buf = String::new();

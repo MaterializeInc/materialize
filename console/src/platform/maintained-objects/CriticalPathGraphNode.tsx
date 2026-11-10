@@ -25,6 +25,13 @@ import { formatIntervalShort } from "~/utils/format";
 import { NodeKind, RenderableNode } from "./criticalPathRenderable";
 import { useJourneyLinkState } from "./useJourneyLinkState";
 
+/** Node types tagged by name, so ingestion reads apart from compute. */
+const INGESTION_TYPES: ReadonlySet<string> = new Set([
+  "source",
+  "subsource",
+  "table",
+]);
+
 const useNodeColors = (node: RenderableNode) => {
   const { colors } = useTheme<MaterializeTheme>();
   // Soft mint / dark forest — matches the design's "healthy" tint, less
@@ -103,7 +110,7 @@ export const CriticalPathGraphNode = ({
   const showPeakBadge = node.peakLag !== null && peakMs > lagMs * 1.05;
 
   const journeyLinkState = useJourneyLinkState(pageObjectId);
-  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
+  const objectLinkTarget = `../${node.id}`;
 
   return (
     <Box
@@ -185,7 +192,7 @@ export const CriticalPathGraphNode = ({
             </Tooltip>
           </>
         )}
-        {node.objectType === "source" && (
+        {node.objectType && INGESTION_TYPES.has(node.objectType) && (
           <>
             {" · "}
             <Box
@@ -197,7 +204,7 @@ export const CriticalPathGraphNode = ({
               borderRadius="sm"
               fontSize="xs"
             >
-              source
+              {node.objectType}
             </Box>
           </>
         )}

@@ -9,7 +9,7 @@
 
 import React from "react";
 
-import { trackSignUpInHubspotActions } from "~/analytics/hubspot";
+import { buildFronteggEvents } from "~/components/fronteggEvents";
 import LoadingScreen from "~/components/LoadingScreen";
 import { RedirectUrlSanitizer } from "~/components/RedirectUrlSanitizer";
 import { CloudAppConfig } from "~/config/AppConfig";
@@ -20,9 +20,11 @@ import {
 } from "~/external-library-wrappers/frontegg";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { fronteggAuthPageBackground, getFronteggTheme } from "~/theme";
+import { getAllowedRedirectOrigins } from "~/utils/redirectUrl";
 
 const buildFronteggProviderProps = (
   appConfig: Readonly<CloudAppConfig>,
+  allowedRedirectOrigins: string[],
 ): FronteggProviderProps => {
   return {
     localizations: {
@@ -35,10 +37,7 @@ const buildFronteggProviderProps = (
       },
     },
     contextOptions: { baseUrl: appConfig.fronteggUrl ?? "" },
-    events: {
-      signUpComplete: trackSignUpInHubspotActions.signUpComplete,
-      userVerified: trackSignUpInHubspotActions.userVerified,
-    },
+    events: buildFronteggEvents(allowedRedirectOrigins),
     backgroundImage: fronteggAuthPageBackground,
     themeOptions: getFronteggTheme({
       requiresExternalRegistration: appConfig.requiresExternalRegistration,
@@ -51,6 +50,8 @@ const buildFronteggProviderProps = (
       },
       keepSessionAlive: true,
       enforceRedirectToSameSite: true,
+      // Lets sign-in from the marketing site return to the page it started on.
+      allowedRedirectOrigins,
     },
     customLoader: () => <LoadingScreen />,
   };
@@ -60,12 +61,23 @@ export const FronteggProviderWrapper = ({
   children,
 }: React.PropsWithChildren) => {
   const appConfig = useAppConfig();
+  const currentStack =
+    appConfig.mode === "cloud" ? appConfig.currentStack : undefined;
+  // One stable array for both Frontegg and the sanitizer, so the sanitizer's
+  // effect doesn't rerun on every render.
+  const allowedRedirectOrigins = React.useMemo(
+    () => (currentStack ? getAllowedRedirectOrigins(currentStack) : []),
+    [currentStack],
+  );
   if (appConfig.mode === "self-managed" || appConfig.isImpersonating) {
     return children;
   }
-  const fronteggProviderProps = buildFronteggProviderProps(appConfig);
+  const fronteggProviderProps = buildFronteggProviderProps(
+    appConfig,
+    allowedRedirectOrigins,
+  );
   return (
-    <RedirectUrlSanitizer>
+    <RedirectUrlSanitizer allowedOrigins={allowedRedirectOrigins}>
       <FronteggProvider {...fronteggProviderProps}>{children}</FronteggProvider>
     </RedirectUrlSanitizer>
   );

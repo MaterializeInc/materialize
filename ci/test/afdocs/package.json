@@ -3,6 +3,6 @@
   "private": true,
   "description": "Pins afdocs and its dependency tree for ci/test/afdocs-report.py. Install with: npm ci --ignore-scripts --prefix ci/test/afdocs",
   "dependencies": {
-    "afdocs": "0.22.2"
+    "afdocs": "0.23.0"
   }
 }

@@ -16,7 +16,3 @@ apis:
     root: ../../cloud/doc/api/internal-api.yml
     x-openapi-ts:
       output: ./src/api/schemas/internal-api.ts
-  region:
-    root: ../../cloud/doc/api/region-api.yml
-    x-openapi-ts:
-      output: ./src/api/schemas/region-api.ts

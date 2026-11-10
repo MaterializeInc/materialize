@@ -35,6 +35,7 @@ azure_storage_blob.workspace = true
 azure_core.workspace = true
 base64.workspace = true
 bytes.workspace = true
+crc32c.workspace = true
 deadpool-postgres.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true

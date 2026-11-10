@@ -29,7 +29,6 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
@@ -47,7 +46,7 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{AdapterNotice, TimestampContext};
+use crate::{AdapterError, AdapterNotice};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -86,6 +85,20 @@ impl Coordinator {
                 {
                     self.message_controller(m).boxed_local().await
                 }
+            }
+            Message::SourceStatementReady {
+                pending,
+                response,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_source_statement_ready(pending, Some(response))
+                    .boxed_local()
+                    .await;
+            }
+            Message::DdlCommandsReady { pending, otel_ctx } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_ddl_commit(pending).boxed_local().await;
             }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
@@ -846,60 +859,24 @@ impl Coordinator {
         };
 
         let plan = match purified_statement {
-            PurifiedStatement::PurifiedCreateSource {
-                create_progress_subsource_stmt,
-                create_source_stmt,
-                subsources,
-                available_source_references,
-            } => self
-                .plan_purified_create_source(
-                    &ctx,
-                    params,
-                    create_progress_subsource_stmt,
-                    create_source_stmt,
-                    subsources,
-                    available_source_references,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                source_name,
-                options,
-                subsources,
-            } => self
-                .plan_purified_alter_source_add_subsource(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    options,
-                    subsources,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
-                source_name,
-                available_source_references,
-            } => self
-                .plan_purified_alter_source_refresh_references(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    available_source_references,
-                )
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
+            PurifiedStatement::PurifiedCreateSource { .. }
+            | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. }
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. } => {
+                let msg = "source preparation must execute as a catalog command";
+                soft_panic_or_log!("{msg}");
+                Err(AdapterError::Internal(msg.into()))
+            }
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)
-            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
+            | PurifiedStatement::PurifiedCreateSink(..)) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
                     }
-                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
-                        Statement::CreateTableFromSource(stmt)
-                    }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
+                    | PurifiedStatement::PurifiedCreateTableFromSource { .. }
                     | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
                     | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
@@ -1154,28 +1131,7 @@ impl Coordinator {
         let mut cached_oracle_ts = BTreeMap::new();
 
         for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
-            if let TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts,
-                oracle_ts,
-            } = read_txn.timestamp_context()
-            {
-                let oracle_ts = match oracle_ts {
-                    Some(oracle_ts) => oracle_ts,
-                    None => {
-                        // There was no oracle timestamp, so no need to delay.
-                        ready_txns.push(read_txn);
-                        continue;
-                    }
-                };
-
-                if chosen_ts <= oracle_ts {
-                    // Chosen ts was already <= the oracle ts, so we're good
-                    // to go!
-                    ready_txns.push(read_txn);
-                    continue;
-                }
-
+            if let Some((timeline, chosen_ts)) = read_txn.timestamp_to_linearize() {
                 // See what the oracle timestamp is now and delay when needed.
                 let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
                 let current_oracle_ts = match current_oracle_ts {
@@ -1213,21 +1169,7 @@ impl Coordinator {
 
             let now = Instant::now();
             for ready_txn in ready_txns {
-                let span = tracing::debug_span!("retire_read_results");
-                ready_txn.otel_ctx.attach_as_parent_to(&span);
-                let _entered = span.enter();
-                self.metrics
-                    .linearize_message_seconds
-                    .with_label_values(&[
-                        "read",
-                        if ready_txn.num_requeues == 0 {
-                            "true"
-                        } else {
-                            "false"
-                        },
-                    ])
-                    .observe((now - ready_txn.created).as_secs_f64());
-                ready_txn.finish();
+                ready_txn.finish_with_metrics(&self.metrics, now);
             }
         }
 

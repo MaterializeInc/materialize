@@ -292,14 +292,20 @@ fn render_simple_generator<'scope>(
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
+    // Only the active worker reports health and offset statistics, because
+    // offset statistics are summed across workers. It is the generator's
+    // primary worker, whose share has every progress event.
     let is_active_worker = config.responsible_for(());
+    let worker_count = config.worker_count;
+    let generator_worker_index =
+        (config.worker_id + worker_count - config.responsible_worker(())) % worker_count;
     let source_statistics = config.statistics.clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
 
             // We only need this until we reported ourselves as Running.
-            let mut health_cap = Some(health_cap);
+            let mut health_cap = is_active_worker.then_some(health_cap);
 
             if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -307,7 +313,6 @@ fn render_simple_generator<'scope>(
                     stats.set_offset_known(0);
                     stats.set_offset_committed(0);
                 }
-                return;
             }
 
             let resume_upper = Antichain::from_iter(
@@ -341,7 +346,13 @@ fn render_simple_generator<'scope>(
             let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
             let mut tick_interval = interval_at(start_instant, tick);
 
-            let mut rows = generator.by_seed(now_fn, None, resume_offset);
+            let mut rows = generator.by_seed_for_worker(
+                now_fn,
+                None,
+                resume_offset,
+                generator_worker_index,
+                worker_count,
+            );
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
@@ -454,7 +465,9 @@ fn render_simple_generator<'scope>(
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
                             for (id, offset_committed) in &offsets_committed {
-                                if let Some(stats) = source_statistics.get(id) {
+                                if let Some(stats) =
+                                    source_statistics.get(id).filter(|_| is_active_worker)
+                                {
                                     stats.set_offset_committed(*offset_committed);
                                     // technically we could have _known_ a larger offset
                                     // than the one that has been committed, but we can

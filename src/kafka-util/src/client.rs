@@ -222,11 +222,12 @@ impl FromStr for MzKafkaError {
             || s.contains("Connection refused")
         {
             Ok(Self::BrokerTransportFailure)
-        } else if Regex::new(r"(\d+)/\1 brokers are down")
+        } else if Regex::new(r"\d+/\d+ brokers are down")
             .unwrap()
             .is_match(s)
             .unwrap_or_default()
         {
+            // The counts can differ ("0/2"): a re-bootstrap resets the broker table first.
             Ok(Self::AllBrokersDown)
         } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
             Ok(Self::UnknownTopicOrPartition)
@@ -1203,6 +1204,19 @@ mod tests {
             .unwrap();
         cert.sign(&key, MessageDigest::sha256()).unwrap();
         String::from_utf8(cert.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    fn all_brokers_down_parses_regardless_of_counts() {
+        for msg in ["1/1 brokers are down", "0/2 brokers are down"] {
+            assert!(
+                matches!(
+                    MzKafkaError::from_str(msg),
+                    Ok(MzKafkaError::AllBrokersDown)
+                ),
+                "{msg}"
+            );
+        }
     }
 
     #[mz_ore::test]

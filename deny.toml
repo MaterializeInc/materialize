@@ -17,14 +17,15 @@ multiple-versions = "deny"
 # dependencies.
 
 skip = [
-    # Materialize uses tower-http 0.7.1. kube-client and reqwest still require
+    # Materialize uses tower-http 0.7.1. reqwest still requires
     # 0.6, which currently resolves to 0.6.11. Temporarily exempt that exact
     # version from duplicate checks. Remove this exception once those
     # dependencies no longer bring in tower-http 0.6.11.
     { name = "tower-http", version = "=0.6.11" },
-    # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
-    # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
-    { name = "serde-saphyr", version = "=0.0.29" },
+    # Materialize uses lru 0.19. aws-sdk-s3 (through 1.155.0), launchdarkly-server-sdk
+    # (through 3.3.2), and mysql_async (through 0.37.1) still require ^0.18.2.
+    # Remove this exception once those crates release with lru 0.19.
+    { name = "lru", version = "=0.18.5" },
 
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
@@ -33,7 +34,7 @@ skip = [
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on, so major versions linger for years. We are on v3;
     # roughly 60 transitive dependencies still pull v2, among them `prost-build`,
-    # `tonic-build`, `kube-derive`, `zerocopy-derive`, and `tracing-attributes`.
+    # `tonic-build`, `zerocopy-derive`, and `tracing-attributes`.
     # A few stragglers still pull v1.
     { name = "syn", version = "1.0.107" },
     { name = "syn", version = "2.0.119" },
@@ -41,12 +42,8 @@ skip = [
     # v2-based release back until it moves to `syn` v3.
     { name = "prettyplease", version = "0.2.37" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
-    { name = "ordered-float", version = "2.10.1" },
+    { name = "ordered-float", version = "3.9.2" },
     { name = "ordered-float", version = "4.6.0" },
-    # Will require updating many crates
-    { name = "indexmap", version = "1.9.1" },
-    # Required by indexmap 1.9.1, which is depended on by many things
-    { name = "hashbrown", version = "0.12.3" },
     { name = "hashbrown", version = "0.14.5" },
     # Required by hashbrown
     { name = "foldhash", version = "0.1.5" },
@@ -72,13 +69,12 @@ skip = [
     { name = "memmap2", version = "0.5.4" },
 
     { name = "getrandom", version = "0.2.10" },
-    { name = "rand", version = "0.8.5" },
+    { name = "rand", version = "0.8.6" },
     { name = "rand_chacha", version = "0.3.0" },
     { name = "rand_core", version = "0.6.2" },
     # Used by reqwest
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
-    { name = "unicode-width", version = "0.1.10" },
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
     { name = "num_enum_derive", version = "0.5.11" },
@@ -93,15 +89,13 @@ skip = [
     { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # tokio-tungstenite still pulls 0.29.
-    { name = "tungstenite", version = "0.29.0" },
-    # libduckdb-sys still pulls 6.
-    { name = "zip", version = "6.0.0" },
+    # duckdb pins comfy-table to 7.1 for its MSRV, which still pulls 0.28.
+    { name = "crossterm", version = "0.28.1" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
     { name = "asyncband", version = "0.6.7" },
-    # rand 0.9 is still used by apache-avro, governor, iceberg, k8s-controller,
+    # rand 0.9 is still used by apache-avro, governor, iceberg,
     # launchdarkly-server-sdk, mysql_async, opentelemetry_sdk, proptest,
     # rand_distr, retry-policies, tokio-postgres, tower-sessions-core,
     # tungstenite and turmoil. rand_core 0.9 is also used by imbl.
@@ -110,21 +104,13 @@ skip = [
     # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
     { name = "phf", version = "0.13.1" },
     { name = "phf_shared", version = "0.13.1" },
-    # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
-    # the iceberg connection code in mz-storage-types, whose client crosses into
-    # iceberg's API.
+    # Used by iceberg, iceberg-catalog-rest, segment, and the iceberg connection
+    # code in mz-storage-types, whose client crosses into iceberg's API.
     { name = "reqwest", version = "0.12.28" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
     { name = "darling", version = "0.20.11" },
-    { name = "darling_macro", version = "0.21.2" },
-    { name = "darling_core", version = "0.21.2" },
-    { name = "darling", version = "0.21.2" },
-    # `kube-derive` and `serde_with_macros` are still on the `syn` v2 release.
-    { name = "darling_macro", version = "0.23.0" },
-    { name = "darling_core", version = "0.23.0" },
-    { name = "darling", version = "0.23.0" },
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
@@ -137,21 +123,8 @@ skip = [
     # arrow
     { name = "hashbrown", version = "0.16.1" },
     { name = "hashbrown", version = "0.17.1" },
-    # duckdb pins arrow 57 while the workspace is on 58, so mz-testdrive links
-    # both majors. They never meet: duckdb's arrow stays inside duckdb's own API.
-    { name = "arrow", version = "57.1.0" },
-    { name = "arrow-arith", version = "57.1.0" },
-    { name = "arrow-array", version = "57.2.0" },
-    { name = "arrow-buffer", version = "57.3.0" },
-    { name = "arrow-cast", version = "57.2.0" },
-    { name = "arrow-data", version = "57.2.0" },
-    { name = "arrow-ord", version = "57.2.0" },
-    { name = "arrow-row", version = "57.1.0" },
-    { name = "arrow-schema", version = "57.2.0" },
-    { name = "arrow-select", version = "57.2.0" },
-    { name = "arrow-string", version = "57.1.0" },
     # base64 0.22 is still used by arrow, axum, eventsource-client, gcp_auth,
-    # headers, iceberg, jsonwebtoken, kube, mysql_common, parquet, pem 3,
+    # headers, iceberg, jsonwebtoken, mysql_common, parquet, pem 3,
     # postgres-protocol, prost-reflect, reqwest 0.12, tonic, tower-http,
     # tower-sessions-core and typespec.
     { name = "base64", version = "0.22.1" },
@@ -187,7 +160,7 @@ skip = [
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
-    # held back by duckdb 1.4 (rusqlite in mz-deploy's build cache is on 0.12)
+    # held back by duckdb 1.10506 (rusqlite in mz-deploy's build cache is on 0.12)
     { name = "hashlink", version = "0.10.0" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
@@ -284,6 +257,8 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "ureq",
+    "ureq-proto",
     "zopfli",
 ]
 
@@ -328,12 +303,25 @@ ignore = [
     "RUSTSEC-2024-0436",
     # Bincode is unmaintained, the team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
     "RUSTSEC-2025-0141",
-    # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
-    # Affects transitive deps (rand 0.8.5 via fail/quickcheck/etc).
-    "RUSTSEC-2026-0097",
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
+    # `basic-toml` is unmaintained with no safe upgrade. It is only used by the
+    # askama_derive proc macro, at compile time.
+    "RUSTSEC-2026-0374",
+    # zstd stream contexts leak data between streams when reused through the
+    # `with_context` constructors. No dependency calls them. The fix needs zstd
+    # 0.14, which parquet, iceberg, apache-avro, async-compression and
+    # mysql_common do not accept yet.
+    "RUSTSEC-2026-0391",
+    # zstd-safe `Seekable::decompress` sets a `Vec` length past its capacity.
+    # The `seekable` feature is not enabled. The fix needs zstd-safe 8.2.
+    "RUSTSEC-2026-0398",
+    # zstd-safe exposes uninitialized memory when streaming decompression of a
+    # legacy frame into a `Vec` fails. No dependency uses
+    # `zstd::stream::write::Decoder`, and async-compression decodes into slices
+    # and returns the error before advancing. The fix needs zstd-safe 8.2.
+    "RUSTSEC-2026-0403",
 ]
 
 # Must be manually kept in sync with about.toml.
@@ -344,6 +332,7 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",

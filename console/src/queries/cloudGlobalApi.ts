@@ -18,10 +18,7 @@ import {
   issueCommunityLicenseKey,
   issueLicenseKey,
 } from "~/api/cloudGlobalApi";
-import { components } from "~/api/schemas/global-api";
 import { getQueryClient } from "~/queryClient";
-
-export type Region = components["schemas"]["Region"];
 
 export const cloudGlobalApiQueryKeys = {
   all: () => buildGlobalQueryKey("cloudGlobalApi"),

@@ -41,6 +41,9 @@ import {
   clusterQueryKeys,
   replicaStatusesUpdatedAt,
   useClusterLineageIds,
+  useClusterReplicaHistory,
+  useDroppedObjectLifetimes,
+  useEpisodeObjectHydrations,
   useFreshnessObjects,
   useObjectHydrationStretches,
   useOwners,
@@ -118,6 +121,18 @@ describe("useOwners", () => {
     await waitFor(() =>
       expect(result.current.isOwner(OWNED_ROLE_ID)).toBe(true),
     );
+  });
+
+  it("names an owner by its role id", async () => {
+    server.use(buildOwnersHandler());
+    const { result } = await renderUseOwners();
+
+    await waitFor(() =>
+      expect(result.current.ownerName(UNOWNED_ROLE_ID)).toBe(
+        "someone_elses_role",
+      ),
+    );
+    expect(result.current.ownerName(UNKNOWN_ROLE_ID)).toBeUndefined();
   });
 
   it("returns false for a role the user cannot act as", async () => {
@@ -632,6 +647,233 @@ describe("useReplicaStatusHistory", () => {
     rerender({ replicaIds: ["u1", "u2"], statusesUpdatedAt: NEXT_UPDATE });
 
     expect(result.current.data).toBeUndefined();
+  });
+});
+
+/** Answers each request for `scope` with the rows for that request's number. */
+const answerByRequest = (
+  scope: string,
+  rowsFor: (request: number) => Record<string, unknown>[],
+  columns: ReturnType<typeof buildColumns>,
+) => {
+  const requests = { count: 0 };
+  server.use(
+    http.post("*/api/sql", ({ request }) => {
+      const queryKey = JSON.parse(
+        new URL(request.url).searchParams.get("query_key") ?? "[]",
+      );
+      if (queryKey[1]?.scope !== scope) return undefined;
+      requests.count += 1;
+      return HttpResponse.json({
+        results: [
+          mapKyselyToTabular({ rows: rowsFor(requests.count), columns }),
+        ],
+      });
+    }),
+  );
+  return requests;
+};
+
+describe("useClusterReplicaHistory", () => {
+  const BURST_DROPPED_AT = Date.UTC(2026, 9, 20, 10, 5);
+  const replicaRow = (replicaId: string, droppedAtMs?: number) => ({
+    replicaId,
+    name: replicaId === "u1" ? "r1" : "r1-burst",
+    size: "100cc",
+    createdAt: String(Date.UTC(2026, 9, 20, 10, 0)),
+    droppedAt: droppedAtMs === undefined ? null : String(droppedAtMs),
+  });
+  const COLUMNS = [
+    ...buildColumns(["replicaId", "name", "size"]),
+    ...["createdAt", "droppedAt"].map((name) =>
+      buildColumn({ name, type_oid: MzDataType.timestamptz }),
+    ),
+  ];
+
+  it("fetches again when the current replicas return to an earlier set", async () => {
+    // A burst replica comes, then is dropped.
+    answerByRequest(
+      "clusterReplicaHistory",
+      (request) =>
+        request === 1
+          ? [replicaRow("u1")]
+          : request === 2
+            ? [replicaRow("u1"), replicaRow("u2")]
+            : [replicaRow("u1"), replicaRow("u2", BURST_DROPPED_AT)],
+      COLUMNS,
+    );
+    const ProviderWrapper = await createProviderWrapper();
+    const { result, rerender } = renderHook(
+      ({ currentReplicaIds }) =>
+        useClusterReplicaHistory({
+          clusterId: "u9",
+          timePeriodMinutes: TIME_PERIOD_MINUTES,
+          currentReplicaIds,
+        }),
+      { wrapper: ProviderWrapper, initialProps: { currentReplicaIds: ["u1"] } },
+    );
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    rerender({ currentReplicaIds: ["u1", "u2"] });
+    await waitFor(() => expect(result.current.data).toHaveLength(2));
+
+    rerender({ currentReplicaIds: ["u1"] });
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual([
+        expect.objectContaining({ replicaId: "u1", droppedAt: null }),
+        expect.objectContaining({
+          replicaId: "u2",
+          droppedAt: new Date(BURST_DROPPED_AT),
+        }),
+      ]),
+    );
+  });
+});
+
+describe("useDroppedObjectLifetimes", () => {
+  const COLUMNS = [
+    ...buildColumns(["id", "objectType"]),
+    buildColumn({ name: "createdAt", type_oid: MzDataType.timestamptz }),
+    buildColumn({ name: "droppedAt", type_oid: MzDataType.timestamptz }),
+  ];
+  const DROPPED_INDEX = {
+    id: "u20",
+    objectType: "index",
+    createdAt: String(Date.UTC(2026, 9, 20, 10, 10)),
+    droppedAt: String(Date.UTC(2026, 9, 20, 10, 30)),
+  };
+
+  const renderDroppedObjects = async (refetchKey: string) => {
+    const requests = answerByRequest(
+      "droppedObjectLifetimes",
+      () => [DROPPED_INDEX],
+      COLUMNS,
+    );
+    const ProviderWrapper = await createProviderWrapper();
+    const view = renderHook(
+      () =>
+        useDroppedObjectLifetimes({
+          clusterId: "u9",
+          timePeriodMinutes: TIME_PERIOD_MINUTES,
+          refetchKey,
+        }),
+      { wrapper: ProviderWrapper },
+    );
+    return { ...view, requests };
+  };
+
+  it("stays idle without a restart to explain", async () => {
+    const { result, requests } = await renderDroppedObjects("");
+    // Long enough for a request started on mount to land.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(result.current.fetchStatus).toEqual("idle");
+    expect(requests.count).toBe(0);
+  });
+
+  it("reads the cluster's dropped objects once a restart needs them", async () => {
+    const { result } = await renderDroppedObjects(
+      `1|${Date.UTC(2026, 9, 20, 10, 12)}`,
+    );
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual([
+        {
+          id: "u20",
+          objectType: "index",
+          createdAt: new Date(Date.UTC(2026, 9, 20, 10, 10)),
+          droppedAt: new Date(Date.UTC(2026, 9, 20, 10, 30)),
+        },
+      ]),
+    );
+  });
+});
+
+describe("useEpisodeObjectHydrations", () => {
+  const EPISODE = {
+    replicaId: "u1",
+    startedAt: new Date("2026-10-20T10:00:00Z"),
+    finishedAt: new Date("2026-10-20T10:05:00Z"),
+    objectCount: 2,
+  };
+  const objectRow = (globalId: string) => ({
+    globalId,
+    objectId: globalId,
+    installedAt: String(EPISODE.startedAt.getTime()),
+    startedAt: String(EPISODE.startedAt.getTime()),
+    hydratedAt: String(EPISODE.finishedAt.getTime()),
+  });
+  const COLUMNS = [
+    ...buildColumns(["globalId", "objectId"]),
+    ...["installedAt", "startedAt", "hydratedAt"].map((name) =>
+      buildColumn({ name, type_oid: MzDataType.timestamptz }),
+    ),
+  ];
+  let requests: { count: number };
+
+  // The collector recorded the episode before one of its two objects.
+  beforeEach(() => {
+    requests = answerByRequest(
+      "episodeObjectHydrations",
+      (request) =>
+        request === 1
+          ? [objectRow("u20")]
+          : [objectRow("u20"), objectRow("u21")],
+      COLUMNS,
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const HYDRATION_HISTORY_ENVIRONMENT = {
+    ...healthyEnvironment,
+    status: {
+      ...healthyEnvironment.status,
+      version: parseDbVersion("v26.46.0 (0000000000)"),
+    },
+  };
+
+  const renderEpisode = async () => {
+    const ProviderWrapper = await createProviderWrapper({
+      initializeState: ({ set }) =>
+        setFakeEnvironment(set, defaultRegionId, HYDRATION_HISTORY_ENVIRONMENT),
+    });
+    return renderHook(() => useEpisodeObjectHydrations(EPISODE), {
+      wrapper: ProviderWrapper,
+    });
+  };
+
+  it("fetches an episode's objects again until each one is recorded", async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const { result } = await renderEpisode();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(result.current.data).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(millisecondsInMinute);
+    expect(result.current.data).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
+    expect(requests.count).toBe(2);
+  });
+
+  it("fetches again on reopening an episode missing some of its objects", async () => {
+    const { result, unmount } = await renderEpisode();
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    unmount();
+
+    const reopened = await renderEpisode();
+
+    await waitFor(() => expect(reopened.result.current.data).toHaveLength(2));
   });
 });
 

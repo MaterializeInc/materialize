@@ -303,11 +303,15 @@ CREATE TABLE e3 (
   a INT COLLATE en
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a STRING COLLATE en
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE t
 ----
@@ -331,6 +335,8 @@ INSERT INTO t VALUES
   ('X' COLLATE de),
   ('y' COLLATE de)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT a FROM t ORDER BY t.a
 ----
@@ -427,6 +433,8 @@ SELECT '40 days' COLLATE en::INTERVAL
 ----
 40 days
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE foo(a STRING COLLATE en_u_ks_level2)
 
@@ -442,6 +450,8 @@ EXECUTE x(NULL)
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT a FROM foo
 ----
@@ -546,6 +556,8 @@ SELECT id, a, length(a), b, length(b::string) FROM t50015 ORDER BY id ASC
 2  hello                                                                                                 5   hello        5
 3  hello hello                                                                                           11  hello hello  11
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t54989(
   no_collation_str text,
@@ -554,6 +566,8 @@ CREATE TABLE t54989(
   default_collation text COLLATE "default"
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT
     a.attname AS column_name,
@@ -579,6 +593,8 @@ SELECT 'cat' = ('cat'::text collate "default"), 'cat' = ('cat'::VARCHAR(64) coll
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t54989 VALUES ('a', '{b}', 'c', 'd')
 
@@ -605,6 +621,8 @@ CREATE TABLE disallowed(a text COLLATE "POSIX")
 # Regression test for collated string lowercase and hyphen/underscore equality.
 subtest nocase_strings
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-level2");
 
@@ -634,26 +652,32 @@ SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en_US_u_ks_level2")
 ----
 Bbb
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE collation_name_case (s STRING COLLATE en_us_u_ks_level2);
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE collation_name_case
 ----
 materialize.public.collation_name_case  CREATE␠TABLE␠materialize.public.collation_name_case␠(s␠pg_catalog.text␠COLLATE␠en_us_u_ks_level2);
 
-statement error table "materialize\.public\.nocase_strings" already exists
+statement error COLLATE not yet supported
 CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-le""vel2");
 
 statement error unterminated quoted identifier
 CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-le"vel2");
 
-statement error WHERE clause error: COLLATE not yet supported
+statement error unknown catalog item 'nocase_strings'
 SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-us-u-ks-l""evel2")
 
 statement error unterminated quoted identifier
 SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-us-u-ks-l"evel2")
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE nocase_strings2 (
   i INT,
@@ -689,6 +713,8 @@ Bbb
 # Test "char" is supposed to truncate long values
 subtest char_long_values
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t65631(a "char", b "char" COLLATE en)
 
@@ -697,6 +723,8 @@ onlyif cockroach
 statement ok
 INSERT INTO t65631 VALUES ('abc', 'abc' COLLATE en)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT a, b FROM t65631
 ----
@@ -704,6 +732,8 @@ SELECT a, b FROM t65631
 
 subtest regression_45142
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t45142(c STRING COLLATE en);
 

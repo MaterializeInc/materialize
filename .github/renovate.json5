@@ -1,0 +1,408 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // The shared preset also extends config:recommended, which is part of
+  // config:best-practices, and its packageRules must come after
+  // config:recommended's, or the monorepo groups override its non-breaking
+  // groups.
+  "extends": ["config:best-practices", "github>MaterializeInc/renovate-config"],
+  // Config migration PRs may rewrite this file as plain JSON and drop its
+  // comments. The Dependency Dashboard still offers migration on demand.
+  "ignorePresets": [":configMigration"],
+  "constraints": {"rust": "1.98.1"},
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/(^|/)Dockerfile[^/]*$/",
+        "/\\.sh$/"
+      ],
+      "matchStrings": [
+        "#[ \\t]*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: packageName=(?<packageName>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n[^\\n:=]*[:=][ \\t]*[\"']?(?:[^\\s\"'@]+:)?(?<currentValue>[^\\s\"'@]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"
+      ]
+    }
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "src/**/fuzz/**",
+    "test/cargo-fuzz/**",
+    // Symlinks to ci/builder/requirements*.txt.
+    "misc/python/requirements*.txt"
+  ],
+  "pip-compile": {
+    // Matches the compiled output. Renovate reads the source files and the
+    // compile command from its header.
+    "managerFilePatterns": ["/^misc/dbt-materialize/requirements\\.txt$/"]
+  },
+  "labels": ["A-dependencies"],
+  "timezone": "Etc/UTC",
+  // The Mend app runs this repo at irregular times. A 4-hour window once
+  // passed without a run, deferring every weekly group by a week.
+  "schedule": ["* * * * 0", "* 0-5 * * 1"],
+  "lockFileMaintenance": {"schedule": ["* * * * 0", "* 0-5 * * 1"]},
+  "internalChecksFilter": "strict",
+  "prConcurrentLimit": 200,
+  "prHourlyLimit": 10,
+  "rebaseWhen": "conflicted",
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "automerge": true
+    },
+    {
+      // Cargo lock file maintenance runs a bare `cargo update`, which bumps
+      // every semver-compatible crate in one PR.
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "enabled": false
+    },
+    {
+      // Rust upgrades need the compile-time validation that bin/lint-versions
+      // asks for.
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["rust"],
+      "enabled": false
+    },
+    {
+      // bin/bump-version moves our own images with each release.
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["materialize/**"],
+      "enabled": false
+    },
+    {
+      // Renovate learns stage names only from `FROM x AS name`, so a stage
+      // declared by `MZFROM x AS name` looks like an untagged image wherever
+      // it is used. pinDigests would pin a Docker Hub image of the same name
+      // onto it.
+      // NOTE: This also skips external images without a tag or digest.
+      "matchManagers": ["dockerfile"],
+      "matchJsonata": ["$not($exists(currentValue)) and $not($exists(currentDigest))"],
+      "enabled": false
+    },
+    {
+      // [patch.crates-io] in Cargo.toml replaces these with forks, which
+      // Renovate does not read. A requirement bumped past the fork's version
+      // makes Cargo drop the patch and build against crates.io. bin/lint-versions
+      // keeps this list in sync with Cargo.toml.
+      // NOTE: Renovate forces the `vulnerabilityAlerts` object onto security
+      // updates, so setting `enabled` in it would override this rule.
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["postgres", "tokio-postgres", "postgres-protocol", "postgres-replication", "postgres-types", "postgres-openssl", "chrono-tz", "serde-value", "rdkafka", "rdkafka-sys", "mysql_async", "tiberius", "async-compression", "iceberg", "iceberg-catalog-rest", "iceberg-storage-opendal"],
+      "enabled": false
+    },
+    {
+      // Held back in Cargo.toml
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["lgalloc"],
+      "allowedVersions": "<0.7"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tungstenite"],
+      "allowedVersions": "<0.30"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchJsonata": ["packageName != depName"],
+      "matchIsBreaking": true,
+      "enabled": false
+    },
+    {
+      // TODO: Also update indirect crates in Cargo.lock once our Renovate
+      // supports postUpgradeTasks. Keep idna_adapter below 1.2 then, since 1.2
+      // switches to ICU4X, adding about 20 crates.
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "additionalBranchPrefix": "cargo-root-"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["misc/wasm/**/Cargo.toml"],
+      "additionalBranchPrefix": "cargo-wasm-"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["misc/materialize-sdk/**/Cargo.toml"],
+      "additionalBranchPrefix": "cargo-sdk-"
+    },
+    {
+      "matchManagers": ["terraform"],
+      "additionalBranchPrefix": "terraform-",
+      "groupName": "terraform terraform",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621", "pip-compile"],
+      "matchFileNames": ["misc/dbt-materialize/*"],
+      "additionalBranchPrefix": "dbt-"
+    },
+    {
+      // pip_requirements also matches the compiled requirements.txt. It would
+      // bump each pin on its own, past the caps that dbt's packages declare,
+      // and pip then fails to install the result. pip-compile updates that file
+      // through the resolver instead.
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["misc/dbt-materialize/requirements.txt"],
+      "enabled": false
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["misc/dbt-materialize/Dockerfile"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.15"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "additionalBranchPrefix": "docker-"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "additionalBranchPrefix": "github-actions-"
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchFileNames": ["ci/builder/*", "test/adbc/*", "test/terraform/azure-temporary/*"],
+      "additionalBranchPrefix": "python-tools-"
+    },
+    {
+      // Test tooling in the driver projects. The driver rules below take the
+      // drivers themselves.
+      "matchFileNames": ["test/lang/**"],
+      "additionalBranchPrefix": "lang-tests-"
+    },
+    {
+      "matchManagers": ["maven"],
+      "matchFileNames": ["test/lang/java/**/pom.xml"],
+      "additionalBranchPrefix": "java-driver-",
+      "matchPackageNames": ["org.postgresql:postgresql"]
+    },
+    {
+      "matchManagers": ["nuget"],
+      "matchFileNames": ["test/lang/csharp/csharp-npgsql.csproj"],
+      "additionalBranchPrefix": "csharp-driver-",
+      "matchPackageNames": ["npgsql"]
+    },
+    {
+      // These projects test older npgsql majors.
+      "matchManagers": ["nuget"],
+      "matchFileNames": ["test/lang/csharp/csharp-npgsql?.csproj"],
+      "matchPackageNames": ["npgsql"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["test/lang/js/package.json"],
+      "additionalBranchPrefix": "js-driver-",
+      "matchPackageNames": ["pg", "@types/pg"]
+    },
+    {
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchFileNames": ["test/lang/python/*"],
+      "additionalBranchPrefix": "python-drivers-"
+    },
+    {
+      "matchManagers": ["bundler"],
+      "matchFileNames": ["test/lang/ruby/Gemfile"],
+      "additionalBranchPrefix": "ruby-driver-",
+      "matchPackageNames": ["pg"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["ci/test/docs-widgets/package.json"],
+      "additionalBranchPrefix": "docs-widgets-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["misc/vscode-ext/package.json"],
+      "additionalBranchPrefix": "vscode-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/e2e-tests/package.json"],
+      "additionalBranchPrefix": "console-e2e-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["test/dataflow-visualizer/package.json"],
+      "additionalBranchPrefix": "dataflow-visualizer-"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "additionalBranchPrefix": "console-"
+    },
+    {
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "matchFileNames": ["!console/**"],
+      "additionalBranchPrefix": ""
+    },
+    // These rules use the branch prefixes assigned by the scope rules above.
+    {
+      "matchJsonata": ["additionalBranchPrefix in ['dbt-', 'java-driver-', 'csharp-driver-', 'js-driver-', 'python-drivers-', 'ruby-driver-', 'docs-widgets-']"],
+      "extends": ["schedule:daily"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "rangeStrategy": "update-lockfile"
+    },
+    {
+      "matchJsonata": [
+        "additionalBranchPrefix in ['cargo-wasm-', 'cargo-sdk-', 'dbt-', 'docker-', 'github-actions-', 'python-tools-', 'python-drivers-', 'lang-tests-', 'vscode-', 'console-e2e-', 'dataflow-visualizer-']"
+      ],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple",
+      "groupSlug": "{{additionalBranchPrefix}}simple"
+    },
+    {
+      "matchJsonata": ["additionalBranchPrefix in ['dbt-', 'lang-tests-', 'vscode-']"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} dependencies"
+    },
+    {
+      "matchJsonata": ["additionalBranchPrefix = 'docs-widgets-'"],
+      "groupName": "docs-widgets dependencies",
+      "separateMajorMinor": false
+    },
+    {
+      "matchJsonata": ["additionalBranchPrefix in ['docker-', 'github-actions-']"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple",
+      "groupSlug": "{{additionalBranchPrefix}}simple"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["/^[n-z]/"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple2",
+      "groupSlug": "{{additionalBranchPrefix}}simple2"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["/^[a-m]/"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} simple1",
+      "groupSlug": "{{additionalBranchPrefix}}simple1"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["arrow*", "parquet", "iceberg*"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} arrow",
+      "groupSlug": "{{additionalBranchPrefix}}arrow"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["duckdb", "libduckdb-sys"],
+      // DuckDB release bumps also need the URL and checksums in ci/builder/Dockerfile
+      // updated to satisfy bin/lint-versions.
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} duckdb",
+      "groupSlug": "{{additionalBranchPrefix}}duckdb"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["tracing*", "opentelemetry*", "prost*", "tonic*", "console-subscriber"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} telemetry-grpc",
+      "groupSlug": "{{additionalBranchPrefix}}telemetry-grpc"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["Cargo.toml"],
+      "matchPackageNames": ["tokio*", "hyper*", "http*", "tower*", "h2", "rustls*"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "{{replace '-$' '' additionalBranchPrefix}} async-stack",
+      "groupSlug": "{{additionalBranchPrefix}}async-stack"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["msw", "downshift", "@frontegg/*", "@intercom/*"],
+      "groupName": null
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["!msw", "!downshift", "!@frontegg/*", "!@intercom/*"],
+      "groupName": "console simple",
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["jotai", "jotai-*"],
+      "groupName": "console jotai",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@tanstack/db", "@tanstack/react-db"],
+      "groupName": "console tanstack-db",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["kysely", "kysely-codegen"],
+      "groupName": "console kysely",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["codemirror", "@codemirror/*", "@codemirror-toolkit/*", "@lezer/*", "style-mod"],
+      "groupName": "console codemirror",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["zod", "@hookform/resolvers", "react-hook-form"],
+      "groupName": "console forms",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      // NOTE: matchPackageNames adds to the names from `extends`.
+      "extends": ["packages:vite"],
+      "matchPackageNames": ["vitest", "@vitest/*", "@rolldown/*", "vite-tsconfig-paths", "vite-bundle-analyzer", "jsdom"],
+      "groupName": "console vite",
+      "separateMajorMinor": false
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "extends": ["packages:eslint"],
+      "matchPackageNames": ["typescript", "@tanstack/eslint-plugin-query", "globals"],
+      "groupName": "console typescript-and-eslint",
+      "separateMajorMinor": false
+    },
+    {
+      // Chakra v3 is a rewrite, migrated separately.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchPackageNames": ["@chakra-ui/*"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}

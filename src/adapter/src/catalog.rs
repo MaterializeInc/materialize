@@ -95,6 +95,7 @@ use uuid::Uuid;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
+pub(crate) use crate::catalog::transact::{CommandExecutionError, CommandWork};
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -107,7 +108,9 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+pub(crate) mod command;
 pub(crate) mod consistency;
+mod limits;
 mod migrate;
 
 mod apply;
@@ -295,6 +298,11 @@ impl ConnCatalog<'_> {
 
     pub fn state(&self) -> &CatalogState {
         &*self.state
+    }
+
+    /// Returns a system-role view of this catalog snapshot.
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
+        self.state.for_system_session()
     }
 
     /// Prevent planning from resolving item with the provided ID. Instead,
@@ -1259,7 +1267,7 @@ impl Catalog {
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
-        &self.state.cluster_replica_sizes
+        self.state.cluster_replica_sizes()
     }
 
     /// Returns the privileges of an object by its ID.
@@ -1331,37 +1339,31 @@ impl Catalog {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.state.entry_by_id.values()
+        self.state.entries()
     }
 
     pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_connection() && entry.id().is_user())
+        self.state.user_connections()
     }
 
     pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_table() && entry.id().is_user())
+        self.state.user_tables()
     }
 
     pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_source() && entry.id().is_user())
+        self.state.user_sources()
     }
 
     pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_sink() && entry.id().is_user())
+        self.state.user_sinks()
     }
 
     pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+        self.state.user_materialized_views()
     }
 
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_secret() && entry.id().is_user())
+        self.state.user_secrets()
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
@@ -1373,7 +1375,7 @@ impl Catalog {
     }
 
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.state.clusters_by_id.values()
+        self.state.clusters()
     }
 
     pub fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1385,7 +1387,7 @@ impl Catalog {
     }
 
     pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.clusters().filter(|cluster| cluster.id.is_user())
+        self.state.user_clusters()
     }
 
     pub fn get_cluster_replica(
@@ -1405,27 +1407,19 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters()
-            .flat_map(|cluster| cluster.user_replicas())
+        self.state.user_cluster_replicas()
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
-        self.state.database_by_id.values()
+        self.state.databases()
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state
-            .roles_by_id
-            .values()
-            .filter(|role| role.is_user())
+        self.state.user_roles()
     }
 
     pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
-        self.state
-            .network_policies_by_id
-            .iter()
-            .filter(|(id, _)| id.is_user())
-            .map(|(_, policy)| policy)
+        self.state.user_network_policies()
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1611,6 +1605,26 @@ impl Catalog {
             },
         )];
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
+    }
+
+    /// Cache the local expression for the given `GlobalId` of an item being
+    /// created, which has no dataflow, such as a view. Otherwise the same as
+    /// [`Catalog::cache_expressions`].
+    pub(crate) fn cache_local_expression(
+        &self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) -> BoxFuture<'static, ()> {
+        let local_exprs = vec![(
+            id,
+            LocalExpressions {
+                local_mir,
+                optimizer_features,
+                item_version: RelationVersion::root(),
+            },
+        )];
+        self.update_expression_cache(local_exprs, Vec::new(), Default::default())
     }
 
     pub(crate) fn update_expression_cache<'a, 'b>(
@@ -2496,6 +2510,9 @@ impl SessionCatalog for ConnCatalog<'_> {
             .map_or(false, |a| a.is_cc)
     }
 }
+
+#[cfg(test)]
+mod source_preparation_tests;
 
 #[cfg(test)]
 mod try_cast_tests;

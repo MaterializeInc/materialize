@@ -290,6 +290,23 @@ steps:
     agents:
       queue: hetzner-x86-64-dedi-48cpu-192gb
 
+  - id: materialize-sdk
+    label: ":rust: Materialize SDK"
+    command: bin/ci-builder run stable ci/test/materialize-sdk.sh
+    inputs:
+      - ci/test/materialize-sdk.sh
+      - misc/materialize-sdk
+      # Cargo and clippy read these from the parent directories.
+      - .cargo/config.toml
+      - clippy.toml
+      - deny.toml
+    depends_on: []
+    timeout_in_minutes: 20
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    coverage: skip
+    sanitizer: skip
+
   - id: testdrive
     topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
     label: "Testdrive"
@@ -303,8 +320,37 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: catalog-command-transactions
+    topics: [cockroach, iceberg, kafka, mysql, postgres, sql-server]
+    label: Catalog command transactions
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/parallel-workload
+      - misc/python/materialize/parallel_workload/catalog_transactions.py
+      - misc/python/materialize/parallel_workload/staged_catalog.py
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          run: catalog-transactions
+          args: [--case=all]
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: catalog-command-read-only
+    topics: [0dt-migration, kafka, mysql, postgres, sql-server]
+    label: Catalog command read-only admission
+    depends_on: build-x86_64
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+          run: read-only
+    agents:
+      queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - id: cluster-tests
-    topics: [kafka, kafka-sink, postgres]
+    topics: [kafka, kafka-sink, mysql, postgres]
     label: Cluster
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -658,16 +704,6 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: mcp-materialize
-    label: mcp-materialize
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mcp-materialize
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
   - id: lean
     label: Lean models
     depends_on: build-aarch64
@@ -764,6 +800,24 @@ steps:
         artifact_paths: console/log/**/*
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: console-nginx-metrics
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Console nginx metrics"
+        depends_on: build-aarch64
+        timeout_in_minutes: 15
+        inputs:
+          - console/Dockerfile
+          - console/misc/docker/**
+          - test/console/**
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: console
+              run: nginx-metrics
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 

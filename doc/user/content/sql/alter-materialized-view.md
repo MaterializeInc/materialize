@@ -80,6 +80,9 @@ name="cpu-memory-considerations" %}}
 {{% include-from-yaml data="examples/alter_materialized_view"
 name="troubleshooting-lagging-original-view" %}}
 
+{{% include-from-yaml data="examples/alter_materialized_view"
+name="troubleshooting-sealed-view" %}}
+
 
 ## Privileges
 

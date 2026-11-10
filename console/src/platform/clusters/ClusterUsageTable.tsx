@@ -255,13 +255,14 @@ const UTILIZATION_COLUMNS: UtilizationColumn[] = [
     urlKey: "memory",
     read: (u) => u.memoryPercent,
   },
-  // NOTE: the denominator is the size's configured disk allocation, so this is
-  // null, and renders a dash, for any replica on a size that allocates no disk.
+  // NOTE: the denominator is the size's configured disk allocation. A size
+  // that allocates none but can swap, as self-managed's swap sizes do, shows
+  // swap's share of the heap limit instead, as the cluster page does.
   {
     id: "diskPercent",
     header: "Disk",
     urlKey: "disk",
-    read: (u) => u.diskPercent,
+    read: (u) => u.diskPercent ?? u.swapPercent ?? null,
   },
   // NOTE: `heap_percent` is RAM plus swap over the heap limit. The heap limit
   // comes from the orchestrator, not the size catalog, so this is null on any

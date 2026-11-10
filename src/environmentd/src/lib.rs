@@ -100,6 +100,9 @@ pub struct Config {
     /// Whether the environmentd is running on a local dev machine. This is
     /// never meant to run in production or CI.
     pub all_features: bool,
+    /// Whether the container entrypoint restarted this process after
+    /// `mz_ore::restart_in_place!`.
+    pub restarted_in_place: bool,
 
     // === Connection options. ===
     /// TLS encryption and authentication configuration.
@@ -671,6 +674,7 @@ impl Listeners {
         let read_only = preflight::preflight_0dt(
             openable_adapter_storage.as_mut(),
             config.controller.deploy_generation,
+            config.restarted_in_place,
         )
         .await?;
 

@@ -264,8 +264,8 @@ pub enum AdapterError {
     SingleStatementTransaction,
     /// The transaction can only execute simple DDL.
     DDLOnlyTransaction,
-    /// Another session modified the Catalog while this transaction was open.
-    DDLTransactionRace,
+    /// Final execution would change an outcome already reported to the client.
+    DDLTransactionOutcomeChanged,
     /// A conditional cluster-config write failed its precondition: the cluster's
     /// managed config changed between when the write was conditioned and when it
     /// was applied. Produced by `Op::CheckClusterState`, never by SQL DDL, so it
@@ -283,6 +283,14 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
+    /// A statement tried to drop indexes while materialized views, indexes, or metric sinks
+    /// read from them.
+    ///
+    /// `blocked` is never empty. Each entry pairs a blocked index's name with its readers as
+    /// `(object type, name)` pairs.
+    IndexInUse {
+        blocked: Vec<(String, Vec<(String, String)>)>,
+    },
     /// When performing an `ALTER` of some variety, re-planning the statement
     /// errored.
     InvalidAlter(&'static str, PlanError),
@@ -330,7 +338,7 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
-    /// Attempt to apply a replacement to a sealed materialized view.
+    /// Attempt to replace a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
     },
@@ -631,6 +639,29 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
+            AdapterError::IndexInUse { blocked } => match &blocked[..] {
+                [(index_name, _)] => Some(format!(
+                    "The dependent objects are live dataflows that read from index {}, so the \
+                     index cannot be dropped while they exist.",
+                    index_name.quoted()
+                )),
+                blocked => {
+                    let per_index = blocked
+                        .iter()
+                        .map(|(index_name, dependents)| {
+                            format!(
+                                "Index {} is read by {}.",
+                                index_name.quoted(),
+                                fmt_dependents(dependents.iter())
+                            )
+                        })
+                        .join(" ");
+                    Some(format!(
+                        "{per_index} The dependent objects are live dataflows that read from \
+                         these indexes, so the indexes cannot be dropped while they exist."
+                    ))
+                }
+            },
             AdapterError::DependentObject(dependent_objects) => Some(
                 dependent_objects
                     .iter()
@@ -748,8 +779,9 @@ impl AdapterError {
                 Some(lines.join("\n"))
             }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
-                "The materialized view has already computed its output until the end of time, \
-                 so replacing its definition would have no effect."
+                "The materialized view's contents are final for all future times, so they can \
+                 no longer be changed. See \
+                 https://materialize.com/docs/sql/alter-materialized-view/#troubleshooting"
                     .into(),
             ),
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
@@ -788,6 +820,12 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::IndexInUse { .. } => Some(
+                "Drop the dependent objects first, then drop the index and recreate the \
+                 dependents. To replace them in production without downtime, use a blue/green \
+                 deployment."
+                    .to_string(),
+            ),
             AdapterError::SubscribeFellBehind { .. } => Some(
                 "The client is not reading results fast enough. Use a client that reads output \
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
@@ -889,9 +927,8 @@ impl AdapterError {
                  mz_internal.mz_cluster_reconfigurations for the retained outcome."
                     .into(),
             ),
-            AdapterError::DDLTransactionRace => Some(
-                "Currently, DDL transactions fail when any other DDL happens concurrently, \
-                 even on unrelated schemas/clusters.".into()
+            AdapterError::DDLTransactionOutcomeChanged => Some(
+                "Retry the transaction to execute its statements against the current catalog.".into()
             ),
             AdapterError::ConcurrentDependencyMutation { .. } => Some(
                 "Another session modified one of this statement's dependencies before \
@@ -908,6 +945,9 @@ impl AdapterError {
             ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
+            ),
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "Create a new materialized view with the new definition instead.".into()
             ),
             _ => None,
         }
@@ -1062,7 +1102,7 @@ impl AdapterError {
             AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::DDLTransactionOutcomeChanged => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
@@ -1074,6 +1114,7 @@ impl AdapterError {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::IndexInUse { .. } => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
@@ -1495,8 +1536,8 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
-            AdapterError::DDLTransactionRace => f.write_str(
-                "another session modified the catalog while this DDL transaction was open",
+            AdapterError::DDLTransactionOutcomeChanged => f.write_str(
+                "a statement in this transaction would produce a different result at commit",
             ),
             AdapterError::ClusterStateChanged { cluster_id } => {
                 write!(f, "cluster {cluster_id} was concurrently modified")
@@ -1515,6 +1556,23 @@ impl fmt::Display for AdapterError {
                     "{role_str} \"{}\" cannot be dropped because some objects depend on it",
                     dependent_objects.keys().join(", ")
                 )
+            }
+            AdapterError::IndexInUse { blocked } => {
+                // Mirrors `PlanError::DependentObjectsStillExist` so clients see one shape of
+                // RESTRICT failure regardless of which layer detected the dependency.
+                let dependents = fmt_dependents(blocked.iter().flat_map(|(_, deps)| deps).unique());
+                match &blocked[..] {
+                    [(index_name, _)] => write!(
+                        f,
+                        "cannot drop index {}: still depended upon by {dependents}",
+                        index_name.quoted()
+                    ),
+                    blocked => write!(
+                        f,
+                        "cannot drop indexes {}: still depended upon by {dependents}",
+                        blocked.iter().map(|(name, _)| name.quoted()).join(", ")
+                    ),
+                }
             }
             AdapterError::InvalidAlter(t, e) => {
                 write!(f, "invalid ALTER {t}: {e}")
@@ -1886,4 +1944,13 @@ mod tests {
         assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
         assert_eq!(response.message, expected_message);
     }
+}
+
+/// Renders `(object type, name)` pairs as `materialized view "mv", index "i"`.
+fn fmt_dependents<'a>(dependents: impl Iterator<Item = &'a (String, String)>) -> String {
+    dependents
+        .map(|(dependent_type, dependent_name)| {
+            format!("{} {}", dependent_type, dependent_name.quoted())
+        })
+        .join(", ")
 }

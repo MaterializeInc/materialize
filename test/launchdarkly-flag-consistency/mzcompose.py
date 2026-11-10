@@ -62,8 +62,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
+import launchdarkly_api
+from launchdarkly_api.api import feature_flags_api
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -126,6 +126,7 @@ SESSION_VARIABLES = {
     "server_version_num",
     "sql_safe_updates",
     "real_time_recency",
+    "emit_execution_time_notice",
     "emit_plan_insights_notice",
     "emit_timestamp_notice",
     "emit_trace_id_notice",
@@ -206,6 +207,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_topology_spread_ignore_non_singular_scale
     cluster_topology_spread_max_skew
     cluster_topology_spread_soft
+    column_paged_batcher_spill_worker_fraction
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
@@ -247,10 +249,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
-    enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
-    enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
     enable_date_bin_hopping
@@ -474,7 +474,6 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
-    enable_compute_temporal_bucketing
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform
@@ -593,7 +592,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
-    persist_fast_path_order
     persist_fetch_semaphore_permit_adjustment
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
@@ -662,7 +660,7 @@ def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
     if env.get("on"):
         index = (env.get("fallthrough") or {}).get("variation")
     else:
-        index = env.get("off_variation")
+        index = env.get("offVariation")
     if index is None or not (0 <= index < len(variations)):
         return None
     return variations[index].get("value")
@@ -685,7 +683,7 @@ def launchdarkly_flag_tags(api: Any) -> dict[str, list[str]]:
         items = page.get("items") or []
         for flag in items:
             flags[flag["key"]] = list(flag.get("tags") or [])
-        total = page.get("total_count")
+        total = page.get("totalCount")
         offset += len(items)
         if not items or (total is not None and offset >= total):
             break

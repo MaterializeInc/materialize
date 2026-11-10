@@ -10,7 +10,7 @@
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,46 +21,429 @@ use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Sink};
+use mz_catalog::memory::objects::Sink;
 use mz_cluster_client::ReplicaId;
-use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
-use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_sql::plan::ConnectionDetails;
+use mz_sql::catalog::CatalogClusterReplica;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::{
-    self, DEFAULT_TIMESTAMP_INTERVAL, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
-};
+use mz_sql::session::vars::{self, DEFAULT_TIMESTAMP_INTERVAL, SystemVars, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::SourceConnection;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, TransactionResult};
-use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::session::{Session, Transaction, TransactionOps};
+use crate::coord::{Coordinator, DeferredDdl, Message, PendingTxn};
+use crate::session::{Session, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
+#[derive(Debug)]
+pub struct PendingSourceStatement {
+    ctx: ExecuteContext,
+    statement: catalog::command::source_statement::SourceStatement,
+}
+
+#[derive(Debug)]
+pub struct PendingDdlCommit {
+    context: DdlCommitContext,
+    commands: Vec<catalog::command::CatalogCommand>,
+    responses: BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+}
+
+#[derive(Debug)]
+enum DdlCommitContext {
+    Transaction(PendingTxn),
+    Statement {
+        ctx: ExecuteContext,
+        response: crate::ExecuteResponse,
+    },
+}
+
+impl PendingDdlCommit {
+    pub(super) fn conn_id(&self) -> &ConnectionId {
+        match &self.context {
+            DdlCommitContext::Transaction(txn) => txn.ctx.session().conn_id(),
+            DdlCommitContext::Statement { ctx, response: _ } => ctx.session().conn_id(),
+        }
+    }
+
+    pub(super) fn transaction(
+        txn: PendingTxn,
+        commands: Vec<catalog::command::CatalogCommand>,
+    ) -> Self {
+        Self {
+            context: DdlCommitContext::Transaction(txn),
+            commands,
+            responses: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn statement(
+        ctx: ExecuteContext,
+        response: crate::ExecuteResponse,
+        commands: Vec<catalog::command::CatalogCommand>,
+    ) -> Self {
+        Self {
+            context: DdlCommitContext::Statement { ctx, response },
+            commands,
+            responses: BTreeMap::new(),
+        }
+    }
+}
+
+impl DdlCommitContext {
+    fn context_mut(&mut self) -> &mut ExecuteContext {
+        match self {
+            Self::Transaction(txn) => &mut txn.ctx,
+            Self::Statement { ctx, .. } => ctx,
+        }
+    }
+
+    fn finish(self, result: Result<(), AdapterError>) {
+        match self {
+            Self::Transaction(mut txn) => {
+                if let Err(error) = result {
+                    txn.response = Err(error);
+                    txn.action = crate::session::EndTransactionAction::Rollback;
+                }
+                txn.finish();
+            }
+            Self::Statement { ctx, response } => ctx.retire(result.map(|()| response)),
+        }
+    }
+}
+
+/// Waits while a test configures the named failpoint with a `return` action.
+async fn catalog_preparation_test_pause(name: &'static str) {
+    let paused = || {
+        fail::fail_point!(name, |_| true);
+        false
+    };
+    // Clearing the failpoint requires coordinator and runtime progress.
+    while paused() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 impl Coordinator {
+    /// Sets allowed responses and checks read-only and execution-cluster restrictions.
+    fn prepare_command_execution(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: &mz_sql::plan::Plan,
+    ) -> Result<(), AdapterError> {
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(plan),
+            ));
+        if self.controller.read_only() && !plan.allowed_in_read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+        self.prepare_plan_execution(ctx, plan)?;
+        Ok(())
+    }
+
+    pub(super) fn sequence_catalog_result_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::CatalogResultCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let row = match catalog::command::CatalogResultCommand::result(&plan) {
+            Ok(row) => row,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        let command = Arc::new(command);
+        self.emit_command_notices(
+            ctx.session(),
+            &catalog::command::CatalogCommand::CatalogResult(Arc::clone(&command)),
+        );
+        ctx.session_mut().retain_catalog_result(command);
+        ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
+    pub(super) async fn sequence_source_statement(
+        &mut self,
+        ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let statement = catalog::command::source_statement::SourceStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+            (self.catalog().config().now)(),
+        );
+        self.sequence_source_statement_ready(PendingSourceStatement { ctx, statement }, None)
+            .await;
+    }
+
+    pub(super) async fn sequence_source_statement_ready(
+        &mut self,
+        mut pending: PendingSourceStatement,
+        mut response: Option<mz_sql::pure::SourcePreparationResponse>,
+    ) {
+        use catalog::command::source_statement::{SourceCommand, SourceResolution};
+        if self.controller.read_only() {
+            return pending.ctx.retire(Err(AdapterError::ReadOnly));
+        }
+        let compiled = loop {
+            let state = pending
+                .ctx
+                .session()
+                .transaction()
+                .catalog_state()
+                .unwrap_or_else(|| self.catalog().state());
+            let result = match response.take() {
+                Some(response) => pending.statement.finish(state, response),
+                None => pending.statement.resolve(state),
+            };
+            match result {
+                Err(error) => return pending.ctx.retire(Err(error)),
+                Ok(SourceResolution::Ready(compiled)) => break compiled,
+                Ok(SourceResolution::Allocate(keys)) => {
+                    let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                        Ok(ids) => ids,
+                        Err(error) => return pending.ctx.retire(Err(error)),
+                    };
+                    pending.statement.record_ids(keys, ids);
+                }
+                Ok(SourceResolution::Prepare(request)) => {
+                    let conn_id = pending.ctx.session().conn_id().clone();
+                    let config = self.controller.storage.config().clone();
+                    let tx = self.internal_cmd_tx.clone();
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    task::spawn(|| "ddl_statement_preparation", async move {
+                        let response = request.execute(&config).await;
+                        tracing::debug!(
+                            target: "mz_adapter::catalog_preparation",
+                            %conn_id, kind = "purification", "catalog preparation complete"
+                        );
+                        catalog_preparation_test_pause("catalog_purification_ready").await;
+                        if let Err(error) = tx.send(Message::SourceStatementReady {
+                            pending, response, otel_ctx,
+                        }) {
+                            warn!("internal_cmd_rx dropped before source preparation completed: {error:?}");
+                        }
+                    }.instrument(tracing::Span::current()));
+                    return;
+                }
+            }
+        };
+        let mut ctx = pending.ctx;
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &compiled.plan) {
+            return ctx.retire(Err(error));
+        }
+        let response = match &compiled.plan {
+            mz_sql::plan::Plan::CreateSources(_) => crate::ExecuteResponse::CreatedSource,
+            mz_sql::plan::Plan::CreateTable(_) => crate::ExecuteResponse::CreatedTable,
+            mz_sql::plan::Plan::AlterSource(_) => {
+                crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::Source)
+            }
+            mz_sql::plan::Plan::AlterNoop(plan) => {
+                crate::ExecuteResponse::AlteredObject(plan.object_type)
+            }
+            _ => unreachable!("source command plan"),
+        };
+        if ctx.session().transaction().is_ddl() {
+            let ts = self.get_local_write_ts().await.timestamp;
+            let TransactionOps::DDL {
+                commands: _,
+                state,
+                snapshot,
+            } = &ctx
+                .session()
+                .transaction()
+                .inner()
+                .expect("DDL transaction")
+                .ops
+            else {
+                unreachable!("DDL transaction")
+            };
+            let staged = match self
+                .catalog()
+                .stage_source_statement(
+                    pending.statement,
+                    *compiled,
+                    (state, snapshot),
+                    self.active_conns.get(ctx.session().conn_id()),
+                    ts,
+                )
+                .await
+            {
+                Ok(staged) => staged,
+                Err(error) => return ctx.retire(Err(error)),
+            };
+            let command = catalog::command::CatalogCommand::Source(Arc::new(staged.command));
+            if let Err(error) = ctx
+                .session_mut()
+                .transaction_mut()
+                .add_ops(TransactionOps::DDL {
+                    commands: vec![command.clone()],
+                    state: staged.state,
+                    snapshot: staged.snapshot,
+                })
+            {
+                return ctx.retire(Err(error));
+            }
+            self.emit_command_notices(ctx.session(), &command);
+            ctx.retire(Ok(response));
+        } else {
+            let command = catalog::command::CatalogCommand::Source(Arc::new(
+                SourceCommand::unobserved(pending.statement, *compiled),
+            ));
+            self.sequence_ddl_commit(PendingDdlCommit::statement(ctx, response, vec![command]))
+                .await;
+        }
+    }
+
+    fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
+        session.add_notices(command.notices().iter().cloned().map(Into::into));
+        let catalog::command::CatalogCommand::Source(command) = command else {
+            return;
+        };
+        if let Some(notice) = command.skipped_notice() {
+            session.add_notice(notice);
+            return;
+        }
+        let state = session
+            .transaction()
+            .catalog_state()
+            .unwrap_or_else(|| self.catalog().state());
+        for id in command.item_ids() {
+            let Some(entry) = state.try_get_entry(&id) else {
+                continue;
+            };
+            let Some(source) = entry.source() else {
+                continue;
+            };
+            use mz_catalog::memory::objects::DataSourceDesc;
+            let cluster_id = match &source.data_source {
+                DataSourceDesc::Ingestion { desc, cluster_id }
+                | DataSourceDesc::OldSyntaxIngestion {
+                    desc, cluster_id, ..
+                } if desc.connection.prefers_single_replica() => cluster_id,
+                _ => continue,
+            };
+            let Some(cluster) = self.catalog().try_get_cluster(*cluster_id) else {
+                continue;
+            };
+            let name = state.resolve_full_name(entry.name(), None);
+            self.notify_single_replica_sources(session, cluster, Some(&name));
+        }
+    }
+
+    pub(super) async fn sequence_rename_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::RenameCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let command = Arc::new(command);
+        if !ctx.session().transaction().is_ddl() {
+            let response = crate::ExecuteResponse::AlteredObject(command.object_type());
+            self.sequence_ddl_commit(PendingDdlCommit::statement(
+                ctx,
+                response,
+                vec![catalog::command::CatalogCommand::Rename(command)],
+            ))
+            .await;
+            return;
+        }
+        let TransactionOps::DDL {
+            state, snapshot, ..
+        } = &ctx
+            .session()
+            .transaction()
+            .inner()
+            .expect("DDL transaction")
+            .ops
+        else {
+            unreachable!("standalone command handled above")
+        };
+        let state = state.clone();
+        let snapshot = snapshot.clone();
+        let ts = self.get_local_write_ts().await.timestamp;
+        let result = Box::pin(self.catalog().transact_incremental_dry_run(
+            &state,
+            vec![Op::RenameCommand(Arc::clone(&command))],
+            self.active_conns.get(ctx.session().conn_id()),
+            Some(snapshot),
+            ts,
+        ))
+        .await
+        .and_then(|(state, snapshot)| {
+            ctx.session_mut()
+                .transaction_mut()
+                .add_ops(TransactionOps::DDL {
+                    commands: vec![catalog::command::CatalogCommand::Rename(Arc::clone(
+                        &command,
+                    ))],
+                    state,
+                    snapshot,
+                })
+        });
+        match result {
+            Ok(()) => {
+                ctx.session()
+                    .add_notices(command.notices().iter().cloned().map(Into::into));
+                ctx.retire(Ok(crate::ExecuteResponse::AlteredObject(
+                    command.object_type(),
+                )));
+            }
+            Err(error) => ctx.retire(Err(error)),
+        }
+    }
+
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
@@ -68,6 +451,11 @@ impl Coordinator {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        if session.is_some_and(|session| session.transaction().is_ddl()) {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
         let result = self
             .catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
@@ -101,17 +489,27 @@ impl Coordinator {
             ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + 'static,
     {
+        if ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.session().transaction().is_ddl())
+        {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
 
-        let (table_updates, catalog_updates) = self
-            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
-            .await?;
+        // Keep catalog work out of the inline state of callers such as ordinary
+        // transaction completion and the coordinator's command dispatcher.
+        let (table_updates, catalog_updates) = Box::pin(
+            self.catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops),
+        )
+        .await?;
 
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
-        let apply_implications_res = self
-            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
-            .await;
+        let apply_implications_res =
+            Box::pin(self.apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)).await;
 
         // We would get into an inconsistent state if we updated the catalog but
         // then failed to apply commands/updates to the controller. Easiest
@@ -192,17 +590,200 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        if ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.session().transaction().is_ddl())
+        {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates) =
+            Box::pin(self.catalog_transact_inner(conn_id, ops)).await?;
 
+        self.finish_catalog_transaction(ctx, table_updates, catalog_updates)
+            .await;
+
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+
+        Ok(())
+    }
+
+    pub(super) fn release_ddl_lock(&self, guard: tokio::sync::OwnedMutexGuard<()>) {
+        drop(guard);
+        if !self.serialized_ddl.is_empty() {
+            let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
+        }
+    }
+
+    pub(super) async fn sequence_ddl_commit(&mut self, mut pending: PendingDdlCommit) {
+        // Command replay must respect the plans other DDLs hold across off-thread work.
+        // Never await this lock on the coordinator, which its owner needs to finish.
+        let guard = self
+            .active_conns
+            .get_mut(pending.conn_id())
+            .expect("connection must exist")
+            .deferred_lock
+            .take();
+        let guard = match guard {
+            Some(guard) => guard,
+            None => match self.serialized_ddl.try_lock_owned() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    tracing::debug!(
+                        conn_id = %pending.conn_id(),
+                        "deferring catalog commit for DDL lock"
+                    );
+                    self.serialized_ddl.push_back(DeferredDdl::Commit(pending));
+                    return;
+                }
+            },
+        };
+        let result = loop {
+            match self
+                .catalog_transact_commands(
+                    pending.context.context_mut(),
+                    &mut pending.commands,
+                    &mut pending.responses,
+                )
+                .await
+            {
+                Ok(()) => break Ok(()),
+                Err(catalog::CommandExecutionError::Error(error)) => break Err(error),
+                Err(catalog::CommandExecutionError::Pending { index, work }) => match work {
+                    catalog::CommandWork::Allocate(keys) => {
+                        let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                            Ok(ids) => ids,
+                            Err(error) => break Err(error),
+                        };
+                        match &mut pending.commands[index] {
+                            catalog::command::CatalogCommand::Source(command) => {
+                                Arc::make_mut(command).record_ids(keys, ids);
+                            }
+                            catalog::command::CatalogCommand::Rename(_)
+                            | catalog::command::CatalogCommand::CatalogResult(_)
+                            | catalog::command::CatalogCommand::Description(_) => {
+                                unreachable!("renames do not allocate IDs");
+                            }
+                        }
+                    }
+                    catalog::CommandWork::Prepare(request) => {
+                        self.release_ddl_lock(guard);
+                        let conn_id = pending.context.context_mut().session().conn_id().clone();
+                        let config = self.controller.storage.config().clone();
+                        let tx = self.internal_cmd_tx.clone();
+                        let otel_ctx = OpenTelemetryContext::obtain();
+                        task::spawn(|| "ddl_command_preparation", async move {
+                            let response = request.execute(&config).await;
+                            tracing::debug!(
+                                target: "mz_adapter::catalog_preparation",
+                                %conn_id, kind = "purification", "catalog preparation complete"
+                            );
+                            catalog_preparation_test_pause("catalog_purification_ready").await;
+                            pending.responses.insert(index, response);
+                            if let Err(error) =
+                                tx.send(Message::DdlCommandsReady { pending, otel_ctx })
+                            {
+                                warn!(
+                                    "internal_cmd_rx dropped before DDL preparation completed: {error:?}"
+                                );
+                            }
+                        }.instrument(tracing::Span::current()));
+                        return;
+                    }
+                },
+            }
+        };
+        self.release_ddl_lock(guard);
+        self.finish_ddl_commit(pending, result);
+    }
+
+    pub(super) fn finish_ddl_commit(
+        &self,
+        mut pending: PendingDdlCommit,
+        result: Result<(), AdapterError>,
+    ) {
+        if result.is_ok() && matches!(pending.context, DdlCommitContext::Statement { .. }) {
+            for command in &pending.commands {
+                self.emit_command_notices(pending.context.context_mut().session(), command);
+            }
+        }
+        pending.context.finish(result);
+    }
+
+    pub(crate) async fn catalog_transact_commands(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        commands: &mut [catalog::command::CatalogCommand],
+        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    ) -> Result<(), catalog::CommandExecutionError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly.into());
+        }
+        let start = Instant::now();
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let oracle_write_ts = self
+            .get_catalog_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["write_ts"]))
+            .await;
+        let conn_id = ctx.session().conn_id();
+        let Coordinator {
+            catalog,
+            active_conns,
+            controller,
+            ..
+        } = self;
+        let conn = active_conns.get(conn_id).expect("connection must exist");
+        let TransactionResult {
+            builtin_table_updates,
+            catalog_updates,
+            audit_events,
+        } = Box::pin(Arc::make_mut(catalog).transact_commands(
+            Some(&mut controller.storage_collections),
+            oracle_write_ts,
+            Some(conn),
+            commands,
+            responses,
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["transact"]))
+        .await?;
+
+        self.track_catalog_audit_events(Some(conn_id), audit_events);
+        let stage_start = Instant::now();
+        let table_updates = self.builtin_table_update().execute(builtin_table_updates);
+        phase_seconds
+            .with_label_values(&["stage_builtin"])
+            .observe(stage_start.elapsed().as_secs_f64());
+        self.finish_catalog_transaction(Some(ctx), table_updates, catalog_updates)
+            .await;
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    async fn finish_catalog_transaction(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
+        table_updates: BuiltinTableAppendNotify,
+        catalog_updates: Vec<ParsedStateUpdate>,
+    ) {
         let table_updates_wait = self
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
-        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+        let apply_catalog_implications_fut =
+            Box::pin(self.apply_catalog_implications(ctx, catalog_updates));
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = futures::future::join(
@@ -239,157 +820,6 @@ impl Coordinator {
             .catalog_transact_phase_seconds
             .with_label_values(&["consistency_check"])
             .observe(consistency_start.elapsed().as_secs_f64());
-
-        self.metrics
-            .catalog_transact_seconds
-            .with_label_values(&["catalog_transact_with_context"])
-            .observe(start.elapsed().as_secs_f64());
-
-        Ok(())
-    }
-
-    /// Executes a Catalog transaction with handling if the provided [`Session`]
-    /// is in a SQL transaction that is executing DDL.
-    #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
-    pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        mut ops: Vec<catalog::Op>,
-        side_effect: F,
-    ) -> Result<(), AdapterError>
-    where
-        F: for<'a> FnOnce(
-                &'a mut Coordinator,
-                Option<&'a mut ExecuteContext>,
-            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let start = Instant::now();
-
-        let Some(Transaction {
-            ops:
-                TransactionOps::DDL {
-                    ops: txn_ops,
-                    revision: txn_revision,
-                    state: txn_state,
-                    snapshot: txn_snapshot,
-                    side_effects: _,
-                },
-            ..
-        }) = ctx.session().transaction().inner()
-        else {
-            let result = self
-                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
-                .await;
-            self.metrics
-                .catalog_transact_seconds
-                .with_label_values(&["catalog_transact_with_ddl_transaction"])
-                .observe(start.elapsed().as_secs_f64());
-            return result;
-        };
-
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
-            self.metrics
-                .catalog_transact_seconds
-                .with_label_values(&["catalog_transact_with_ddl_transaction"])
-                .observe(start.elapsed().as_secs_f64());
-            return Err(AdapterError::DDLTransactionRace);
-        }
-
-        // The per-statement phases of a DDL transaction carry their own labels.
-        // The work differs from a real transaction's phases, and it is billed
-        // once per statement rather than once per transaction, so pooling the two
-        // populations under one label would blur both.
-        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
-
-        // Clone what we need from the session before taking &mut below.
-        let clone_start = Instant::now();
-        let txn_ops_clone = txn_ops.clone();
-        let txn_state_clone = txn_state.clone();
-        // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
-        // O(catalog size) in allocations, once per statement. `txn_state` next to
-        // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
-        let prev_snapshot = txn_snapshot.clone();
-        phase_seconds
-            .with_label_values(&["ddl_txn_snapshot_clone"])
-            .observe(clone_start.elapsed().as_secs_f64());
-
-        // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
-        let prep_start = Instant::now();
-        let mut combined_ops = txn_ops_clone;
-        combined_ops.extend(ops.iter().cloned());
-        let creates_scoped_object = ops.iter().any(|op| {
-            matches!(
-                op,
-                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
-            )
-        });
-        if creates_scoped_object {
-            // Include accumulated creates when deriving contexts. A replica can
-            // be created in a later DDL statement than its still-uncommitted
-            // cluster, which is absent from the coordinator's live catalog.
-            if let Some(scoped_op) = self.scoped_overrides_create_op(&combined_ops) {
-                ops.push(scoped_op.clone());
-                combined_ops.push(scoped_op);
-            }
-        }
-        let conn_id = ctx.session().conn_id().clone();
-        let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
-        phase_seconds
-            .with_label_values(&["ddl_txn_prep"])
-            .observe(prep_start.elapsed().as_secs_f64());
-        validate_res?;
-
-        // Get oracle timestamp for audit log entries.
-        let oracle_write_ts = self
-            .get_local_write_ts()
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_write_ts"]))
-            .await
-            .timestamp;
-
-        // Get ConnMeta for the session.
-        let conn = self.active_conns.get(ctx.session().conn_id());
-
-        // Incremental dry run: process only NEW ops against accumulated state.
-        // If we have a saved snapshot from a previous dry run, use it to
-        // initialize the transaction so it starts in sync with the accumulated
-        // state. Otherwise (first statement), the fresh durable transaction is
-        // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
-
-        // Accumulate ops for eventual COMMIT.
-        let result = ctx
-            .session_mut()
-            .transaction_mut()
-            .add_ops(TransactionOps::DDL {
-                ops: combined_ops,
-                state: new_state,
-                side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
-                snapshot: Some(new_snapshot),
-            });
-
-        self.metrics
-            .catalog_transact_seconds
-            .with_label_values(&["catalog_transact_with_ddl_transaction"])
-            .observe(start.elapsed().as_secs_f64());
-
-        result
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -414,7 +844,6 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let phase_start = Instant::now();
 
-        let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
@@ -508,34 +937,6 @@ impl Coordinator {
                     update_optimizer_e2e_latency_warning_threshold = true;
                     reconcile_metric_sinks = true;
                 }
-                catalog::Op::RenameItem { id, .. } => {
-                    let item = self.catalog().get_entry(id);
-                    let is_webhook_source = item
-                        .source()
-                        .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                        .unwrap_or(false);
-                    if is_webhook_source {
-                        webhook_sources_to_restart.insert(*id);
-                    }
-                }
-                catalog::Op::RenameSchema {
-                    database_spec,
-                    schema_spec,
-                    ..
-                } => {
-                    let schema = self.catalog().get_schema(
-                        database_spec,
-                        schema_spec,
-                        conn_id.unwrap_or(&SYSTEM_CONN_ID),
-                    );
-                    let webhook_sources = schema.item_ids().filter(|id| {
-                        let item = self.catalog().get_entry(id);
-                        item.source()
-                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                            .unwrap_or(false)
-                    });
-                    webhook_sources_to_restart.extend(webhook_sources);
-                }
                 catalog::Op::CreateCluster { id, .. } => {
                     clusters_to_create.push(*id);
                 }
@@ -557,7 +958,10 @@ impl Coordinator {
 
         // Observe before propagating, so a transaction rejected on resource
         // limits still accounts for the op scan it burned on the loop.
-        let validate_res = self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
+        let validate_res = self
+            .catalog()
+            .state()
+            .validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
         phase_seconds
             .with_label_values(&["prep"])
             .observe(phase_start.elapsed().as_secs_f64());
@@ -657,10 +1061,6 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            if !webhook_sources_to_restart.is_empty() {
-                self.restart_webhook_sources(webhook_sources_to_restart);
-            }
-
             if update_metrics_config {
                 mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
             }
@@ -712,6 +1112,20 @@ impl Coordinator {
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
 
+        self.track_catalog_audit_events(conn_id, audit_events);
+
+        phase_seconds
+            .with_label_values(&["finalize"])
+            .observe(finalize_start.elapsed().as_secs_f64());
+
+        Ok((builtin_update_notify, catalog_updates))
+    }
+
+    fn track_catalog_audit_events(
+        &self,
+        conn_id: Option<&ConnectionId>,
+        audit_events: Vec<VersionedEvent>,
+    ) {
         let conn = conn_id.and_then(|id| self.active_conns.get(id));
         if let Some(segment_client) = &self.segment_client {
             for VersionedEvent::V1(event) in audit_events {
@@ -734,12 +1148,6 @@ impl Coordinator {
                 );
             }
         }
-
-        phase_seconds
-            .with_label_values(&["finalize"])
-            .observe(finalize_start.elapsed().as_secs_f64());
-
-        Ok((builtin_update_notify, catalog_updates))
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
@@ -787,12 +1195,6 @@ impl Coordinator {
             .storage
             .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
-    }
-
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
-        for id in sources {
-            self.active_webhooks.remove(&id);
-        }
     }
 
     /// Like `drop_compute_sinks`, but for a single compute sink.
@@ -877,6 +1279,10 @@ impl Coordinator {
                 (sink, write_notify, reason)
             })
             .collect();
+
+        if to_retire.is_empty() {
+            return BuiltinTableAppendCompletion::completed();
+        }
 
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
@@ -1179,428 +1585,6 @@ impl Coordinator {
         Ok(res?)
     }
 
-    /// Validate all resource limits in a catalog transaction and return an error if that limit is
-    /// exceeded.
-    fn validate_resource_limits(
-        &self,
-        ops: &Vec<catalog::Op>,
-        conn_id: &ConnectionId,
-    ) -> Result<(), AdapterError> {
-        let mut new_kafka_connections = 0;
-        let mut new_postgres_connections = 0;
-        let mut new_mysql_connections = 0;
-        let mut new_sql_server_connections = 0;
-        let mut new_aws_privatelink_connections = 0;
-        let mut new_tables = 0;
-        let mut new_sources = 0;
-        let mut new_sinks = 0;
-        let mut new_materialized_views = 0;
-        let mut new_clusters = 0;
-        let mut new_replicas_per_cluster = BTreeMap::new();
-        let mut new_credit_consumption_rate = Numeric::zero();
-        let mut new_databases = 0;
-        let mut new_schemas_per_database = BTreeMap::new();
-        let mut new_objects_per_schema = BTreeMap::new();
-        let mut new_secrets = 0;
-        let mut new_roles = 0;
-        let mut new_network_policies = 0;
-        for op in ops {
-            match op {
-                Op::CreateDatabase { .. } => {
-                    new_databases += 1;
-                }
-                Op::CreateSchema { database_id, .. } => {
-                    if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
-                        *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
-                    }
-                }
-                Op::CreateRole { .. } => {
-                    new_roles += 1;
-                }
-                Op::CreateNetworkPolicy { .. } => {
-                    new_network_policies += 1;
-                }
-                Op::CreateCluster { .. } => {
-                    // TODO(benesch): having deprecated linked clusters, remove
-                    // the `max_sources` and `max_sinks` limit, and set a higher
-                    // max cluster limit?
-                    new_clusters += 1;
-                }
-                Op::CreateClusterReplica {
-                    cluster_id, config, ..
-                } => {
-                    if cluster_id.is_user() {
-                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
-                        if let ReplicaLocation::Managed(location) = &config.location {
-                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
-                        }
-                    }
-                }
-                Op::CreateItem { name, item, .. } => {
-                    *new_objects_per_schema
-                        .entry((
-                            name.qualifiers.database_spec.clone(),
-                            name.qualifiers.schema_spec.clone(),
-                        ))
-                        .or_insert(0) += 1;
-                    match item {
-                        CatalogItem::Connection(connection) => match connection.details {
-                            ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
-                            ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
-                            ConnectionDetails::MySql(_) => new_mysql_connections += 1,
-                            ConnectionDetails::SqlServer(_) => new_sql_server_connections += 1,
-                            ConnectionDetails::AwsPrivatelink(_) => {
-                                new_aws_privatelink_connections += 1
-                            }
-                            ConnectionDetails::Csr(_)
-                            | ConnectionDetails::GlueSchemaRegistry(_)
-                            | ConnectionDetails::Ssh { .. }
-                            | ConnectionDetails::Aws(_)
-                            | ConnectionDetails::Gcp(_)
-                            | ConnectionDetails::IcebergCatalog(_) => {}
-                        },
-                        CatalogItem::Table(_) => {
-                            new_tables += 1;
-                        }
-                        CatalogItem::Source(source) => {
-                            new_sources += source.user_controllable_persist_shard_count()
-                        }
-                        CatalogItem::Sink(_) => new_sinks += 1,
-                        CatalogItem::MaterializedView(_) => {
-                            new_materialized_views += 1;
-                        }
-                        CatalogItem::Secret(_) => {
-                            new_secrets += 1;
-                        }
-                        CatalogItem::Log(_)
-                        | CatalogItem::View(_)
-                        | CatalogItem::Index(_)
-                        | CatalogItem::Type(_)
-                        | CatalogItem::Func(_)
-                        | CatalogItem::MetricSink(_) => {}
-                    }
-                }
-                Op::DropObjects(drop_object_infos) => {
-                    for drop_object_info in drop_object_infos {
-                        match drop_object_info {
-                            DropObjectInfo::Cluster(_) => {
-                                new_clusters -= 1;
-                            }
-                            DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
-                                if cluster_id.is_user() {
-                                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                                    let cluster = self
-                                        .catalog()
-                                        .get_cluster_replica(*cluster_id, *replica_id);
-                                    if let ReplicaLocation::Managed(location) =
-                                        &cluster.config.location
-                                    {
-                                        new_credit_consumption_rate -=
-                                            self.replica_credits_per_hour(location);
-                                    }
-                                }
-                            }
-                            DropObjectInfo::Database(_) => {
-                                new_databases -= 1;
-                            }
-                            DropObjectInfo::Schema((database_spec, _)) => {
-                                if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                                    *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                                }
-                            }
-                            DropObjectInfo::Role(_) => {
-                                new_roles -= 1;
-                            }
-                            DropObjectInfo::NetworkPolicy(_) => {
-                                new_network_policies -= 1;
-                            }
-                            DropObjectInfo::Item(id) => {
-                                let entry = self.catalog().get_entry(id);
-                                *new_objects_per_schema
-                                    .entry((
-                                        entry.name().qualifiers.database_spec.clone(),
-                                        entry.name().qualifiers.schema_spec.clone(),
-                                    ))
-                                    .or_insert(0) -= 1;
-                                match entry.item() {
-                                    CatalogItem::Connection(connection) => match connection.details
-                                    {
-                                        ConnectionDetails::AwsPrivatelink(_) => {
-                                            new_aws_privatelink_connections -= 1;
-                                        }
-                                        _ => (),
-                                    },
-                                    CatalogItem::Table(_) => {
-                                        new_tables -= 1;
-                                    }
-                                    CatalogItem::Source(source) => {
-                                        new_sources -=
-                                            source.user_controllable_persist_shard_count()
-                                    }
-                                    CatalogItem::Sink(_) => new_sinks -= 1,
-                                    CatalogItem::MaterializedView(_) => {
-                                        new_materialized_views -= 1;
-                                    }
-                                    CatalogItem::Secret(_) => {
-                                        new_secrets -= 1;
-                                    }
-                                    CatalogItem::Log(_)
-                                    | CatalogItem::View(_)
-                                    | CatalogItem::Index(_)
-                                    | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_)
-                                    | CatalogItem::MetricSink(_) => {}
-                                }
-                            }
-                        }
-                    }
-                }
-                Op::UpdateItem {
-                    name: _,
-                    id,
-                    to_item,
-                } => match to_item {
-                    CatalogItem::Source(source) => {
-                        let current_source = self
-                            .catalog()
-                            .get_entry(id)
-                            .source()
-                            .expect("source update is for source item");
-
-                        new_sources += source.user_controllable_persist_shard_count()
-                            - current_source.user_controllable_persist_shard_count();
-                    }
-                    CatalogItem::Connection(_)
-                    | CatalogItem::Table(_)
-                    | CatalogItem::Sink(_)
-                    | CatalogItem::MaterializedView(_)
-                    | CatalogItem::Secret(_)
-                    | CatalogItem::Log(_)
-                    | CatalogItem::View(_)
-                    | CatalogItem::Index(_)
-                    | CatalogItem::Type(_)
-                    | CatalogItem::Func(_)
-                    | CatalogItem::MetricSink(_) => {}
-                },
-                Op::AlterRole { .. }
-                | Op::AlterRetainHistory { .. }
-                | Op::AlterSourceTimestampInterval { .. }
-                | Op::AlterNetworkPolicy { .. }
-                | Op::AlterAddColumn { .. }
-                | Op::AlterMaterializedViewApplyReplacement { .. }
-                | Op::UpdatePrivilege { .. }
-                | Op::UpdateDefaultPrivilege { .. }
-                | Op::GrantRole { .. }
-                | Op::RenameCluster { .. }
-                | Op::RenameClusterReplica { .. }
-                | Op::RenameItem { .. }
-                | Op::RenameSchema { .. }
-                | Op::UpdateOwner { .. }
-                | Op::RevokeRole { .. }
-                | Op::UpdateClusterConfig { .. }
-                | Op::UpdateSourceReferences { .. }
-                | Op::UpdateSystemConfiguration { .. }
-                | Op::ResetSystemConfiguration { .. }
-                | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateScopedSystemParameters { .. }
-                | Op::Comment { .. }
-                | Op::CheckClusterState { .. }
-                | Op::InjectAuditEvents { .. } => {}
-            }
-        }
-
-        let mut current_aws_privatelink_connections = 0;
-        let mut current_postgres_connections = 0;
-        let mut current_mysql_connections = 0;
-        let mut current_sql_server_connections = 0;
-        let mut current_kafka_connections = 0;
-        for c in self.catalog().user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
-
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::GlueSchemaRegistry(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::Gcp(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
-            }
-        }
-        self.validate_resource_limit(
-            current_kafka_connections,
-            new_kafka_connections,
-            SystemVars::max_kafka_connections,
-            "Kafka Connection",
-            MAX_KAFKA_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_postgres_connections,
-            new_postgres_connections,
-            SystemVars::max_postgres_connections,
-            "PostgreSQL Connection",
-            MAX_POSTGRES_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_mysql_connections,
-            new_mysql_connections,
-            SystemVars::max_mysql_connections,
-            "MySQL Connection",
-            MAX_MYSQL_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_sql_server_connections,
-            new_sql_server_connections,
-            SystemVars::max_sql_server_connections,
-            "SQL Server Connection",
-            MAX_SQL_SERVER_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_aws_privatelink_connections,
-            new_aws_privatelink_connections,
-            SystemVars::max_aws_privatelink_connections,
-            "AWS PrivateLink Connection",
-            MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_tables().count(),
-            new_tables,
-            SystemVars::max_tables,
-            "table",
-            MAX_TABLES.name(),
-        )?;
-
-        let current_sources: usize = self
-            .catalog()
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
-        self.validate_resource_limit(
-            current_sources,
-            new_sources,
-            SystemVars::max_sources,
-            "source",
-            MAX_SOURCES.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_sinks().count(),
-            new_sinks,
-            SystemVars::max_sinks,
-            "sink",
-            MAX_SINKS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_materialized_views().count(),
-            new_materialized_views,
-            SystemVars::max_materialized_views,
-            "materialized view",
-            MAX_MATERIALIZED_VIEWS.name(),
-        )?;
-        self.validate_resource_limit(
-            // Linked compute clusters don't count against the limit, since
-            // we have a separate sources and sinks limit.
-            //
-            // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
-            // and set a higher max cluster limit?
-            self.catalog().user_clusters().count(),
-            new_clusters,
-            SystemVars::max_clusters,
-            "cluster",
-            MAX_CLUSTERS.name(),
-        )?;
-        for (cluster_id, new_replicas) in new_replicas_per_cluster {
-            // It's possible that the cluster hasn't been created yet.
-            let current_amount = self
-                .catalog()
-                .try_get_cluster(cluster_id)
-                .map(|instance| instance.user_replicas().count())
-                .unwrap_or(0);
-            self.validate_resource_limit(
-                current_amount,
-                new_replicas,
-                SystemVars::max_replicas_per_cluster,
-                "cluster replica",
-                MAX_REPLICAS_PER_CLUSTER.name(),
-            )?;
-        }
-        self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(None),
-            new_credit_consumption_rate,
-            |system_vars| {
-                self.license_key
-                    .max_credit_consumption_rate()
-                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
-            },
-            "cluster replica",
-            MAX_CREDIT_CONSUMPTION_RATE.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().databases().count(),
-            new_databases,
-            SystemVars::max_databases,
-            "database",
-            MAX_DATABASES.name(),
-        )?;
-        for (database_id, new_schemas) in new_schemas_per_database {
-            self.validate_resource_limit(
-                self.catalog().get_database(database_id).schemas_by_id.len(),
-                new_schemas,
-                SystemVars::max_schemas_per_database,
-                "schema",
-                MAX_SCHEMAS_PER_DATABASE.name(),
-            )?;
-        }
-        for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
-            // For temporary schemas that don't exist yet (lazy creation),
-            // treat them as having 0 items.
-            let current_items = self
-                .catalog()
-                .try_get_schema(&database_spec, &schema_spec, conn_id)
-                .map(|schema| schema.items.len())
-                .unwrap_or(0);
-            self.validate_resource_limit(
-                current_items,
-                new_objects,
-                SystemVars::max_objects_per_schema,
-                "object",
-                MAX_OBJECTS_PER_SCHEMA.name(),
-            )?;
-        }
-        self.validate_resource_limit(
-            self.catalog().user_secrets().count(),
-            new_secrets,
-            SystemVars::max_secrets,
-            "secret",
-            MAX_SECRETS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_roles().count(),
-            new_roles,
-            SystemVars::max_roles,
-            "role",
-            MAX_ROLES.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_network_policies().count(),
-            new_network_policies,
-            SystemVars::max_network_policies,
-            "network_policy",
-            MAX_NETWORK_POLICIES.name(),
-        )?;
-        Ok(())
-    }
-
-    /// Validate a specific type of resource limit and return an error if that limit is exceeded.
     pub(crate) fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
@@ -1612,43 +1596,15 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        if new_instances <= 0 {
-            return Ok(());
-        }
-
-        let limit: i64 = resource_limit(self.catalog().system_config()).into();
-        let current_amount: Option<i64> = current_amount.try_into().ok();
-        let desired =
-            current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
-
-        let exceeds_limit = if let Some(desired) = desired {
-            desired > limit
-        } else {
-            true
-        };
-
-        let desired = desired
-            .map(|desired| desired.to_string())
-            .unwrap_or_else(|| format!("more than {}", i64::MAX));
-        let current = current_amount
-            .map(|current| current.to_string())
-            .unwrap_or_else(|| format!("more than {}", i64::MAX));
-        if exceeds_limit {
-            Err(AdapterError::ResourceExhaustion {
-                resource_type: resource_type.to_string(),
-                limit_name: limit_name.to_string(),
-                desired,
-                limit: limit.to_string(),
-                current,
-            })
-        } else {
-            Ok(())
-        }
+        self.catalog().state().validate_resource_limit(
+            current_amount,
+            new_instances,
+            resource_limit,
+            resource_type,
+            limit_name,
+        )
     }
 
-    /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
-    ///
-    /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
     pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
         current_amount: Numeric,
@@ -1660,25 +1616,12 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> Numeric,
     {
-        if new_amount <= Numeric::zero() {
-            return Ok(());
-        }
-
-        let limit = resource_limit(self.catalog().system_config());
-        // Floats will overflow to infinity instead of panicking, which has the correct comparison
-        // semantics.
-        // NaN should be impossible here since both values are positive.
-        let desired = current_amount + new_amount;
-        if desired > limit {
-            Err(AdapterError::ResourceExhaustion {
-                resource_type: resource_type.to_string(),
-                limit_name: limit_name.to_string(),
-                desired: desired.to_string(),
-                limit: limit.to_string(),
-                current: current_amount.to_string(),
-            })
-        } else {
-            Ok(())
-        }
+        self.catalog().state().validate_resource_limit_numeric(
+            current_amount,
+            new_amount,
+            resource_limit,
+            resource_type,
+            limit_name,
+        )
     }
 }

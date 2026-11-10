@@ -194,6 +194,8 @@ IGNORE_RE = re.compile(
     # For 0dt upgrades
     | halting\ process:\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
+    # Expected in the 0dt restarted-in-place-after-promotion workflow
+    | 0dt-mz_restarted_in_place-1\ .*\ halting\ process:\ restarted\ in\ place,\ but\ deployment\ generation\ \d+\ has\ been\ promoted
     | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey

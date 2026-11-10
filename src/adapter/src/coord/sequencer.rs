@@ -17,7 +17,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::FuturesOrdered;
 use http::Uri;
@@ -61,10 +60,7 @@ use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::DeferredPlan;
 use crate::coord::validity::PlanValidity;
-use crate::coord::{
-    Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
-    catalog_serving,
-};
+use crate::coord::{Coordinator, ExplainPlanContext, Message, TargetCluster, catalog_serving};
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
@@ -77,7 +73,7 @@ use crate::util::ClientTransmitter;
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
-// private module to prevent anyone from calling them directly. All
+// private module to prevent anyone from calling them directly. Bound-plan
 // sequencing should be done through the `sequence_plan` method.
 // This allows us to add catch-all logic that should be applied to all
 // plans in `sequence_plan` and guarantee that no caller can circumvent
@@ -85,6 +81,7 @@ use crate::util::ClientTransmitter;
 //
 // The exceptions are:
 //
+// - Rename/swap commands enter through `sequence_rename_command` and execute in the catalog.
 // - Creating a role during connection startup. In this scenario, the session has not been properly
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
@@ -96,9 +93,52 @@ use crate::util::ClientTransmitter;
 mod inner;
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Selects and records the execution cluster, checking its restrictions.
+    pub(super) fn prepare_plan_execution(
+        &mut self,
+        ctx: &ExecuteContext,
+        plan: &Plan,
+    ) -> Result<(TargetCluster, Option<mz_controller_types::ClusterId>), AdapterError> {
+        // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
+        let target_cluster = match ctx.session().transaction().cluster() {
+            // Use the current transaction's cluster.
+            Some(cluster_id) => TargetCluster::Transaction(cluster_id),
+            // If there isn't a current cluster set for a transaction, then try to auto route.
+            None => {
+                let session_catalog = self.catalog.for_session(ctx.session());
+                catalog_serving::auto_run_on_catalog_server(&session_catalog, ctx.session(), plan)
+            }
+        };
+        let (target_cluster_id, target_cluster_name) = match self
+            .catalog()
+            .resolve_target_cluster(target_cluster, ctx.session())
+        {
+            Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+            Err(_) => (None, None),
+        };
+
+        if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
+            target_cluster_id,
+            target_cluster_name.clone(),
+            ctx.extra().contents(),
+        ) {
+            self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
+        }
+
+        let session_catalog = self.catalog.for_session(ctx.session());
+
+        if let Some(cluster_name) = &target_cluster_name {
+            if let Err(e) =
+                catalog_serving::check_cluster_restrictions(cluster_name, &session_catalog, plan)
+            {
+                return Err(e);
+            }
+        }
+
+        Ok((target_cluster, target_cluster_id))
+    }
+
+    /// Dispatches a plan in a size-bounded, heap-allocated future.
     pub(crate) fn sequence_plan(
         &mut self,
         mut ctx: ExecuteContext,
@@ -106,7 +146,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
         sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
@@ -140,47 +180,9 @@ impl Coordinator {
                 return;
             };
 
-            // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
-            let target_cluster = match ctx.session().transaction().cluster() {
-                // Use the current transaction's cluster.
-                Some(cluster_id) => TargetCluster::Transaction(cluster_id),
-                // If there isn't a current cluster set for a transaction, then try to auto route.
-                None => {
-                    let session_catalog = self.catalog.for_session(ctx.session());
-                    catalog_serving::auto_run_on_catalog_server(
-                        &session_catalog,
-                        ctx.session(),
-                        &plan,
-                    )
-                }
-            };
-            let (target_cluster_id, target_cluster_name) = match self
-                .catalog()
-                .resolve_target_cluster(target_cluster, ctx.session())
-            {
-                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
-                Err(_) => (None, None),
-            };
-
-            if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
-                target_cluster_id,
-                target_cluster_name.clone(),
-                ctx.extra().contents(),
-            ) {
-                self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
-            }
-
+            let (target_cluster, target_cluster_id) =
+                return_if_err!(self.prepare_plan_execution(&ctx, &plan), ctx);
             let session_catalog = self.catalog.for_session(ctx.session());
-
-            if let Some(cluster_name) = &target_cluster_name {
-                if let Err(e) = catalog_serving::check_cluster_restrictions(
-                    cluster_name,
-                    &session_catalog,
-                    &plan,
-                ) {
-                    return ctx.retire(Err(e));
-                }
-            }
 
             // The target-connection role only matters for `pg_cancel_backend`,
             // which the frontend sequences.
@@ -198,6 +200,15 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
+                    if !matches!(
+                        plan.source.data_source,
+                        plan::DataSourceDesc::Webhook { .. }
+                    ) {
+                        let msg = "CREATE SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
+                        return;
+                    }
                     let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
@@ -213,13 +224,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::CreateSources(plans) => {
-                    assert!(
-                        resolved_ids.is_empty(),
-                        "each plan has separate resolved_ids"
-                    );
-                    let result = self.sequence_create_source(&mut ctx, plans).await;
-                    ctx.retire(result);
+                Plan::CreateSources(_) => {
+                    let msg = "CREATE SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateConnection(plan) => {
                     self.sequence_create_connection(ctx, plan, resolved_ids)
@@ -253,6 +261,18 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateTable(plan) => {
+                    if matches!(
+                        plan.table.data_source,
+                        plan::TableDataSource::DataSource {
+                            desc: plan::DataSourceDesc::IngestionExport { .. },
+                            ..
+                        }
+                    ) {
+                        let msg = "CREATE TABLE FROM SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
+                        return;
+                    }
                     let result = self
                         .sequence_create_table(&mut ctx, plan, resolved_ids)
                         .await;
@@ -351,33 +371,6 @@ impl Coordinator {
                 | Plan::AbortTransaction(AbortTransactionPlan {
                     ref transaction_type,
                 }) => {
-                    // Serialize DDL transactions. Statements that use this mode must return false
-                    // in `must_serialize_ddl()`.
-                    if ctx.session().transaction().is_ddl() {
-                        if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
-                            let prev = self
-                                .active_conns
-                                .get_mut(ctx.session().conn_id())
-                                .expect("connection must exist")
-                                .deferred_lock
-                                .replace(guard);
-                            assert!(
-                                prev.is_none(),
-                                "connections should have at most one lock guard"
-                            );
-                        } else {
-                            self.serialized_ddl.push_back(DeferredPlanStatement {
-                                ctx,
-                                ps: PlanStatement::Plan {
-                                    plan,
-                                    resolved_ids,
-                                    sql_impl_resolved_ids,
-                                },
-                            });
-                            return;
-                        }
-                    }
-
                     let action = match &plan {
                         Plan::CommitTransaction(_) => EndTransactionAction::Commit,
                         Plan::AbortTransaction(_) => EndTransactionAction::Rollback,
@@ -441,19 +434,15 @@ impl Coordinator {
                 Plan::AlterCluster(plan) => {
                     self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
-                Plan::AlterClusterRename(plan) => {
-                    let result = self.sequence_alter_cluster_rename(&mut ctx, plan).await;
-                    ctx.retire(result);
-                }
-                Plan::AlterClusterSwap(plan) => {
-                    let result = self.sequence_alter_cluster_swap(&mut ctx, plan).await;
-                    ctx.retire(result);
-                }
-                Plan::AlterClusterReplicaRename(plan) => {
-                    let result = self
-                        .sequence_alter_cluster_replica_rename(ctx.session(), plan)
-                        .await;
-                    ctx.retire(result);
+                Plan::AlterClusterRename(_)
+                | Plan::AlterClusterSwap(_)
+                | Plan::AlterClusterReplicaRename(_)
+                | Plan::AlterItemRename(_)
+                | Plan::AlterSchemaRename(_)
+                | Plan::AlterSchemaSwap(_) => {
+                    let msg = "rename/swap must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterConnection(plan) => {
                     self.sequence_alter_connection(ctx, plan).await;
@@ -472,18 +461,6 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::AlterItemRename(plan) => {
-                    let result = self.sequence_alter_item_rename(&mut ctx, plan).await;
-                    ctx.retire(result);
-                }
-                Plan::AlterSchemaRename(plan) => {
-                    let result = self.sequence_alter_schema_rename(&mut ctx, plan).await;
-                    ctx.retire(result);
-                }
-                Plan::AlterSchemaSwap(plan) => {
-                    let result = self.sequence_alter_schema_swap(&mut ctx, plan).await;
-                    ctx.retire(result);
-                }
                 Plan::AlterRole(plan) => {
                     let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
                     ctx.retire(result);
@@ -494,9 +471,10 @@ impl Coordinator {
                 Plan::AlterSink(plan) => {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
                 }
-                Plan::AlterSource(plan) => {
-                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                Plan::AlterSource(_) => {
+                    let msg = "ALTER SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;
@@ -589,6 +567,11 @@ impl Coordinator {
                             catalog_revision: self.catalog().transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
                         };
+                        ctx.session_mut().retain_description(
+                            plan.stmt.clone(),
+                            plan.desc.param_types.iter().cloned().map(Some).collect(),
+                            plan.desc.clone(),
+                        );
                         ctx.session_mut().set_prepared_statement(
                             plan.name,
                             Some(plan.stmt),
@@ -709,8 +692,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))
-        .boxed_local()
+        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"));
+        crate::coord::box_dispatcher(future)
     }
 
     #[mz_ore::instrument(level = "debug")]

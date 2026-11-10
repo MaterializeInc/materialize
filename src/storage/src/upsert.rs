@@ -34,12 +34,12 @@ use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    PressOnDropButton, sole_capability,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, InputCapability, Operator};
+use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -239,7 +239,13 @@ where
 {
     /// Columnar order key. Must order consistently with the source time it is
     /// projected from.
-    type Order: columnar::Columnar + Clone + Default + Ord + Send + Sync + 'static;
+    type Order: mz_timely_util::columnar::chunk::PoolColumnar
+        + Clone
+        + Default
+        + Ord
+        + Send
+        + Sync
+        + 'static;
     /// Project the source time onto its order key.
     fn upsert_order(&self) -> Self::Order;
 }
@@ -684,7 +690,7 @@ where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
-    T: columnar::Columnar + Default,
+    T: mz_timely_util::columnar::chunk::PoolColumnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     FromTime: Timestamp + Clone + Sync,
     FromTime: UpsertSourceTime,
@@ -804,7 +810,7 @@ where
         .inner
         .unary(Pipeline, "UpsertThinning", |_, _| {
             // A capability suitable to emit all updates in `updates`, if any.
-            let mut capability: Option<InputCapability<T>> = None;
+            let mut capability: Option<Capability<T>> = None;
             // A batch of received updates
             let mut updates = Vec::new();
             move |input, output| {
@@ -814,6 +820,11 @@ where
                         "invalid upsert input"
                     );
                     updates.append(data);
+                    // `T: TotalOrder`, so the message's stamp has a least element, and holding
+                    // that one capability suffices to emit every update in the message.
+                    let cap = cap
+                        .retain_least(0)
+                        .expect("message stamped with no capabilities");
                     match capability.as_mut() {
                         Some(capability) => {
                             if cap.time() <= capability.time() {
@@ -1276,6 +1287,7 @@ where
             for (i, event) in events {
                 match event {
                     AsyncEvent::Data(cap, mut data) => {
+                        let cap = sole_capability(&cap).clone();
                         tracing::trace!(
                             time=?cap.time(),
                             updates=%data.len(),

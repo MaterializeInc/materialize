@@ -1361,6 +1361,161 @@ select '9::59.999999999'::time
 statement error invalid input syntax for type time: NANOSECOND
 select '9::60.1'::time
 
+# Regression test for CPU-146. A time keeps nanoseconds, but its text and
+# interval forms round or truncate to microseconds, so distinct times map to the
+# same text and interval. Neither cast may carry the unique key of `t`.
+statement ok
+CREATE TABLE cpu_146 (t time)
+
+query BB
+SELECT '00:00:00.000000499'::time::text = '00:00:00'::time::text,
+       '00:00:00.000000499'::time::interval = '00:00:00'::time::interval
+----
+true true
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_text AS SELECT t::text FROM (SELECT DISTINCT t FROM cpu_146)
+----
+materialize.public.cpu_146_text:
+  Project (#1) // { keys: "()" }
+    Map (time_to_text(#0{t})) // { keys: "([0])" }
+      Distinct project=[#0] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_interval AS SELECT t::interval FROM (SELECT DISTINCT t FROM cpu_146)
+----
+materialize.public.cpu_146_interval:
+  Project (#1) // { keys: "()" }
+    Map (time_to_interval(#0{t})) // { keys: "([0])" }
+      Distinct project=[#0] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+# A timestamp built from `date + time` keeps the time's nanoseconds, and its
+# text form rounds them away like the time's does. The same holds for
+# containers with such elements.
+query BBB
+SELECT DATE '2000-01-01' + '00:00:00.000000499'::time = TIMESTAMP '2000-01-01',
+       (DATE '2000-01-01' + '00:00:00.000000499'::time)::text = TIMESTAMP '2000-01-01'::text,
+       LIST['00:00:00.000000499'::time]::text = LIST['00:00:00'::time]::text
+----
+false true true
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_timestamp AS SELECT ts::text FROM (SELECT DISTINCT DATE '2000-01-01' + t AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_timestamp:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_to_text(#0{ts})) // { keys: "([0])" }
+      Distinct project=[(2000-01-01 + #0{t})] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_timestamptz AS SELECT ts::text FROM (SELECT DISTINCT (DATE '2000-01-01' + t)::timestamptz AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_timestamptz:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_with_time_zone_to_text(#0{ts})) // { keys: "([0])" }
+      Distinct project=[timestamp_to_timestamp_with_time_zone((2000-01-01 + #0{t}))] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_list AS SELECT ts::text FROM (SELECT DISTINCT LIST[ROW(DATE '2000-01-01' + t)] AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_list:
+  Project (#1) // { keys: "()" }
+    Map (listtostr(#0{ts})) // { keys: "([0])" }
+      Distinct project=[list[row((2000-01-01 + #0{t}))]] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_jsonb AS SELECT to_jsonb(ts) FROM (SELECT DISTINCT LIST[DATE '2000-01-01' + t] AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_jsonb:
+  Project (#1) // { keys: "()" }
+    Map (listtojsonb(#0{ts})) // { keys: "([0])" }
+      Distinct project=[list[(2000-01-01 + #0{t})]] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+# Casts between timestamp types round to the target precision, which drops the
+# nanoseconds of an unbounded-precision input.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_to_timestamptz AS SELECT ts::timestamptz FROM (SELECT DISTINCT DATE '2000-01-01' + t AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_to_timestamptz:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_to_timestamp_with_time_zone(#0{ts})) // { keys: "([0])" }
+      Distinct project=[(2000-01-01 + #0{t})] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_to_timestamp AS SELECT ts::timestamp FROM (SELECT DISTINCT (DATE '2000-01-01' + t)::timestamptz AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_to_timestamp:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_with_time_zone_to_timestamp(#0{ts})) // { keys: "([0])" }
+      Distinct project=[timestamp_to_timestamp_with_time_zone((2000-01-01 + #0{t}))] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP TABLE cpu_146
+
 # Regression test for SQL-473. 24:00:00 is rejected. The binary Bind parameter
 # path rejects it too instead of silently wrapping to 00:00:00, see
 # test/pgtest-mz/time-binary-out-of-range.pt.

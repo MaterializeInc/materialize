@@ -8,8 +8,6 @@
 # by the Apache License, Version 2.0.
 
 rules:
-  dependabot-cooldown:
-    disable: true
   dangerous-triggers:
     ignore:
       - cla.yml

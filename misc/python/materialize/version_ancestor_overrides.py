@@ -32,6 +32,33 @@ def get_ancestor_overrides_for_performance_regressions(
         "MySqlInitialLoad",
         "MySqlInitialLoadMultiWorkerSampled",
         "MySqlInitialLoadMultiWorkerSingleTable",
+        "MySqlStreaming",
+    ):
+        # PR#40206 (storage: read the MySQL replication stream during a snapshot)
+        # delays snapshot visibility by up to the 2s
+        # storage_persist_sink_description_lookahead that CI sets. It also
+        # fills the persist blob cache faster, which raises clusterd memory.
+        min_ancestor_mz_version_per_commit[
+            "1f7e8de37d254655599fcfe40865b3be49c599ef"
+        ] = MzVersion.parse_mz("v26.50.0")
+
+    if scenario_class_name == "MinMaxMaintained":
+        # PR#38805 (deps: update differential-dataflow to 0.26 and timely to
+        # 0.32) increased wallclock by ~10%.
+        min_ancestor_mz_version_per_commit[
+            "746101ba71cf1a62ded82d80170df2b7ec2fe30a"
+        ] = MzVersion.parse_mz("v26.50.0")
+
+    if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
+        # PR#40271 (kafka: update librdkafka to 2.16.0) increased wallclock by ~40%
+        min_ancestor_mz_version_per_commit[
+            "a98fc037e9a7b9b92eeaa9a89c94629df3b99678"
+        ] = MzVersion.parse_mz("v26.49.0")
+
+    if scenario_class_name in (
+        "MySqlInitialLoad",
+        "MySqlInitialLoadMultiWorkerSampled",
+        "MySqlInitialLoadMultiWorkerSingleTable",
     ):
         # PR#38094 (storage: Fast approximate snapshot partitioning) increased
         # snapshot wallclock: integer primary keys are no longer partitioned,

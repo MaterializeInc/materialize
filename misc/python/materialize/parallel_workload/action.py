@@ -332,14 +332,13 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
+            "Window function performance issue",  # TODO: Remove when SQL-858 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
-            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
             # generate_select_query occasionally emits a WITH MUTUALLY
             # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
             # purpose when the iteration outruns the limit. Only our generated
@@ -370,7 +369,6 @@ class Action:
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
-                    "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
                     "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
@@ -1744,6 +1742,12 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A materialized view or a newer index may read from it.
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:
@@ -2834,18 +2838,13 @@ class ReadOnlyTransactionAction(Action):
 
 
 class DDLTransactionAction(Action):
-    """A DDL statement inside an explicit `BEGIN`/`COMMIT`. Materialize allows
-    only a single statement in a DDL transaction, so the value over autocommit
-    DDL is the open commit window: racing concurrent DDL against it exercises
-    the "another session modified the catalog while this DDL transaction was
-    open" serialization path."""
+    """Race concurrent catalog changes against CREATE TABLE deferred until COMMIT."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            "another session modified the catalog",
             "unknown schema",
         ] + super().errors_to_ignore(exe)
 
@@ -3004,6 +3003,9 @@ class FlipFlagsAction(Action):
             "'.*'",
         ]
         self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_gc_remove_finalized_rollups"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
@@ -3201,10 +3203,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
-            "0",
-            "2",
-            "4",
+        self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
+            "0.0",
+            "0.125",
+            "0.5",
         ]
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3280,7 +3282,6 @@ class FlipFlagsAction(Action):
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
-            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
@@ -3473,6 +3474,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -4666,6 +4668,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
@@ -6419,12 +6422,9 @@ class SourceReadHoldSweepAction(Action):
 
     PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
     kill scenario, where racing envd/clusterd restarts stresses read-hold
-    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
-    shard not upheld across a restart, so its since advances past the
-    dependent's upper) and PER-49 (a compute import as_of behind the compacted
-    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
-    those known coordinator/compute panics.
-    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+    reinstatement. Enabling it now just re-triggers PER-49 (a compute import
+    as_of behind the compacted since after ALTER TABLE ADD COLUMN + kill).
+    TODO: enable in read_action_list once PER-49 is fixed."""
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -6484,7 +6484,7 @@ read_action_list = ActionList(
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
         # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
-        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
@@ -6537,7 +6537,7 @@ dml_nontrans_action_list = ActionList(
         (FlipFlagsAction, 2),
         (SetSessionVariableAction, 2),
         (DiscardAction, 2),
-        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # TODO: Reenable when SS-325 is fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],

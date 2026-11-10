@@ -46,7 +46,7 @@ use semver::Version;
 use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug_span, trace_span, warn};
+use tracing::{Instrument, debug, debug_span, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
@@ -1522,9 +1522,9 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 
 #[derive(Debug)]
 pub(crate) struct PartDeletes<T> {
-    /// Keys to hollow parts or runs that we're ready to delete.
+    /// Keys to hollow parts that we're ready to delete.
     blob_keys: BTreeSet<PartialBatchKey>,
-    /// Keys to hollow runs that may not have had all their parts deleted (or added to blob_keys) yet.
+    /// Hollow runs whose parts have not been read yet.
     hollow_runs: BTreeMap<PartialBatchKey, HollowRunRef<T>>,
 }
 
@@ -1572,6 +1572,11 @@ impl<T: Timestamp> PartDeletes<T> {
         }
     }
 
+    /// Deletes every blob reachable from the added parts.
+    ///
+    /// A run's blob is only deleted once everything it lists is gone. So if
+    /// this gets interrupted, calling it again with the same parts cleans up
+    /// the rest.
     pub async fn delete(
         mut self,
         blob: &dyn Blob,
@@ -1582,6 +1587,7 @@ impl<T: Timestamp> PartDeletes<T> {
     ) where
         T: Codec64,
     {
+        let mut run_keys = Vec::new();
         loop {
             let () = stream::iter(mem::take(&mut self.blob_keys))
                 .map(|key| {
@@ -1598,13 +1604,37 @@ impl<T: Timestamp> PartDeletes<T> {
                 break;
             };
 
-            if let Some(run) = run_ref.get(shard_id, blob, metrics).await {
-                // Queue up both all the individual parts and the run itself for deletion.
-                for part in &run.parts {
-                    self.add(part);
+            // The run's own key goes to `run_keys`, not `blob_keys`. Deleting it
+            // alongside its children would lose the only list of them if we
+            // crashed before they were all gone.
+            match run_ref.get(shard_id, blob, metrics).await {
+                Some(run) => {
+                    for part in &run.parts {
+                        self.add(part);
+                    }
+                    run_keys.push(run_key);
                 }
-                self.blob_keys.insert(run_key);
-            };
+                // `get` retries errors, so `None` means the run blob is gone. If this
+                // code deleted it, everything it listed went first. If something else
+                // did (an older version mid-upgrade, a manual delete), its children are
+                // now unreachable, which is what the metric is for.
+                None => {
+                    metrics.state.hollow_run_missing_on_delete.inc();
+                    debug!("hollow run {run_key} already deleted in shard {shard_id}");
+                }
+            }
+        }
+
+        // Nested runs are read after their parent, so walking the list
+        // backwards deletes children first. Do these one at a time: deleted
+        // concurrently, a parent could go while its nested run's delete is
+        // still in flight, and a crash then leaks the nested run.
+        //
+        // A possible optimization: delete one nesting level at a time, deepest
+        // first, running each level's deletes concurrently.
+        for run_key in run_keys.into_iter().rev() {
+            let key = run_key.complete(&shard_id);
+            retry_external(delete_metrics, || blob.delete(&key)).await;
         }
     }
 }
@@ -1622,6 +1652,10 @@ fn diffs_sum<D: Monoid + Codec64>(updates: &Int64Array) -> D {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
+    use std::time::Duration;
+
+    use mz_persist::intercept::{InterceptBlob, InterceptHandle};
+    use mz_persist::location::ExternalError;
 
     use super::*;
     use crate::PersistLocation;
@@ -2045,5 +2079,92 @@ mod tests {
             validate_truncate_batch(&rewritten, &desc(2, 5), true, true).expect("valid"),
             false
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn hollow_run_delete_interrupted() {
+        let cache = PersistClientCache::new_no_metrics();
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        let batch = write
+            .expect_batch(&[(("1".into(), "one".into()), 1, 1)], 0, 2)
+            .await;
+        let parts = batch.into_hollow_batch().parts;
+
+        // top run -> inner run -> part
+        let writer = WriterKey::for_version(&client.cfg.build_version);
+        let part_key = parts[0].expect_hollow_part().key.complete(&shard_id);
+        let inner = HollowRunRef::set::<i64>(
+            shard_id,
+            &*client.blob,
+            &writer,
+            HollowRun { parts },
+            &client.metrics,
+        )
+        .await;
+        let inner_key = inner.key.complete(&shard_id);
+        let top = HollowRunRef::set::<i64>(
+            shard_id,
+            &*client.blob,
+            &writer,
+            HollowRun {
+                parts: vec![RunPart::Many(inner)],
+            },
+            &client.metrics,
+        )
+        .await;
+        let top_key = top.key.complete(&shard_id);
+
+        // Fake a crash right after the top run blob is deleted. The hook runs
+        // after the delete has happened and reports an error every time, so
+        // `retry_external` spins and the delete never gets past this point.
+        // The timeout below then drops it, which is the crash.
+        let intercept = InterceptHandle::default();
+        let crash_key = top_key.to_string();
+        intercept.set_post_delete(Some(Arc::new(move |key, ret| {
+            if key == crash_key {
+                Err(ExternalError::from(anyhow::anyhow!("crash")))
+            } else {
+                ret
+            }
+        })));
+        let crashing = InterceptBlob::new(Arc::clone(&client.blob), intercept);
+        let deletes = || {
+            let mut deletes = PartDeletes::default();
+            deletes.add(&RunPart::Many(top.clone()));
+            deletes
+        };
+        let metrics = &*client.metrics;
+        let retry = &metrics.retries.external.batch_delete;
+        let missing = || metrics.state.hollow_run_missing_on_delete.get();
+        let missing_before = missing();
+        let crashed = tokio::time::timeout(
+            Duration::from_secs(1),
+            deletes().delete(&crashing, shard_id, usize::MAX, metrics, retry),
+        )
+        .await;
+        assert!(crashed.is_err(), "delete should be stuck on the top run");
+        assert_eq!(missing(), missing_before);
+
+        // Retry from scratch, like GC does after a restart. Only the top run
+        // blob is missing: the inner run is listed only there, so it's never
+        // read.
+        deletes()
+            .delete(&*client.blob, shard_id, usize::MAX, metrics, retry)
+            .await;
+        assert_eq!(missing(), missing_before + 1);
+        for key in [top_key, inner_key, part_key] {
+            let leaked = client.blob.get(&key).await.expect("in-mem blob");
+            assert!(leaked.is_none(), "leaked {key}");
+        }
     }
 }

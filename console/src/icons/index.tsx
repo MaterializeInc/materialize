@@ -74,6 +74,7 @@ export { default as ReturnArrowIcon } from "~/icon/ReturnArrowIcon.svg?react";
 export { default as SchemaIcon } from "~/icon/SchemaIcon.svg?react";
 export { default as SearchIcon } from "~/icon/SearchIcon.svg?react";
 export { default as SecretIcon } from "~/icon/SecretIcon.svg?react";
+export { default as SettingsIcon } from "~/icon/SettingsIcon.svg?react";
 export { default as ShieldIcon } from "~/icon/ShieldIcon.svg?react";
 export { default as SinkIcon } from "~/icon/SinkIcon.svg?react";
 export { default as SinksIcon } from "~/icon/SinksIcon.svg?react";

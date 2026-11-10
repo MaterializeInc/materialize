@@ -360,6 +360,9 @@ DROP MATERIALIZED VIEW auction_house.mv_winning_bids_v2;
 {{% include-from-yaml data="examples/alter_materialized_view"
 name="troubleshooting-lagging-original-view" %}}
 
+{{% include-from-yaml data="examples/alter_materialized_view"
+name="troubleshooting-sealed-view" %}}
+
 ## Related pages
 
 - [Updating materialized views](/transform-data/updating-materialized-views/)

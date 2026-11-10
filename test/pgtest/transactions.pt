@@ -773,3 +773,56 @@ DataRow {"fields":["1"]}
 DataRow {"fields":["2"]}
 CommandComplete {"tag":"SELECT 2"}
 ReadyForQuery {"status":"I"}
+
+# COPY must reject a DDL-only transaction without crashing the coordinator.
+send
+Query {"query": "CREATE TABLE ddl_copy_source (a INT)"}
+Query {"query": "CREATE TABLE ddl_copy_target (a INT)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "BEGIN; ALTER TABLE ddl_copy_source RENAME TO ddl_copy_renamed"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+CommandComplete {"tag":"ALTER TABLE"}
+ReadyForQuery {"status":"T"}
+
+send
+Query {"query": "COPY ddl_copy_target FROM STDIN"}
+CopyData "1\n"
+CopyDone
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"25000"},{"typ":"M","value":"transactions which modify objects are restricted to just modifying objects"}]}
+ReadyForQuery {"status":"E"}
+
+send
+Query {"query": "ROLLBACK"}
+Query {"query": "DROP TABLE ddl_copy_source, ddl_copy_target"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}

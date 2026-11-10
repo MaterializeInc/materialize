@@ -340,6 +340,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
         .add(&COMPACTION_MEMORY_BOUND_BYTES)
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&GC_REMOVE_FINALIZED_ROLLUPS)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
         .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
@@ -408,7 +409,8 @@ impl PersistConfig {
 
 /// Sets the maximum size of the connection pool that is used by consensus.
 ///
-/// Requires a restart of the process to take effect.
+/// Applies to existing pools without a restart. Each pool picks up a changed
+/// value the next time a connection is requested from it.
 pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
@@ -612,6 +614,18 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_gc_blob_delete_concurrency_limit",
     32,
     "Limit the number of concurrent deletes GC can perform to this threshold.",
+    ParameterScope::Environment,
+);
+
+/// Kill switch for GC removing a finalized shard's old rollups. When off, they
+/// stay in state and in blob, and new rollups don't record `finalized`.
+///
+/// NOTE: Off by default until no binary that predates `HollowRollup::finalized`
+/// can read state written with it set. See the note atop `state.proto`.
+pub const GC_REMOVE_FINALIZED_ROLLUPS: Config<bool> = Config::new(
+    "persist_gc_remove_finalized_rollups",
+    false,
+    "Whether GC removes a finalized shard's old rollups from state and blob.",
     ParameterScope::Environment,
 );
 

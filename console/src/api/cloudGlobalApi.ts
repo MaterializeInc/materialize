@@ -24,8 +24,14 @@ import { OpenApiRequestOptions } from "./types";
 export type Organization = components["schemas"]["OrganizationResponse"];
 export type PlanType = components["schemas"]["PlanType"];
 export type Invoice = components["schemas"]["Invoice"];
-export type Region = components["schemas"]["Region"];
-export type Regions = components["schemas"]["Paginated_Region"];
+export type AvailableRegion = components["schemas"]["AvailableRegion"];
+export type AvailableRegions =
+  components["schemas"]["Paginated_AvailableRegion"];
+export type Region =
+  | components["schemas"]["Region"]
+  | { regionInfo?: null; regionState: "disabled" };
+export type RegionInfo = NonNullable<Region["regionInfo"]>;
+export type RegionRequest = components["schemas"]["RegionRequest"];
 export type CreditBlock = components["schemas"]["CreditBlock"];
 export type CostBreakdownAccount =
   components["schemas"]["CostBreakdownAccount"];
@@ -104,22 +110,6 @@ export async function recentInvoices(
   });
   return handleOpenApiResponseWithBody(data, response);
 }
-// The /cloud-regions API returns localhost URLs without a URL scheme,
-// unlike staging and production which include proper schemes.
-// This should be fixed on the cloud side, but for now we prepend "http://"
-// for our local kind environments to ensure calls to the API work.
-function mapCloudRegions(regions: components["schemas"]["Region"][]) {
-  return regions.map((regionInfo) => {
-    if (regionInfo.url.startsWith("localhost")) {
-      return {
-        ...regionInfo,
-        url: regionInfo.url.replace("localhost", "http://localhost"),
-      };
-    }
-    return regionInfo;
-  });
-}
-
 export async function getCloudRegions(
   requestOptions: OpenApiRequestOptions = {},
 ) {
@@ -129,13 +119,64 @@ export async function getCloudRegions(
     headers,
     ...options,
   });
+  return handleOpenApiResponseWithBody(data, response);
+}
 
-  const res = await handleOpenApiResponseWithBody(data, response);
+// NOTE: The spec declares this route as `/api/region/:cloud_provider/:region`
+// without path parameters, and openapi-fetch only substitutes `{name}`
+// placeholders, so the region calls build their URL here.
+async function fetchRegion(
+  cloudProvider: string,
+  region: string,
+  init: RequestInit,
+) {
+  if (apiClient.type !== "cloud") {
+    throw new Error(NOT_SUPPORTED_MESSAGE);
+  }
+  const path = `/api/region/${encodeURIComponent(cloudProvider)}/${encodeURIComponent(region)}`;
+  return apiClient.cloudApiFetch(
+    `${apiClient.cloudGlobalApiBasePath}${path}`,
+    init,
+  );
+}
 
-  return {
-    ...res,
-    data: { ...res.data, data: mapCloudRegions(res.data.data) },
-  };
+async function readRegionBody(response: Response): Promise<Region | undefined> {
+  if (!response.ok) {
+    return undefined;
+  }
+  const text = await response.text();
+  return text ? (JSON.parse(text) as Region) : undefined;
+}
+
+export async function createRegion(
+  cloudProvider: string,
+  region: string,
+  body: RegionRequest = {},
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const response = await fetchRegion(cloudProvider, region, {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  return handleOpenApiResponse(await readRegionBody(response), response);
+}
+
+export async function getRegion(
+  cloudProvider: string,
+  region: string,
+  requestOptions: OpenApiRequestOptions = {},
+): Promise<ReturnType<typeof handleOpenApiResponseWithBody<Region>>> {
+  const response = await fetchRegion(cloudProvider, region, requestOptions);
+  if (response.status === 204) {
+    return { data: { regionState: "disabled" as const }, ...response };
+  }
+  return handleOpenApiResponseWithBody(
+    await readRegionBody(response),
+    response,
+  );
 }
 
 export async function getCredits(requestOptions: OpenApiRequestOptions = {}) {

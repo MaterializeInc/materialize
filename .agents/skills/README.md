@@ -21,6 +21,8 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-debug-ci** | CI failures, red builds, Buildkite issues | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes |
 | **mz-dbt-release** | Cutting a new `dbt-materialize` PyPI release | Bumps the version in `__version__.py` + `setup.py`, dates the `Unreleased` CHANGELOG entry, opens the release PR |
 | **mz-release-signoff** | Verifying a release candidate on the Grafana dashboards | Compares metrics across the release boundary per area and region. Metric references with measured baselines for compute, adapter, sources and sinks, persist, and the release-health and networking dashboards |
+| **mz-dependencies** | Adding, updating, or removing Rust dependencies | Workspace dependency rules, Cargo.lock discipline, license policy sync between `deny.toml` and `about.toml` |
+| **mz-feature-flags** | Adding a feature flag or dyncfg, or reviewing one | Production default policy, enabling flags in CI, `bin/lint-test-flags`, LaunchDarkly caveats |
 
 ## Performance
 
@@ -29,6 +31,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-benchmark** | Adding or debugging benchmark scenarios | Three measurement frameworks: Feature Benchmark (micro-benchmarks), Scalability Test (throughput under concurrency), Parallel Benchmark (sustained latency) |
 | **mz-profile** | Something is slow or using too much memory | CPU profiling with samply, memory profiling with heaptrack, binary size analysis |
 | **mz-query-tracing** | Understanding where time goes in SQL execution | Distributed tracing with OpenTelemetry/Tempo to get a latency breakdown of any SQL statement |
+| **mz-console-scalability** | Measuring what Console load costs `mz_catalog_server` | Runs the Console scalability suite against a replayed captured workload and reports catalog_server CPU per phase and per viewer |
 
 ## Specialized Test Frameworks
 

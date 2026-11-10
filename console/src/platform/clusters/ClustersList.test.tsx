@@ -108,6 +108,7 @@ const buildReplica = ({
   memoryPercent = 0.4,
   diskPercent = 0.25,
   heapPercent = 0.45,
+  swapPercent,
   hydration = { hydratedObjects: 4, totalObjects: 4 },
   ...overrides
 }: Partial<Replica> &
@@ -137,6 +138,7 @@ const buildReplica = ({
     memoryPercent,
     diskPercent,
     heapPercent,
+    swapPercent,
   });
   if (hydration) {
     replicaHydration.set(replica.id, hydration);
@@ -173,6 +175,7 @@ const buildCluster = ({
   size: "50cc",
   disk: true,
   managed: true,
+  replicationFactor: 1,
   ownerId: "u1",
   replicas: replicas ?? [buildReplica(), secondReplica()],
   latestStatusUpdate: STATUS_UPDATED_AT,
@@ -625,6 +628,25 @@ describe("ClustersList replica rows", () => {
 
       expect(cellsForRow("r1")[column]).toBe("-");
     });
+  });
+
+  it("shows swap in the Disk column only for a size that allocates no disk", async () => {
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          buildReplica({ diskPercent: null, swapPercent: 0.3 }),
+          buildReplica({
+            id: "u11",
+            name: "r2",
+            diskPercent: 0.25,
+            swapPercent: 0.1,
+          }),
+        ],
+      }),
+    ]);
+
+    expect(cellsForRow("r1")[COLUMN.disk]).toBe("30.0%");
+    expect(cellsForRow("r2")[COLUMN.disk]).toBe("25.0%");
   });
 
   it("renders a dash when the replica has no size", async () => {

@@ -115,7 +115,9 @@ pub use hir::{
 };
 pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use query::{ExprContext, QueryContext, QueryLifetime, scalar_type_from_catalog};
+pub use query::{
+    ExprContext, QueryContext, QueryLifetime, is_supported_collation, scalar_type_from_catalog,
+};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
@@ -691,7 +693,7 @@ pub struct OnHydration {
     pub linger_duration: Option<Duration>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CreateSourcePlan {
     pub name: QualifiedItemName,
     pub source: Source,

@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.47.0
+    tag: v26.49.1
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -61,6 +61,16 @@ operator:
     # deployments generally do not preserve (port-forwards and most ingress
     # setups present a proxy address), so they are disabled by default.
     enableDatabaseNetworkPolicies: false
+    # -- Whether to run the operator, environmentd, clusterd, balancerd, and
+    # console pods in Kubernetes user namespaces (`hostUsers: false`), so that
+    # root inside a container maps to an unprivileged user on the node. Nodes
+    # must support it: Linux 6.3 or later (for idmapped mounts on
+    # tmpfs-backed volumes such as Secrets and emptyDir), containerd 2.0 or
+    # later or CRI-O 1.25 or later, and a nonzero `user.max_user_namespaces`
+    # sysctl. Bottlerocket sets that sysctl to 0, so pods there fail to start
+    # until it is raised. Changing this for an existing Materialize instance
+    # requires a rollout to take effect.
+    enableUserNamespaces: false
     # -- Whether to install the v1 version of the Materialize CRD and the
     # conversion webhook that converts between v1 and v1alpha1. When false,
     # only the v1alpha1 CRD version is installed and no webhook serving
@@ -328,6 +338,30 @@ environmentd:
       # Setting the memory request to slightly less than limit
       # allows the pod to use swap if enabled at the kubelet.
       memory: "4095Mi"
+  # -- Default readiness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against environmentd's SQL port. Only the fields set here
+  # are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdReadinessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultReadinessProbe: {}
+  # -- Default liveness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against environmentd's SQL port. Only the fields set here
+  # are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdLivenessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultLivenessProbe: {}
+  # -- Default startup probe for environmentd. Liveness and readiness checks
+  # are held off until it succeeds. No startup probe runs unless this or the
+  # Materialize CR's `environmentdStartupProbe` sets one. It is overlaid onto
+  # the built-in TCP check against environmentd's SQL port in the same way as
+  # `defaultReadinessProbe`.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultStartupProbe: {}
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
@@ -374,6 +408,17 @@ balancerd:
   # @notationType -- k8s/tolerations
   # @default -- ``{}``
   tolerations: {}
+  # -- HTTP path of the balancerd readiness probe. `/api/readyz` fails once a
+  # pod reaches `balancerd_connection_high_watermark`, which removes it from the
+  # Service endpoints. Use `/api/livez` when the load balancer health-checks
+  # `/api/readyz` itself, for example an NLB whose targets the AWS Load Balancer
+  # Controller registers from the endpoints: deregistration cuts held sessions
+  # after the deregistration delay and excludes the pod from fail-open.
+  readinessProbePath: /api/readyz
+  # -- Termination grace period for balancerd pods. Keep it at least
+  # `balancerd_sigterm_listen_wait` plus `balancerd_sigterm_connection_wait`
+  # (10 minutes by default), or open connections are cut before they drain.
+  terminationGracePeriodSeconds: 600
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for balancerd's CPU and memory
@@ -450,7 +495,9 @@ observability:
 
 telemetry:
   enabled: true
+  # @ignored
   segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  # @ignored
   segmentClientSide: true
 
 # Network policies configuration

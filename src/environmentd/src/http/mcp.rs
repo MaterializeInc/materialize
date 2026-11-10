@@ -2051,6 +2051,9 @@ struct TableReferenceCollector {
     tables: Vec<(Option<String>, String)>,
     /// CTE names to exclude from validation (they're not real tables)
     cte_names: std::collections::BTreeSet<String>,
+    /// Item names written as `[<id> AS <name>]`. The planner resolves these by
+    /// ID and ignores the name, so the name cannot be checked.
+    id_references: Vec<String>,
 }
 
 impl TableReferenceCollector {
@@ -2058,45 +2061,61 @@ impl TableReferenceCollector {
         Self {
             tables: Vec::new(),
             cte_names: std::collections::BTreeSet::new(),
+            id_references: Vec::new(),
         }
+    }
+
+    fn record_table(&mut self, name: &RawItemName) {
+        let parts = &name.name().0;
+        let Some(last) = parts.last() else {
+            return;
+        };
+        let table_name = last.as_str().to_lowercase();
+
+        // Only an unqualified name can refer to a CTE. `public.t` names a
+        // catalog item even when a CTE `t` is in scope.
+        if parts.len() == 1 && self.cte_names.contains(&table_name) {
+            return;
+        }
+
+        // Extract schema if qualified (e.g., mz_catalog.mz_tables)
+        let schema = (parts.len() >= 2).then(|| parts[parts.len() - 2].as_str().to_lowercase());
+        self.tables.push((schema, table_name));
     }
 }
 
 impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
-    fn visit_cte(&mut self, cte: &'ast mz_sql_parser::ast::Cte<Raw>) {
-        // Track CTE names so we don't treat them as table references
-        self.cte_names
-            .insert(cte.alias.name.as_str().to_lowercase());
-        visit::visit_cte(self, cte);
+    fn visit_cte_block(&mut self, block: &'ast mz_sql_parser::ast::CteBlock<Raw>) {
+        // Bindings are registered before any body is visited, because a
+        // WITH MUTUALLY RECURSIVE body can reference any binding in its block.
+        self.cte_names.extend(
+            block
+                .bound_identifiers()
+                .map(|ident| ident.as_str().to_lowercase()),
+        );
+        visit::visit_cte_block(self, block);
     }
 
     fn visit_table_factor(&mut self, table_factor: &'ast mz_sql_parser::ast::TableFactor<Raw>) {
         // Only visit actual table references in FROM/JOIN clauses, not function names
         if let mz_sql_parser::ast::TableFactor::Table { name, .. } = table_factor {
-            match name {
-                RawItemName::Name(n) | RawItemName::Id(_, n, _) => {
-                    let parts = &n.0;
-                    if !parts.is_empty() {
-                        let table_name = parts.last().unwrap().as_str().to_lowercase();
-
-                        // Skip if this is a CTE reference, not a real table
-                        if self.cte_names.contains(&table_name) {
-                            visit::visit_table_factor(self, table_factor);
-                            return;
-                        }
-
-                        // Extract schema if qualified (e.g., mz_catalog.mz_tables)
-                        let schema = if parts.len() >= 2 {
-                            Some(parts[parts.len() - 2].as_str().to_lowercase())
-                        } else {
-                            None
-                        };
-                        self.tables.push((schema, table_name));
-                    }
-                }
-            }
+            self.record_table(name);
         }
         visit::visit_table_factor(self, table_factor);
+    }
+
+    fn visit_set_expr(&mut self, set_expr: &'ast mz_sql_parser::ast::SetExpr<Raw>) {
+        // `TABLE t` parses to a set expression, not a table factor.
+        if let mz_sql_parser::ast::SetExpr::Table(name) = set_expr {
+            self.record_table(name);
+        }
+        visit::visit_set_expr(self, set_expr);
+    }
+
+    fn visit_item_name(&mut self, name: &'ast RawItemName) {
+        if let RawItemName::Id(..) = name {
+            self.id_references.push(name.to_ast_string_simple());
+        }
     }
 }
 
@@ -2126,6 +2145,13 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     let mut collector = TableReferenceCollector::new();
     for stmt in &stmts {
         collector.visit_statement(&stmt.ast);
+    }
+
+    if !collector.id_references.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(format!(
+            "Query references objects by ID: {}. Reference system catalog tables by name.",
+            collector.id_references.join(", ")
+        )));
     }
 
     // Use the canonical system schema list, excluding mz_unsafe which contains
@@ -2201,6 +2227,7 @@ mod tests {
             ok: String::new(),
             notices: vec![],
             parameters: vec![],
+            execution_time: None,
         }
     }
 
@@ -2546,6 +2573,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_rejects_hidden_user_references() {
+        for sql in [
+            "SELECT * FROM mz_catalog.mz_tables UNION ALL TABLE public.user_data",
+            "WITH user_data AS (SELECT 1) \
+             SELECT * FROM public.user_data, mz_catalog.mz_tables",
+            "SELECT * FROM [u1 AS mz_catalog.mz_tables]",
+        ] {
+            assert!(
+                validate_system_catalog_query(sql).is_err(),
+                "should reject {sql}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_accepts_table_and_mutual_recursion() {
+        for sql in [
+            "TABLE mz_catalog.mz_tables",
+            "WITH MUTUALLY RECURSIVE \
+               t (id text) AS (TABLE u), \
+               u (id text) AS (SELECT id FROM mz_catalog.mz_tables) \
+             SELECT * FROM t",
+        ] {
+            assert!(
+                validate_system_catalog_query(sql).is_ok(),
+                "should accept {sql}"
+            );
+        }
     }
 
     #[mz_ore::test]

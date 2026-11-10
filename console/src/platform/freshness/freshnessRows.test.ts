@@ -19,10 +19,11 @@ import {
   computeStats,
   describeThreshold,
   judgeLines,
+  latestPeak,
   Predicate,
   UNREADABLE,
 } from "./freshnessRows";
-import { HydrationCounts } from "./queries";
+import { HydrationCounts, LagPercentiles } from "./queries";
 
 /**
  * A reading as the page receives it: a number is a measured lag in
@@ -119,9 +120,19 @@ const hydrationByObjectId = new Map<string, HydrationCounts>(
   ]),
 );
 
+/**
+ * What the percentile query returns, null where a reading could not be taken.
+ * `absent` has no readings in the range, so it has no entry.
+ */
+const percentilesByObjectId = new Map<string, LagPercentiles>([
+  ["spiky", { peak: 9_000, p90: 430, p99: 9_000, p99_9: 9_000 }],
+  ["steady", { peak: 3_100, p90: 3_050, p99: 3_100, p99_9: 3_100 }],
+  ["unreadable", { peak: null, p90: null, p99: null, p99_9: null }],
+]);
+
 const rowsFor = (predicate: Predicate, threshold: number) => {
-  const stats = buildStats(lines, data, latestByObjectId);
-  const judged = judgeLines(lines, data, predicate, stats);
+  const stats = buildStats(lines, latestByObjectId, percentilesByObjectId);
+  const judged = judgeLines(lines, predicate, stats);
   return buildFreshnessRows({
     judged,
     statsByKey: stats,
@@ -132,124 +143,94 @@ const rowsFor = (predicate: Predicate, threshold: number) => {
 };
 
 describe("computeStats", () => {
-  it("separates the latest reading from the worst", () => {
-    expect(
-      computeStats("spiky", data, latestByObjectId.get("spiky")),
-    ).toMatchObject({
+  it("takes the percentiles from the query and Now from the latest reading", () => {
+    expect(computeStats(430, percentilesByObjectId.get("spiky"))).toEqual({
       current: 430,
       peak: 9_000,
+      p90: 430,
+      p99: 9_000,
+      p99_9: 9_000,
     });
   });
 
-  it("is all null for a line that never reported", () => {
-    expect(
-      computeStats("absent", data, latestByObjectId.get("absent")),
-    ).toEqual({
+  it("is all null for an object with no readings", () => {
+    expect(computeStats(undefined, undefined)).toEqual({
       current: null,
       peak: null,
       p90: null,
+      p99: null,
+      p99_9: null,
     });
   });
 
   it("counts an unreadable reading as worse than any lag", () => {
-    const stats = computeStats(
-      "unreadable",
-      data,
-      latestByObjectId.get("unreadable"),
-    );
+    const stats = computeStats(null, percentilesByObjectId.get("unreadable"));
     // The graph breaks its line at these readings rather than drawing them.
     expect(accessorFor("unreadable")(data[4]!)).toBeNull();
-    expect(stats.peak).toBe(UNREADABLE);
-    expect(stats.current).toBe(UNREADABLE);
+    expect(stats).toEqual({
+      current: UNREADABLE,
+      peak: UNREADABLE,
+      p90: UNREADABLE,
+      p99: UNREADABLE,
+      p99_9: UNREADABLE,
+    });
   });
 
-  it('takes "Now" from the latest reading, not the worst in the last bin', () => {
-    // At a wide range the final bin is a maximum over many minutes, so it
-    // reads high for an object that has already recovered.
-    const recovered = buildData({ recovered: [400, 410, 9_000] }, 3);
-
-    const stats = computeStats("recovered", recovered, 430);
-    expect(stats.current).toBe(430);
-    expect(stats.peak).toBe(9_000);
-  });
-
-  it("counts a lag that started after the series was fetched in pMAX", () => {
-    const stats = computeStats("spiky", data, 600_000);
+  it("counts a lag that started after the percentiles were fetched in pMAX", () => {
+    const stats = computeStats(600_000, percentilesByObjectId.get("spiky"));
     expect(stats.peak).toBe(600_000);
-    expect(stats.p90).toBe(9_000);
+    expect(stats.p90).toBe(430);
   });
 
-  it("takes pMAX from the latest reading before the series has any", () => {
-    const stats = computeStats("absent", data, 5_000);
-    expect(stats).toEqual({ current: 5_000, peak: 5_000, p90: null });
+  it("takes pMAX from the latest reading before the range has any", () => {
+    expect(computeStats(5_000, undefined)).toMatchObject({
+      current: 5_000,
+      peak: 5_000,
+      p90: null,
+    });
   });
 
-  it("lets one unreadable reading in sixty pass p90", () => {
-    // Unreadable once about twenty hours ago, healthy since. It has to still
-    // breach "at any moment", because that reading was
-    // the worst thing in the window. It must not breach "right now", and one
-    // bad reading in sixty is not more than 10% of them.
-    const series = buildData(
-      {
-        mv: Array.from({ length: 60 }, (_, i) =>
-          i === 10 ? ("unreadable" as const) : 400,
-        ),
-      },
-      60,
-    );
-    const stats = computeStats("mv", series, 400);
-
-    expect(stats.peak).toBe(UNREADABLE);
-    expect(stats.p90).toBe(400);
-    expect(stats.current).toBe(400);
-
+  it("judges each predicate by its own statistic", () => {
+    // Unreadable once, hours ago, and healthy since: the worst thing in the
+    // window, but not now and not one reading in ten.
+    const stats = computeStats(400, {
+      peak: null,
+      p90: 400,
+      p99: null,
+      p99_9: null,
+    });
     const line = { key: "mv", yAccessor: () => null };
     const byKey = new Map([["mv", stats]]);
     const breaches = (predicate: Predicate) => {
-      const value = judgeLines([line], series, predicate, byKey)[0].breachValue;
+      const value = judgeLines([line], predicate, byKey)[0].breachValue;
       return value !== null && value > 2_000;
     };
 
     expect(breaches("current")).toBe(false);
     expect(breaches("p90")).toBe(false);
+    expect(breaches("p99")).toBe(true);
     expect(breaches("peak")).toBe(true);
   });
+});
 
-  it("breaches p90 once a tenth of the readings are bad, of either kind", () => {
-    // Three unreadable and four slow is seven of sixty. Neither kind reaches
-    // the bar alone, and together they do.
-    const series = buildData(
-      {
-        mv: Array.from({ length: 60 }, (_, i) =>
-          i < 3 ? ("unreadable" as const) : i < 7 ? 9_000 : 400,
-        ),
-      },
-      60,
-    );
-    const stats = computeStats("mv", series, 400);
-    expect(stats.p90).toBe(9_000);
+describe("latestPeak", () => {
+  const latest = new Map<string, number | null>([
+    ["u1", 400],
+    ["u2", 9_000],
+    ["u3", null],
+  ]);
+
+  it("takes the worst newest minute among the objects asked for", () => {
+    expect(latestPeak(["u1", "u2"], latest)).toBe(9_000);
   });
 
-  it("discards a short spike that the peak keeps", () => {
-    // The query hands us 60 readings whatever range is selected, so this is the
-    // shape p90 actually sees. Six bad readings sit above the 90th percentile;
-    // the 54th of 60 does not.
-    const sixty = buildData(
-      { spike: Array.from({ length: 60 }, (_, i) => (i < 3 ? 9_000 : 400)) },
-      60,
-    );
-    const stats = computeStats("spike", sixty, undefined);
-    expect(stats.peak).toBe(9_000);
-    expect(stats.p90).toBe(400);
+  it("counts an unreadable minute as the worst", () => {
+    expect(latestPeak(["u1", "u2", "u3"], latest)).toBe(UNREADABLE);
   });
 
-  it("keeps a spike that is wide enough to clear the percentile", () => {
-    // Seven of sixty readings is over 10%, so p90 lands inside the spike.
-    const sixty = buildData(
-      { spike: Array.from({ length: 60 }, (_, i) => (i < 7 ? 9_000 : 400)) },
-      60,
-    );
-    expect(computeStats("spike", sixty, undefined).p90).toBe(9_000);
+  it("is undefined when none of the objects has a minute", () => {
+    expect(latestPeak(["u9"], latest)).toBeUndefined();
+    expect(latestPeak(["u1"], undefined)).toBeUndefined();
   });
 });
 
@@ -316,7 +297,7 @@ describe("describeThreshold", () => {
       "2s at any moment over the last 1 hour",
     );
     expect(describeThreshold("1m 30s", "p90", "24 hours")).toBe(
-      "1m 30s for more than 10% of readings over the last 24 hours",
+      "1m 30s for more than 10% of minutes over the last 24 hours",
     );
   });
 

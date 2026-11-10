@@ -39,7 +39,6 @@ use std::{env, fmt, ops, str, thread};
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
 use maplit::btreemap;
@@ -101,6 +100,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
+use tokio_postgres::fallible_iterator::FallibleIterator;
 use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -1270,6 +1270,7 @@ impl<'a> RunnerInner<'a> {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
@@ -1285,6 +1286,7 @@ impl<'a> RunnerInner<'a> {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Disabled,
                     },
                 },
@@ -1342,6 +1344,7 @@ impl<'a> RunnerInner<'a> {
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
+            restarted_in_place: false,
             metrics_registry,
             now,
             environment_id,

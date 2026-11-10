@@ -19,6 +19,9 @@ import { MaintainedObjectListItem, useMaintainedObjectsList } from "./queries";
 export interface MaintainedObjectsOutletContext {
   data: MaintainedObjectListItem[];
   isLoading: boolean;
+  lagReady: boolean;
+  hydrationReady: boolean;
+  isError: boolean;
   lookbackMinutes: number;
   setLookbackMinutes: React.Dispatch<React.SetStateAction<number>>;
 }
@@ -30,7 +33,7 @@ export const MaintainedObjectsLayout = () => {
     timePeriodOptions: LOOKBACK_OPTIONS,
   });
 
-  const { data, isLoading, lagReady, hydrationReady } =
+  const { data, isLoading, lagReady, hydrationReady, isError } =
     useMaintainedObjectsList({ lookbackMinutes });
 
   return (
@@ -48,6 +51,9 @@ export const MaintainedObjectsLayout = () => {
           {
             data,
             isLoading,
+            lagReady,
+            hydrationReady,
+            isError,
             lookbackMinutes,
             setLookbackMinutes,
           } satisfies MaintainedObjectsOutletContext

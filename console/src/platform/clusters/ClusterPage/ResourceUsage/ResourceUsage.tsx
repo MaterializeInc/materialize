@@ -25,6 +25,7 @@ import { useParentSize } from "@visx/responsive";
 import { scaleTime } from "@visx/scale";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import React from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
@@ -51,16 +52,20 @@ import { capitalizeSentence, pluralize } from "~/util";
 import { formatBytesShort, formatPercentage } from "~/utils/format";
 import { buildXYGraphLayoutProps } from "~/utils/graph";
 
-import { ProcessesDrawer, ProcessReplica } from "./ProcessesDrawer";
+import { opensProcesses, workersTabLink } from "../tabLinks";
+import { useSizedReplicas } from "../useSizedReplicas";
+import { ProcessesDrawer } from "./ProcessesDrawer";
 import {
   ChangesLane,
   ChangeTooltipContent,
   CpuChart,
+  FittedLegendItem,
   LegendSwatch,
   MemoryChart,
   ReplicaStatusTimeline,
+  ResourceTimeAxis,
   StatusTimelineRow,
-  TimeAxis,
+  TimeGridLines,
 } from "./ResourceUsageCharts";
 import {
   canSwap,
@@ -77,8 +82,9 @@ import {
   stateAt,
 } from "./resourceUsageModel";
 import {
-  CHART_MARGIN,
   MIN_BAR_SLOT_PX,
+  RESOURCE_CHART_MARGIN,
+  truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
 import { ColoredReplica, useResourceUsageData } from "./useResourceUsageData";
@@ -101,11 +107,16 @@ const formatBytes = (bytes: number) =>
 const isCpuLimited = (allocation: SizeAllocation) =>
   allocation.cpuNanoCores <= Number.MAX_SAFE_INTEGER;
 
+const formatCores = (cores: number) =>
+  cores > 0 && cores < 0.01
+    ? "< 0.01 cores"
+    : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`;
+
 /**
  * A replica's readings at one time, in percent, 0 to 100. CPU, memory and disk
  * are shares of the replica's allocation of each, summed over its processes,
- * as the Clusters list shows them. Heap and the total are shares of one
- * process's heap limit, `heapLimitBytes`, as the memory bar draws them.
+ * as the Clusters list shows them. Heap is its fullest process's share of one
+ * process's heap limit, `heapLimitBytes`, as the memory bar draws it.
  */
 const readingRows = (
   point: DataPoint,
@@ -159,23 +170,34 @@ const readingRows = (
     point.diskPercent ??
     (point.swapPercent !== null && allocation?.diskBytes ? 0 : null);
   const bar = memoryBar(point);
+  // Memory and disk sum over processes and heap doesn't, so on a multi-process
+  // replica the label says whose heap it is.
+  const isMultiProcess = (allocation?.processes ?? 1) > 1;
+  const heapLabel = isMultiProcess ? "Fullest process" : "Heap";
   return [
     {
       label: "CPU",
       percent: point.cpuPercent,
-      amount:
-        cores === undefined
-          ? undefined
-          : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`,
+      amount: cores === undefined ? undefined : formatCores(cores),
     },
     point.swapPercent === null && hasHeapLimit
-      ? ofHeapLimit("Heap", point.heapPercent)
+      ? ofHeapLimit(
+          heapLabel,
+          point.heapPercent,
+          isMultiProcess ? "process heap limit" : undefined,
+        )
       : ofAllocation("Memory", point.memoryPercent, allocation?.memoryBytes),
     ...(canSwap(point) || diskPercent !== null
       ? [ofAllocation("Disk", diskPercent, allocation?.diskBytes)]
       : []),
     ...(canSwap(point)
-      ? [ofHeapLimit("Total", bar?.heap ?? null, "heap limit")]
+      ? [
+          ofHeapLimit(
+            heapLabel,
+            bar?.heap ?? null,
+            isMultiProcess ? "process heap limit" : "heap limit",
+          ),
+        ]
       : []),
   ];
 };
@@ -427,7 +449,8 @@ interface ResourceUsageContentProps {
   unhydratedObjectCounts: Map<string, number> | undefined;
   missingUsage: MissingUsageCause;
   isDdlError: boolean;
-  cpuHeaderAction?: React.ReactNode;
+  /** In the CPU chart's header, or above the message explaining why there's no chart. */
+  replicaToggles?: React.ReactNode;
   isStatusLoading: boolean;
   isStatusError: boolean;
   isHydrationError: boolean;
@@ -455,7 +478,7 @@ const ResourceUsageContent = ({
   isStatusLoading,
   isStatusError,
   isHydrationError,
-  cpuHeaderAction,
+  replicaToggles,
 }: ResourceUsageContentProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { tooltipData, tooltipLeft, tooltipTop, showTooltip, hideTooltip } =
@@ -471,7 +494,7 @@ const ResourceUsageContent = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startDate, endDate, width],
@@ -554,66 +577,69 @@ const ResourceUsageContent = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={6} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         {hasUsage ? (
           <>
-            <CpuChart {...plotProps} headerAction={cpuHeaderAction} />
-            <VStack spacing={0} alignItems="stretch">
-              <MemoryChart
-                {...plotProps}
-                heapLimitBytes={heapLimitBytes}
-                hasHeapLimit={hasHeapLimit}
-              />
-              <TimeAxis width={width} xScale={xScale} />
-            </VStack>
+            <CpuChart {...plotProps} headerAction={replicaToggles} />
+            <ResourceTimeAxis width={width} xScale={xScale} />
+            <MemoryChart
+              {...plotProps}
+              heapLimitBytes={heapLimitBytes}
+              hasHeapLimit={hasHeapLimit}
+            />
+            <ResourceTimeAxis width={width} xScale={xScale} />
           </>
         ) : (
-          <VStack spacing={2} alignItems="stretch">
+          <VStack spacing={2} alignItems="stretch" pb={4}>
+            {replicaToggles && (
+              <Flex justifyContent="flex-end">{replicaToggles}</Flex>
+            )}
             <MissingUsageMessage
               cause={missingUsage}
               hasReplicas={replicasById.size > 0}
             />
-            <TimeAxis width={width} xScale={xScale} />
           </VStack>
         )}
-        <VStack spacing={1} alignItems="stretch">
-          {isStatusError ? (
-            <Alert variant="error" message="Replica status is unavailable." />
-          ) : isStatusLoading ? (
-            <Flex justifyContent="center">
-              <Spinner size="sm" />
-            </Flex>
-          ) : (
-            <ReplicaStatusTimeline
-              width={width}
-              xScale={xScale}
-              rows={statusRows}
-              hoverTimeMs={tooltipData}
-              onPointerMove={onPointerMove}
-              onPointerLeave={hideTooltip}
-            />
-          )}
-          {!isStatusError && !isStatusLoading && isHydrationError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Hydration history is unavailable.
-            </Text>
-          )}
-        </VStack>
-        <VStack spacing={1} alignItems="stretch">
-          <ChangesLane
+        {isStatusError ? (
+          <Alert variant="error" message="Replica status is unavailable." />
+        ) : isStatusLoading ? (
+          <Flex justifyContent="center" py={4}>
+            <Spinner size="sm" />
+          </Flex>
+        ) : (
+          <ReplicaStatusTimeline
             width={width}
             xScale={xScale}
-            events={ddlEvents}
-            activeStartMs={changeTooltip.tooltipData?.startMs}
-            onActivate={onChangeActivate}
-            onDeactivate={changeTooltip.hideTooltip}
+            rows={statusRows}
+            hoverTimeMs={tooltipData}
+            onPointerMove={onPointerMove}
+            onPointerLeave={hideTooltip}
           />
-          {isDdlError && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              Object creation markers are unavailable.
-            </Text>
-          )}
-        </VStack>
+        )}
+        {!isStatusError && !isStatusLoading && isHydrationError && (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            Hydration history is unavailable.
+          </Text>
+        )}
+        <ResourceTimeAxis width={width} xScale={xScale} />
+        <ChangesLane
+          width={width}
+          xScale={xScale}
+          events={ddlEvents}
+          activeStartMs={changeTooltip.tooltipData?.startMs}
+          onActivate={onChangeActivate}
+          onDeactivate={changeTooltip.hideTooltip}
+        />
+        {isDdlError && (
+          <Text
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+            mt={1}
+          >
+            Object creation markers are unavailable.
+          </Text>
+        )}
       </VStack>
       {tooltipSections.length > 0 &&
         tooltipLeft !== undefined &&
@@ -649,6 +675,9 @@ const ResourceUsageContent = ({
 
 // The legend key that stands for every past replica.
 const PAST_REPLICAS_KEY = "past-replicas";
+// A toggle's square swatch, and the gap between its parts.
+const TOGGLE_SWATCH_PX = 8;
+const TOGGLE_GAP_PX = 4;
 // The most past replicas their toggle's tooltip names before summarizing the
 // rest.
 const PAST_REPLICA_TOOLTIP_LIMIT = 10;
@@ -667,11 +696,14 @@ const ReplicaToggle = forwardRef<ReplicaToggleProps, "button">(
       type="button"
       aria-pressed={isPressed}
       spacing={1}
+      minWidth={0}
       opacity={isPressed ? 1 : 0.5}
       whiteSpace="nowrap"
       {...props}
     >
-      <LegendSwatch color={swatchColor} variant="square" />
+      <Box flexShrink={0}>
+        <LegendSwatch color={swatchColor} variant="square" />
+      </Box>
       {children}
     </HStack>
   ),
@@ -731,25 +763,37 @@ const ReplicaToggles = ({
       listStyleType="none"
     >
       {currentGroups.map((replica) => (
-        <Box as="li" key={replica.id}>
+        <FittedLegendItem
+          key={replica.id}
+          fixedPx={TOGGLE_SWATCH_PX + (replica.size ? 2 : 1) * TOGGLE_GAP_PX}
+          fixedText={replica.size ?? undefined}
+        >
           <ReplicaToggle
             isPressed={visibleKeys.has(replica.id)}
             swatchColor={replica.color}
             onClick={(event) => onToggle(replica.id, event)}
           >
-            <Text textStyle="text-small" color={colors.foreground.primary}>
+            <Text
+              textStyle="text-small"
+              color={colors.foreground.primary}
+              {...truncatedLabelProps}
+            >
               {replica.name}
             </Text>
             {replica.size && (
-              <Text textStyle="text-small" color={colors.foreground.secondary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.secondary}
+                flexShrink={0}
+              >
                 {replica.size}
               </Text>
             )}
           </ReplicaToggle>
-        </Box>
+        </FittedLegendItem>
       ))}
       {pastGroups.length > 0 && (
-        <Box as="li">
+        <FittedLegendItem fixedPx={TOGGLE_SWATCH_PX + TOGGLE_GAP_PX}>
           <Tooltip
             label={<PastReplicaList replicas={pastGroups} />}
             placement="bottom-end"
@@ -762,13 +806,17 @@ const ReplicaToggles = ({
               swatchColor={pastGroups.map(({ color }) => color)}
               onClick={(event) => onToggle(PAST_REPLICAS_KEY, event)}
             >
-              <Text textStyle="text-small" color={colors.foreground.primary}>
+              <Text
+                textStyle="text-small"
+                color={colors.foreground.primary}
+                {...truncatedLabelProps}
+              >
                 +{pastGroups.length} past{" "}
                 {pluralize(pastGroups.length, "replica", "replicas")}
               </Text>
             </ReplicaToggle>
           </Tooltip>
-        </Box>
+        </FittedLegendItem>
       )}
     </Flex>
   );
@@ -795,6 +843,8 @@ export const ResourceUsage = ({
   selectedReplicaId,
 }: ResourceUsageProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const {
     history,
     replicasById,
@@ -870,7 +920,18 @@ export const ResourceUsage = ({
     ),
   );
 
-  const [isProcessesOpen, setIsProcessesOpen] = React.useState(false);
+  const [isProcessesOpen, setIsProcessesOpen] = React.useState(() =>
+    opensProcesses(location.state),
+  );
+  const processesButtonRef = React.useRef<HTMLButtonElement>(null);
+  const closeProcesses = () => {
+    setIsProcessesOpen(false);
+    // The state that opened the drawer would otherwise reopen it on back or
+    // reload.
+    if (opensProcesses(location.state)) {
+      navigate({ search: location.search }, { replace: true, state: null });
+    }
+  };
   // Past replicas' sizes too, for their tooltip readings.
   const { data: allocationsBySize } = useReplicaSizeAllocations(
     [
@@ -879,17 +940,19 @@ export const ResourceUsage = ({
       ),
     ].sort(),
   );
+  const { replicas: sizedReplicas } = useSizedReplicas(cluster);
+  // A selected replica narrows the drawer and the Workers link to it.
+  const shownReplicas =
+    selectedReplicaId === undefined
+      ? sizedReplicas
+      : sizedReplicas.filter(({ id }) => id === selectedReplicaId);
   // Only a size that runs more than one process has processes to compare.
-  const processReplicas = cluster.replicas.flatMap(
-    ({ id, name, size }): ProcessReplica[] => {
-      if (selectedReplicaId !== undefined && id !== selectedReplicaId) {
-        return [];
-      }
-      const allocation = size ? allocationsBySize?.get(size) : undefined;
-      return size && allocation && allocation.processes > 1
-        ? [{ id, name, size, allocation }]
-        : [];
-    },
+  const processReplicas = shownReplicas.filter(
+    ({ allocation }) => allocation.processes > 1,
+  );
+  const hasWorkers = shownReplicas.length > 0;
+  const workersLink = workersTabLink(
+    cluster.replicas.find(({ id }) => id === selectedReplicaId)?.name,
   );
 
   let body: React.ReactNode;
@@ -933,15 +996,14 @@ export const ResourceUsage = ({
             isStatusLoading={isStatusLoading}
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
-            cpuHeaderAction={
-              processReplicas.length > 0 && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setIsProcessesOpen(true)}
-                >
-                  Processes
-                </Button>
+            replicaToggles={
+              selectedReplicaId === undefined && (
+                <ReplicaToggles
+                  currentGroups={currentGroups}
+                  pastGroups={pastGroups}
+                  visibleKeys={visibleLegendItems}
+                  onToggle={toggleLegendItem}
+                />
               )
             }
           />
@@ -958,45 +1020,50 @@ export const ResourceUsage = ({
       borderWidth="1px"
       borderColor={colors.border.primary}
     >
-      <VStack spacing={6} alignItems="stretch">
-        <Flex
+      <VStack spacing={4} alignItems="stretch">
+        <HStack
           justifyContent="space-between"
-          alignItems="start"
-          flexWrap="wrap"
-          columnGap={4}
-          rowGap={2}
+          alignItems="flex-end"
+          spacing={4}
         >
-          <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
-            Resource Usage
-          </Text>
-          <Flex
-            flex="1"
-            minWidth={0}
-            justifyContent="flex-end"
-            alignItems="center"
-            columnGap={4}
-            rowGap={1}
-          >
+          <HStack spacing={4}>
+            <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
+              Resource Usage
+            </Text>
             {history.isRefreshing && (
               <Spinner size="sm" data-testid="refreshing-spinner" />
             )}
-            {selectedReplicaId === undefined && (
-              <ReplicaToggles
-                currentGroups={currentGroups}
-                pastGroups={pastGroups}
-                visibleKeys={visibleLegendItems}
-                onToggle={toggleLegendItem}
-              />
-            )}
-          </Flex>
-        </Flex>
+          </HStack>
+          {(processReplicas.length > 0 || hasWorkers) && (
+            <HStack spacing={2}>
+              {processReplicas.length > 0 && (
+                <Button
+                  ref={processesButtonRef}
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setIsProcessesOpen(true)}
+                >
+                  Processes
+                </Button>
+              )}
+              {hasWorkers && (
+                <Button as={Link} to={workersLink} size="xs" variant="outline">
+                  Workers
+                </Button>
+              )}
+            </HStack>
+          )}
+        </HStack>
         {body}
       </VStack>
       <ProcessesDrawer
         isOpen={isProcessesOpen}
-        onClose={() => setIsProcessesOpen(false)}
+        onClose={closeProcesses}
+        // Opened from a link, the drawer has no opener to return focus to.
+        finalFocusRef={processesButtonRef}
         replicas={processReplicas}
         timePeriodMinutes={timePeriodMinutes}
+        workersLink={workersTabLink}
       />
     </Card>
   );

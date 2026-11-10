@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-trixie-slim AS node
+FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS node
 
 # Node 25 dropped corepack from the distribution, but the console pins its
 # package manager through `packageManager` in console/package.json and CI drives
@@ -15,10 +15,13 @@ FROM node:26-trixie-slim AS node
 # `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
 RUN npm install -g corepack
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM debian:13-slim AS ci-builder-min
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -44,6 +47,11 @@ ARG XZ_OPT=-T0
 # Please take care with what gets added here. The goal of this initial layer is to be as small as
 # possible since it's used for the `mkpipeline` and `Build` CI jobs, which block __all other__
 # jobs.
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
+
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -175,7 +183,7 @@ COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] https://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
@@ -399,6 +407,20 @@ RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
     && mv zizmor /usr/local/bin \
     && rm zizmor.tar.gz
 
+# Install a pinned libduckdb for libduckdb-sys to link against via
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
@@ -409,6 +431,7 @@ ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+ENV DUCKDB_LIB_DIR=/usr/local/lib
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compilation.
@@ -417,7 +440,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM debian:13-slim AS ci-builder-console
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -430,6 +453,11 @@ ENV MZ_DEV_CI_BUILDER=1
 ENV DOCKER_BUILDKIT=1
 
 ARG XZ_OPT=-T0
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \

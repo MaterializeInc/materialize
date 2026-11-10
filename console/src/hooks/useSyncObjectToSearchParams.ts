@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
 /**
@@ -56,7 +56,8 @@ export function encodeObjectAsSearchParams(object: Record<string, any>) {
 }
 /**
  *
- * Syncs any object to the current URL's search params.
+ * Syncs any object to the current URL's search params. Search params the
+ * object never set are kept, so a page around the synced list can keep its own.
  *
  * @param object - The object to sync to the current URL's search params. This object must be a stable and immutable.
  * @param pathPrefix - (Optional) if set, the object will only be synced to the URL when the location pathname starts with the given prefix.
@@ -80,12 +81,21 @@ export const useSyncObjectToSearchParams = (
 ) => {
   const { pathname, state } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Remembered so a key the object drops, such as a cleared filter, is removed.
+  const writtenKeys = useRef(new Set<string>());
 
   useEffect(() => {
     if (pathPrefix && !pathname.startsWith(pathPrefix)) {
       return;
     }
-    const newSearchParams = encodeObjectAsSearchParams(object);
+    const encoded = encodeObjectAsSearchParams(object);
+    const newSearchParams = new URLSearchParams(
+      [...searchParams].filter(
+        ([key]) => !writtenKeys.current.has(key) && !encoded.has(key),
+      ),
+    );
+    encoded.forEach((value, key) => newSearchParams.append(key, value));
+    writtenKeys.current = new Set(encoded.keys());
     if (newSearchParams.toString() !== searchParams.toString()) {
       // setSearchParams drops state unless forwarded
       setSearchParams(newSearchParams, { replace: true, state });

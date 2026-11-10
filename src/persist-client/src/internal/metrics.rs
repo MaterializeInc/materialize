@@ -1198,6 +1198,8 @@ pub struct StateMetrics {
     pub(crate) rollup_write_success: IntCounter,
     pub(crate) rollup_write_noop_latest: IntCounter,
     pub(crate) rollup_write_noop_truncated: IntCounter,
+    pub(crate) hollow_run_missing_on_delete: IntCounter,
+    pub(crate) finalized_rollup_assigned: IntCounter,
 }
 
 impl StateMetrics {
@@ -1249,6 +1251,10 @@ impl StateMetrics {
                 name: "mz_persist_state_update_state_slow_path",
                 help: "count of state update applications that hit the slow path",
             )),
+            finalized_rollup_assigned: registry.register(metric!(
+                name: "mz_persist_state_finalized_rollup_assigned",
+                help: "count of rollups assigned on finalized shards, normally two or three per shard (steady growth means a rollup loop)",
+            )),
             rollup_at_seqno_migration: registry.register(metric!(
                 name: "mz_persist_state_rollup_at_seqno_migration",
                 help: "count of fetch_rollup_at_seqno calls that only worked because of the migration",
@@ -1279,6 +1285,10 @@ impl StateMetrics {
             )),
             rollup_write_noop_latest: rollup_write_noop.with_label_values(&["latest"]),
             rollup_write_noop_truncated: rollup_write_noop.with_label_values(&["truncated"]),
+            hollow_run_missing_on_delete: registry.register(metric!(
+                name: "mz_persist_state_hollow_run_missing_on_delete",
+                help: "count of hollow run blobs found already missing while deleting the parts they reference",
+            )),
         }
     }
 }

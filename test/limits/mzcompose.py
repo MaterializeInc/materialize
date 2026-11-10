@@ -1759,6 +1759,8 @@ class PostgresSources(Generator):
 
 
 class PostgresTables(Generator):
+    MAX_COUNT = 2000  # TODO: Bump when SS-533 is fixed, too slow at count=4000
+
     @classmethod
     def body(cls) -> None:
         print(f"$ set-sql-timeout duration={sql_timeout(300)}s")

@@ -5062,15 +5062,20 @@ fn plan_map_subquery(
     Ok(expr.into())
 }
 
+/// Reports whether `collation` is one Materialize supports in a `COLLATE`
+/// clause. Only `pg_catalog.default` is, which is a no-op.
+pub fn is_supported_collation(collation: &UnresolvedItemName) -> bool {
+    collation.0.len() == 2
+        && collation.0[0] == ident!(mz_repr::namespaces::PG_CATALOG_SCHEMA)
+        && collation.0[1] == ident!("default")
+}
+
 fn plan_collate(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    if collation.0.len() == 2
-        && collation.0[0] == ident!(mz_repr::namespaces::PG_CATALOG_SCHEMA)
-        && collation.0[1] == ident!("default")
-    {
+    if is_supported_collation(collation) {
         plan_expr(ecx, expr)
     } else {
         bail_unsupported!("COLLATE");

@@ -350,7 +350,7 @@ where
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
-    /// us.
+    /// us. See [`Self::batch`] for how long this holds the calling worker.
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
@@ -398,7 +398,7 @@ where
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
-    /// us.
+    /// us. See [`Self::batch`] for how long this holds the calling worker.
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
@@ -942,6 +942,9 @@ where
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
+    ///
+    /// Encoding does not yield until a part reaches `blob_target_size`, so a
+    /// large `updates` keeps the calling Tokio worker busy for the whole encode.
     #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,

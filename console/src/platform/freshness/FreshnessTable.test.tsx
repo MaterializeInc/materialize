@@ -33,6 +33,7 @@ const buildRow = (overrides: Partial<FreshnessRow>): FreshnessRow => ({
   current: 420,
   peak: 9_000,
   p90: 9_000,
+  p99: 9_000,
   breachValue: 9_000,
   breaching: true,
   color: "#ff0000",

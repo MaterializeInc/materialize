@@ -11,6 +11,7 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildIdListQuery } from "~/api/materialize/expressionBuilders";
 
 /**
  * Replica hydration counts for a known set of objects.
@@ -30,8 +31,9 @@ import { executeSqlV2, queryBuilder } from "~/api/materialize";
  */
 export function buildHydrationCountsQuery(objectIds: string[]) {
   return queryBuilder
+    .with("ids", () => buildIdListQuery(objectIds))
     .selectFrom("mz_hydration_statuses as hs")
-    .where("hs.object_id", "in", objectIds)
+    .innerJoin("ids", "ids.id", "hs.object_id")
     .select(({ fn }) => [
       "hs.object_id as objectId",
       fn.countAll<bigint>().as("totalReplicas"),

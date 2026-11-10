@@ -92,7 +92,7 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
 
 pub(crate) const PART_DECODE_BATCH_ROWS: Config<Option<usize>> = Config::new(
     "persist_part_decode_batch_rows",
-    None,
+    Some(16384),
     "\
     Maximum number of rows of a fetched blob part that a reader decodes at \
     once. Unset decodes the whole part at once.",

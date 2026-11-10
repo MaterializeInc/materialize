@@ -319,7 +319,7 @@ pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 /// [Tokio console]: https://github.com/tokio-rs/console
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
-#[allow(clippy::unused_async)]
+#[allow(clippy::unused_async, deprecated)]
 pub async fn configure<F>(config: TracingConfig<F>) -> Result<TracingHandle, anyhow::Error>
 where
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,

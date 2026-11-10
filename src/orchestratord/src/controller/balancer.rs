@@ -18,6 +18,7 @@ use k8s_openapi::{
             SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
             Toleration, Volume, VolumeMount,
         },
+        policy::v1::PodDisruptionBudget,
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
@@ -35,7 +36,10 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{FIELD_MANAGER, apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{
+        FIELD_MANAGER, apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
+        replace_resource,
+    },
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -53,6 +57,8 @@ pub const CONTROLLER_NAME: &str = "balancer";
 #[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
+    /// Whether to run pods in a Kubernetes user namespace (`hostUsers: false`).
+    pub enable_user_namespaces: bool,
     pub enable_prometheus_scrape_annotations: bool,
 
     pub image_pull_policy: KubernetesImagePullPolicy,
@@ -69,6 +75,11 @@ pub struct Config {
     pub balancerd_sql_port: u16,
     pub balancerd_http_port: u16,
     pub balancerd_internal_http_port: u16,
+    /// `/api/readyz` takes a balancerd at its connection high watermark out of
+    /// the Service endpoints. `/api/livez` keeps it in, for load balancers that
+    /// read `/api/readyz` in their own health check instead.
+    pub balancerd_readiness_probe_path: String,
+    pub balancerd_termination_grace_period_seconds: i64,
 }
 
 pub struct Context {
@@ -342,14 +353,16 @@ impl Context {
             timeout_seconds: Some(1),
             ..Default::default()
         };
+        // Tighter than liveness so that, on `/api/readyz`, a balancerd at its
+        // connection high watermark leaves the Service endpoints within seconds.
         let readiness_probe = Probe {
             http_get: Some(HTTPGetAction {
                 port: IntOrString::Int(self.config.balancerd_internal_http_port.into()),
-                path: Some("/api/readyz".into()),
+                path: Some(self.config.balancerd_readiness_probe_path.clone()),
                 ..Default::default()
             }),
-            failure_threshold: Some(3),
-            period_seconds: Some(10),
+            failure_threshold: Some(2),
+            period_seconds: Some(2),
             success_threshold: Some(1),
             timeout_seconds: Some(1),
             ..Default::default()
@@ -432,7 +445,13 @@ impl Context {
                         ..Default::default()
                     }),
                     scheduler_name: self.config.scheduler_name.clone(),
+                    termination_grace_period_seconds: Some(
+                        self.config.balancerd_termination_grace_period_seconds,
+                    ),
                     volumes: Some(volumes),
+                    // `None` rather than `Some(true)` when disabled, so the
+                    // pod spec is unchanged from before user namespace support.
+                    host_users: self.config.enable_user_namespaces.then_some(false),
                     ..Default::default()
                 }),
             },
@@ -663,6 +682,7 @@ impl k8s_controller::Context for Context {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         let step = metadata.step("certificate");
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
@@ -683,6 +703,14 @@ impl k8s_controller::Context for Context {
         }
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Completed);
+
+        let step = metadata.step("pod_disruption_budget");
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        apply_resource(&pdb_api, &pdb).await?;
         step.finish(Outcome::Completed);
 
         let step = metadata.step("service");
@@ -720,6 +748,7 @@ mod tests {
     fn test_context() -> Context {
         Context::new(Config {
             enable_security_context: false,
+            enable_user_namespaces: false,
             enable_prometheus_scrape_annotations: false,
             image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
             scheduler_name: None,
@@ -733,6 +762,8 @@ mod tests {
             balancerd_sql_port: 6875,
             balancerd_http_port: 6876,
             balancerd_internal_http_port: 6878,
+            balancerd_readiness_probe_path: "/api/readyz".to_owned(),
+            balancerd_termination_grace_period_seconds: 600,
         })
     }
 
@@ -766,6 +797,56 @@ mod tests {
             assert_eq!(deployment.spec.unwrap().replicas, expected);
             assert_eq!(balancer.initial_replicas(), 3);
         }
+    }
+
+    #[mz_ore::test]
+    fn user_namespaces_set_host_users() {
+        let balancer = test_balancer(BalancerSpec::default());
+        for (enabled, expected) in [(false, None), (true, Some(false))] {
+            let mut context = test_context();
+            context.config.enable_user_namespaces = enabled;
+            let pod = context
+                .create_deployment_object(&balancer)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            assert_eq!(pod.host_users, expected);
+        }
+    }
+
+    #[mz_ore::test]
+    fn pdb_selects_deployment_pods() {
+        let balancer = test_balancer(BalancerSpec::default());
+        let deployment = test_context().create_deployment_object(&balancer).unwrap();
+        let pdb = pod_disruption_budget(
+            balancer.managed_resource_meta(balancer.deployment_name()),
+            &deployment,
+        );
+        let spec = pdb.spec.unwrap();
+        assert_eq!(spec.max_unavailable, Some(IntOrString::Int(1)));
+        assert_eq!(
+            spec.unhealthy_pod_eviction_policy.as_deref(),
+            Some("AlwaysAllow")
+        );
+        let match_labels = spec.selector.unwrap().match_labels.unwrap();
+        let pod_labels = deployment
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .labels
+            .unwrap();
+        assert!(!match_labels.is_empty());
+        assert!(
+            match_labels
+                .iter()
+                .all(|(k, v)| pod_labels.get(k) == Some(v)),
+            "PDB selector {match_labels:?} does not match pod labels {pod_labels:?}",
+        );
     }
 
     #[mz_ore::test]

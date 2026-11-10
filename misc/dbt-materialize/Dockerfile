@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
-FROM python:3.14.8@sha256:12d187a59ecdeb95df0a78cd6107a84398455365a66cc2183db2be42b6067d33
+# NOTE: requirements.txt is compiled for this Python minor version. Bump
+# --python-version in its header and recompile when changing it.
+FROM python:3.14.10@sha256:be6eade411a0482be66d4539115cb4df1e0fa8a97085c91400236c4dbd87c763
+
+# The official image can lag Debian security updates by weeks, so a digest bump
+# alone does not pick them up. libbrotli is CVE-2026-111497.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade libbrotli1 libbrotli-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . dbt-materialize/
 
-RUN pip install --no-cache-dir -r dbt-materialize/requirements.txt --find-links /dbt-materialize
+RUN cd dbt-materialize && pip install --no-cache-dir -r requirements.txt

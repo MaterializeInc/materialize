@@ -326,6 +326,12 @@ pub fn plan_create_table(
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
+        if c.collation
+            .as_ref()
+            .is_some_and(|collation| !query::is_supported_collation(collation))
+        {
+            bail_unsupported!("COLLATE");
+        }
         let aug_data_type = &c.data_type;
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
@@ -3434,7 +3440,11 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Persisted sinks (pcx is None) are re-planned against the keys
+                // the running optimizer derives, which can be fewer than when
+                // the sink was created. Rejecting the key there fails catalog
+                // boot, so only new statements enforce it.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),

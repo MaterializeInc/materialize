@@ -93,3 +93,6 @@ export const OBJECT_TYPE_FILTERS: Record<
   ),
   schema: SCHEMA_OBJECT_TYPE_FILTERS,
 };
+
+/** Shown where a statistic has no value, matching the rest of the Console. */
+export const NO_VALUE = "—";

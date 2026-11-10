@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 Types: deb
-URIs: http://apt.materialize.com/
+URIs: https://apt.materialize.com/
 Suites: generic
 Components: main
 Signed-By:

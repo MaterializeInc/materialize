@@ -680,7 +680,6 @@ def print_stats(
         "must be owner of",
         "permission denied for",
         "still depended upon by",
-        "another session modified the catalog while this DDL transaction was open",
         "because it already has a replacement",
         "is sealed and thus cannot be replaced",
         "unknown cluster 'dont_exist'",

@@ -49,6 +49,7 @@ SERVICES = [
 TD_CMD = [
     "--var=default-replica-size=25cc",
     "--var=default-storage-size=25cc",
+    "--var=multi-worker-replica-size=100cc",
 ]
 
 COMPATIBLE_TESTDRIVE_FILES = [
@@ -237,7 +238,23 @@ def build_mz_debug_async(env: dict[str, str] | None = None) -> threading.Thread:
 def run_mz_debug(env: dict[str, str] | None = None) -> None:
     print("--- Running mz-debug")
     try:
-        # mz-debug (and its compilation) is rather noisy, so ignore the output
+        instances = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "jsonpath={.items[*].metadata.name}",
+            ],
+            env=env,
+        ).split()
+        if len(instances) != 1:
+            print(
+                f"Skipping mz-debug, expected one Materialize instance but found {instances}"
+            )
+            return
         spawn.capture(
             [
                 "cargo",
@@ -249,7 +266,7 @@ def run_mz_debug(env: dict[str, str] | None = None) -> None:
                 "--k8s-namespace",
                 "materialize-environment",
                 "--mz-instance-name",
-                "12345678-1234-1234-1234-123456789012",
+                instances[0],
                 "--additional-k8s-namespace",
                 "materialize",
             ],
@@ -257,19 +274,19 @@ def run_mz_debug(env: dict[str, str] | None = None) -> None:
             stderr=subprocess.STDOUT,
             env=env,
         )
-    except:
-        pass
+    except subprocess.CalledProcessError as e:
+        print(f"mz-debug failed: {e}\n{e.output}")
+    except Exception as e:
+        print(f"mz-debug failed: {e}")
 
 
 class State:
-    materialize_environment: dict | None
     path: Path
     environmentd_port_forward_process: subprocess.Popen[bytes] | None
     balancerd_port_forward_process: subprocess.Popen[bytes] | None
     version: int
 
     def __init__(self, path: Path):
-        self.materialize_environment = None
         self.path = path
         self.environmentd_port_forward_process = None
         self.balancerd_port_forward_process = None
@@ -374,15 +391,7 @@ class State:
         self._kubectl_describe_pods(namespace)
         # self._kubectl_log_all_pods(namespace)
 
-    def kubectl_setup(
-        self,
-        tag: str,
-        metadata_backend_url: str,
-        persist_backend_url: str,
-        skip_materialize_cr: bool = False,
-    ) -> None:
-        self.metadata_backend_url = metadata_backend_url
-        self.persist_backend_url = persist_backend_url
+    def kubectl_setup(self) -> None:
         spawn.runv(["kubectl", "get", "nodes"])
 
         for i in range(60):
@@ -411,64 +420,6 @@ class State:
         else:
             raise ValueError("Never completed")
 
-        # Skip Materialize CR creation if Terraform already created it
-        if skip_materialize_cr:
-            print("--- Skipping Materialize CR creation (Terraform handles it)")
-        else:
-            spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
-
-            materialize_backend_secret = {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {
-                    "name": "materialize-backend",
-                    "namespace": "materialize-environment",
-                },
-                "stringData": {
-                    "metadata_backend_url": self.metadata_backend_url,
-                    "persist_backend_url": self.persist_backend_url,
-                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
-                },
-            }
-
-            spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                cwd=self.path,
-                stdin=yaml.dump(materialize_backend_secret).encode(),
-            )
-
-            self.materialize_environment = {
-                "apiVersion": "materialize.cloud/v1alpha1",
-                "kind": "Materialize",
-                "metadata": {
-                    "name": "12345678-1234-1234-1234-123456789012",
-                    "namespace": "materialize-environment",
-                },
-                "spec": {
-                    "environmentdImageRef": f"materialize/environmentd:{tag}",
-                    "environmentdResourceRequirements": {
-                        "limits": {"memory": "4Gi"},
-                        "requests": {"cpu": "2", "memory": "4Gi"},
-                    },
-                    "balancerdResourceRequirements": {
-                        "limits": {"memory": "256Mi"},
-                        "requests": {"cpu": "100m", "memory": "256Mi"},
-                    },
-                    "backendSecretName": "materialize-backend",
-                },
-            }
-
-            # Only supported since self-managed v25.2
-            if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
-                "v0.147.0"
-            ):
-                self.materialize_environment["spec"]["authenticatorKind"] = "None"
-
-            spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                cwd=self.path,
-                stdin=yaml.dump(self.materialize_environment).encode(),
-            )
         for i in range(60):
             try:
                 spawn.runv(
@@ -559,21 +510,6 @@ class State:
 
     def destroy(self, env=None) -> None:
         print("--- Destroying")
-        if self.materialize_environment:
-            run_ignore_error(
-                ["kubectl", "delete", "-f", "-"],
-                cwd=self.path,
-                stdin=yaml.dump(self.materialize_environment).encode(),
-            )
-        run_ignore_error(
-            [
-                "kubectl",
-                "delete",
-                "materialize.materialize.cloud/12345678-1234-1234-1234-123456789012",
-                "-n",
-                "materialize-environment",
-            ]
-        )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
         run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
 
@@ -938,17 +874,7 @@ class AWS(State):
             ]
         )
 
-        metadata_backend_url = spawn.capture(
-            ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
-        ).strip()
-        persist_backend_url = spawn.capture(
-            ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
-        ).strip()
-        # For aws-temporary, Terraform creates the Materialize instance
-        # We will implement this for the other providers as well next
-        self.kubectl_setup(
-            tag, metadata_backend_url, persist_backend_url, skip_materialize_cr=True
-        )
+        self.kubectl_setup()
 
     def upgrade(self, tag: str) -> None:
         """Upgrade Materialize to a new version using Terraform.
@@ -1578,12 +1504,6 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 ["terraform", "output", "-json", "gke_cluster"], cwd=path
             ).strip()
         )
-        connection_strings = json.loads(
-            spawn.capture(
-                ["terraform", "output", "-json", "connection_strings"], cwd=path
-            ).strip()
-        )
-
         spawn.runv(
             [
                 "gcloud",
@@ -1599,13 +1519,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         )
 
         if args.setup:
-            # For gcp-temporary, Terraform creates the Materialize instance
-            state.kubectl_setup(
-                tag,
-                connection_strings["metadata_backend_url"],
-                connection_strings["persist_backend_url"],
-                skip_materialize_cr=True,
-            )
+            state.kubectl_setup()
             # Wait for environmentd pod to be ready (not just Running)
             print("--- Waiting for environmentd pod to be ready...")
             for i in range(60):
@@ -1828,13 +1742,6 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 ["terraform", "output", "-json", "aks_cluster"], cwd=path, env=venv_env
             ).strip()
         )
-        connection_strings = json.loads(
-            spawn.capture(
-                ["terraform", "output", "-json", "connection_strings"],
-                cwd=path,
-                env=venv_env,
-            ).strip()
-        )
         resource_group_name = spawn.capture(
             ["terraform", "output", "-raw", "resource_group_name"],
             cwd=path,
@@ -1856,12 +1763,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         )
 
         if args.setup:
-            state.kubectl_setup(
-                tag,
-                connection_strings["metadata_backend_url"],
-                connection_strings["persist_backend_url"],
-                skip_materialize_cr=True,
-            )
+            state.kubectl_setup()
             print("--- Waiting for environmentd pod to be ready...")
             for i in range(60):
                 try:

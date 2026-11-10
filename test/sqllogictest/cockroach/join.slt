@@ -785,6 +785,8 @@ CREATE TABLE pkBAC (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,c))
 statement ok
 CREATE TABLE pkBAD (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,d))
 
+# Not supported by Materialize.
+onlyif cockroach
 # Tests with joins with merged columns of collated string type.
 statement ok
 CREATE TABLE str1 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
@@ -794,6 +796,8 @@ onlyif cockroach
 statement ok
 INSERT INTO str1 VALUES (1, 'a' COLLATE en_u_ks_level1), (2, 'A' COLLATE en_u_ks_level1), (3, 'c' COLLATE en_u_ks_level1), (4, 'D' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE str2 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
 
@@ -802,21 +806,29 @@ onlyif cockroach
 statement ok
 INSERT INTO str2 VALUES (1, 'A' COLLATE en_u_ks_level1), (2, 'B' COLLATE en_u_ks_level1), (3, 'C' COLLATE en_u_ks_level1), (4, 'E' COLLATE en_u_ks_level1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT rowsort
 SELECT s, str1.s, str2.s FROM str1 INNER JOIN str2 USING(s)
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT rowsort
 SELECT s, str1.s, str2.s FROM str1 LEFT OUTER JOIN str2 USING(s)
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT rowsort
 SELECT s, str1.s, str2.s FROM str1 RIGHT OUTER JOIN str2 USING(s)
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT rowsort
 SELECT s, str1.s, str2.s FROM str1 FULL OUTER JOIN str2 USING(s)
 ----

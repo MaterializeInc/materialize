@@ -32,6 +32,28 @@ ALTER SYSTEM SET enable_load_generator_datums = true;
 > SELECT count(*) FROM counter_single_tbl
 1
 
+> ALTER SOURCE counter_single REFRESH REFERENCES;
+
+> SELECT u.name
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE s.name = 'counter_single';
+counter
+
+> ALTER SOURCE counter_single RENAME TO counter_renamed;
+
+> ALTER SOURCE IF EXISTS counter_single REFRESH REFERENCES;
+
+> ALTER SOURCE counter_renamed REFRESH REFERENCES;
+
+> SELECT u.name
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE s.name = 'counter_renamed';
+counter
+
+> ALTER SOURCE counter_renamed RENAME TO counter_single;
+
 > CREATE SOURCE counter_five
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5)
@@ -152,8 +174,10 @@ org_id false bigint ""
   FROM LOAD GENERATOR AUCTION FOR TABLES (user);
 contains:reference to user not found in source
 
-> CREATE SCHEMA another;
+# Source and export preparation must use a schema renamed in the same transaction.
+> CREATE SCHEMA another_before;
 > BEGIN
+> ALTER SCHEMA another_before RENAME TO another;
 > CREATE SOURCE another.auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;

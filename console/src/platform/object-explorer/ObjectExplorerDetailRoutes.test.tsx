@@ -319,6 +319,17 @@ describe("ObjectExplorerDetailRoutes", () => {
     });
 
     it("shows a spinner initially", async () => {
+      server.use(
+        buildSqlQueryHandlerV2(
+          {
+            queryKey: objectExplorerQueryKeys.databaseDetails({
+              name: "materialize",
+            }),
+            results: [],
+          },
+          { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME },
+        ),
+      );
       await renderComponent();
       expect(await screen.findByTestId("loading-spinner")).toBeVisible();
     });

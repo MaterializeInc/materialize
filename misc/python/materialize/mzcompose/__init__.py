@@ -116,6 +116,7 @@ def get_minimal_system_parameters(
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
         "enable_mcp_protocol_2026_07_28": "true",
+        "enable_mcp_unified": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -179,9 +180,9 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.45.0-dev"):
         # Exercise the source persist sink's grouping of a snapshotting export's
         # updates ahead of release to production. At least one default_timestamp_interval
-        # (1s by default). A Postgres source's snapshot and first CDC
-        # rows become visible about this much later, which the PgCdc feature
-        # benchmarks measure.
+        # (1s by default). A Postgres or MySQL source's snapshot and first CDC
+        # rows become visible about this much later. The PgCdc and MySqlCdc
+        # feature benchmarks measure that delay.
         config["storage_persist_sink_description_lookahead"] = "2s"
 
     if sanitizer_enabled():
@@ -508,6 +509,9 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
         VariableSystemParameter(
+            "persist_gc_remove_finalized_rollups", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
         VariableSystemParameter(
@@ -772,14 +776,15 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
-    "enable_compute_half_join2",
+    # Off by default so tests exercise the refusal to drop in-use indexes.
+    "enable_drop_in_use_index",
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
-    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
     "enable_lgalloc_eager_reclamation",

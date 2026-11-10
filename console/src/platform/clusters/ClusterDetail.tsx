@@ -25,6 +25,7 @@ import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
 import ClusterOverview from "./ClusterOverview";
 import { CLUSTER_OBJECT_TYPES } from "./ClusterPage/clusterObjectTypes";
 import ClusterPage, { ClusterPageHeader } from "./ClusterPage/ClusterPage";
+import { HYDRATION_TAB_PATH, WORKERS_TAB_PATH } from "./ClusterPage/tabLinks";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
@@ -71,6 +72,9 @@ const ClassicClusterDetailPage = () => {
       <Route path="sinks" element={<Sinks key={clusterName} />} />
       <Route path="objects" element={<ClassicObjectsRedirect />} />
       <Route path="objects/:objectType" element={<ClassicObjectsRedirect />} />
+      {/* The redesigned Workers and Hydration tabs have no classic counterpart. */}
+      <Route path={WORKERS_TAB_PATH} element={<Navigate to=".." replace />} />
+      <Route path={HYDRATION_TAB_PATH} element={<Navigate to=".." replace />} />
     </SentryRoutes>
   );
 };
@@ -88,7 +92,10 @@ const ClusterDetailPage = () => {
     <>
       <PageHeader variant="compact" boxProps={{ mb: 0 }} sticky>
         <VStack spacing={0} alignItems="flex-start" width="100%">
-          <ClusterDetailBreadcrumbs crumbs={breadcrumbs} />
+          <ClusterDetailBreadcrumbs
+            crumbs={breadcrumbs}
+            showActions={!isEnabled}
+          />
           {isEnabled ? (
             <ClusterPageHeader />
           ) : (

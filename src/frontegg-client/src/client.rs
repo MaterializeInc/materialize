@@ -100,6 +100,10 @@ pub enum Authentication {
     /// A singular, legitimate app password that will remain in use to identify
     /// the user throughout the client's existence.
     AppPassword(AppPassword),
+    /// An access token obtained elsewhere, such as from an OAuth token
+    /// endpoint. It is sent as is and never refreshed, so requests fail once it
+    /// expires.
+    AccessToken(String),
 }
 
 /// Representation of a user's credentials.
@@ -200,6 +204,10 @@ impl Client {
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
     pub async fn auth(&self) -> Result<String, Error> {
+        if let Authentication::AccessToken(token) = &self.authentication {
+            return Ok(token.clone());
+        }
+
         let mut auth = self.auth.lock().await;
         let mut req;
 
@@ -237,6 +245,7 @@ impl Client {
                         };
                         req = req.json(&authentication_request);
                     }
+                    Authentication::AccessToken(_) => unreachable!("returned above"),
                 }
             }
         }

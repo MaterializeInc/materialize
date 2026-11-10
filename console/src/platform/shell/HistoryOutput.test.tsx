@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { Setter } from "jotai";
 import mitt from "mitt";
 import React from "react";
@@ -20,6 +20,7 @@ import {
 } from "~/test/utils";
 
 import { COMMAND_INTERRUPTED_MESSAGE } from "./constants";
+import { EXECUTION_TIME_NOTICE_CODE } from "./executionTime";
 import HistoryOutput from "./HistoryOutput";
 import { createInterruptedCommandError } from "./machines/webSocketFsm";
 import { CommandOutput, historyItemAtom, shellStateAtom } from "./store/shell";
@@ -110,5 +111,164 @@ describe("HistoryOutput", () => {
 
     expect(screen.queryByText(COMMAND_INTERRUPTED_MESSAGE)).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it.each([
+    [
+      '{"duration_us":2000,"kind":"completed"}',
+      "Returned in 148.0ms · 2.0ms in Materialize",
+    ],
+    ["not json", "Returned in 148.0ms"],
+  ])(
+    "never prints an execution time notice as a notice line (detail %s)",
+    async (detail, footer) => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [
+                {
+                  code: EXECUTION_TIME_NOTICE_CODE,
+                  message: "execution time: 2.000 ms",
+                  severity: "Notice",
+                  detail,
+                },
+              ],
+              hasRows: false,
+              commandCompletePayload: "CREATE TABLE",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      expect(screen.getByText(footer)).toBeVisible();
+      expect(screen.queryByText(/execution time:/)).toBeNull();
+    },
+  );
+
+  describe("timing tooltip", () => {
+    const executionTimeNotice = (kind: string) => ({
+      code: EXECUTION_TIME_NOTICE_CODE,
+      message: "execution time: 12.000 ms",
+      severity: "Notice" as const,
+      detail: JSON.stringify({ duration_us: 12000, kind }),
+    });
+    const displayState = {
+      isSubscribeManager: false,
+      isFollowingSubscribeManager: true,
+      currentTablePage: 0,
+      currentSubscribeManagerTablePage: 0,
+    };
+
+    async function openTooltip(button: HTMLElement) {
+      act(() => button.focus());
+      const tooltip = await screen.findByRole("tooltip");
+      // The tooltip fades in.
+      await waitFor(() => expect(tooltip).toBeVisible());
+      return tooltip;
+    }
+
+    it("opens on keyboard focus and explains each timing in its own row", async () => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [executionTimeNotice("first_row")],
+              hasRows: false,
+              commandCompletePayload: "SELECT 2",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      const tooltip = await openTooltip(
+        screen.getByRole("button", { name: "Timing details" }),
+      );
+
+      expect(within(tooltip).getByText("Returned in")).toBeVisible();
+      expect(
+        within(tooltip).getByText(/measured from sending the input\.$/),
+      ).toBeVisible();
+      expect(within(tooltip).getByText("In Materialize")).toBeVisible();
+      expect(
+        within(tooltip).getByText(/does not include sending the rows/),
+      ).toBeVisible();
+    });
+
+    // Two statements of one input. The second result arrives 4ms after the
+    // first, although Materialize spent 12ms on it.
+    const twoStatementOutput = () =>
+      commandOutput({
+        statements: [{ query: "SELECT 1" }, { query: "SELECT 2" }],
+        commandSentTimeMs: 1000,
+        commandResults: [
+          {
+            notices: [executionTimeNotice("first_row")],
+            hasRows: false,
+            commandCompletePayload: "SELECT 1",
+            endTimeMs: 1100,
+          },
+          {
+            notices: [executionTimeNotice("first_row")],
+            hasRows: false,
+            commandCompletePayload: "SELECT 1",
+            endTimeMs: 1104,
+          },
+        ],
+        commandResultsDisplayStates: [displayState, displayState],
+      });
+
+    it("says in the footer that a later result is timed from the previous result", async () => {
+      await renderHistoryOutput(twoStatementOutput());
+
+      expect(
+        screen.getByText("Returned in 100.0ms · 12.0ms in Materialize"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          "Returned in 4.0ms after the previous result · 12.0ms in Materialize",
+        ),
+      ).toBeVisible();
+    });
+
+    it("says a later statement's round trip can be shorter than its time in Materialize", async () => {
+      await renderHistoryOutput(twoStatementOutput());
+
+      const [, second] = screen.getAllByRole("button", {
+        name: "Timing details",
+      });
+      expect(
+        within(await openTooltip(second)).getByText(
+          /measured from the previous result\. It can be shorter than the time in Materialize/,
+        ),
+      ).toBeVisible();
+    });
+
+    it("has only the round trip row without an execution time", async () => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [],
+              hasRows: false,
+              commandCompletePayload: "CREATE TABLE",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      const tooltip = await openTooltip(
+        screen.getByRole("button", { name: "Timing details" }),
+      );
+
+      expect(within(tooltip).getByText("Returned in")).toBeVisible();
+      expect(within(tooltip).queryByText("In Materialize")).toBeNull();
+    });
   });
 });

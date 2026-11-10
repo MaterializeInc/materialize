@@ -16,7 +16,6 @@ import multiprocessing
 import os
 import shutil
 import subprocess
-import sys
 from argparse import Namespace
 from typing import Any, Literal
 from urllib.parse import quote
@@ -26,6 +25,7 @@ from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzbuild import (
     CargoRegistryFetchFailure,
     RustIncrementalBuildFailure,
+    exit_for_retryable_build_failure,
     run_and_detect_retryable_build_failure,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -427,10 +427,8 @@ def run_cargo_nextest(
                 cwd=MZ_ROOT,
                 env=env,
             )
-        except RustIncrementalBuildFailure:
-            _handle_incremental_build_failure()
-        except CargoRegistryFetchFailure:
-            _handle_registry_fetch_failure()
+        except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
+            exit_for_retryable_build_failure(e)
         clusterd_thread.join()
 
     try:
@@ -452,20 +450,5 @@ def run_cargo_nextest(
             cwd=MZ_ROOT,
             env=env,
         )
-    except RustIncrementalBuildFailure:
-        _handle_incremental_build_failure()
-    except CargoRegistryFetchFailure:
-        _handle_registry_fetch_failure()
-
-
-def _handle_incremental_build_failure() -> None:
-    print("--- Detected incremental build failure, clearing cargo target directories")
-    for dir in ["target", "target-xcompile"]:
-        if os.path.exists(dir):
-            shutil.rmtree(dir, ignore_errors=True)
-    sys.exit(199)
-
-
-def _handle_registry_fetch_failure() -> None:
-    print("--- Detected transient cargo registry failure, retrying")
-    sys.exit(199)
+    except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
+        exit_for_retryable_build_failure(e)

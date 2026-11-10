@@ -75,7 +75,7 @@ describe("TutorialInsertionWidget", () => {
   it("submits a correct query", async () => {
     renderComponent();
     server.use(
-      http.post("*/api/sql", async (info) => {
+      http.post<never, ExtendedRequest>("*/api/sql", async (info) => {
         const body = await info.request.clone().json();
         if (body == null) {
           return undefined;

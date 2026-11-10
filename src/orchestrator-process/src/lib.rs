@@ -262,7 +262,7 @@ impl Orchestrator for ProcessOrchestrator {
                 config: Arc::clone(&config),
                 services: Arc::clone(&services),
                 service_event_tx,
-                system: System::new(),
+                system: System::new().expect("sysinfo supports Linux and macOS"),
                 command_rx,
             }
             .spawn();
@@ -752,7 +752,7 @@ impl OrchestratorWorker {
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 if path.extension() == Some(OsStr::new("pid")) {
-                    let mut system = System::new();
+                    let mut system = System::new().expect("sysinfo supports Linux and macOS");
                     let Some(process) = find_process_from_pid_file(&mut system, &path).await else {
                         // Dropping the supervisor may already have killed a
                         // supervised process. An orphan that cannot be found
@@ -985,7 +985,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         state_updater.namespace, state_updater.id, state_updater.i
     );
 
-    let mut system = System::new();
+    let mut system = System::new().expect("sysinfo supports Linux and macOS");
     let Some(process) = find_process_from_pid_file(&mut system, pid_file).await else {
         return;
     };
@@ -1007,7 +1007,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
 
     // Periodically check if the process has terminated. Verify start_time
     // on each iteration to detect PID reuse.
-    let mut system = System::new();
+    let mut system = System::new().expect("sysinfo supports Linux and macOS");
     loop {
         let refreshed = system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
@@ -1097,7 +1097,7 @@ fn did_process_crash(status: ExitStatus) -> bool {
 }
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
-    let mut system = System::new();
+    let mut system = System::new().expect("sysinfo supports Linux and macOS");
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
         true,

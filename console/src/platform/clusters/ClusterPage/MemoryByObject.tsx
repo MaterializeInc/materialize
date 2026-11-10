@@ -27,7 +27,7 @@ import { TooltipColorSwatch } from "~/components/graphComponents";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import { generateRainbowPalette } from "~/components/ThresholdLineGraph/thresholdLineGraphHelpers";
-import { useFlags } from "~/hooks/useFlags";
+import { useLastDefined } from "~/hooks/useLastDefined";
 import { InfoIcon } from "~/icons";
 import {
   LargestReplica,
@@ -40,11 +40,7 @@ import {
   useReplicaHeapLimits,
   useReplicaSizeAllocations,
 } from "~/platform/clusters/queries";
-import {
-  absoluteMaintainedObjectPath,
-  useBuildWorkflowGraphPath,
-} from "~/platform/routeHelpers";
-import { useEnvironmentGate, useRegionSlug } from "~/store/environments";
+import { useEnvironmentGate } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { formatMemoryUsage } from "~/utils/format";
 
@@ -56,6 +52,7 @@ import {
 } from "./memoryByObjectModel";
 import { PERCENT_TICKS } from "./ResourceUsage/resourceUsageStyles";
 import { useLiveLargestObjects } from "./useLiveLargestObjects";
+import { useObjectLink } from "./useObjectLink";
 
 export interface MemoryByObjectProps {
   cluster: Cluster;
@@ -64,7 +61,7 @@ export interface MemoryByObjectProps {
 }
 
 const OTHER_MEMORY_DESCRIPTION =
-  "Heap in use that isn't attributed to the objects listed. Object sizes come from arrangement sizes, which undercount.";
+  "Heap in use beyond the objects listed: smaller objects, and memory that arrangement sizes don't count.";
 
 /**
  * Heap limits and use of the cluster's current replicas, from the reads the
@@ -78,6 +75,8 @@ const useReplicaHeaps = (cluster: Cluster) => {
   const heapLimits = useReplicaHeapLimits(replicaIds);
   const allocations = useReplicaSizeAllocations(sizes);
   const heapBytes = useReplicaHeapBytes(replicaIds);
+  const processesOf = (size: string | null) =>
+    size ? allocations.data?.get(size)?.processes : undefined;
   return {
     isLoading:
       heapLimits.isLoading || allocations.isLoading || heapBytes.isLoading,
@@ -89,12 +88,14 @@ const useReplicaHeaps = (cluster: Cluster) => {
     heapLimitOf: ({ id, size }: Replica) => {
       const perProcess = heapLimits.data?.get(id);
       if (perProcess === undefined || allocations.isError) return null;
-      const processes = size
-        ? allocations.data?.get(size)?.processes
-        : undefined;
-      return perProcess * (processes ?? 1);
+      return perProcess * (processesOf(size) ?? 1);
     },
     heapBytesOf: (replicaId: string) => heapBytes.data?.get(replicaId),
+    /** Undefined for a replica that isn't current, or whose size hasn't loaded. */
+    processCountOf: (replicaId: string) =>
+      processesOf(
+        cluster.replicas.find(({ id }) => id === replicaId)?.size ?? null,
+      ),
   };
 };
 
@@ -121,12 +122,14 @@ export const MemoryByObject = ({ cluster, replica }: MemoryByObjectProps) => {
         <MemoryByObjectFrame>{fallback}</MemoryByObjectFrame>
       )}
     >
-      {(shown) =>
+      {(shown, { isStale }) =>
         hasLiveSizes ? (
           <LiveMemoryByObject
             replica={shown}
             heapUsedBytes={heaps.heapBytesOf(shown.id)}
+            processCount={heaps.processCountOf(shown.id)}
             isHeapLoading={heaps.isLoading}
+            isReplicaStale={isStale}
           />
         ) : heaps.isLoading ? (
           // A named replica's polled sizes are keyed on its heap limit, so
@@ -140,6 +143,8 @@ export const MemoryByObject = ({ cluster, replica }: MemoryByObjectProps) => {
             clusterName={cluster.name}
             replica={shown}
             heapUsedBytes={heaps.heapBytesOf(shown.id)}
+            processCount={heaps.processCountOf(shown.id)}
+            isStale={isStale}
           />
         )
       }
@@ -152,11 +157,15 @@ const PolledMemoryByObject = ({
   clusterName,
   replica,
   heapUsedBytes,
+  processCount,
+  isStale,
 }: {
   clusterId: string;
   clusterName: string;
   replica: LargestReplica;
   heapUsedBytes: number | undefined;
+  processCount: number | undefined;
+  isStale: boolean;
 }) => {
   const { data: objects } = useLargestMaintainedQueries({
     clusterId,
@@ -171,27 +180,26 @@ const PolledMemoryByObject = ({
       replicaName={replica.name}
       heapLimit={replica.heapLimit}
       heapUsedBytes={heapUsedBytes}
+      processCount={processCount}
+      isRefreshing={isStale}
+      isStale={isStale}
     />
   );
 };
 
-/** `value`, or while it's undefined, the last value it had in a commit. */
-function useLastDefined<T>(value: T | undefined) {
-  const last = React.useRef(value);
-  React.useEffect(() => {
-    if (value !== undefined) last.current = value;
-  });
-  return value ?? last.current;
-}
-
 const LiveMemoryByObject = ({
   replica,
   heapUsedBytes,
+  processCount,
   isHeapLoading,
+  isReplicaStale,
 }: {
   replica: LargestReplica;
   heapUsedBytes: number | undefined;
+  processCount: number | undefined;
   isHeapLoading: boolean;
+  /** `replica` stands in while the replica to show loads. */
+  isReplicaStale: boolean;
 }) => {
   const { objects, snapshotComplete, isRefreshing, isError } =
     useLiveLargestObjects({
@@ -205,11 +213,13 @@ const LiveMemoryByObject = ({
           replicaName: replica.name,
           heapLimit: replica.heapLimit,
           heapUsedBytes,
+          processCount,
         }
       : undefined;
   // A switch to another replica keeps the previous one's content on screen
   // until the new one's first snapshot and heap reads are in.
   const shown = useLastDefined(content);
+  const isStale = !content || isReplicaStale;
   if (isError) {
     return (
       <MemoryByObjectFrame>
@@ -227,8 +237,8 @@ const LiveMemoryByObject = ({
   return (
     <MemoryByObjectCard
       {...shown}
-      isRefreshing={isRefreshing || !content}
-      isStale={!content}
+      isRefreshing={isRefreshing || isStale}
+      isStale={isStale}
     />
   );
 };
@@ -310,6 +320,8 @@ interface MemoryByObjectContent {
   heapLimit: number | null;
   /** The replica's heap in use, which sizes the other memory segment. */
   heapUsedBytes: number | undefined;
+  /** How many processes the heap limit and use are summed over. */
+  processCount: number | undefined;
 }
 
 const MemoryByObjectCard = ({
@@ -317,6 +329,7 @@ const MemoryByObjectCard = ({
   replicaName,
   heapLimit,
   heapUsedBytes,
+  processCount,
   isRefreshing,
   isStale,
 }: MemoryByObjectContent & {
@@ -324,12 +337,7 @@ const MemoryByObjectCard = ({
   isStale?: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  // The maintained objects page only has routes while its flag is on.
-  const hasMaintainedObjectsPage = Boolean(
-    useFlags()["maintained-objects-ui-50"],
-  );
-  const regionSlug = useRegionSlug();
-  const workflowGraphPath = useBuildWorkflowGraphPath();
+  const objectLink = useObjectLink();
 
   const hasHeapLimit = heapLimit !== null;
   if (objects.length === 0) {
@@ -356,22 +364,13 @@ const MemoryByObjectCard = ({
     ),
   );
   const segments: Segment[] = objects.map((object, index) => {
-    const { id, name, databaseName, schemaName, type } = object;
     return {
-      key: id ?? object.dataflowId ?? String(index),
-      label: name ?? object.dataflowName ?? "-",
+      key: object.id ?? object.dataflowId ?? String(index),
+      label: object.name ?? object.dataflowName ?? "-",
       usage: formatMemoryUsage(hasHeapLimit ? object : { size: object.size }),
       color: palette[index],
       widthPercent: widths[index],
-      path:
-        object.isOrphanedDataflow || !id || !name || !schemaName || !type
-          ? undefined
-          : hasMaintainedObjectsPage
-            ? absoluteMaintainedObjectPath(regionSlug, id)
-            : workflowGraphPath({
-                databaseObject: { id, name, databaseName, schemaName },
-                type,
-              }),
+      path: object.isOrphanedDataflow ? undefined : objectLink(object),
     };
   });
   if (other) {
@@ -393,9 +392,11 @@ const MemoryByObjectCard = ({
           : `Top ${TOP_OBJECT_COUNT} Objects by Memory`
       }
       subtitle={
-        hasHeapLimit
-          ? `% of heap limit on ${replicaName}`
-          : `Size on ${replicaName}`
+        !hasHeapLimit
+          ? `Size on ${replicaName}`
+          : processCount !== undefined && processCount > 1
+            ? `% of heap limit across ${processCount} processes on ${replicaName}`
+            : `% of heap limit on ${replicaName}`
       }
       isRefreshing={isRefreshing}
       isStale={isStale}

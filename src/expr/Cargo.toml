@@ -34,7 +34,6 @@ dec.workspace = true
 derivative.workspace = true
 encoding.workspace = true
 enum-iterator.workspace = true
-fallible-iterator.workspace = true
 hex.workspace = true
 hmac.workspace = true
 itertools.workspace = true
