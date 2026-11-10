@@ -1699,7 +1699,7 @@ transaction_isolation, execution_timestamp, transient_index_id, params, mz_versi
 error_message, result_size, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 mpsh.session_id, prepared_at, statement_type,
-COALESCE(mseh.throttled_count, 0::uint8) AS throttled_count,
+COALESCE(mseh.throttled_count, mpsh.throttled_count, 0::uint8) AS throttled_count,
 connected_at, initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,
