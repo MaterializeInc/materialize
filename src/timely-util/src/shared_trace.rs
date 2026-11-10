@@ -49,15 +49,19 @@ use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFront
 use differential_dataflow::trace::{Description, Span, Trace, TraceReader};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
-use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::order::TotalOrder;
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::activate::SyncActivator;
 
 use crate::arrange_agent::trace_box::TraceBox;
-use crate::rendezvous::{self, Attachment, Event, Locked, Rendezvous, adjust};
+use crate::rendezvous::{self, Attachment, Event, Locked, Rendezvous, Subscription, adjust};
+
+mod binding;
+
+pub use binding::{Binding, BindingReader, HoldAccumulation};
 
 /// The hold kind of logical compaction.
 const LOGICAL: usize = 0;
@@ -179,6 +183,24 @@ impl<T: Timestamp + Lattice, B> Shared<T, B> {
                 return Err(published.meta.logical.clone());
             }
             Ok([as_of.clone(), published.upper.clone()])
+        })?;
+        Ok(SharedReader { reader })
+    }
+
+    /// A reader holding nothing logically and physical compaction at the chain's coverage, or
+    /// `Err` with the published `since` when that is already beyond `as_of`.
+    ///
+    /// The reader of a [`BindingReader`], whose logical holds live in a [`HoldAccumulation`]
+    /// instead. Checks and registers under one lock acquisition, as [`Self::reader_at`] does.
+    pub fn reader_physical_at(
+        self: &Arc<Self>,
+        as_of: &Antichain<T>,
+    ) -> Result<SharedReader<T, B>, Antichain<T>> {
+        let reader = self.reader_with(|published| {
+            if !PartialOrder::less_equal(&published.meta.logical, as_of) {
+                return Err(published.meta.logical.clone());
+            }
+            Ok([Antichain::new(), published.upper.clone()])
         })?;
         Ok(SharedReader { reader })
     }
@@ -740,86 +762,145 @@ where
     ) -> Arranged<'scope, TraceFrontier<SharedReader<T, B>>> {
         let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
         let shared = Arc::clone(self.shared());
-        let mut hold = Some(self.clone());
+        let hold = self.clone();
 
         let stream = source(scope, name, move |capability, info| {
             let activator = scope.worker().sync_activator_for(info.address.to_vec());
-
-            // Register under one lock acquisition: seed the queue with the chain and the frontier it
-            // covers, then publish the queue weakly. Later spans append, earlier ones are seeded.
-            let (queue, seed) = shared.subscribe(activator);
-
-            // Emptied once the read is over, which is the operator's "done" state.
-            let mut capabilities = CapabilitySet::from_elem(capability);
-            let mut acknowledged = seed.clone();
-            // The seeded instructions come first and are emitted as-is. Everything after the seed's
-            // own `Upper` is live and is filtered against `seed` below.
-            let mut draining_seed = true;
-
-            move |output| {
-                // Drains this importer's own queue only, never the publication point's lock.
-                let drained = queue.drain();
-                if capabilities.is_empty() {
-                    return;
-                }
-                for instruction in drained {
-                    match instruction {
-                        Event::Upper(frontier) => {
-                            // A capability set cannot be downgraded backwards, and the seeded
-                            // coverage is already correct.
-                            if !PartialOrder::less_equal(&acknowledged, &frontier) {
-                                continue;
-                            }
-                            acknowledged = frontier.clone();
-                            draining_seed = false;
-                            // Everything at or below `acknowledged` has been delivered and will never
-                            // be replayed, so this import will not read there again. Both axes: the
-                            // physical hold otherwise pins the spine at the coverage this import
-                            // registered at and the chain grows one span per seal for its life.
-                            if let Some(hold) = hold.as_mut() {
-                                hold.set_logical_compaction(acknowledged.borrow());
-                                hold.set_physical_compaction(acknowledged.borrow());
-                            }
-                            // Bound the read at `until`, and complete on the empty frontier a writer
-                            // whose collection is complete publishes. Otherwise track `upper`,
-                            // keeping the stream frontier equal to the trace's upper.
-                            if frontier.is_empty() || PartialOrder::less_equal(&until, &frontier) {
-                                capabilities.downgrade(std::iter::empty::<T>());
-                                hold = None;
-                                break;
-                            }
-                            capabilities.downgrade(&frontier.borrow()[..]);
-                        }
-                        Event::Item(span) => {
-                            // The writer enqueues a span only to importers live under the lock
-                            // that published the chain containing it, so a span in the seed cannot
-                            // also arrive live. This guards the invariant: emitting a covered span
-                            // twice would double count it under a capability already moved past.
-                            if !draining_seed
-                                && PartialOrder::less_equal(&span.upper().borrow(), &seed.borrow())
-                            {
-                                continue;
-                            }
-                            if !span.has_updates() {
-                                continue;
-                            }
-                            // The chain is contiguous and totally ordered, so `lower` has one
-                            // element, at or beyond the frontier the capability sits at.
-                            let time = span.lower().elements()[0].clone();
-                            let cap = capabilities.delayed(&time);
-                            let wrapped = Span::new(
-                                span.desc,
-                                span.inner.map(|b| {
-                                    BatchFrontier::make_from(b, as_of.borrow(), until.borrow())
-                                }),
-                            );
-                            output.session(&cap).give(wrapped);
-                        }
-                    }
-                }
-            }
+            let mut import =
+                ImportDrain::subscribe(&shared, activator, capability, hold, as_of, until);
+            move |output| import.drain(|cap, span| output.session(cap).give(span))
         });
 
         Arranged { stream, trace }
+    }
+}
+
+/// The hold an import's source keeps while it reads, following the frontiers it acknowledges.
+trait ImportHold<T: Timestamp> {
+    /// Moves the hold to `frontier`, below which the import will not read again.
+    fn acknowledge(&mut self, frontier: AntichainRef<'_, T>);
+}
+
+impl<T, B> ImportHold<T> for SharedReader<T, B>
+where
+    T: Timestamp + Lattice + TotalOrder,
+    B: Clone + 'static,
+{
+    fn acknowledge(&mut self, frontier: AntichainRef<'_, T>) {
+        self.set_logical_compaction(frontier);
+        self.set_physical_compaction(frontier);
+    }
+}
+
+/// The state of an import's source operator once it subscribed to a point.
+struct ImportDrain<T: Timestamp, B, H> {
+    queue: Subscription<T, Span<T, B>>,
+    /// Emptied once the read is over, which is the operator's "done" state.
+    capabilities: CapabilitySet<T>,
+    /// The frontier the subscription was seeded at.
+    seed: Antichain<T>,
+    acknowledged: Antichain<T>,
+    /// The seeded instructions come first and are emitted as-is. Everything after the seed's own
+    /// `Upper` is live and is filtered against `seed`.
+    draining_seed: bool,
+    /// Released once the read is over.
+    hold: Option<H>,
+    as_of: Antichain<T>,
+    until: Antichain<T>,
+}
+
+impl<T, B, H> ImportDrain<T, B, H>
+where
+    T: Timestamp + Lattice + TotalOrder,
+    B: Clone + 'static,
+    H: ImportHold<T>,
+{
+    /// Subscribes to `shared`, with `activator` scheduling the source operator that owns
+    /// `capability`.
+    fn subscribe(
+        shared: &Shared<T, B>,
+        activator: SyncActivator,
+        capability: Capability<T>,
+        hold: H,
+        as_of: Antichain<T>,
+        until: Antichain<T>,
+    ) -> Self {
+        // Register under one lock acquisition: seed the queue with the chain and the frontier it
+        // covers, then publish the queue weakly. Later spans append, earlier ones are seeded.
+        let (queue, seed) = shared.subscribe(activator);
+        ImportDrain {
+            queue,
+            capabilities: CapabilitySet::from_elem(capability),
+            acknowledged: seed.clone(),
+            seed,
+            draining_seed: true,
+            hold: Some(hold),
+            as_of,
+            until,
+        }
+    }
+
+    /// Emits every span queued since the last call through `give`, and moves the capability and
+    /// the hold to every `upper` queued.
+    fn drain(&mut self, mut give: impl FnMut(&Capability<T>, Span<T, BatchFrontier<B, T>>)) {
+        // Drains this importer's own queue only, never the publication point's lock.
+        let drained = self.queue.drain();
+        if self.capabilities.is_empty() {
+            return;
+        }
+        for instruction in drained {
+            match instruction {
+                Event::Upper(frontier) => {
+                    // A capability set cannot be downgraded backwards, and the seeded
+                    // coverage is already correct.
+                    if !PartialOrder::less_equal(&self.acknowledged, &frontier) {
+                        continue;
+                    }
+                    self.acknowledged = frontier.clone();
+                    self.draining_seed = false;
+                    // Everything at or below `acknowledged` has been delivered and will never
+                    // be replayed, so this import will not read there again. Both axes: the
+                    // physical hold otherwise pins the spine at the coverage this import
+                    // registered at and the chain grows one span per seal for its life.
+                    if let Some(hold) = self.hold.as_mut() {
+                        hold.acknowledge(self.acknowledged.borrow());
+                    }
+                    // Bound the read at `until`, and complete on the empty frontier a writer
+                    // whose collection is complete publishes. Otherwise track `upper`,
+                    // keeping the stream frontier equal to the trace's upper.
+                    if frontier.is_empty() || PartialOrder::less_equal(&self.until, &frontier) {
+                        self.capabilities.downgrade(std::iter::empty::<T>());
+                        self.hold = None;
+                        break;
+                    }
+                    self.capabilities.downgrade(&frontier.borrow()[..]);
+                }
+                Event::Item(span) => {
+                    // The writer enqueues a span only to importers live under the lock
+                    // that published the chain containing it, so a span in the seed cannot
+                    // also arrive live. This guards the invariant: emitting a covered span
+                    // twice would double count it under a capability already moved past.
+                    if !self.draining_seed
+                        && PartialOrder::less_equal(&span.upper().borrow(), &self.seed.borrow())
+                    {
+                        continue;
+                    }
+                    if !span.has_updates() {
+                        continue;
+                    }
+                    // The chain is contiguous and totally ordered, so `lower` has one
+                    // element, at or beyond the frontier the capability sits at.
+                    let time = span.lower().elements()[0].clone();
+                    let cap = self.capabilities.delayed(&time);
+                    let (as_of, until) = (self.as_of.borrow(), self.until.borrow());
+                    let wrapped = Span::new(
+                        span.desc,
+                        span.inner
+                            .map(|b| BatchFrontier::make_from(b, as_of, until)),
+                    );
+                    give(&cap, wrapped);
+                }
+            }
+        }
     }
 }
