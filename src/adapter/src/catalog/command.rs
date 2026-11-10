@@ -14,8 +14,13 @@
 //! output we might have sent to the client (aka. the "promise"), so commit can
 //! "assert" on that output when re-checking catalog commands against the
 //! current catalog.
+//!
+//! Pending external work abandons the candidate. A continuation rebuilds the
+//! prefix before consuming its indexed response, so successful preparation and
+//! preparation errors are accepted only when their inputs still match.
 
 pub(crate) mod source;
+pub(crate) mod source_statement;
 
 use std::sync::Arc;
 
@@ -28,6 +33,26 @@ use tokio::sync::mpsc;
 use crate::catalog::{CatalogState, Op};
 use crate::session::SessionMeta;
 use crate::{AdapterError, AdapterNotice};
+
+#[derive(Clone, Debug)]
+pub enum CatalogCommand {
+    Rename(Arc<RenameCommand>),
+    CatalogResult(Arc<CatalogResultCommand>),
+    Description(Arc<DescriptionCommand>),
+    Source(Arc<source_statement::SourceCommand>),
+}
+
+impl CatalogCommand {
+    /// The planning notices recorded during preparation.
+    pub(crate) fn notices(&self) -> &[PlanNotice] {
+        match self {
+            Self::Rename(command) => command.notices(),
+            Self::CatalogResult(command) => &command.notices,
+            Self::Description(_) => &[],
+            Self::Source(command) => command.notices(),
+        }
+    }
+}
 
 /// A rename or swap command.
 #[derive(Debug)]
@@ -124,11 +149,6 @@ pub struct CatalogResultCommand {
 }
 
 impl CatalogResultCommand {
-    /// The planning notices recorded during preparation.
-    pub(crate) fn notices(&self) -> &[PlanNotice] {
-        &self.notices
-    }
-
     /// Whether this statement supports retaining its catalog result for replay.
     pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
         use mz_sql::ast::ShowStatement;

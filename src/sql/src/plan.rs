@@ -693,7 +693,7 @@ pub struct OnHydration {
     pub linger_duration: Option<Duration>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CreateSourcePlan {
     pub name: QualifiedItemName,
     pub source: Source,

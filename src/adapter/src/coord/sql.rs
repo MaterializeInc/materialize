@@ -21,8 +21,8 @@ use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
+use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
-use crate::coord::{Coordinator, Message};
 use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
@@ -258,17 +258,14 @@ impl Coordinator {
             drop(txn_reads);
         }
 
-        if let Some(_guard) = self
+        if let Some(guard) = self
             .active_conns
             .get_mut(conn_id)
             .expect("must exist for active session")
             .deferred_lock
             .take()
         {
-            // If there are waiting deferred statements, process one.
-            if !self.serialized_ddl.is_empty() {
-                let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
-            }
+            self.release_ddl_lock(guard);
         }
 
         retire_notify

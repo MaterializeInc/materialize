@@ -1063,29 +1063,12 @@ class Scenario:
         self.c = c
         self.rng = rng
         self.num_objects = num_objects
-        # Set to True when a transient error was detected and the catalog
-        # may now be in an inconsistent state (e.g. a BEGIN/COMMIT transaction
-        # rolled back after testdrive's retry logic masked the COMMIT failure).
-        # The outer workflow loop must do a full reset before the next run.
-        self.needs_reset = False
 
     def _impl(self, num_executions: int) -> str:
         raise NotImplementedError
 
     def print(self) -> None:
         print(self._impl(1))
-
-    # Errors that are transient and safe to ignore in race-condition testing.
-    # When one of these is encountered the catalog is likely in an
-    # inconsistent state, so the scenario signals for a full reset.
-    ignorable_errors: list[str] = [
-        # TODO: https://linear.app/materializeinc/issue/DB-117
-        "another session modified the catalog while this DDL transaction was open",
-        # Downstream effect: a prior catalog-conflict rolled back a
-        # BEGIN/COMMIT transaction, so the object never existed by the time
-        # destroy() tried to drop it.
-        "unknown catalog item",
-    ]
 
     def run_fragment(self, text: str, tries: int = 1) -> None:
         if not text:
@@ -1095,18 +1078,6 @@ class Scenario:
                 self.c.testdrive(text, quiet=True)
                 return
             except Exception as e:
-                # FailedTestExecutionError's str() is just a summary ("At least
-                # one test failed"); the actual testdrive error text lives in
-                # e.errors[].{message,details}. Check all of them.
-                haystack = str(e)
-                for err in getattr(e, "errors", []) or []:
-                    haystack += f"\n{getattr(err, 'message', '')}\n{getattr(err, 'details', '')}"
-                if any(msg in haystack for msg in self.ignorable_errors):
-                    print(
-                        f"Transient error detected, will reset state before next scenario: {e}"
-                    )
-                    self.needs_reset = True
-                    return
                 print(e)
                 if i == tries - 1:
                     print("Failed to run fragment, giving up")
@@ -1226,11 +1197,7 @@ class SubsequentChain(Scenario):
 
 
 def setup(c: Composition) -> None:
-    """Bring services up and configure Materialize for the test.
-
-    Called at startup and again after a reset (down + up), so the operations
-    here must be safe to run against a fresh volume-destroyed environment.
-    """
+    """Bring services up and configure Materialize for the test."""
     c.up(
         *SERVICE_NAMES,
         Service("testdrive", idle=True),
@@ -1344,12 +1311,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         duration = time.time() - start
         max_scenario_duration = max(max_scenario_duration, duration)
         print(f"--- Scenario finished in {duration:.0f}s")
-
-        if scenario.needs_reset:
-            print("--- Resetting state after transient error")
-            c.down(destroy_volumes=True)
-            toxiproxy_start(c, args.jitter)
-            setup(c)
 
         seed = rng.randrange(1000000)
 

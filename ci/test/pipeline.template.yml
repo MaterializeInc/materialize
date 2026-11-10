@@ -328,13 +328,26 @@ steps:
     inputs:
       - test/parallel-workload
       - misc/python/materialize/parallel_workload/catalog_transactions.py
+      - misc/python/materialize/parallel_workload/staged_catalog.py
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           run: catalog-transactions
-          args: [--case=rename]
+          args: [--case=all]
     agents:
       queue: hetzner-aarch64-16cpu-32gb
+
+  - id: catalog-command-read-only
+    topics: [0dt-migration, kafka, mysql, postgres, sql-server]
+    label: Catalog command read-only admission
+    depends_on: build-x86_64
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+          run: read-only
+    agents:
+      queue: hetzner-x86-64-dedi-16cpu-64gb
 
   - id: cluster-tests
     topics: [kafka, kafka-sink, mysql, postgres]

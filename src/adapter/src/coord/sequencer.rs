@@ -60,10 +60,7 @@ use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::DeferredPlan;
 use crate::coord::validity::PlanValidity;
-use crate::coord::{
-    Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
-    catalog_serving,
-};
+use crate::coord::{Coordinator, ExplainPlanContext, Message, TargetCluster, catalog_serving};
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
@@ -203,6 +200,15 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
+                    if !matches!(
+                        plan.source.data_source,
+                        plan::DataSourceDesc::Webhook { .. }
+                    ) {
+                        let msg = "CREATE SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
+                        return;
+                    }
                     let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
@@ -218,13 +224,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::CreateSources(plans) => {
-                    assert!(
-                        resolved_ids.is_empty(),
-                        "each plan has separate resolved_ids"
-                    );
-                    let result = self.sequence_create_source(&mut ctx, plans).await;
-                    ctx.retire(result);
+                Plan::CreateSources(_) => {
+                    let msg = "CREATE SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateConnection(plan) => {
                     self.sequence_create_connection(ctx, plan, resolved_ids)
@@ -258,6 +261,18 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateTable(plan) => {
+                    if matches!(
+                        plan.table.data_source,
+                        plan::TableDataSource::DataSource {
+                            desc: plan::DataSourceDesc::IngestionExport { .. },
+                            ..
+                        }
+                    ) {
+                        let msg = "CREATE TABLE FROM SOURCE must execute as a catalog command";
+                        soft_panic_or_log!("{msg}");
+                        ctx.retire(Err(AdapterError::Internal(msg.into())));
+                        return;
+                    }
                     let result = self
                         .sequence_create_table(&mut ctx, plan, resolved_ids)
                         .await;
@@ -356,33 +371,6 @@ impl Coordinator {
                 | Plan::AbortTransaction(AbortTransactionPlan {
                     ref transaction_type,
                 }) => {
-                    // Serialize DDL transactions. Statements that use this mode must return false
-                    // in `must_serialize_ddl()`.
-                    if ctx.session().transaction().is_ddl() {
-                        if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
-                            let prev = self
-                                .active_conns
-                                .get_mut(ctx.session().conn_id())
-                                .expect("connection must exist")
-                                .deferred_lock
-                                .replace(guard);
-                            assert!(
-                                prev.is_none(),
-                                "connections should have at most one lock guard"
-                            );
-                        } else {
-                            self.serialized_ddl.push_back(DeferredPlanStatement {
-                                ctx,
-                                ps: PlanStatement::Plan {
-                                    plan,
-                                    resolved_ids,
-                                    sql_impl_resolved_ids,
-                                },
-                            });
-                            return;
-                        }
-                    }
-
                     let action = match &plan {
                         Plan::CommitTransaction(_) => EndTransactionAction::Commit,
                         Plan::AbortTransaction(_) => EndTransactionAction::Rollback,
@@ -452,9 +440,9 @@ impl Coordinator {
                 | Plan::AlterItemRename(_)
                 | Plan::AlterSchemaRename(_)
                 | Plan::AlterSchemaSwap(_) => {
-                    ctx.retire(Err(AdapterError::Internal(
-                        "rename/swap must execute as a catalog command".into(),
-                    )));
+                    let msg = "rename/swap must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterConnection(plan) => {
                     self.sequence_alter_connection(ctx, plan).await;
@@ -483,9 +471,10 @@ impl Coordinator {
                 Plan::AlterSink(plan) => {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
                 }
-                Plan::AlterSource(plan) => {
-                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                Plan::AlterSource(_) => {
+                    let msg = "ALTER SOURCE must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;

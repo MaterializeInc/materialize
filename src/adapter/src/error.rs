@@ -264,8 +264,6 @@ pub enum AdapterError {
     SingleStatementTransaction,
     /// The transaction can only execute simple DDL.
     DDLOnlyTransaction,
-    /// Another session modified the Catalog while this transaction was open.
-    DDLTransactionRace,
     /// Final execution would change an outcome already reported to the client.
     DDLTransactionOutcomeChanged,
     /// A conditional cluster-config write failed its precondition: the cluster's
@@ -929,10 +927,6 @@ impl AdapterError {
                  mz_internal.mz_cluster_reconfigurations for the retained outcome."
                     .into(),
             ),
-            AdapterError::DDLTransactionRace => Some(
-                "Currently, DDL transactions fail when any other DDL happens concurrently, \
-                 even on unrelated schemas/clusters.".into()
-            ),
             AdapterError::DDLTransactionOutcomeChanged => Some(
                 "Retry the transaction to execute its statements against the current catalog.".into()
             ),
@@ -1108,9 +1102,7 @@ impl AdapterError {
             AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::DDLTransactionRace | AdapterError::DDLTransactionOutcomeChanged => {
-                SqlState::T_R_SERIALIZATION_FAILURE
-            }
+            AdapterError::DDLTransactionOutcomeChanged => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
@@ -1543,9 +1535,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
-            ),
-            AdapterError::DDLTransactionRace => f.write_str(
-                "another session modified the catalog while this DDL transaction was open",
             ),
             AdapterError::DDLTransactionOutcomeChanged => f.write_str(
                 "a statement in this transaction would produce a different result at commit",

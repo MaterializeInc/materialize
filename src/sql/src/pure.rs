@@ -345,15 +345,14 @@ pub async fn purify_statement(
     storage_configuration: &StorageConfiguration,
 ) -> (Result<PurifiedStatement, PlanError>, Option<ClusterId>) {
     match stmt {
-        Statement::CreateSource(stmt) => {
-            let cluster_id = stmt.in_cluster.as_ref().map(|cluster| cluster.id.clone());
-            (
-                purify_create_source(catalog, now, stmt, storage_configuration).await,
-                cluster_id,
-            )
-        }
         Statement::AlterSource(stmt) => (
-            purify_alter_source(catalog, stmt, storage_configuration).await,
+            source_preparation::purify(
+                &catalog,
+                now,
+                Statement::AlterSource(stmt),
+                storage_configuration,
+            )
+            .await,
             None,
         ),
         Statement::CreateSink(stmt) => {
@@ -363,10 +362,6 @@ pub async fn purify_statement(
                 cluster_id,
             )
         }
-        Statement::CreateTableFromSource(stmt) => (
-            purify_create_table_from_source(catalog, now, stmt, storage_configuration).await,
-            None,
-        ),
         o => (
             Err(internal_err!(
                 "unexpected statement type in purification: {:?}",
@@ -1452,60 +1447,44 @@ async fn execute_create_source_preparation(
     })
 }
 
-async fn purify_create_source(
-    catalog: impl SessionCatalog,
-    now: u64,
-    statement: CreateSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    source_preparation::purify(
-        &catalog,
-        now,
-        Statement::CreateSource(statement),
-        storage_configuration,
-    )
-    .await
+/// Catalog-derived inputs of upstream reads for `ALTER SOURCE ... ADD SUBSOURCES`
+/// and `REFRESH REFERENCES`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AlterSourcePreparation {
+    AddSubsources {
+        external_references: Vec<ExternalReferenceExport>,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+        desc: SourceDesc,
+        partial_name: PartialItemName,
+        unresolved_source_name: UnresolvedItemName,
+        resolved_source_name: ResolvedItemName,
+    },
+    RefreshReferences {
+        desc: SourceDesc,
+        resolved_source_name: ResolvedItemName,
+    },
 }
 
-/// On success, returns the details on new subsources and updated
-/// 'options' that sequencing expects for handling `ALTER SOURCE` statements.
-async fn purify_alter_source(
-    catalog: impl SessionCatalog,
-    stmt: AlterSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    let scx = StatementContext::new(None, &catalog);
+fn prepare_alter_source(
+    catalog: &dyn SessionCatalog,
+    stmt: &AlterSourceStatement<Aug>,
+) -> Result<Option<AlterSourcePreparation>, PlanError> {
+    let scx = StatementContext::new(None, catalog);
     let AlterSourceStatement {
         source_name: unresolved_source_name,
         action,
         if_exists,
     } = stmt;
-
-    // Get name.
     let item = match scx.resolve_item(RawItemName::Name(unresolved_source_name.clone())) {
         Ok(item) => item,
-        Err(_) if if_exists => {
-            return Ok(PurifiedStatement::PurifiedAlterSource {
-                alter_source_stmt: AlterSourceStatement {
-                    source_name: unresolved_source_name,
-                    action,
-                    if_exists,
-                },
-            });
-        }
+        Err(_) if *if_exists => return Ok(None),
         Err(e) => return Err(e),
     };
-
-    // Ensure it's an ingestion-based and alterable source.
     let desc = match item.source_desc()? {
         Some(desc) => desc.clone().into_inline_connection(scx.catalog),
-        None => {
-            sql_bail!("cannot ALTER this type of source")
-        }
+        None => sql_bail!("cannot ALTER this type of source"),
     };
-
     let source_name = item.name();
-
     let resolved_source_name = ResolvedItemName::Item {
         id: item.id(),
         qualifiers: item.name().qualifiers.clone(),
@@ -1513,9 +1492,7 @@ async fn purify_alter_source(
         print_id: true,
         version: RelationVersionSelector::Latest,
     };
-
     let partial_name = scx.catalog.minimal_qualification(source_name);
-
     match action {
         AlterSourceAction::AddSubsources {
             external_references,
@@ -1524,11 +1501,42 @@ async fn purify_alter_source(
             if scx.catalog.system_vars().enable_create_table_from_source()
                 && scx.catalog.system_vars().force_source_table_syntax()
             {
-                Err(PlanError::UseTablesForSources(
+                return Err(PlanError::UseTablesForSources(
                     "ALTER SOURCE .. ADD SUBSOURCES ..".to_string(),
-                ))?;
+                ));
             }
+            Ok(Some(AlterSourcePreparation::AddSubsources {
+                external_references: external_references.clone(),
+                options: options.clone(),
+                desc,
+                partial_name,
+                unresolved_source_name: unresolved_source_name.clone(),
+                resolved_source_name,
+            }))
+        }
+        AlterSourceAction::RefreshReferences => {
+            Ok(Some(AlterSourcePreparation::RefreshReferences {
+                desc,
+                resolved_source_name,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
 
+async fn execute_alter_source_preparation(
+    request: AlterSourcePreparation,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    match request {
+        AlterSourcePreparation::AddSubsources {
+            external_references,
+            options,
+            desc,
+            partial_name,
+            unresolved_source_name,
+            resolved_source_name,
+        } => {
             purify_alter_source_add_subsources(
                 external_references,
                 options,
@@ -1540,7 +1548,10 @@ async fn purify_alter_source(
             )
             .await
         }
-        AlterSourceAction::RefreshReferences => {
+        AlterSourcePreparation::RefreshReferences {
+            desc,
+            resolved_source_name,
+        } => {
             purify_alter_source_refresh_references(
                 desc,
                 resolved_source_name,
@@ -1548,18 +1559,10 @@ async fn purify_alter_source(
             )
             .await
         }
-        _ => Ok(PurifiedStatement::PurifiedAlterSource {
-            alter_source_stmt: AlterSourceStatement {
-                source_name: unresolved_source_name,
-                action,
-                if_exists,
-            },
-        }),
     }
 }
 
 // TODO(database-issues#8620): Remove once subsources are removed
-/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
 async fn purify_alter_source_add_subsources(
     external_references: Vec<ExternalReferenceExport>,
     mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,
@@ -2457,21 +2460,6 @@ fn finish_table_from_source(
     // available references table in the catalog, so plumb this through.
     // available_source_references: retrieved_source_references.available_source_references(),
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
-}
-
-async fn purify_create_table_from_source(
-    catalog: impl SessionCatalog,
-    now: u64,
-    statement: CreateTableFromSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    source_preparation::purify(
-        &catalog,
-        now,
-        Statement::CreateTableFromSource(statement),
-        storage_configuration,
-    )
-    .await
 }
 
 #[derive(Clone, Debug)]

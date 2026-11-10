@@ -320,9 +320,8 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
 
         return columns
 
-    # SQLSTATE raised by Materialize when a DDL transaction is aborted because
-    # another session modified the catalog concurrently. See
-    # `AdapterError::DDLTransactionRace` in `src/adapter/src/error.rs`.
+    # Serialization failures include DDL commits that would change an outcome
+    # already reported to the client (AdapterError::DDLTransactionOutcomeChanged).
     _DDL_CONFLICT_SQLSTATE = "40001"
 
     @available

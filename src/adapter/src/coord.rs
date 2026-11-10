@@ -154,6 +154,7 @@ use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
     NetworkPolicyRule, Params, QueryWhen,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
@@ -365,6 +366,15 @@ pub enum Message {
         controller: ControllerReadiness,
     },
     PurifiedStatementReady(PurifiedStatementReady),
+    SourceStatementReady {
+        pending: ddl::PendingSourceStatement,
+        response: mz_sql::pure::SourcePreparationResponse,
+        otel_ctx: OpenTelemetryContext,
+    },
+    DdlCommandsReady {
+        pending: ddl::PendingDdlCommit,
+        otel_ctx: OpenTelemetryContext,
+    },
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
     DeferredPlanReady {
@@ -546,6 +556,8 @@ impl Message {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
+            Message::SourceStatementReady { .. } => "source_statement_ready",
+            Message::DdlCommandsReady { .. } => "ddl_commands_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
@@ -1311,6 +1323,22 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+impl PendingTxn {
+    fn finish(self) {
+        let PendingTxn {
+            mut ctx,
+            response,
+            action,
+        } = self;
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+        ctx.retire(response);
+    }
+}
+
 #[derive(Debug)]
 /// The response we'll send for a [`PendingTxn`].
 pub enum PendingTxnResponse {
@@ -1415,17 +1443,7 @@ impl PendingReadTxn {
     /// Alert the client that the read has been linearized.
     #[instrument(level = "debug")]
     pub fn finish(self) {
-        let PendingTxn {
-            mut ctx,
-            response,
-            action,
-        } = self.txn;
-        let changed = ctx.session_mut().vars_mut().end_transaction(action);
-        let response = response.map(|mut r| {
-            r.extend_params(changed);
-            ExecuteResponse::from(r)
-        });
-        ctx.retire(response);
+        self.txn.finish();
     }
 }
 
@@ -2036,7 +2054,7 @@ pub struct Coordinator {
     /// - Re-planning a statement is hard because Coordinator and Session state is mutated at
     ///   various points, and we would need to correctly reset those changes before re-planning and
     ///   re-sequencing.
-    serialized_ddl: LockedVecDeque<DeferredPlanStatement>,
+    serialized_ddl: LockedVecDeque<DeferredDdl>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -5614,22 +5632,26 @@ impl<T> LockedVecDeque<T> {
 }
 
 #[derive(Debug)]
-struct DeferredPlanStatement {
-    ctx: ExecuteContext,
-    ps: PlanStatement,
-}
-
-#[derive(Debug)]
-enum PlanStatement {
+enum DeferredDdl {
     Statement {
+        ctx: ExecuteContext,
         stmt: Arc<Statement<Raw>>,
         params: Params,
     },
-    Plan {
-        plan: mz_sql::plan::Plan,
-        resolved_ids: ResolvedIds,
-        sql_impl_resolved_ids: ResolvedIds,
-    },
+    Commit(ddl::PendingDdlCommit),
+}
+
+impl DeferredDdl {
+    fn conn_id(&self) -> &ConnectionId {
+        match self {
+            Self::Statement {
+                ctx,
+                stmt: _,
+                params: _,
+            } => ctx.session().conn_id(),
+            Self::Commit(pending) => pending.conn_id(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

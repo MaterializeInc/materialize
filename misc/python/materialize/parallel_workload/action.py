@@ -369,7 +369,6 @@ class Action:
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
-                    "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
                     "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
@@ -2839,18 +2838,13 @@ class ReadOnlyTransactionAction(Action):
 
 
 class DDLTransactionAction(Action):
-    """A DDL statement inside an explicit `BEGIN`/`COMMIT`. Materialize allows
-    only a single statement in a DDL transaction, so the value over autocommit
-    DDL is the open commit window: racing concurrent DDL against it exercises
-    the "another session modified the catalog while this DDL transaction was
-    open" serialization path."""
+    """Race concurrent catalog changes against CREATE TABLE deferred until COMMIT."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            "another session modified the catalog",
             "unknown schema",
         ] + super().errors_to_ignore(exe)
 
