@@ -14004,6 +14004,51 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_freshness_progress";
+----
+Explained Query:
+  →Union
+    →Map/Filter/Project
+      Project: #0, #2, #1
+      Map: null
+        →Consolidating Monotonic GroupAggregate
+          Aggregations: max
+          Key:
+            Project: #1
+          →Read mz_internal.mz_wallclock_global_freshness_histogram_raw
+    →Unarranged Raw Stream
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: max
+        Key:
+          Project: #1, #2
+        →Read mz_internal.mz_wallclock_replica_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_global_freshness_histogram_raw
+  project=(#1, #2)
+  filter=((#3{measure} = "end_to_end"))
+Source mz_internal.mz_wallclock_replica_freshness_histogram_raw
+  project=(#1..=#3)
+  filter=((#4{measure} = "end_to_end"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_global_freshness_histogram";
+----
+Explained Query:
+  →Accumulable GroupAggregate
+    Simple aggregates: count(*)
+    →Stream mz_internal.mz_wallclock_global_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_global_freshness_histogram_raw
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_global_lag";
 ----
 Explained Query:
@@ -14067,6 +14112,20 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_wallclock_global_lag_recent_history_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_replica_freshness_histogram";
+----
+Explained Query:
+  →Accumulable GroupAggregate
+    Simple aggregates: count(*)
+    →Stream mz_internal.mz_wallclock_replica_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_replica_freshness_histogram_raw
 
 Target cluster: mz_catalog_server
 
