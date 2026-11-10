@@ -95,6 +95,8 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
 (e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
+It includes disabled sizes, which existing replicas may still use; to list the
+sizes available for new clusters and replicas, filter on `NOT disabled`.
 
 This table was previously in the `mz_internal` schema. All queries previously referencing
 `mz_internal.mz_cluster_replica_sizes` should now reference `mz_catalog.mz_cluster_replica_sizes`.
@@ -114,6 +116,7 @@ any kind of capacity planning.
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in bytes.                                                                                                                    |
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
+| `disabled`             | [`boolean`] | Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.                             |
 
 ### `mz_cluster_replicas`
 

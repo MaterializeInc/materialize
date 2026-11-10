@@ -483,12 +483,7 @@ impl CatalogState {
 
             // The disk column of mz_clusters / mz_cluster_replicas MVs needs
             // `swap_enabled` and `disk_bytes`; expose them through a parallel
-            // internal table. Unlike the public sizes table below, we write
-            // here unconditionally — `cluster_replica_size_has_disk` previously
-            // indexed the in-memory map without checking `disabled`, so a
-            // managed cluster pinned to a disabled size still resolved its
-            // `disk` column from the real allocation. Writing disabled rows
-            // here preserves that behavior.
+            // internal table.
             let internal_row = Row::pack_slice(&[
                 size.as_str().into(),
                 Datum::from(alloc.swap_enabled),
@@ -499,10 +494,6 @@ impl CatalogState {
                 internal_row,
                 Diff::ONE,
             ));
-
-            if alloc.disabled {
-                continue;
-            }
 
             let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
             let MemoryLimit(ByteSize(memory_bytes)) =
@@ -516,6 +507,7 @@ impl CatalogState {
                 memory_bytes.into(),
                 disk_bytes.into(),
                 (alloc.credits_per_hour).into(),
+                alloc.disabled.into(),
             ]);
 
             updates.push(BuiltinTableUpdate::row(

@@ -335,6 +335,7 @@ mz_cluster_replica_size_internal  size
 mz_cluster_replica_size_internal  swap_enabled
 mz_cluster_replica_sizes  cpu_nano_cores
 mz_cluster_replica_sizes  credits_per_hour
+mz_cluster_replica_sizes  disabled
 mz_cluster_replica_sizes  disk_bytes
 mz_cluster_replica_sizes  memory_bytes
 mz_cluster_replica_sizes  processes
