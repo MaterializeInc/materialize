@@ -9,7 +9,7 @@
 
 //! Completion of read-only transactions whose resources belong to the session.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mz_repr::Timestamp;
 use mz_sql::session::vars::{EndTransactionAction, IsolationLevel};
@@ -41,15 +41,31 @@ pub(crate) async fn complete_read_only_transaction(
         if let Some(context) = &completion.timestamp {
             match session.vars().transaction_isolation() {
                 IsolationLevel::StrictSerializable => {
-                    if let Some((timeline, timestamp)) = context.timestamp_to_linearize() {
-                        client
-                            .coordinator_client()
-                            .metrics()
-                            .frontend_transaction_waits
-                            .inc();
-                        let oracle = client.ensure_oracle(timeline.clone()).await?;
-                        wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?;
-                    }
+                    let started = Instant::now();
+                    let immediately_handled =
+                        if let Some((timeline, timestamp)) = context.timestamp_to_linearize() {
+                            client
+                                .coordinator_client()
+                                .metrics()
+                                .frontend_transaction_waits
+                                .inc();
+                            let oracle = client.ensure_oracle(timeline.clone()).await?;
+                            wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?
+                        } else {
+                            client
+                                .coordinator_client()
+                                .metrics()
+                                .linearize_read_fast_path
+                                .inc();
+                            true
+                        };
+                    let metrics = client.coordinator_client().metrics();
+                    let duration = if immediately_handled {
+                        &metrics.linearize_read_immediate_seconds
+                    } else {
+                        &metrics.linearize_read_delayed_seconds
+                    };
+                    duration.observe(started.elapsed().as_secs_f64());
                 }
                 IsolationLevel::StrongSessionSerializable => {
                     if let Some((timeline, timestamp)) = context.timeline_timestamp() {
@@ -87,19 +103,28 @@ async fn wait_for_read_timestamp(
     oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
     timestamp: Timestamp,
     cancel: &mut watch::Receiver<()>,
-) -> Result<(), AdapterError> {
+) -> Result<bool, AdapterError> {
     let wait = async {
+        let mut immediately_handled = true;
         loop {
+            #[cfg(debug_assertions)]
+            {
+                fail::fail_point!("frontend_transaction_before_oracle_read");
+                while fail::eval("frontend_transaction_hold_oracle_read", |_| ()).is_some() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
             let current = oracle.read_ts().await;
             if timestamp <= current {
-                break;
+                break immediately_handled;
             }
+            immediately_handled = false;
             let delay = Duration::from_millis(timestamp.saturating_sub(current).into());
             tokio::time::sleep(delay.min(Duration::from_secs(1))).await;
         }
     };
     tokio::select! {
-        () = wait => Ok(()),
+        immediately_handled = wait => Ok(immediately_handled),
         _ = cancel.changed() => Err(AdapterError::Canceled),
     }
 }
@@ -151,7 +176,7 @@ mod tests {
         );
         oracle.timestamp.store(10, Ordering::SeqCst);
         tokio::time::advance(Duration::from_millis(10)).await;
-        assert!(wait.await.is_ok());
+        assert!(!wait.await.expect("oracle advancement completes the read"));
     }
 
     #[mz_ore::test(tokio::test)]

@@ -52,6 +52,8 @@ pub struct Metrics {
     pub as_of_queries: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
+    pub linearize_read_immediate_seconds: Histogram,
+    pub linearize_read_delayed_seconds: Histogram,
     pub linearize_read_fast_path: IntCounter,
     pub frontend_transaction_completions: IntCounter,
     pub frontend_transaction_waits: IntCounter,
@@ -85,6 +87,12 @@ pub struct Metrics {
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
+        let linearize_message_seconds: HistogramVec = registry.register(metric!(
+            name: "mz_linearize_message_seconds",
+            help: "The number of seconds it takes to linearize strict serializable messages",
+            var_labels: ["type", "immediately_handled"],
+            buckets: histogram_seconds_buckets(0.000_128, 8.0),
+        ));
         Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
@@ -176,12 +184,9 @@ impl Metrics {
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
             )),
-            linearize_message_seconds: registry.register(metric!(
-                name: "mz_linearize_message_seconds",
-                help: "The number of seconds it takes to linearize strict serializable messages",
-                var_labels: ["type", "immediately_handled"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
+            linearize_read_immediate_seconds: linearize_message_seconds.with_label_values(&["read", "true"]),
+            linearize_read_delayed_seconds: linearize_message_seconds.with_label_values(&["read", "false"]),
+            linearize_message_seconds,
             linearize_read_fast_path: registry.register(metric!(
                 name: "mz_linearize_read_fast_path_total",
                 help: "The number of ordinary strict serializable reads already linearized at transaction end",

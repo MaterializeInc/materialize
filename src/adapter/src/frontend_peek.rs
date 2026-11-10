@@ -641,6 +641,8 @@ impl PeekClient {
             Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self.ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
+                #[cfg(debug_assertions)]
+                fail::fail_point!("frontend_peek_after_oracle_read");
                 Some(oracle_read_ts)
             }
             Some(_) | None => None,
