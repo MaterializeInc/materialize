@@ -892,6 +892,12 @@ impl<'w> Worker<'w> {
 
             self.handle_pending_commands()?;
 
+            // After the commands, so a peer recorded by one is tried in the same pass, and before
+            // the peeks, so a peek on a peer bound here is served in this pass.
+            if let Some(compute_state) = &mut self.compute_state {
+                compute_state.bind_peers();
+            }
+
             self.process_storage_guest();
 
             if let Some(mut compute_state) = self.activate_compute() {

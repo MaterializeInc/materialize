@@ -1614,7 +1614,9 @@ fn an_import_built_before_binding_replays_the_chain_once_bound() {
             )
         });
 
-        binding.bind(Arc::clone(&published.shared));
+        binding
+            .bind(Arc::clone(&published.shared))
+            .expect("the point's since is at or below the readers' holds");
         let upper = published.shared.upper();
         let mut steps = 0;
         while probe.with_frontier(|frontier| frontier.to_owned()) != upper {
@@ -1703,7 +1705,9 @@ fn a_join_over_an_import_bound_late_matches_direct() {
         );
 
         let (pub_a, keep_a, _agent_a) = publish_updates(worker, &a, seal, "late join A");
-        binding_a.bind(Arc::clone(&pub_a.shared));
+        binding_a
+            .bind(Arc::clone(&pub_a.shared))
+            .expect("the point's since is at or below the readers' holds");
 
         let seal_ts = Timestamp::from(seal);
         let mut steps = 0;
@@ -1770,7 +1774,6 @@ fn holds_before_connect_are_pushed_at_connect_and_follow_every_change() {
 }
 
 #[mz_ore::test]
-#[should_panic(expected = "the hold stream keeps")]
 fn an_import_refuses_a_point_compacted_past_its_as_of() {
     timely::execute_directly(move |worker| {
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -1799,8 +1802,16 @@ fn an_import_refuses_a_point_compacted_past_its_as_of() {
                 Antichain::new(),
             );
         });
-        // The import's hold, minted at construction, registers on the point here.
-        binding.bind(Arc::clone(&published.shared));
+        // The import's hold, minted at construction, is below the point's `since`.
+        assert_eq!(
+            binding.bind(Arc::clone(&published.shared)),
+            Err(target),
+            "the bind refuses a point compacted past a reader's hold"
+        );
+        assert!(
+            !binding.is_bound(),
+            "a refused bind leaves the binding unbound"
+        );
         drop_dataflows(worker);
     });
 }
@@ -1838,7 +1849,9 @@ fn a_physical_request_before_binding_holds_from_the_chain_coverage() {
             "an unbound reader holds nothing on any point"
         );
 
-        binding.bind(Arc::clone(&published.shared));
+        binding
+            .bind(Arc::clone(&published.shared))
+            .expect("the point's since is at or below the readers' holds");
         assert_eq!(
             published.physical_holds(),
             coverage,
@@ -1921,7 +1934,9 @@ fn a_bound_reader_holds_physically_at_the_coverage_its_consumer_saw() {
 
         let binding = RowBinding::new(HoldAccumulation::new());
         let mut before = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
-        binding.bind(Arc::clone(&published.shared));
+        binding
+            .bind(Arc::clone(&published.shared))
+            .expect("the point's since is at or below the readers' holds");
         check(&mut before, worker, &mut advance);
 
         let mut after = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));

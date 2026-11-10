@@ -12,8 +12,13 @@
 //!
 //! An index arrangement is normally readable only from the timely worker that maintains it. When
 //! `crate::render` publishes a maintained index through `crate::shared_trace` it records the
-//! resulting `Published` points here, keyed by [`GlobalId`], so a reader on another thread or
-//! runtime can mint a `Send` `SharedReader` for the same arrangement.
+//! resulting `Published` points here, keyed by the index's [`GlobalId`] and the
+//! [`CreationNumber`] of its incarnation, so a reader on another thread or runtime can read the
+//! same arrangement.
+//!
+//! Only the publisher creates slots. The reading runtime records each peer index as a
+//! [`PeerIndex`] whose readers exist before the slot does, and binds it to the slot of exactly its
+//! incarnation once the publisher reported applying the command that created it.
 //!
 //! A process holds one registry per local worker ordinal, and each runtime's worker with that
 //! ordinal holds a clone of it. Pairing worker `i` of one runtime with worker `i` of the other is
@@ -27,6 +32,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{Thread, ThreadId};
 
 use differential_dataflow::trace::TraceReader;
+use mz_compute_types::dataflows::IndexDesc;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_timely_util::capture::{ProgressPusher, ProgressSource, progress_link};
 use mz_timely_util::shared_trace::{Binding, HoldAccumulation};
@@ -39,7 +46,8 @@ use crate::arrangement::manager::TraceBundle;
 use crate::command_channel::CommandNumber;
 use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
 use crate::shared_trace::{
-    PeerErrsReader, PeerOksReader, Published, SharedErrsHandle, SharedOksHandle, adopt_trace,
+    PeerErrsBinding, PeerErrsReader, PeerOksBinding, PeerOksReader, Published, SharedErrsHandle,
+    SharedOksHandle, adopt_trace,
 };
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -50,14 +58,36 @@ use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 /// `GlobalId` the number names one incarnation on both runtimes of a process.
 pub(crate) type CreationNumber = CommandNumber;
 
+/// What both runtimes derive from the command that created an incarnation, which a reader compares
+/// against the slot it binds.
+///
+/// Equal on both runtimes for one incarnation. A difference means the two runtimes assigned the
+/// same creation number to different commands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SlotCheck {
+    /// The `as_of` of the dataflow that exports the index.
+    pub(crate) as_of: Antichain<Timestamp>,
+    /// The exported index, `None` for a logging index.
+    pub(crate) index: Option<IndexDesc<LirScalarExpr>>,
+}
+
+impl SlotCheck {
+    /// The check of a logging index, whose dataflow reads from the minimum time.
+    pub(crate) fn logging() -> Self {
+        SlotCheck {
+            as_of: Antichain::from_elem(Timestamp::minimum()),
+            index: None,
+        }
+    }
+}
+
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
 ///
 /// An index's `oks` is always a `RowRowSpine` and its `errs` always an `ErrSpine`. Holding the
 /// `Published` values keeps the publication points registered and lets us mint further handles.
 pub struct SharedIndexArrangement {
-    /// The `as_of` of the dataflow that exports the index, which tells two incarnations of one id
-    /// apart.
-    as_of: Antichain<Timestamp>,
+    /// What the publisher knew of the incarnation when it created the slot.
+    check: SlotCheck,
     /// The published `oks` arrangement.
     pub(crate) oks: Published<RowRowSpine<Timestamp, Diff>>,
     /// The published `errs` arrangement.
@@ -93,15 +123,10 @@ impl Default for HoldLink {
 #[derive(Default)]
 struct Inner {
     /// Weak, so an entry lives exactly as long as a publisher or a reader holds its slot. Dead
-    /// entries are pruned whenever a slot is created. Holds the newest incarnation of each id, and
-    /// an older one lives on outside the map for as long as someone holds it.
+    /// entries are pruned whenever a slot is created.
     ///
-    /// Keyed by id alone, with the `as_of` in the slot, so two incarnations of one id that are
-    /// wanted at once evict each other's entry, and a lookup of the evicted one creates a slot
-    /// nobody backs. Safe only because the reconciliation barrier between the two runtimes keeps
-    /// either from creating dataflows before both dropped the ones a connection replaces, so the
-    /// two runtimes never want two incarnations of one id at once.
-    map: BTreeMap<GlobalId, Weak<SharedIndexArrangement>>,
+    /// Keyed by incarnation, so two incarnations of one id coexist for as long as both are held.
+    map: BTreeMap<(GlobalId, CreationNumber), Weak<SharedIndexArrangement>>,
     /// The worker that publishes here, `None` until it attaches.
     publisher: Option<ThreadId>,
     /// The worker that reads here and is woken on a publication, `None` until it attaches.
@@ -156,41 +181,15 @@ impl SharedIndexArrangement {
         self.oks.is_frozen() || self.errs.is_frozen()
     }
 
-    /// Readers of both points, bound to them at once, that hold logically at `as_of` and nothing
-    /// physically. They and every reader minted from them hold in one accumulation, which pushes
-    /// into the slot's hold link.
+    /// Releases the reading runtime's hold on this slot for good, unless a peer took the hold link
+    /// before, for an incarnation that peer will never read.
     ///
-    /// A slot has one peer. For a second one, which a reconnect that diverged between the two
-    /// runtimes could ask for, this reports the bug and returns readers whose bindings stay
-    /// unbound: their holds reach no publisher, so they read nothing and their reads wait forever.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a published `since` is beyond `as_of`.
-    pub(crate) fn peer_readers(
-        &self,
-        as_of: &Antichain<Timestamp>,
-    ) -> (PeerOksReader, PeerErrsReader) {
-        let holds = HoldAccumulation::new();
-        let oks_binding = Binding::new(holds.clone());
-        let errs_binding = Binding::new(holds.clone());
-        let pusher = self.take_hold_pusher();
-        if pusher.is_some() {
-            oks_binding.bind(Arc::clone(&self.oks.shared));
-            errs_binding.bind(Arc::clone(&self.errs.shared));
-        } else {
-            mz_ore::soft_panic_or_log!("a second peer for a slot whose peer holds its hold link");
+    /// Until a peer connects, the publisher holds the slot at the minimum, so a slot no peer binds
+    /// would otherwise keep its traces from compacting for as long as it is published.
+    pub(crate) fn release_hold_link(&self) {
+        if let Some(mut pusher) = self.take_hold_pusher() {
+            pusher.advance_to(Antichain::new().borrow());
         }
-        let mut oks = oks_binding.reader(as_of.clone());
-        oks.set_physical_compaction(Antichain::new().borrow());
-        let mut errs = errs_binding.reader(as_of.clone());
-        errs.set_physical_compaction(Antichain::new().borrow());
-        // After the readers, so the first frontier pushed is their hold. An empty one would end
-        // the replayed stream for good.
-        if let Some(pusher) = pusher {
-            holds.connect(pusher);
-        }
-        (oks, errs)
     }
 
     /// Takes the end of the hold link the reading runtime pushes its holds into, `None` if taken
@@ -203,15 +202,18 @@ impl SharedIndexArrangement {
             .take()
     }
 
-    /// Takes the end of the hold link the publisher replays, `None` if taken before, which only a
-    /// second publication of the slot does. That one is reported by the soft assert on re-attaching
-    /// in `TraceBox::attach` (`mz_timely_util::shared_trace`).
-    fn take_hold_source(&self) -> Option<ProgressSource<Timestamp>> {
+    /// Takes the end of the hold link the publisher replays.
+    ///
+    /// # Panics
+    ///
+    /// Panics if taken before. A slot is created by its one publication, which takes it.
+    fn take_hold_source(&self) -> ProgressSource<Timestamp> {
         self.hold_link
             .source
             .lock()
             .expect("hold link poisoned")
             .take()
+            .expect("a slot is published once")
     }
 }
 
@@ -277,93 +279,69 @@ impl ArrangementSharingRegistry {
         self.inner.lock().expect("registry poisoned")
     }
 
-    /// Returns the slot for the incarnation of `id` whose dataflow has `as_of`, creating one backed
-    /// by unbacked [`Published`] points if there is none or the one there is frozen.
-    ///
-    /// Whichever side touches an incarnation first creates the slot, and the other observes and
-    /// shares the same `Arc`. So a point a reader already imported is backed in place by a later
-    /// [`crate::shared_trace::adopt_trace`] rather than being overwritten by a second,
-    /// disconnected arrangement.
-    ///
-    /// A reconnect can recreate an index under its id with an `as_of` below the old incarnation's
-    /// `since`. Comparing the `as_of` keeps a read of the new incarnation off the old one's
-    /// compacted chain.
-    ///
-    /// A reconnect can also recreate an index at the same `as_of`. The old incarnation's trace has
-    /// dropped by then, and its points refuse another trace, so a frozen slot is never returned. Its
-    /// readers keep its final view, and the new incarnation gets a fresh slot. That two runtimes
-    /// then bind the same incarnation relies on the reconciliation barrier, which keeps either
-    /// runtime from creating dataflows before both dropped the ones they replace.
-    ///
-    /// An unbacked point carries no data, so this does not `notify`: there is nothing yet for a
-    /// waiting reader to act on. [`Self::publish`] notifies once the publishers are installed.
-    pub(crate) fn get_or_create(
+    /// The slot of the incarnation of `id` created by command `creation`, if someone holds it.
+    pub(crate) fn slot(
         &self,
         id: GlobalId,
-        as_of: &Antichain<Timestamp>,
-    ) -> Arc<SharedIndexArrangement> {
-        let mut inner = self.lock();
-        if let Some(slot) = inner.map.get(&id).and_then(Weak::upgrade) {
-            if slot.as_of == *as_of && !slot.is_frozen() {
-                return slot;
-            }
-        }
-        let slot = Arc::new(SharedIndexArrangement {
-            as_of: as_of.clone(),
-            oks: Published::new(),
-            errs: Published::new(),
-            hold_link: Default::default(),
-        });
-        inner.map.retain(|_, slot| slot.strong_count() > 0);
-        inner.map.insert(id, Arc::downgrade(&slot));
-        slot
+        creation: CreationNumber,
+    ) -> Option<Arc<SharedIndexArrangement>> {
+        self.lock().map.get(&(id, creation)).and_then(Weak::upgrade)
     }
 
-    /// The slot for `id`, if someone holds it.
+    /// The live slot of `id` with the largest creation number. Test-only.
     #[cfg(test)]
-    fn slot(inner: &Inner, id: &GlobalId) -> Option<Arc<SharedIndexArrangement>> {
-        inner.map.get(id).and_then(Weak::upgrade)
+    fn newest_slot(inner: &Inner, id: &GlobalId) -> Option<Arc<SharedIndexArrangement>> {
+        inner
+            .map
+            .range((*id, CreationNumber::MIN)..=(*id, CreationNumber::MAX))
+            .rev()
+            .find_map(|(_, slot)| slot.upgrade())
     }
 
-    /// Publishes index `id`'s `oks` and `errs` traces and wakes readers waiting on `id`. `as_of` is
-    /// the `as_of` of the dataflow that exports the index, and `scope` must belong to the worker
-    /// that maintains the traces.
+    /// Publishes index `id`'s `oks` and `errs` traces as the incarnation created by command
+    /// `creation`, and wakes readers waiting on `id`. `check` describes the incarnation for the
+    /// readers to compare, and `scope` must belong to the worker that maintains the traces.
     ///
-    /// Adopts the slot for `id` at `as_of`, see [`Self::get_or_create`]. Each half signals its own
-    /// seal. A peek whose result is an error carries its data on the errs arrangement, whose
-    /// frontier is held back until the error is emitted, so an oks-only signal would leave that
-    /// peek parked.
+    /// Creates a fresh slot under `(id, creation)`. A live slot under that key is a second
+    /// publication of one incarnation, a protocol violation, which is reported, and the fresh slot
+    /// replaces it. Each half signals its own seal. A peek whose result is an error carries its
+    /// data on the errs arrangement, whose frontier is held back until the error is emitted, so an
+    /// oks-only signal would leave that peek parked.
     ///
-    /// Every id gets its own publication point, including an index that re-exports another's
-    /// arrangement. The point's writer frontier and peer holds are per collection, and the
-    /// controller compacts two collections independently even when they share a trace.
-    ///
-    /// NOTE: A re-export's points are backed by the other index's trace, which outlives the
-    /// re-exporting index, so they do not freeze when its token drops, and [`Self::get_or_create`]
-    /// returns the live slot to a later incarnation at the same `as_of` for as long as anyone holds
-    /// it. Publishing into that slot again is refused, see the panics below. Reconciliation drops
-    /// every dataflow and peer holding the old slot before either runtime creates the new
-    /// incarnation, so the slot is gone by then.
+    /// Every incarnation gets its own publication points, including an index that re-exports
+    /// another's arrangement. The point's writer frontier and peer holds are per collection, and
+    /// the controller compacts two collections independently even when they share a trace. A
+    /// recreated re-export publishes new points over the same trace while readers of the old
+    /// incarnation may still hold the old ones, which the trace keeps backing.
     ///
     /// Builds in `scope` the replay of the slot's hold link, through which the reading runtime's
     /// holds keep the traces from compacting past them, see [`replay_reader_holds`].
     ///
     /// The publication lasts as long as the returned token, and so does the replay.
-    ///
-    /// # Panics
-    ///
-    /// Panics, or soft-panics when the same trace backs it, if the slot for `id` at `as_of` is live,
-    /// not frozen, and already backed by a trace.
     #[must_use]
     pub(crate) fn publish(
         &self,
         id: GlobalId,
-        as_of: &Antichain<Timestamp>,
+        creation: CreationNumber,
+        check: SlotCheck,
         scope: Scope<'_, Timestamp>,
         oks: &RowRowAgent<Timestamp, Diff>,
         errs: &ErrAgent<Timestamp, Diff>,
     ) -> PublishToken {
-        let slot = self.get_or_create(id, as_of);
+        let slot = Arc::new(SharedIndexArrangement {
+            check,
+            oks: Published::new(),
+            errs: Published::new(),
+            hold_link: Default::default(),
+        });
+        let replaced = {
+            let mut inner = self.lock();
+            inner.map.retain(|_, slot| slot.strong_count() > 0);
+            inner.map.insert((id, creation), Arc::downgrade(&slot))
+        };
+        if replaced.is_some_and(|replaced| replaced.strong_count() > 0) {
+            mz_ore::soft_panic_or_log!("incarnation {creation} of {id} published twice");
+        }
         let registry = self.clone();
         adopt_trace(oks, scope.worker(), &slot.oks, move || registry.notify());
         let registry = self.clone();
@@ -375,9 +353,6 @@ impl ArrangementSharingRegistry {
         // ahead of any `AllowCompaction` for the index on this runtime's stream, at the minimum
         // until the reading runtime's holds arrive.
         //
-        // A slot whose source is gone was published before, which `adopt_trace` reported, and
-        // the first publication's replay keeps holding it.
-        //
         // NOTE: Dropping a re-export's token releases its replayed holds while the interactive
         // runtime may still read the re-export. The shared trace stays protected by the base
         // index's replayed hold: the trace compacts to the meet of the holds across every point
@@ -385,15 +360,13 @@ impl ArrangementSharingRegistry {
         // holds the base at or below the re-export's `since`, and the interactive runtime applies
         // the base's compactions in command order.
         let minimum = Antichain::from_elem(Timestamp::minimum());
-        let replay = slot.take_hold_source().map(|source| {
-            replay_reader_holds(
-                scope,
-                id,
-                source,
-                slot.oks.shared.reader_at_least(&minimum),
-                slot.errs.shared.reader_at_least(&minimum),
-            )
-        });
+        let replay = replay_reader_holds(
+            scope,
+            id,
+            slot.take_hold_source(),
+            slot.oks.shared.reader_at_least(&minimum),
+            slot.errs.shared.reader_at_least(&minimum),
+        );
         self.notify();
         PublishToken {
             registry: self.clone(),
@@ -402,21 +375,44 @@ impl ArrangementSharingRegistry {
         }
     }
 
-    /// The bundle through which this runtime holds and reads index `id`, which its peer publishes.
-    ///
-    /// The bundle's logical compaction is this runtime's hold on the publication, from the index's
-    /// `as_of`, so an index's `since` never passes the `as_of` of a dataflow importing it. Its
-    /// readers are [`SharedIndexArrangement::peer_readers`], so the bundle holds nothing
-    /// physically and the publisher keeps merging. Imports from the bundle mint readers that do.
-    /// The slot lives as long as the bundle.
+    /// Readers of the incarnation of `id` created by `creation` at `as_of`, through a peer bound
+    /// at once, which hold logically at `as_of` and nothing physically. Test-only.
     ///
     /// # Panics
     ///
-    /// Panics if its published `since` is beyond `as_of`.
-    pub(crate) fn peer_bundle(&self, id: GlobalId, as_of: &Antichain<Timestamp>) -> TraceBundle {
-        let slot = self.get_or_create(id, as_of);
-        let (oks, errs) = slot.peer_readers(as_of);
-        TraceBundle::shared(oks, errs).with_drop(slot)
+    /// Panics if nobody holds the slot, or a published `since` is beyond `as_of`.
+    #[cfg(test)]
+    pub(crate) fn peer_readers_at(
+        &self,
+        id: GlobalId,
+        creation: CreationNumber,
+        as_of: &Antichain<Timestamp>,
+    ) -> (PeerOksReader, PeerErrsReader) {
+        let slot = self.slot(id, creation).expect("a published slot");
+        let mut peer = PeerIndex::new(creation, slot.check.clone());
+        // Readers at the slot's `as_of` first, so the bind connects a hold.
+        let (oks, errs) = peer.readers();
+        peer.bind(id, slot);
+        let mut at_as_of = (oks.reader_at_least(as_of), errs.reader_at_least(as_of));
+        at_as_of
+            .0
+            .set_physical_compaction(Antichain::new().borrow());
+        at_as_of
+            .1
+            .set_physical_compaction(Antichain::new().borrow());
+        at_as_of
+    }
+
+    /// The bundle over [`Self::peer_readers_at`]. Test-only.
+    #[cfg(test)]
+    pub(crate) fn peer_bundle_at(
+        &self,
+        id: GlobalId,
+        creation: CreationNumber,
+        as_of: &Antichain<Timestamp>,
+    ) -> TraceBundle {
+        let (oks, errs) = self.peer_readers_at(id, creation, as_of);
+        TraceBundle::shared(oks, errs)
     }
 
     /// The published `oks` `since` of `id`. Test-only.
@@ -427,7 +423,7 @@ impl ArrangementSharingRegistry {
     #[cfg(test)]
     pub(crate) fn published_since(&self, id: &GlobalId) -> Antichain<Timestamp> {
         let inner = self.lock();
-        let slot = Self::slot(&inner, id).expect("a slot for the id");
+        let slot = Self::newest_slot(&inner, id).expect("a slot for the id");
         slot.oks.shared.since()
     }
 
@@ -435,7 +431,7 @@ impl ArrangementSharingRegistry {
     #[cfg(test)]
     pub(crate) fn handles(&self, id: &GlobalId) -> Option<(SharedOksHandle, SharedErrsHandle)> {
         let inner = self.lock();
-        let slot = Self::slot(&inner, id)?;
+        let slot = Self::newest_slot(&inner, id)?;
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
@@ -447,7 +443,7 @@ impl ArrangementSharingRegistry {
     #[cfg(test)]
     pub(crate) fn published_logical_holds(&self, id: &GlobalId) -> Option<Antichain<Timestamp>> {
         let inner = self.lock();
-        let slot = Self::slot(&inner, id)?;
+        let slot = Self::newest_slot(&inner, id)?;
         Some(slot.oks.logical_holds())
     }
 
@@ -558,7 +554,7 @@ pub(crate) struct PublishToken {
     slot: Option<Arc<SharedIndexArrangement>>,
     /// Shuts the replay of the slot's hold link down when dropped, which releases the holds it
     /// keeps.
-    _replay: Option<Rc<dyn Any>>,
+    _replay: Rc<dyn Any>,
 }
 
 impl Drop for PublishToken {
@@ -567,6 +563,132 @@ impl Drop for PublishToken {
         // itself.
         drop(self.slot.take());
         self.registry.notify();
+    }
+}
+
+/// The reading runtime's side of one incarnation of a peer index: bindings whose readers exist
+/// from the moment the peer is recorded, and that bind the incarnation's slot once the publishing
+/// runtime created it.
+///
+/// Every reader of both bindings holds in one accumulation, which the bind connects to the slot's
+/// hold link. Until then the publisher holds the index at the minimum on the readers' behalf.
+pub(crate) struct PeerIndex {
+    /// The number of the command that created the incarnation.
+    creation: CreationNumber,
+    /// Compared against the slot's at the bind.
+    check: SlotCheck,
+    holds: HoldAccumulation<Timestamp>,
+    oks: PeerOksBinding,
+    errs: PeerErrsBinding,
+    /// The bound slot, `None` until bound.
+    slot: Option<Arc<SharedIndexArrangement>>,
+}
+
+impl PeerIndex {
+    /// An unbound peer of the incarnation that command `creation` created, described by `check`.
+    pub(crate) fn new(creation: CreationNumber, check: SlotCheck) -> Self {
+        let holds = HoldAccumulation::new();
+        PeerIndex {
+            creation,
+            check,
+            oks: Binding::new(holds.clone()),
+            errs: Binding::new(holds.clone()),
+            holds,
+            slot: None,
+        }
+    }
+
+    /// The number of the command that created the incarnation.
+    pub(crate) fn creation(&self) -> CreationNumber {
+        self.creation
+    }
+
+    /// Whether a slot is bound. Test-only.
+    #[cfg(test)]
+    pub(crate) fn is_bound(&self) -> bool {
+        self.slot.is_some()
+    }
+
+    /// Readers of both bindings that hold logically at the incarnation's `as_of` and nothing
+    /// physically, so the publisher keeps merging. Imports from them mint readers that do hold
+    /// physically.
+    ///
+    /// # Panics
+    ///
+    /// Panics if bound and a published `since` is beyond the `as_of`.
+    pub(crate) fn readers(&self) -> (PeerOksReader, PeerErrsReader) {
+        let mut oks = self.oks.reader(self.check.as_of.clone());
+        oks.set_physical_compaction(Antichain::new().borrow());
+        let mut errs = self.errs.reader(self.check.as_of.clone());
+        errs.set_physical_compaction(Antichain::new().borrow());
+        (oks, errs)
+    }
+
+    /// The bundle through which the reading runtime holds and reads the index, over
+    /// [`Self::readers`]. Its logical compaction is this runtime's hold on the publication, so an
+    /// index's `since` never passes the `as_of` of a dataflow importing it.
+    ///
+    /// Taken before [`Self::bind`], so the first frontier the bind pushes is the bundle's hold.
+    ///
+    /// # Panics
+    ///
+    /// Panics if bound and a published `since` is beyond the `as_of`.
+    pub(crate) fn bundle(&self) -> TraceBundle {
+        let (oks, errs) = self.readers();
+        TraceBundle::shared(oks, errs)
+    }
+
+    /// Binds both halves to `slot`, the slot of peer index `id` under this peer's creation number,
+    /// connects the readers' holds to its hold link, and keeps it.
+    ///
+    /// A slot whose check differs from the peer's, a slot whose hold link another peer took, and a
+    /// point compacted past the readers' holds are each a protocol violation, which is reported.
+    /// The peer then stays unbound and its reads wait forever, instead of reading another
+    /// incarnation or reading without a hold. A slot of another incarnation is released, see
+    /// [`SharedIndexArrangement::release_hold_link`].
+    pub(crate) fn bind(&mut self, id: GlobalId, slot: Arc<SharedIndexArrangement>) {
+        if slot.check != self.check {
+            // No peer of this process has the slot's incarnation under this number, so none ever
+            // reads it.
+            slot.release_hold_link();
+            mz_ore::soft_panic_or_log!(
+                "peer {id} at {} binds a slot of another incarnation: {:?} != {:?}",
+                self.creation,
+                slot.check,
+                self.check,
+            );
+            return;
+        }
+        let Some(mut pusher) = slot.take_hold_pusher() else {
+            mz_ore::soft_panic_or_log!(
+                "a second peer for slot {id} at {}, whose peer holds its hold link",
+                self.creation,
+            );
+            return;
+        };
+        // Before the holds are connected, so the publisher still holds at the minimum and the
+        // points' `since` is at or below every reader's hold.
+        let bound = self
+            .oks
+            .bind(Arc::clone(&slot.oks.shared))
+            .and_then(|()| self.errs.bind(Arc::clone(&slot.errs.shared)));
+        // Connected even if a bind was refused, so the publisher's hold follows the readers'
+        // lifetime instead of staying at the minimum. A connect while nothing holds would end the
+        // stream through a soft assert, so with no reader left the hold is released directly.
+        if self.holds.frontier().is_empty() {
+            pusher.advance_to(Antichain::new().borrow());
+        } else {
+            self.holds.connect(pusher);
+        }
+        match bound {
+            Ok(()) => self.slot = Some(slot),
+            // NOTE: A refused `errs` leaves `oks` bound. Every read of the index waits on both
+            // halves, so the peer reads nothing either way.
+            Err(since) => mz_ore::soft_panic_or_log!(
+                "peer {id} at {} binds a point compacted to {since:?}, past its readers",
+                self.creation,
+            ),
+        }
     }
 }
 

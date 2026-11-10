@@ -27,7 +27,7 @@ mod publish;
 
 use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::shared_trace::{BindingReader, SharedReader};
+use mz_timely_util::shared_trace::{Binding, BindingReader, SharedReader};
 
 pub(crate) use self::publish::{Published, adopt_trace};
 
@@ -46,6 +46,12 @@ pub(crate) type PeerOksReader =
 /// A reader of a peer's published `errs` arrangement.
 pub(crate) type PeerErrsReader =
     BindingReader<Timestamp, <ErrSpine<Timestamp, Diff> as TraceReader>::Batch>;
+/// The binding of a peer's published `oks` arrangement.
+pub(crate) type PeerOksBinding =
+    Binding<Timestamp, <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch>;
+/// The binding of a peer's published `errs` arrangement.
+pub(crate) type PeerErrsBinding =
+    Binding<Timestamp, <ErrSpine<Timestamp, Diff> as TraceReader>::Batch>;
 
 // `pub(crate)` for sibling test modules. The peek and render tests in `crate::render` and
 // `crate::sharing` read a published arrangement through `SharedReaderExt::snapshot_at` and inspect
