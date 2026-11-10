@@ -32,6 +32,7 @@ from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -48,6 +49,7 @@ from materialize.parallel_workload.settings import (
 )
 
 SERVICES = [
+    Pubsub(),
     Cockroach(setup_materialize=True, in_memory=True),
     Postgres(),
     MySql(),
@@ -104,12 +106,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     sanity_restart = False
 
     external = scenario in COCKROACH_SCENARIOS
+    # Coexisting deployments must retain one relay across predecessor cleanup.
+    shared_pubsub = scenario == Scenario.ZeroDowntimeDeploy
 
     if external:
         service_names.append("cockroach")
 
     with c.override(
         Materialized(
+            depends_on=["pubsub"] if shared_pubsub else [],
+            options=(
+                [
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ]
+                if shared_pubsub
+                else []
+            ),
             external_blob_store=external,
             blob_store_is_azure=args.azurite,
             external_metadata_store=("toxiproxy" if external else False),

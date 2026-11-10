@@ -633,6 +633,96 @@ def test_zippy_native_replica_override_spans_execution_and_restores(
         assert c.compose["services"][service] == before[service]
 
 
+@pytest.mark.parametrize("retirement_fails", [False, True])
+def test_parallel_deploy_retires_captured_generation_before_cleanup(
+    monkeypatch, retirement_fails
+):
+    from random import Random
+
+    from materialize.parallel_workload import action
+
+    sleep = Mock()
+    monkeypatch.setattr(action.time, "sleep", sleep)
+    c = MagicMock(spec=Composition)
+    deploy = action.ZeroDowntimeDeployAction(Random(0), c, False, False)
+    for generation in range(3):
+        c.reset_mock()
+        target = "materialized2" if generation % 2 == 0 else "materialized"
+        previous = "materialized" if generation % 2 == 0 else "materialized2"
+        if retirement_fails and generation == 2:
+            c.retire_mz_deployment.side_effect = UIError("retirement failed")
+            with pytest.raises(UIError, match="retirement failed"):
+                deploy.run(Mock())
+            c.kill_fenced_mz.assert_not_called()
+        else:
+            assert deploy.run(Mock())
+            c.kill_fenced_mz.assert_called_once_with(previous)
+        expected = [
+            call.await_mz_deployment_status(
+                action.DeploymentStatus.READY_TO_PROMOTE, target, timeout=1800
+            ),
+            call.promote_mz(target, retire_mz_service=None),
+            call.await_mz_deployment_status(action.DeploymentStatus.IS_LEADER, target),
+            call.retire_mz_deployment(
+                target, generation, environment_id=action.DEFAULT_MZ_ENVIRONMENT_ID
+            ),
+        ]
+        assert [
+            invocation
+            for invocation in c.method_calls
+            if invocation[0]
+            in {"await_mz_deployment_status", "promote_mz", "retire_mz_deployment"}
+        ] == expected
+        events = [invocation[0] for invocation in c.method_calls]
+        if "kill_fenced_mz" in events:
+            assert events.index("retire_mz_deployment") < events.index("kill_fenced_mz")
+        service = c.override.call_args.args[0]
+        assert service.name == target
+        assert f"--deploy-generation={generation + 1}" in service.config["command"]
+        assert "pubsub" in service.config["depends_on"]
+        assert "--persist-pubsub-external" in service.config["command"]
+        assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+        c.kill.assert_not_called()
+    assert sleep.call_count == (2 if retirement_fails else 3)
+    assert all(60 <= invocation.args[0] <= 120 for invocation in sleep.call_args_list)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["0dt-deploy", "kill", "backup-restore", "regression"]
+)
+def test_parallel_launch_keeps_shared_relay_only_for_coexistence(monkeypatch, scenario):
+    c = Composition(
+        mzbuild.Repository(MZ_ROOT), "parallel-workload", resolve_image_specs=False
+    )
+    scope = c.workflows["default"].__globals__
+    for operation in ("up", "exec", "default_port", "port"):
+        monkeypatch.setattr(c, operation, Mock(return_value=6975))
+    monkeypatch.setitem(scope, "toxiproxy_start", Mock())
+    monkeypatch.setitem(scope, "setup_sql_server_testing", Mock())
+    monkeypatch.setitem(scope, "os", SimpleNamespace(_exit=Mock()))
+
+    def run(*args):
+        config = c.compose["services"]["materialized"]
+        shared = scenario == "0dt-deploy"
+        assert ("pubsub" in config["depends_on"]) == shared
+        assert ("--persist-pubsub-external" in config["command"]) == shared
+        assert (
+            "--persist-pubsub-url=http://pubsub:6879" in config["command"]
+        ) == shared
+        assert ("materialized2" in args[1]) == shared
+        assert args[3] == 7 and args[6] == 3
+
+    execute = Mock(side_effect=run)
+    monkeypatch.setitem(scope, "run", execute)
+    c.workflows["default"](
+        c,
+        WorkflowArgumentParser(
+            "default", "", ["--scenario", scenario, "--runtime", "7", "--threads", "3"]
+        ),
+    )
+    execute.assert_called_once()
+
+
 @pytest.fixture
 def platform_checks(composition, monkeypatch):
     path = MZ_ROOT / "test/platform-checks/mzcompose.py"

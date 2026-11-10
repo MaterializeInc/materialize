@@ -9,12 +9,13 @@ separate. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Next convert the remaining native lifecycle callers, starting with parallel-workload's
-`ZeroDowntimeDeployAction`. Preserve concurrent workload and routing behavior while
-separating promotion, durable retirement and process cleanup. Zippy now uses native
-standalone context and a shared relay. Its actual start/restart/promotion actions
-passed with continued source ingestion in both storage topologies. Full randomized
-zippy and runtime backup/restore remain unrun.
+Next convert `test/0dt/mzcompose.py::workflow_ddl` from read-only/exclusive-fencing
+expectations to compatible writers and explicit retirement. Preserve its source,
+sink, webhook, subscription and DDL assertions while accounting for writes now
+succeeding before promotion. Parallel-workload's coexistence action now separates
+promotion/retirement/cleanup and keeps a shared relay, with helper checks but no
+concurrent stress rerun. Zippy's native actions passed with continuing ingestion
+in both storage topologies. Full randomized zippy and runtime restore remain unrun.
 
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
@@ -66,8 +67,8 @@ check and stale hydration expectations remain unresolved. Full formatting last
 failed on an unchanged generic call in `src/catalog/src/catalog.rs`. Changed-file
 formatting and scoped combined all-target Rust checks pass. The PR stays draft.
 
-The current-source preservation, upsert-stress and data-ingest container workflows
-have not been rerun after their lifecycle conversion. Broad native container/upgrade
+The current-source preservation, upsert-stress, data-ingest and parallel-workload
+container/stress workflows have not been rerun after their lifecycle conversion. Broad native container/upgrade
 coverage remains outstanding. Use matching post-cleanup builtin schemas for the
 next version demonstration. Arbitrary-release compatibility, external-sink handover
 and matched performance acceptance remain unverified.
@@ -92,7 +93,8 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   four-worker recovery, managed multi-process promotion/retirement and continuing
   load-generator ingestion. Backend and full-workload limitations remain explicit.
 - `native-current-source-verification.md`, `native-upsert-lifecycle-verification.md`
-  and `native-data-ingest-verification.md` distinguish checked harness contracts
+  `native-data-ingest-verification.md` and `native-parallel-lifecycle-verification.md`
+  distinguish checked harness contracts
   from unexecuted container/stress coverage.
 - `native-compute-owner-verification.md` records scoped Rust checks, native tests,
   binary hashes and Kafka execution. The four compute introspection inputs remain

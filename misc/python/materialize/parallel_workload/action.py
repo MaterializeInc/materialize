@@ -46,7 +46,10 @@ from materialize.data_ingest.data_type import (
     VarChar,
 )
 from materialize.data_ingest.query_error import QueryError
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
+    get_default_system_parameters,
+)
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -5059,6 +5062,10 @@ class ZeroDowntimeDeployAction(Action):
     def run(self, exe: Executor) -> bool:
         assert self.composition
 
+        previous_generation = self.deploy_generation
+        previous_service = (
+            "materialized" if previous_generation % 2 == 0 else "materialized2"
+        )
         self.deploy_generation += 1
 
         if self.deploy_generation % 2 == 0:
@@ -5073,6 +5080,11 @@ class ZeroDowntimeDeployAction(Action):
         with self.composition.override(
             Materialized(
                 name=mz_service,
+                depends_on=["pubsub"],
+                options=[
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ],
                 # TODO: Retry with toxiproxy on azurite
                 external_blob_store=True,
                 blob_store_is_azure=self.azurite,
@@ -5092,12 +5104,16 @@ class ZeroDowntimeDeployAction(Action):
             self.composition.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
-            self.composition.promote_mz(
-                mz_service,
-                retire_mz_service=(
-                    "materialized2" if mz_service == "materialized" else "materialized"
-                ),
+            self.composition.promote_mz(mz_service, retire_mz_service=None)
+            self.composition.await_mz_deployment_status(
+                DeploymentStatus.IS_LEADER, mz_service
             )
+            self.composition.retire_mz_deployment(
+                mz_service,
+                previous_generation,
+                environment_id=DEFAULT_MZ_ENVIRONMENT_ID,
+            )
+            self.composition.kill_fenced_mz(previous_service)
 
         time.sleep(self.rng.uniform(60, 120))
         return True
