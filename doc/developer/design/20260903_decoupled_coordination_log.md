@@ -9,18 +9,22 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Rebuild the debug candidate with `build-retirement-candidate.py`, then rerun the
-full DDL lifecycle using `run-native-ddl-retirement-fixed.py`. The runner keeps
-original retry limits and records phase logs and request timing.
+Implement the approved temporary-Item execution ownership and catalog-authorized
+reclamation, using the fresh-state format boundary. Preserve original ownership
+on updates and existing protected storage lifetimes. See
+`native-temporary-owner-implementation-map.md` and `native-temporary-format-decision.md`.
 
-Retirement now shares DDL's empty-progress rebase loop. Genuine content, including
-opaque-only changes, still requires fresh raw preparation. Durable/read-write
-checks, negative controls, formatting and independent review passed. Runtime
-repeatability remains unverified. Earlier DDL runs include both a complete pass
-and intermittent retirement contention failures. See `native-retirement-verification.md`
-and `native-ddl-runtime-findings.md` for evidence and limits.
+A focused scheduling investigation found that general sessionless staged DDL
+would need an admission extension. Oracle239/task16 is checking whether the
+smaller existing one-attempt maintenance boundary suffices for this specific
+resampled cleanup operation. Do not add a general scheduler or periodic scans
+without a concrete requirement. No temporary ownership code has been changed.
 
-Temporary ownership follows this repair. No runtime fixture remains active.
+The retirement repair is published in `854d883cb8`. Durable/read-write checks,
+negative controls, independent review and full debug DDL reruns passed. The trace
+shows genuine content forcing fresh preparation and empty progress rebasing the
+same raw candidate. Evidence and limits: `native-retirement-verification.md`.
+All owned runtime fixtures are stopped and removed.
 
 ## Verified outcome
 
@@ -35,7 +39,8 @@ queries, Kafka ALTER SINK, retained writers/sessions, explicit retirement and re
 continuity. Same-build platform lifecycle, MV pruning and default/larger index
 protection cohorts passed. PG, MySQL and SQL Server bounded CDC cases passed prewarming,
 reader handover, forced reconnect with both deployments alive, and ingestion after
-retirement. These are selected local outcomes, not broad CI or fresh
+retirement. The full DDL workflow also passed with first-request retirement while peers
+continued publishing. These are selected local outcomes, not broad CI or fresh
 distinct-version acceptance.
 
 ## Live blockers and decisions
