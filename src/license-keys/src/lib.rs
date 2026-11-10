@@ -136,7 +136,8 @@ impl Default for ValidatedLicenseKey {
 ///
 /// An intermediate JWT is signed by a root key and carries another public key
 /// (see `make_intermediate_jwt`). A license key signed by that public key is
-/// accepted while the intermediate JWT is unexpired and not revoked.
+/// accepted while the intermediate JWT is not revoked. The result expires at
+/// the earlier of the license key's and the intermediate JWT's expiration.
 pub fn validate(license_key: &str) -> anyhow::Result<ValidatedLicenseKey> {
     validate_with_roots(license_key, PUBLIC_KEYS)
 }
@@ -163,7 +164,17 @@ fn validate_with_roots(
         Ok(Some(intermediate_jwt)) => {
             let res = validate_intermediate(&intermediate_jwt, root_pubkeys)
                 .context("invalid intermediate JWT")
-                .and_then(|pubkey| validate_with_pubkey(license_key, &pubkey));
+                .and_then(|intermediate| {
+                    let mut key = validate_with_pubkey(license_key, &intermediate.public_key)?;
+                    // NOTE: An expired intermediate JWT does not fail
+                    // validation, so the license key's `expiration_behavior`
+                    // decides what happens. This means its expiration does not
+                    // bound a leaked intermediate private key, which can mint
+                    // `Warn` keys. Only `REVOKED_KEYS` stops that.
+                    key.expired |= intermediate.expired;
+                    key.expiration = key.expiration.min(intermediate.expiration);
+                    Ok(key)
+                });
             match res {
                 Ok(key) => return Ok(key),
                 Err(e) => errs.push(format!("intermediate JWT: {e:#}")),
@@ -179,8 +190,18 @@ fn validate_with_roots(
     bail!("license key validation failed:\n  {}", errs.join("\n  "))
 }
 
-/// Returns the public key PEM carried by `intermediate_jwt` if a root key signed it.
-fn validate_intermediate(intermediate_jwt: &str, root_pubkeys: &[&str]) -> anyhow::Result<String> {
+struct ValidatedIntermediate {
+    /// PEM of the public key that signs license keys.
+    public_key: String,
+    expiration: u64,
+    expired: bool,
+}
+
+/// Returns the claims of `intermediate_jwt` if a root key signed it.
+fn validate_intermediate(
+    intermediate_jwt: &str,
+    root_pubkeys: &[&str],
+) -> anyhow::Result<ValidatedIntermediate> {
     let mut validation = Validation::new(Algorithm::PS256);
     validation.set_required_spec_claims(&["exp", "nbf", "iss", "sub"]);
     validation.set_issuer(&[ISSUER]);
@@ -190,8 +211,20 @@ fn validate_intermediate(intermediate_jwt: &str, root_pubkeys: &[&str]) -> anyho
     let mut err = None;
     for root in root_pubkeys {
         let key = DecodingKey::from_rsa_pem(root.as_bytes())?;
-        match jsonwebtoken::decode::<IntermediatePayload>(intermediate_jwt, &key, &validation) {
-            Ok(decoded) => {
+        let res = match jsonwebtoken::decode::<IntermediatePayload>(
+            intermediate_jwt,
+            &key,
+            &validation,
+        ) {
+            Err(e) if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) => {
+                let mut validation = validation.clone();
+                validation.validate_exp = false;
+                jsonwebtoken::decode(intermediate_jwt, &key, &validation).map(|d| (d, true))
+            }
+            res => res.map(|d| (d, false)),
+        };
+        match res {
+            Ok((decoded, expired)) => {
                 // The typ check keeps a root-signed license key from being
                 // accepted as an intermediate JWT, and vice versa.
                 if decoded.header.typ.as_deref() != Some(INTERMEDIATE_TYP) {
@@ -200,13 +233,20 @@ fn validate_intermediate(intermediate_jwt: &str, root_pubkeys: &[&str]) -> anyho
                 if decoded.claims.version != 1 {
                     bail!("invalid intermediate JWT version");
                 }
-                if !(decoded.claims.nbf..=decoded.claims.exp).contains(&decoded.claims.iat) {
-                    bail!("invalid intermediate JWT issuance time");
+                if decoded.claims.iat < decoded.claims.nbf {
+                    bail!("intermediate JWT issued before it is valid");
+                }
+                if decoded.claims.iat > decoded.claims.exp {
+                    bail!("intermediate JWT issued after it expired");
                 }
                 if REVOKED_KEYS.contains(&decoded.claims.jti.as_str()) {
                     bail!("revoked intermediate JWT");
                 }
-                return Ok(decoded.claims.public_key);
+                return Ok(ValidatedIntermediate {
+                    public_key: decoded.claims.public_key,
+                    expiration: decoded.claims.exp,
+                    expired,
+                });
             }
             Err(e) => err = Some(e.into()),
         }
@@ -457,16 +497,19 @@ mod tests {
             "error must report every attempt: {err}"
         );
 
+        let expired_exp = now() - 3600;
         let expired_jwt = sign(
             &root_priv,
             INTERMEDIATE_TYP,
             None,
-            &intermediate_payload(int_pub.clone(), now() - 3600),
+            &intermediate_payload(int_pub.clone(), expired_exp),
         );
+        let validated = validate_with_roots(&int_key(&expired_jwt), roots).unwrap();
         assert!(
-            validate_with_roots(&int_key(&expired_jwt), roots).is_err(),
-            "expired intermediate JWT must be rejected"
+            validated.expired,
+            "expired intermediate JWT must expire the key"
         );
+        assert_eq!(validated.expiration, expired_exp);
 
         let wrong_typ_jwt = sign(
             &root_priv,
