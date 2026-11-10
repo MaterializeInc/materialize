@@ -32,7 +32,6 @@ from kubernetes.client import (
     V1PersistentVolumeClaimSpec,
     V1PodSpec,
     V1PodTemplateSpec,
-    V1ResourceRequirements,
     V1Secret,
     V1SecretVolumeSource,
     V1Service,
@@ -43,6 +42,7 @@ from kubernetes.client import (
     V1Toleration,
     V1Volume,
     V1VolumeMount,
+    V1VolumeResourceRequirements,
 )
 
 from materialize import MZ_ROOT
@@ -305,7 +305,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     metadata=V1ObjectMeta(name="coverage"),
                     spec=V1PersistentVolumeClaimSpec(
                         access_modes=["ReadWriteOnce"],
-                        resources=V1ResourceRequirements(requests={"storage": "10Gi"}),
+                        resources=V1VolumeResourceRequirements(
+                            requests={"storage": "10Gi"}
+                        ),
                     ),
                 )
             )
