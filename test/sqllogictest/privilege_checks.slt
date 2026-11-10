@@ -3673,18 +3673,61 @@ REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
 ----
 db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
 
+# ON ALL ... IN SCHEMA mz_temp targets the connection's own temporary items, and
+# a connection has no temporary schema until it creates a temporary item.
+
 simple conn=no_temp_objects,user=materialize
 GRANT SELECT ON ALL TABLES IN SCHEMA mz_temp TO PUBLIC
 ----
-db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+db error: ERROR: unknown schema 'mz_temp'
 
 simple conn=no_temp_objects,user=materialize
 REVOKE SELECT ON ALL TABLES IN SCHEMA mz_temp FROM PUBLIC
 ----
-db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+db error: ERROR: unknown schema 'mz_temp'
 
-statement error cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
+simple conn=temp_a,user=materialize
+CREATE TEMPORARY TABLE t_temp_a (a int)
+----
+COMPLETE 0
+
+simple conn=temp_b,user=materialize
+CREATE TEMPORARY TABLE t_temp_b (a int)
+----
+COMPLETE 0
+
+simple conn=temp_a,user=materialize
 GRANT SELECT ON ALL TABLES IN SCHEMA mz_temp TO PUBLIC
+----
+COMPLETE 0
+
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name IN ('t_temp_a', 't_temp_b')
+----
+t_temp_a  =r/materialize
+t_temp_a  materialize=arwd/materialize
+t_temp_b  materialize=arwd/materialize
+
+simple conn=temp_a,user=materialize
+REVOKE SELECT ON ALL TABLES IN SCHEMA mz_temp FROM PUBLIC
+----
+COMPLETE 0
+
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_tables WHERE name IN ('t_temp_a', 't_temp_b')
+----
+t_temp_a  materialize=arwd/materialize
+t_temp_b  materialize=arwd/materialize
+
+simple conn=temp_a,user=materialize
+DROP TABLE t_temp_a
+----
+COMPLETE 0
+
+simple conn=temp_b,user=materialize
+DROP TABLE t_temp_b
+----
+COMPLETE 0
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system

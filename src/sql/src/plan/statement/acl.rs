@@ -504,24 +504,26 @@ fn plan_update_privilege(
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllSchemas {
                     schemas,
                 }) => {
-                    // The temporary schema is created lazily, so `get_schema` on it panics
-                    // for a connection that has not created a temporary object yet.
-                    if schemas
-                        .iter()
-                        .any(|schema| schema.schema_spec().is_temporary())
-                    {
-                        sql_bail!(
-                            "cannot grant or revoke privileges on schema {} because it is a temporary schema",
-                            mz_repr::namespaces::MZ_TEMP_SCHEMA
+                    let mut ids = Vec::new();
+                    for schema in schemas {
+                        let schema = match schema.schema_spec() {
+                            // The temporary schema is created lazily on the connection's
+                            // first temporary item, and `get_schema` panics until then.
+                            SchemaSpecifier::Temporary => scx.catalog.resolve_schema_in_database(
+                                &ResolvedDatabaseSpecifier::Ambient,
+                                mz_repr::namespaces::MZ_TEMP_SCHEMA,
+                            )?,
+                            SchemaSpecifier::Id(_) => {
+                                scx.get_schema(schema.database_spec(), schema.schema_spec())
+                            }
+                        };
+                        ids.extend(
+                            schema.item_ids().map(ObjectId::from).filter(|object_id| {
+                                object_type_filter(object_id, &object_type, scx)
+                            }),
                         );
                     }
-                    schemas
-                        .into_iter()
-                        .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
-                        .flat_map(|schema| schema.item_ids())
-                        .map(|item_id| item_id.into())
-                        .filter(|object_id| object_type_filter(object_id, &object_type, scx))
-                        .collect()
+                    ids
                 }
                 GrantTargetSpecificationInner::Objects { names } => {
                     let mut ids = Vec::with_capacity(names.len());
