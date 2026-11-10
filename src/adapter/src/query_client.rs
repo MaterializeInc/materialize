@@ -1311,6 +1311,17 @@ mod tests {
         SnapshotBeforeIncarnation,
         PermissionRace(Option<Timestamp>),
         UninstalledIndex,
+        DurableProgress,
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn storage_cutover_waits_for_strict_durable_progress_without_replica_reports() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            acquisition_catalog_harness(AcquisitionCase::DurableProgress),
+        )
+        .await
+        .expect("durable progress must release the cutover wait");
     }
 
     async fn uninstalled_index_acquisition(
@@ -1683,6 +1694,39 @@ mod tests {
             storage_ids: BTreeSet::from([id]),
             compute_ids: BTreeMap::new(),
         };
+        if matches!(case, AcquisitionCase::DurableProgress) {
+            assert_eq!(
+                client.write_frontier(&catalog, &bundle).await.unwrap(),
+                frontier(80)
+            );
+            // A completed prefix below the upper is immediately available. The
+            // same upper does not yet establish overlap at the cutover itself.
+            client
+                .wait_for_progress(&catalog, &bundle, Timestamp::from(79))
+                .await
+                .unwrap();
+            let mut wait =
+                Box::pin(client.wait_for_progress(&catalog, &bundle, Timestamp::from(80)));
+            assert!(futures::poll!(&mut wait).is_pending());
+            writer
+                .compare_and_append(
+                    Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                    frontier(80),
+                    frontier(81),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            wait.await.unwrap();
+            assert_eq!(
+                client.write_frontier(&catalog, &bundle).await.unwrap(),
+                frontier(81)
+            );
+            // This fixture has no replica transport or controller frontier reports.
+            reader.expire().await;
+            writer.expire().await;
+            return;
+        }
         if uninstalled_index {
             Box::pin(uninstalled_index_acquisition(
                 &mut catalog,

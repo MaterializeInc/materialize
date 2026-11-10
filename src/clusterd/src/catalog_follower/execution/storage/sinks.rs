@@ -13,6 +13,7 @@ use mz_catalog::memory::objects::CatalogItem;
 use mz_controller_types::ClusterId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{RunSinkCommand, StorageCommand};
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use timely::PartialOrder;
 use timely::progress::Antichain;
@@ -276,20 +277,8 @@ impl ReplicaEnactment {
                 continue;
             }
             self.ensure_live(catalog)?;
-            let as_of = Antichain::from_elem(frontier);
-            let with_snapshot = definition.with_snapshot && !PartialOrder::less_than(&as_of, upper);
-            let description = StorageSinkDesc {
-                from: definition.from,
-                from_desc: definition.from_desc.clone(),
-                connection: definition.connection.clone(),
-                envelope: definition.envelope,
-                with_snapshot,
-                version: definition.version,
-                as_of,
-                from_storage_metadata: from_metadata.clone(),
-                to_storage_metadata: to_metadata.clone(),
-                commit_interval: definition.commit_interval,
-            };
+            let description =
+                executable_description(&definition, frontier, upper, from_metadata, to_metadata);
             let execution = self
                 .io
                 .storage
@@ -319,6 +308,31 @@ impl ReplicaEnactment {
             self.storage_state.starting.insert(execution);
         }
         Ok(pending || !self.storage_state.starting.is_empty())
+    }
+}
+
+/// Uses the committed recovery frontier exactly. Only strictly later durable
+/// output progress proves the snapshot at that frontier was committed.
+fn executable_description(
+    definition: &StorageSinkDesc<()>,
+    frontier: Timestamp,
+    upper: &Antichain<Timestamp>,
+    from: &CollectionMetadata,
+    to: &CollectionMetadata,
+) -> StorageSinkDesc<CollectionMetadata> {
+    let as_of = Antichain::from_elem(frontier);
+    let with_snapshot = definition.with_snapshot && !PartialOrder::less_than(&as_of, upper);
+    StorageSinkDesc {
+        from: definition.from,
+        from_desc: definition.from_desc.clone(),
+        connection: definition.connection.clone(),
+        envelope: definition.envelope,
+        with_snapshot,
+        version: definition.version,
+        as_of,
+        from_storage_metadata: from.clone(),
+        to_storage_metadata: to.clone(),
+        commit_interval: definition.commit_interval,
     }
 }
 

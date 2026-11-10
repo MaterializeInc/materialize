@@ -9,11 +9,13 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Remove controller-owned storage execution while preserving native observation,
-readability, history and table contracts. `native-storage-test-boundary.md` maps
-actual callers and test coverage. Replace meaningful legacy export assertions at
-their native owners rather than changing fixture booleans or adding production
-test-only APIs. Keep controllerd reconciliation and adapter policy.
+Remove the adapter-side legacy compute-controller execution graph and its
+fallback callers. The boundary survey is `native-compute-owner-boundary.md`.
+Preserve native query transport, transient execution, subscriptions, grants,
+shared readiness/peek helpers and native response handling. Account for the
+adapter-process overflow configuration currently applied by the old controller.
+Bootstrap's temporary absence of QueryClient must not enable legacy execution.
+Storage-owner removal is verified. Its evidence is linked below.
 
 Use one Cargo job for the next heavy build to avoid overlapping large links.
 Preserve the 30 GiB disk reserve.
@@ -28,10 +30,9 @@ directory below.
 Convert native multi-generation harnesses to shared relay topology and
 explicit retirement. Verify compatible writers before and after promotion,
 warmed replicas and surviving deployments. Current-source script selection is
-preserved, but its multi-container runtime remains unverified. Remaining
-controller-owned compute/storage execution also needs removal.
+preserved, but its multi-container runtime remains unverified. The remaining compute-owner removal is the next implementation unit.
 
-## Current cleanup outcome
+## Committed cleanup outcome
 
 Adapter-side replica provisioning, cleanup, process events and metrics ownership
 are removed. Controllerd remains the process owner. Adapter policy, endpoint
@@ -48,6 +49,9 @@ write exceptions and readiness exclusions are also removed. Shared builtin-schem
 admission, native WAL recovery and readiness classification remain protected.
 Remote COPY uses request-owned query transport without controller callbacks.
 Native cancellation, completion, error handling and restart checks pass.
+Controller-owned storage execution, replay and capability state are removed.
+Passive inventory/observations, durable progress, read-only collection APIs and
+WAL contracts remain. Native recovery and complete Kafka ALTER SINK checks pass.
 All affected targets compile
 and native owner tests pass. Independent review is resolved. Exclusive cleanup
 based on deployment age or local inventory is also removed. Its old retry interval
@@ -73,6 +77,8 @@ before workflow dispatch. Its probe timed out during pulls, without starting
 services. Newly pulled unused image tags were removed.
 
 Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
+- `native-storage-owner-verification.md` links the source review, native runtime
+  checks and complete Kafka ALTER SINK run using rebuilt current services.
 - `query-copy-verification.md` links native HTTP COPY, query transport, restart
   and WAL checks, with the independent review and resolved test-only findings.
 - `private-migration-verification.md` links passing native startup/readiness,
@@ -103,8 +109,10 @@ Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
 - `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
   `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
 
-All owned verification services and disk monitors are stopped.
-Superseded native benchmark binaries
+All owned verification services and monitors are stopped. Current service
+binaries are rebuilt, with 35 GiB free after cache cleanup. Old stopped
+experiment containers and their owned volumes were removed, with inspect records
+in `obsolete-runtime-inspect.json`. Superseded native benchmark binaries
 were removed, with checksums retained in `archived-binary-cleanup.log`. Baseline
 artifacts, measurement reports and current binaries remain. Recreate isolated
 prerequisites before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use

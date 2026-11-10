@@ -33,7 +33,7 @@ async fn native_controller_with_history(
     single_replica: bool,
     publish_status_history: bool,
 ) -> (Controller, StorageMetadata) {
-    let (mut controller, _, _) = test_controller(true, false).await;
+    let (mut controller, _, _) = test_controller(false).await;
     let cluster = export_description(TABLE).instance_id;
     controller.create_instance(cluster, None);
     let connection = if single_replica {
@@ -244,7 +244,6 @@ async fn followed_lifecycle_enacts_without_history() {
     for id in [SOURCE, TABLE, SIBLING, SINK] {
         assert!(controller.check_exists(id).is_err());
     }
-    assert!(controller.dropped_objects.is_empty());
     assert!(controller.stashed_responses.is_empty());
 }
 
@@ -256,7 +255,6 @@ async fn native_lifecycle_is_inventory_only() {
     controller.register_replica(cluster, replica);
     controller.initialization_complete();
     controller.update_parameters(StorageParameters::default());
-    assert!(controller.instances[&cluster].legacy.is_none());
     for id in [SOURCE, TABLE, SIBLING, SINK] {
         assert!(matches!(
             controller.collections[&id].extra_state,
@@ -271,7 +269,6 @@ async fn native_lifecycle_is_inventory_only() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([SOURCE, TABLE, SIBLING])
     );
-    assert!(controller.export(SINK).is_err());
     assert!(controller.is_sink(SINK));
 
     let DataSource::Ingestion(desc) = &controller.collections[&SOURCE].data_source else {
@@ -322,11 +319,9 @@ async fn native_lifecycle_is_inventory_only() {
         [SIBLING]
     );
     controller.drop_sinks(&metadata, vec![SINK], true).unwrap();
-    assert!(controller.dropped_objects.is_empty());
     assert!(controller.check_exists(TABLE).is_err());
     assert!(controller.check_exists(SINK).is_err());
     controller.process().unwrap();
-    assert!(controller.instances.values().all(|i| i.legacy.is_none()));
 }
 
 fn process_observations(controller: &mut Controller) {
@@ -460,31 +455,5 @@ async fn single_replica_source_hydration_follows_lowest_member() {
             .active_ingestion_exports(cluster)
             .next()
             .is_none()
-    );
-}
-
-#[mz_ore::test(tokio::test)]
-async fn read_only_prewarming_preserves_execution_ownership() {
-    for replica_owned in [false, true] {
-        let (mut controller, _, _) = test_controller(replica_owned, true).await;
-        let cluster = StorageInstanceId::system(1).unwrap();
-        controller.create_instance(cluster, None);
-        assert_eq!(
-            controller.instances[&cluster].legacy.is_none(),
-            replica_owned
-        );
-    }
-}
-
-#[mz_ore::test(tokio::test)]
-#[should_panic(expected = "native replicas must be registered without transport")]
-async fn native_mode_rejects_legacy_transport() {
-    let (mut controller, _, _) = test_controller(true, false).await;
-    let cluster = StorageInstanceId::system(1).unwrap();
-    controller.create_instance(cluster, None);
-    controller.connect_replica(
-        cluster,
-        ReplicaId::User(1),
-        ClusterReplicaLocation { ctl_addrs: vec![] },
     );
 }

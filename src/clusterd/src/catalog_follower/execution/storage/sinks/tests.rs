@@ -19,12 +19,17 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Datum, Row};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_storage::server::StatusEvent;
+use mz_storage::server::{ReplicaStorageResponse, StatusEvent};
 use mz_storage::storage_state::StorageInstanceContext;
-use mz_storage_client::client::{Status, StatusUpdate};
+use mz_storage_client::client::{Status, StatusUpdate, StorageResponse};
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_types::connections::{KafkaBroker, KafkaConnection, Tunnel};
+use mz_storage_types::sinks::{
+    KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
+    KafkaSinkFormatType, SinkEnvelope,
+};
 use mz_storage_types::sources::{SourceData, kafka::KAFKA_PROGRESS_DESC};
 use mz_txn_wal::operator::TxnsContext;
 
@@ -32,12 +37,124 @@ use super::*;
 use crate::catalog_follower::execution::tests::in_child;
 use crate::catalog_follower::tests::{BUILD, debug_catalog, name, store, transact};
 
+#[mz_ore::test]
+fn executable_sink_preserves_recovery_frontier_and_snapshot_boundary() {
+    let from_desc = RelationDesc::builder()
+        .with_column("value", SqlScalarType::String.nullable(false))
+        .finish();
+    let mut definition = StorageSinkDesc {
+        from: GlobalId::User(1),
+        from_desc: from_desc.clone(),
+        connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
+            connection_id: CatalogItemId::User(2),
+            connection: KafkaConnection {
+                brokers: vec![KafkaBroker {
+                    address: "localhost:9092".into(),
+                    tunnel: Tunnel::Direct,
+                }],
+                default_tunnel: Tunnel::Direct,
+                progress_topic: None,
+                progress_topic_options: Default::default(),
+                options: Default::default(),
+                tls: None,
+                sasl: None,
+            },
+            format: KafkaSinkFormat {
+                key_format: None,
+                value_format: KafkaSinkFormatType::Text,
+            },
+            relation_key_indices: None,
+            key_desc_and_indices: None,
+            headers_index: None,
+            value_desc: from_desc.clone(),
+            partition_by: Default::default(),
+            topic: "native-snapshot-contract".into(),
+            topic_options: Default::default(),
+            compression_type: KafkaSinkCompressionType::None,
+            progress_group_id: KafkaIdStyle::Legacy,
+            transactional_id: KafkaIdStyle::Legacy,
+            topic_metadata_refresh_interval: Default::default(),
+        }),
+        with_snapshot: true,
+        version: 3,
+        envelope: SinkEnvelope::Upsert,
+        as_of: Antichain::from_elem(Timestamp::MIN),
+        from_storage_metadata: (),
+        to_storage_metadata: (),
+        commit_interval: Some(Duration::from_secs(1)),
+    };
+    let from = CollectionMetadata {
+        persist_location: PersistLocation::new_in_mem(),
+        data_shard: ShardId::new(),
+        relation_desc: from_desc,
+        txns_shard: Some(ShardId::new()),
+    };
+    let to = CollectionMetadata {
+        persist_location: from.persist_location.clone(),
+        data_shard: ShardId::new(),
+        relation_desc: KAFKA_PROGRESS_DESC.clone(),
+        txns_shard: None,
+    };
+    for (upper, recovery, snapshot) in [(0, 5, true), (5, 5, true), (6, 5, false), (21, 20, false)]
+    {
+        for enabled in [true, false] {
+            definition.with_snapshot = enabled;
+            let description = executable_description(
+                &definition,
+                Timestamp::new(recovery),
+                &Antichain::from_elem(Timestamp::new(upper)),
+                &from,
+                &to,
+            );
+            assert_eq!(
+                description.as_of,
+                Antichain::from_elem(Timestamp::new(recovery))
+            );
+            assert_eq!(
+                description.with_snapshot,
+                enabled && snapshot,
+                "upper={upper}, recovery={recovery}, enabled={enabled}"
+            );
+            assert_eq!(description.from_storage_metadata, from);
+            assert_eq!(description.to_storage_metadata, to);
+            assert_eq!(description.from, definition.from);
+            assert_eq!(description.from_desc, definition.from_desc);
+            assert_eq!(description.connection, definition.connection);
+            assert_eq!(description.envelope, definition.envelope);
+            assert_eq!(description.version, definition.version);
+            assert_eq!(description.commit_interval, definition.commit_interval);
+        }
+    }
+}
+
 #[mz_ore::test(tokio::test)]
 async fn completed_sink_health_requires_closed_output_and_current_placement() {
-    const TEST: &str = "catalog_follower::execution::storage::sinks::tests::completed_sink_health_requires_closed_output_and_current_placement";
+    sink_harness(SinkCase::Completion).await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn sink_recovery_retains_inputs_until_execution_completion() {
+    sink_harness(SinkCase::Recovery).await;
+}
+
+#[derive(Clone, Copy)]
+enum SinkCase {
+    Completion,
+    Recovery,
+}
+
+async fn sink_harness(case: SinkCase) {
+    let test = match case {
+        SinkCase::Completion => {
+            "catalog_follower::execution::storage::sinks::tests::completed_sink_health_requires_closed_output_and_current_placement"
+        }
+        SinkCase::Recovery => {
+            "catalog_follower::execution::storage::sinks::tests::sink_recovery_retains_inputs_until_execution_completion"
+        }
+    };
     if !in_child(
-        "MZ_CLUSTERD_COMPLETED_SINK_TEST_CHILD",
-        TEST,
+        "MZ_CLUSTERD_SINK_TEST_CHILD",
+        test,
         Duration::from_secs(120),
     )
     .await
@@ -115,16 +232,18 @@ async fn completed_sink_health_requires_closed_output_and_current_placement() {
     }
     let input = ids[0].1;
     let (sink_item, sink) = ids[2];
-    let mut requirement = catalog.state().maintained_read_requirements()[&sink].clone();
-    requirement.frontier = None;
-    transact(
-        &mut catalog,
-        vec![Op::SetReadProtection {
-            bounds: vec![],
-            requirements: vec![requirement],
-        }],
-    )
-    .await;
+    if matches!(case, SinkCase::Completion) {
+        let mut requirement = catalog.state().maintained_read_requirements()[&sink].clone();
+        requirement.frontier = None;
+        transact(
+            &mut catalog,
+            vec![Op::SetReadProtection {
+                bounds: vec![],
+                requirements: vec![requirement],
+            }],
+        )
+        .await;
+    }
 
     let input_desc = catalog
         .state()
@@ -206,6 +325,106 @@ async fn completed_sink_health_requires_closed_output_and_current_placement() {
     driver
         .configure_status_history(&catalog, persist.clone(), deployment)
         .unwrap();
+
+    if matches!(case, SinkCase::Recovery) {
+        let recovery = catalog.state().maintained_read_requirements()[&sink]
+            .frontier
+            .expect("live recovery requirement");
+        let frontier = |offset: u64| Antichain::from_elem(recovery.checked_add(offset).unwrap());
+        output
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, i64)>::new(),
+                Antichain::from_elem(Timestamp::MIN),
+                frontier(10),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let metadata = storage_metadata::resolve(
+            &catalog,
+            &BTreeSet::from([input, sink]),
+            &store,
+            BUILD,
+            &persist,
+            &location,
+            Some(wal),
+            &mut storage_metadata::Progress::default(),
+        )
+        .await
+        .unwrap();
+        assert!(metadata.pending.is_empty());
+        let mut effects = ReplicaEffects::default();
+        driver
+            .install_sinks(&mut catalog, &mut effects, cluster, BUILD, &metadata)
+            .await
+            .unwrap();
+        let first = driver.storage_state.sinks[&sink].execution;
+        // A later output upper is not permission to skip the committed recovery
+        // point. Installation must acquire that exact input grant before RunSink.
+        assert_eq!(driver.protection.granted_frontier(input), Some(recovery));
+        assert_eq!(
+            driver.protection.active_frontiers(),
+            BTreeMap::from([(input, recovery)])
+        );
+
+        let observe = |driver: &mut ReplicaEnactment, response| {
+            driver.io.storage.as_mut().unwrap().absorb(response);
+            driver.apply_storage_progress();
+        };
+        let progress = |execution, frontier| ReplicaStorageResponse::ExecutionInput {
+            execution,
+            input,
+            frontier,
+        };
+        observe(&mut driver, progress(first, frontier(2)));
+        observe(
+            &mut driver,
+            ReplicaStorageResponse::RestartRequested {
+                execution: first,
+                id: sink,
+            },
+        );
+        driver
+            .install_sinks(&mut catalog, &mut effects, cluster, BUILD, &metadata)
+            .await
+            .unwrap();
+        let second = driver.storage_state.sinks[&sink].execution;
+        assert_ne!(first, second);
+        observe(&mut driver, progress(second, frontier(4)));
+        assert_eq!(
+            driver.protection.active_frontiers(),
+            BTreeMap::from([(input, recovery.checked_add(2).unwrap())])
+        );
+
+        // Delayed progress cannot regress protection, and output/drop reports
+        // cannot release an input reader from either execution.
+        observe(&mut driver, progress(first, frontier(1)));
+        observe(
+            &mut driver,
+            ReplicaStorageResponse::Response(StorageResponse::FrontierUpper(sink, frontier(10))),
+        );
+        observe(
+            &mut driver,
+            ReplicaStorageResponse::Response(StorageResponse::DroppedId(sink)),
+        );
+        assert_eq!(
+            driver.protection.active_frontiers(),
+            BTreeMap::from([(input, recovery.checked_add(2).unwrap())])
+        );
+        observe(&mut driver, progress(first, Antichain::new()));
+        assert_eq!(
+            driver.protection.active_frontiers(),
+            BTreeMap::from([(input, recovery.checked_add(4).unwrap())])
+        );
+        observe(&mut driver, progress(first, frontier(1)));
+        assert_eq!(
+            driver.protection.active_frontiers(),
+            BTreeMap::from([(input, recovery.checked_add(4).unwrap())])
+        );
+        observe(&mut driver, progress(second, Antichain::new()));
+        assert!(driver.protection.active_frontiers().is_empty());
+        std::process::exit(0);
+    }
 
     let builtin = &*mz_catalog::builtin::MZ_STORAGE_STATUSES_RAW;
     let health_id = catalog

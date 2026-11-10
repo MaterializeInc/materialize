@@ -12,11 +12,10 @@
 //! The storage controller curates the creation of sources, the progress of readers through these collections,
 //! and their eventual dropping and resource reclamation.
 //!
-//! The storage controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
-//! use an identifier before it has been "created" with `create_source()`. Once created, the controller holds
-//! a read capability for each source, which is manipulated with `update_read_capabilities()`.
-//! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
-//! empty frontier.
+//! The controller tracks committed storage inventory, passive replica observations
+//! and adapter-owned introspection writers. Replicas derive maintained execution
+//! from the durable catalog. [`crate::storage_collections::StorageCollections`]
+//! owns local collection handles and applies catalog-authorized compaction.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -28,11 +27,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
-use mz_dyncfg::{ConfigSet, ConfigUpdates};
+use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 use mz_persist_types::{Codec64, ShardId};
 use mz_repr::adt::interval::Interval;
@@ -44,8 +41,6 @@ use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::ReadHold;
-use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceDesc, SourceExportDataConfig,
@@ -53,7 +48,6 @@ use mz_storage_types::sources::{
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
-use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{AppendOnlyUpdate, StatusUpdate, StorageResponse};
@@ -238,11 +232,6 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub instance_id: StorageInstanceId,
 }
 
-#[derive(Debug)]
-pub enum Response {
-    FrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
-}
-
 /// Metadata that the storage controller must know to properly handle the life
 /// cycle of creating and dropping collections.
 ///
@@ -421,19 +410,6 @@ pub trait StorageController: Debug {
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
 
-    /// Replaces the per-replica dyncfg overrides for the given instances.
-    ///
-    /// This only stores the overrides; callers should follow with a
-    /// configuration push (e.g. [`Self::update_parameters`]) so existing
-    /// replicas observe the new values. Instances absent from `overrides` have
-    /// their overrides cleared, so a replica that no longer has an override
-    /// reverts to the environment-wide configuration. Used by the scoped
-    /// feature flags (replica-local) layer.
-    fn update_replica_dyncfg_overrides(
-        &mut self,
-        overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
-    );
-
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
 
@@ -527,23 +503,7 @@ pub trait StorageController: Debug {
         workload_class: Option<String>,
     );
 
-    /// Connects the storage instance to the specified replica.
-    ///
-    /// If the storage instance is already attached to a replica, communication
-    /// with that replica is severed in favor of the new replica.
-    ///
-    /// In the future, this API will be adjusted to support active replication
-    /// of storage instances (i.e., multiple replicas attached to a given
-    /// storage instance).
-    fn connect_replica(
-        &mut self,
-        instance_id: StorageInstanceId,
-        replica_id: ReplicaId,
-        location: ClusterReplicaLocation,
-    );
-
     /// Registers native replica membership without constructing a lifecycle transport.
-    /// Only valid when maintained execution is replica-owned.
     fn register_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
     /// Accept passive query-protocol observations without attaching a lifecycle client.
@@ -569,15 +529,10 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, RelationDesc)>,
     ) -> Result<(), StorageError>;
 
-    /// Create the sources described in the individual RunIngestionCommand commands.
+    /// Registers collection metadata and adapter-owned introspection writers.
     ///
-    /// Each command carries the source id, the source description, and any associated metadata
-    /// needed to ingest the particular source.
-    ///
-    /// This command installs collection state for the indicated sources, and they are
-    /// now valid to use in queries at times beyond the initial `since` frontiers. Each
-    /// collection also acquires a read capability at this frontier, which will need to
-    /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
+    /// This does not start maintained execution. Replicas follow the committed
+    /// catalog, which also authorizes compaction through StorageCollections.
     ///
     /// This method is NOT idempotent; It can fail between processing of different
     /// collections and leave the controller in an inconsistent state. It is almost
@@ -650,12 +605,6 @@ pub trait StorageController: Debug {
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
-
-    /// Acquire an immutable reference to the export state, should it exist.
-    fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
-
-    /// Acquire a mutable reference to the export state, should it exist.
-    fn export_mut(&mut self, id: GlobalId) -> Result<&mut ExportState, StorageError>;
 
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(
@@ -743,7 +692,7 @@ pub trait StorageController: Debug {
     async fn ready(&mut self);
 
     /// Processes the work queued by [`StorageController::ready`].
-    fn process(&mut self) -> Result<Option<Response>, anyhow::Error>;
+    fn process(&mut self) -> Result<(), anyhow::Error>;
 
     /// Records append-only updates for the given introspection type.
     ///
@@ -840,68 +789,6 @@ impl From<NonZeroI64> for PersistEpoch {
     }
 }
 
-/// State maintained about individual exports.
-#[derive(Debug)]
-pub struct ExportState {
-    /// Really only for keeping track of changes to the `derived_since`.
-    pub read_capabilities: MutableAntichain<Timestamp>,
-
-    /// The cluster this export is associated with.
-    pub cluster_id: StorageInstanceId,
-
-    /// Monotone accounting floor initialized or raised by dependency readability.
-    /// The read policy advances it as reported write progress catches up.
-    pub derived_since: Antichain<Timestamp>,
-
-    /// The read holds that this export has on its dependencies (its input and itself). When
-    /// the upper of the export changes, we downgrade this, which in turn
-    /// downgrades holds we have on our dependencies' sinces.
-    pub read_holds: [ReadHold; 2],
-
-    /// The policy to use to downgrade `self.read_capability`.
-    pub read_policy: ReadPolicy,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<Timestamp>,
-}
-
-impl ExportState {
-    pub fn new(
-        cluster_id: StorageInstanceId,
-        read_hold: ReadHold,
-        self_hold: ReadHold,
-        write_frontier: Antichain<Timestamp>,
-        read_policy: ReadPolicy,
-    ) -> Self {
-        let mut dependency_since = Antichain::from_elem(Timestamp::MIN);
-        for read_hold in [&read_hold, &self_hold] {
-            dependency_since.join_assign(read_hold.since());
-        }
-        Self {
-            read_capabilities: MutableAntichain::from(dependency_since.borrow()),
-            cluster_id,
-            derived_since: dependency_since,
-            read_holds: [read_hold, self_hold],
-            read_policy,
-            write_frontier,
-        }
-    }
-
-    /// Returns the cluster to which the export is bound.
-    pub fn cluster_id(&self) -> StorageInstanceId {
-        self.cluster_id
-    }
-
-    /// Returns the cluster to which the export is bound.
-    pub fn input_hold(&self) -> &ReadHold {
-        &self.read_holds[0]
-    }
-
-    /// Returns whether the export was dropped.
-    pub fn is_dropped(&self) -> bool {
-        self.read_holds.iter().all(|h| h.since().is_empty())
-    }
-}
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
@@ -1084,6 +971,7 @@ mod tests {
 
     #[mz_ore::test]
     fn lag_writes_by_zero() {
+        use mz_storage_types::read_policy::ReadPolicy;
         let policy =
             ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());
         let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));

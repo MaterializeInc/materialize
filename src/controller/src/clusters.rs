@@ -113,19 +113,15 @@ impl Controller {
         replica_id: ReplicaId,
         config: ReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
 
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs,
+                storagectl_addrs: _,
                 computectl_addrs,
             }) => {
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: computectl_addrs,
-                };
-                storage_location = ClusterReplicaLocation {
-                    ctl_addrs: storagectl_addrs,
                 };
             }
             ReplicaLocation::Managed(m) => {
@@ -146,9 +142,6 @@ impl Controller {
                         },
                     )
                 };
-                storage_location = ClusterReplicaLocation {
-                    ctl_addrs: addresses("storagectl", 2100)?,
-                };
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: addresses("computectl", 2101)?,
                 };
@@ -160,11 +153,8 @@ impl Controller {
             }
         }
 
-        if self.replica_owned_compute() {
-            self.storage.register_replica(cluster_id, replica_id);
-        } else {
-            self.storage
-                .connect_replica(cluster_id, replica_id, storage_location);
+        self.storage.register_replica(cluster_id, replica_id);
+        if !self.replica_owned_compute() {
             self.compute.add_replica_to_instance(
                 cluster_id,
                 replica_id,

@@ -835,7 +835,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn same_key_race_and_late_sample() {
-        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
+        let (_controller, collections, persist) = crate::tests::test_controller(false).await;
         let output_shard = ShardId::new();
         let data_shard = ShardId::new();
         let (mut writer, _lease) = data(&persist, data_shard).await;
@@ -910,7 +910,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn logical_permission_and_transactional_upper_ignore_physical_pins() {
-        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
+        let (_controller, collections, persist) = crate::tests::test_controller(false).await;
         let id = GlobalId::User(1);
         let data_shard = ShardId::new();
         register(collections.as_ref(), id, data_shard, true).await;
@@ -1103,7 +1103,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn inventory_removal_and_replacement_preserve_shared_rows() {
-        let (_controller, collections, persist) = crate::tests::test_controller(true, false).await;
+        let (_controller, collections, persist) = crate::tests::test_controller(false).await;
         let shard = ShardId::new();
         let mut output = Output::open(&persist, binding(shard)).await;
         let mut inventory = Inventory::default();
@@ -1315,7 +1315,7 @@ mod tests {
         for read_only in [false, true] {
             let registry = mz_ore::metrics::MetricsRegistry::new();
             let (controller, collections, persist, peer) =
-                crate::tests::test_controller_with_peer(true, read_only, registry.clone()).await;
+                crate::tests::test_controller_with_peer(read_only, registry.clone()).await;
             // Lease heartbeats must not be the mechanism repairing this gap.
             controller
                 .persist
@@ -1388,8 +1388,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn actor_samples_on_notification_and_stops_on_drop() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let (_controller, collections, persist) =
-                crate::tests::test_controller(true, false).await;
+            let (_controller, collections, persist) = crate::tests::test_controller(false).await;
             let shard = ShardId::new();
             register_output(collections.as_ref(), shard).await;
             let data_shard = ShardId::new();

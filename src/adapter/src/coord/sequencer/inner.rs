@@ -2899,7 +2899,11 @@ impl Coordinator {
 
         // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
-        let write_frontier = if let Some(client) = self.query_client.as_ref() {
+        let client = self
+            .query_client
+            .as_ref()
+            .expect("query client initialized before serving ALTER SINK");
+        let write_frontier = {
             match client
                 .write_frontier(
                     self.catalog(),
@@ -2916,13 +2920,6 @@ impl Coordinator {
                     return;
                 }
             }
-        } else {
-            self.controller
-                .storage
-                .export(global_id)
-                .expect("sink known to exist")
-                .write_frontier
-                .clone()
         };
         info!(%global_id, ?write_frontier, "finishing alter sink");
         let as_of = ctx.read_hold.least_valid_read();

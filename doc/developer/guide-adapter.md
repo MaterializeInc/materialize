@@ -48,7 +48,6 @@ limitation, including synthetic per-replica Paused markers. Only the successful 
 publishes these events. Followers still enact local effects, and join/restart
 reconstruction emits no historical transitions. Current existence and zero-replica
 placement come from the catalog, not successful delivery of those events.
-Legacy controller-owned execution retains its runtime status reconstruction.
 
 Two contracts on the implications phase:
 
@@ -616,14 +615,14 @@ Already-fixed query timestamps require their existing protection, not automatic
 advancement to a newer since. Unavailable readiness observations must remain not
 ready, rather than becoming an empty successful result.
 
-### Durable sink progress can precede controller observations
+### Durable sink progress can precede frontier observations
 
-A sink commits external output before advancing its Persist progress shard, then
-reports that progress to the controller. A query client can observe the durable
-upper before the controller processes the report. Sink alteration must establish
-input overlap against durable progress, not reject committed desired state using
-a lagging controller observation. Waiting for that report on the coordinator loop
-can also block the loop that must process it.
+A sink commits external output before advancing its Persist progress shard.
+A query client can observe that durable upper before frontier observations catch
+up. Sink alteration must establish input overlap against durable progress, not
+reject committed desired state using a lagging observation. Native reconstruction
+uses the committed recovery frontier exactly and skips an enabled snapshot only
+when durable output progress is strictly beyond that frontier.
 
 This applies to the sink's output-progress shard, not a source remap shard. Remap
 progress alone does not establish completion of source output.

@@ -207,9 +207,7 @@ impl Controller {
         &mut self,
         overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
-        self.compute
-            .update_replica_dyncfg_overrides(overrides.clone());
-        self.storage.update_replica_dyncfg_overrides(overrides);
+        self.compute.update_replica_dyncfg_overrides(overrides);
     }
 
     /// Start sinking the compute controller's introspection data into storage.
@@ -455,12 +453,8 @@ impl Controller {
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
     fn process_storage_response(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
-        let maybe_response = self.storage.process()?;
-        Ok(maybe_response.and_then(
-            |mz_storage_client::controller::Response::FrontierUpdates(r)| {
-                self.handle_frontier_updates(&r)
-            },
-        ))
+        self.storage.process()?;
+        Ok(None)
     }
 
     /// Process a pending response from the compute controller. If necessary,
@@ -566,7 +560,7 @@ impl Controller {
     /// by catalog bootstrap before construction opens Persist handles.
     ///
     /// # Panics
-    /// If `storage_txn` is missing the transaction WAL identity.
+    /// If catalog read protection is disabled or `storage_txn` lacks the WAL identity.
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
@@ -576,6 +570,10 @@ impl Controller {
         storage_txn: &dyn StorageTxn,
         txns_metrics: Arc<TxnMetrics>,
     ) -> Self {
+        assert!(
+            catalog_read_protection_enabled,
+            "controllers require a protected native catalog"
+        );
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
         }
@@ -603,17 +601,14 @@ impl Controller {
 
         let catalog_persist_location =
             catalog_read_protection_enabled.then(|| config.persist_location.clone());
-        let replica_owned = mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
-            && catalog_persist_location.is_some();
         let storage_controller = mz_storage_controller::Controller::new(
-            config.build_info,
             config.persist_location.clone(),
             config.persist_clients,
             config.now.clone(),
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             read_only,
-            replica_owned.then_some(config.deploy_generation),
+            config.deploy_generation,
             &config.metrics_registry,
             controller_metrics.clone(),
             config.connection_context,
