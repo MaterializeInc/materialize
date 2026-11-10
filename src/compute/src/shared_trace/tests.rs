@@ -16,8 +16,9 @@ use differential_dataflow::input::Input;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_row_spine::RowRowBatcher;
+use mz_row_spine::{DatumSeq, RowRowBatcher};
 use mz_timely_util::arrange_agent::TraceAgent;
+use mz_timely_util::shared_trace::{Binding, BindingReader, HoldAccumulation};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -1412,6 +1413,40 @@ fn publish_updates(
     (published, input, keep)
 }
 
+/// The direct join of `a` and `b` on their keys: each matching pair emits `(key, a value, b value)`
+/// at the later of their times with the product of their diffs, consolidated.
+fn direct_join(
+    a: &[(i64, &'static str, u64, i64)],
+    b: &[(i64, &'static str, u64, i64)],
+) -> Vec<(Row, Timestamp, Diff)> {
+    let mut pairs = Vec::new();
+    for &(ka, la, ta, da) in a {
+        for &(kb, rb, tb, db) in b {
+            if ka == kb {
+                let row =
+                    Row::pack_slice(&[Datum::Int64(ka), Datum::String(la), Datum::String(rb)]);
+                pairs.push((row, Timestamp::from(ta.max(tb)), Diff::from(da * db)));
+            }
+        }
+    }
+    consolidate(pairs)
+}
+
+/// `updates` summed per `(row, time)`, without zero entries, sorted.
+fn consolidate(
+    updates: impl IntoIterator<Item = (Row, Timestamp, Diff)>,
+) -> Vec<(Row, Timestamp, Diff)> {
+    let mut consolidated: BTreeMap<(Row, Timestamp), Diff> = BTreeMap::new();
+    for (row, time, diff) in updates {
+        *consolidated.entry((row, time)).or_insert(Diff::ZERO) += diff;
+    }
+    consolidated
+        .into_iter()
+        .filter(|(_, d)| !d.is_zero())
+        .map(|((r, t), d)| (r, t, d))
+        .collect()
+}
+
 /// A differential join over two single-sourced imports must equal the direct join exactly, with
 /// no doubling and correct multiplicities (key 1 is inserted then retracted and must cancel).
 ///
@@ -1435,24 +1470,7 @@ fn join_over_single_sourced_import_matches_direct() {
     let b: Vec<(i64, &str, u64, i64)> = vec![(1, "x", 0, 1), (2, "y", 1, 1), (3, "z", 2, 1)];
     let seal = 3u64;
 
-    // Direct-join oracle: matching pair emits at the max of their times with the product diff.
-    let mut oracle: BTreeMap<(Row, Timestamp), Diff> = BTreeMap::new();
-    for &(ka, la, ta, da) in &a {
-        for &(kb, rb, tb, db) in &b {
-            if ka != kb {
-                continue;
-            }
-            let row = Row::pack_slice(&[Datum::Int64(ka), Datum::String(la), Datum::String(rb)]);
-            let time = Timestamp::from(ta.max(tb));
-            *oracle.entry((row, time)).or_insert(Diff::ZERO) += Diff::from(da * db);
-        }
-    }
-    let mut expected: Vec<(Row, Timestamp, Diff)> = oracle
-        .into_iter()
-        .filter(|(_, d)| !d.is_zero())
-        .map(|((r, t), d)| (r, t, d))
-        .collect();
-    expected.sort();
+    let expected = direct_join(&a, &b);
 
     let (tx, rx) = mpsc::channel();
     timely::execute_directly(move |worker| {
@@ -1487,16 +1505,7 @@ fn join_over_single_sourced_import_matches_direct() {
         }
     });
 
-    let got: Vec<(Row, Timestamp, Diff)> = rx.extract().into_iter().flat_map(|(_, d)| d).collect();
-    let mut consolidated: BTreeMap<(Row, Timestamp), Diff> = BTreeMap::new();
-    for (row, time, diff) in got {
-        *consolidated.entry((row, time)).or_insert(Diff::ZERO) += diff;
-    }
-    let got: Vec<(Row, Timestamp, Diff)> = consolidated
-        .into_iter()
-        .filter(|(_, d)| !d.is_zero())
-        .map(|((r, t), d)| (r, t, d))
-        .collect();
+    let got = consolidate(rx.extract().into_iter().flat_map(|(_, d)| d));
 
     assert_eq!(
         got, expected,
@@ -1593,4 +1602,460 @@ fn empty_seal_advances_import_frontier_to_completion() {
         vec![Row::pack_slice(&[Datum::Int64(7), Datum::String("d")])],
         "bounded read returned the wrong accumulation"
     );
+}
+
+/// A [`Binding`] over the batches of a `RowRow` index.
+type RowBinding = Binding<Timestamp, <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch>;
+/// A reader of a [`RowBinding`].
+type RowBindingReader =
+    BindingReader<Timestamp, <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch>;
+
+#[mz_ore::test]
+fn an_unbound_reader_reads_as_an_empty_chain_at_the_minimum() {
+    let holds = HoldAccumulation::new();
+    let binding = RowBinding::new(holds.clone());
+    let minimum = Antichain::from_elem(Timestamp::MIN);
+    let mut reader = binding.reader(Antichain::from_elem(Timestamp::from(3_u64)));
+    assert!(!binding.is_bound());
+    assert_eq!(
+        holds.frontier(),
+        Antichain::from_elem(Timestamp::from(3_u64)),
+        "the logical hold lives in the accumulation"
+    );
+
+    let mut upper = Antichain::new();
+    reader.read_upper(&mut upper);
+    assert_eq!(upper, minimum);
+    let mut spans = 0;
+    reader.map_spans(|_| spans += 1);
+    assert_eq!(spans, 0);
+    assert_eq!(
+        reader.get_physical_compaction(),
+        minimum.borrow(),
+        "an unbound reader holds physically at the minimum, as a trace handle starts"
+    );
+    assert_eq!(
+        reader
+            .spans_through(minimum.borrow())
+            .map(|spans| spans.len()),
+        Some(0)
+    );
+
+    let message = mz_ore::panic::catch_unwind_str(std::panic::AssertUnwindSafe(|| {
+        reader.spans_through(Antichain::from_elem(Timestamp::from(1_u64)).borrow())
+    }))
+    .map(|_| ())
+    .expect_err("a read past the minimum must panic");
+    assert!(
+        message.contains("read through an unbound binding past the minimum"),
+        "unexpected panic: {message}"
+    );
+
+    drop(reader);
+    assert_eq!(
+        holds.frontier(),
+        Antichain::new(),
+        "a dropped reader releases"
+    );
+}
+
+#[mz_ore::test]
+fn an_import_built_before_binding_replays_the_chain_once_bound() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use timely::dataflow::ProbeHandle;
+    use timely::dataflow::operators::{Inspect, Probe};
+
+    timely::execute_directly(move |worker| {
+        let (published, mut input, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged =
+                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("late oks");
+            (adopt_fresh(&arranged), input, arranged.trace.clone())
+        });
+        for t in 0..3 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        let holds = HoldAccumulation::new();
+        let binding = RowBinding::new(holds.clone());
+        let reader = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+        let seen = Rc::new(RefCell::new(Vec::<(Row, Timestamp, Diff)>::new()));
+        let probe = ProbeHandle::new();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            let seen = Rc::clone(&seen);
+            reader
+                .import_frontier_core(
+                    scope.clone(),
+                    "late import",
+                    Antichain::from_elem(Timestamp::from(0_u64)),
+                    Antichain::new(),
+                )
+                .as_collection(|k: DatumSeq, v: DatumSeq| {
+                    Row::pack(k.into_iter().chain(v.into_iter()))
+                })
+                .inner
+                .inspect(move |update| seen.borrow_mut().push(update.clone()))
+                .probe_with(&probe);
+        });
+        drop(reader);
+
+        // The import holds `as_of` from construction, so connecting now replays `{0}`, never the
+        // empty frontier that would release the writer for good.
+        let (pusher, replay) = mz_timely_util::capture::progress_link();
+        let replayed = ProbeHandle::new();
+        let replay_token = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (stream, token) = replay.replay(scope.clone(), "late holds");
+            stream.probe_with(&replayed);
+            token
+        });
+        holds.connect(pusher);
+
+        for _ in 0..64 {
+            worker.step();
+        }
+        assert!(
+            seen.borrow().is_empty(),
+            "an unbound import produced output"
+        );
+        replayed.with_frontier(|frontier| {
+            assert_eq!(
+                frontier.to_vec(),
+                vec![Timestamp::from(0_u64)],
+                "an unbound import's logical hold is missing from the accumulation"
+            )
+        });
+        probe.with_frontier(|frontier| {
+            assert_eq!(
+                frontier.to_vec(),
+                vec![Timestamp::MIN],
+                "an unbound import moved its capability"
+            )
+        });
+
+        binding.bind(Arc::clone(&published.shared));
+        let upper = published.shared.upper();
+        let mut steps = 0;
+        while probe.with_frontier(|frontier| frontier.to_owned()) != upper {
+            worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the bound import did not reach {upper:?}");
+        }
+        let tick_row = Row::pack_slice(&[Datum::Int32(-1), Datum::String("tick")]);
+        let expected: Vec<_> = (0..3_u64)
+            .map(|t| (tick_row.clone(), Timestamp::from(t), Diff::ONE))
+            .collect();
+        assert_eq!(
+            consolidate(seen.borrow().iter().cloned()),
+            expected,
+            "the bound import replayed the wrong chain"
+        );
+        assert_eq!(
+            holds.frontier(),
+            upper,
+            "the import's logical hold follows the frontier it acknowledged"
+        );
+        let mut steps = 0;
+        while replayed.with_frontier(|frontier| frontier.to_owned()) != upper {
+            worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the replayed holds did not reach {upper:?}");
+        }
+
+        drop(replay_token);
+        drop_dataflows(worker);
+        drop((keep, input));
+    });
+}
+
+/// The port of `crate::sharing`'s `join_over_point_adopted_late_matches_direct` onto a
+/// [`Binding`]: the join captures the import's trace at construction, before A's point exists.
+#[mz_ore::test]
+fn a_join_over_an_import_bound_late_matches_direct() {
+    use std::sync::mpsc;
+    use timely::dataflow::ProbeHandle;
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::{Capture, Probe};
+
+    let a: Vec<(i64, &str, u64, i64)> = vec![
+        (1, "a", 0, 1),
+        (2, "b", 0, 1),
+        (3, "c", 1, 1),
+        (1, "a", 2, -1),
+    ];
+    let b: Vec<(i64, &str, u64, i64)> = vec![(1, "x", 0, 1), (2, "y", 1, 1), (3, "z", 2, 1)];
+    let seal = 3u64;
+    let expected = direct_join(&a, &b);
+
+    let (tx, rx) = mpsc::channel();
+    timely::execute_directly(move |worker| {
+        let (pub_b, keep_b, _agent_b) = publish_updates(worker, &b, seal, "late join B");
+        let hb = pub_b.handle();
+        let binding_a = RowBinding::new(HoldAccumulation::new());
+        let ha = binding_a.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+
+        let as_of = Antichain::from_elem(Timestamp::from(0_u64));
+        let until = Antichain::from_elem(Timestamp::from(seal));
+        let probe = ProbeHandle::new();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            let arr_a = ha.import_frontier_core(
+                scope.clone(),
+                "import A (unbound)",
+                as_of.clone(),
+                until.clone(),
+            );
+            let arr_b = hb.import_frontier_core(scope.clone(), "import B", as_of, until);
+            let joined = arr_a.join_core(arr_b, |key, v1, v2| {
+                let row = Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
+                Some(row)
+            });
+            joined.inner.probe_with(&probe).capture_into(tx.clone());
+        });
+
+        for _ in 0..64 {
+            worker.step();
+        }
+        assert!(
+            probe.less_than(&Timestamp::from(1_u64)),
+            "join advanced past time 0 before A was bound"
+        );
+
+        let (pub_a, keep_a, _agent_a) = publish_updates(worker, &a, seal, "late join A");
+        binding_a.bind(Arc::clone(&pub_a.shared));
+
+        let seal_ts = Timestamp::from(seal);
+        let mut steps = 0;
+        while probe.less_than(&seal_ts) {
+            let _keep = (&keep_a, &keep_b);
+            worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "join did not seal through {seal_ts:?}");
+        }
+        drop_dataflows(worker);
+    });
+
+    let got = consolidate(rx.extract().into_iter().flat_map(|(_, d)| d));
+    assert_eq!(
+        got, expected,
+        "join over an import bound late diverged from the direct join"
+    );
+}
+
+#[mz_ore::test]
+fn holds_before_connect_are_pushed_at_connect_and_follow_every_change() {
+    use timely::dataflow::ProbeHandle;
+    use timely::dataflow::operators::Probe;
+
+    timely::execute_directly(move |worker| {
+        let holds = HoldAccumulation::new();
+        let binding = RowBinding::new(holds.clone());
+        let at_three = binding.reader(Antichain::from_elem(Timestamp::from(3_u64)));
+        let mut at_five = at_three.clone();
+        at_five.set_logical_compaction(Antichain::from_elem(Timestamp::from(5_u64)).borrow());
+        assert_eq!(
+            holds.frontier(),
+            Antichain::from_elem(Timestamp::from(3_u64))
+        );
+
+        let (pusher, source) = mz_timely_util::capture::progress_link();
+        let probe = ProbeHandle::new();
+        let token = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (stream, token) = source.replay(scope.clone(), "holds");
+            stream.probe_with(&probe);
+            token
+        });
+        let settle_at = |worker: &mut timely::worker::Worker, expected: Vec<Timestamp>| {
+            let mut steps = 0;
+            while probe.with_frontier(|frontier| frontier.to_vec()) != expected {
+                worker.step();
+                steps += 1;
+                assert!(
+                    steps < 10_000,
+                    "the replayed holds did not reach {expected:?}"
+                );
+            }
+        };
+        settle_at(worker, vec![Timestamp::MIN]);
+
+        holds.connect(pusher);
+        settle_at(worker, vec![Timestamp::from(3_u64)]);
+        drop(at_three);
+        settle_at(worker, vec![Timestamp::from(5_u64)]);
+        drop(at_five);
+        settle_at(worker, vec![]);
+        drop(token);
+    });
+}
+
+#[mz_ore::test]
+#[should_panic(expected = "the hold stream keeps")]
+fn an_import_refuses_a_point_compacted_past_its_as_of() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged =
+                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("compacted oks");
+            (arranged.trace.clone(), adopt_fresh(&arranged), input)
+        });
+        let target = Antichain::from_elem(Timestamp::from(10_u64));
+        writer.set_logical_compaction(target.borrow());
+        writer.set_physical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(10_u64),
+            Timestamp::from(11_u64),
+        );
+
+        let binding = RowBinding::new(HoldAccumulation::new());
+        let reader = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            reader.import_frontier_core(
+                scope.clone(),
+                "stale import",
+                Antichain::from_elem(Timestamp::from(0_u64)),
+                Antichain::new(),
+            );
+        });
+        // The import's hold, minted at construction, registers on the point here.
+        binding.bind(Arc::clone(&published.shared));
+        drop_dataflows(worker);
+    });
+}
+
+#[mz_ore::test]
+fn a_physical_request_before_binding_holds_from_the_chain_coverage() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged =
+                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("physical oks");
+            (arranged.trace.clone(), adopt_fresh(&arranged), input)
+        });
+        // Release the writer's own physical hold, so the point's physical holds are the reader's.
+        writer.set_physical_compaction(Antichain::new().borrow());
+        for t in 0..5 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+        let coverage = published.shared.upper();
+        assert_eq!(coverage, Antichain::from_elem(Timestamp::from(5_u64)));
+        assert_eq!(published.physical_holds(), Antichain::new());
+
+        let holds = HoldAccumulation::new();
+        let binding = RowBinding::new(holds.clone());
+        let mut reader = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+        reader.set_physical_compaction(Antichain::from_elem(Timestamp::from(2_u64)).borrow());
+        assert_eq!(
+            published.physical_holds(),
+            Antichain::new(),
+            "an unbound reader holds nothing on any point"
+        );
+
+        binding.bind(Arc::clone(&published.shared));
+        assert_eq!(
+            published.physical_holds(),
+            coverage,
+            "the physical hold starts at the request joined with the chain coverage"
+        );
+        assert_eq!(
+            holds.frontier(),
+            Antichain::from_elem(Timestamp::from(0_u64)),
+            "the logical hold stays in the accumulation"
+        );
+
+        reader.set_physical_compaction(Antichain::from_elem(Timestamp::from(7_u64)).borrow());
+        assert_eq!(
+            published.physical_holds(),
+            Antichain::from_elem(Timestamp::from(7_u64))
+        );
+        drop(reader);
+        assert_eq!(published.physical_holds(), Antichain::new());
+        drop(input);
+    });
+}
+
+/// A reader's physical hold never exceeds a frontier its consumer already saw through `map_spans`,
+/// whether the reader was minted before the bind or on a bound binding, so a cut there still
+/// succeeds after the writer merges past it.
+#[mz_ore::test]
+fn a_bound_reader_holds_physically_at_the_coverage_its_consumer_saw() {
+    use timely::PartialOrder;
+
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged =
+                collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("coverage oks");
+            (arranged.trace.clone(), adopt_fresh(&arranged), input)
+        });
+        // The writer's agent stands in for the trace manager and lets the spine merge up to its
+        // upper, so the readers' holds are what keep boundaries. Releasing it entirely instead
+        // would drop the spine's physical frontier to the empty antichain, which a later hold
+        // cannot rewind.
+        let mut ticks = 0_u64..;
+        let mut advance = |worker: &mut timely::worker::Worker, count: usize| {
+            for t in ticks.by_ref().take(count) {
+                tick(
+                    worker,
+                    &mut input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+                writer
+                    .set_physical_compaction(Antichain::from_elem(Timestamp::from(t + 1)).borrow());
+            }
+        };
+        advance(worker, 3);
+
+        // The consumer's view of a reader: the coverage `map_spans` shows, then the writer seals
+        // and merges, then the physical frontier and a cut at that coverage.
+        let check =
+            |reader: &mut RowBindingReader,
+             worker: &mut timely::worker::Worker,
+             advance: &mut dyn FnMut(&mut timely::worker::Worker, usize)| {
+                let mut seen = Antichain::from_elem(Timestamp::MIN);
+                reader.map_spans(|span| seen.clone_from(span.upper()));
+                advance(worker, 30);
+                assert!(
+                    PartialOrder::less_equal(&reader.get_physical_compaction(), &seen.borrow()),
+                    "the physical hold {:?} passed the coverage {seen:?} the consumer saw",
+                    reader.get_physical_compaction(),
+                );
+                let spans = reader
+                    .spans_through(seen.borrow())
+                    .expect("a cut at the seen coverage");
+                assert!(
+                    spans.iter().all(|span| PartialOrder::less_equal(
+                        &span.upper().borrow(),
+                        &seen.borrow()
+                    ))
+                );
+            };
+
+        let binding = RowBinding::new(HoldAccumulation::new());
+        let mut before = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+        binding.bind(Arc::clone(&published.shared));
+        check(&mut before, worker, &mut advance);
+
+        let mut after = binding.reader(Antichain::from_elem(Timestamp::from(0_u64)));
+        check(&mut after, worker, &mut advance);
+
+        // A clone inherits the original's hold, not the coverage at the clone.
+        let held = after.get_physical_compaction().to_owned();
+        advance(worker, 30);
+        let mut clone = after.clone();
+        assert_eq!(clone.get_physical_compaction(), held.borrow());
+        drop((before, after, clone));
+        drop(input);
+    });
 }
