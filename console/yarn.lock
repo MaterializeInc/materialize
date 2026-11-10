@@ -8271,7 +8271,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"is-network-error@npm:^1.3.0":
+"is-network-error@npm:^1.3.2":
   version: 1.3.2
   resolution: "is-network-error@npm:1.3.2"
   checksum: 10c0/37edc576497b21d022754b49203358ee80fdac4a11a71a09687f38ad789ec437dd930c223301df39f1c920566692b31345e0108ae720996e592cab3879eca74f
@@ -9315,7 +9315,7 @@ __metadata:
     oidc-client-ts: "npm:^3.5.0"
     openapi-fetch: "npm:^0.17.0"
     openapi-typescript: "npm:^7.13.0"
-    p-retry: "npm:^8.0.1"
+    p-retry: "npm:^9.0.0"
     papaparse: "npm:^5.7.0"
     pg: "npm:^8.23.1"
     pg-error-enum: "npm:^2.0.1"
@@ -10331,12 +10331,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"p-retry@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "p-retry@npm:8.0.1"
+"p-retry@npm:^9.0.0":
+  version: 9.0.0
+  resolution: "p-retry@npm:9.0.0"
   dependencies:
-    is-network-error: "npm:^1.3.0"
-  checksum: 10c0/3ce078a179ba2303d29d516db57abed71abd940c29aff292f97f64e2682777b0cb2b03321f4e3badb8185137a3a85cc003ba8060a769b179a5ba8059e7ecdd2c
+    is-network-error: "npm:^1.3.2"
+  checksum: 10c0/69f80655ad6d08f6b1b15c007cca1586980a32d7a07ebe3e5a59a22cac4cf7d892a4700c6dbbe6dc6f0b1a6e90b289df586d76113c640f4ee35f2e23ad62c594
   languageName: node
   linkType: hard
 
