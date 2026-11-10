@@ -25,10 +25,12 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{Thread, ThreadId};
 
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_timely_util::capture::{ProgressPusher, ProgressSource, progress_link};
 use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::command_channel::CommandNumber;
 use crate::reconcile_barrier::{ConnectionOrder, ReconcileBarrier};
 use crate::shared_trace::{Published, SharedErrsHandle, SharedOksHandle, adopt_trace};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
@@ -102,6 +104,28 @@ pub struct ArrangementSharingRegistry {
     order: ConnectionOrder,
     /// The barrier between the reconciliations of the two workers attached here.
     barrier: ReconcileBarrier,
+    /// The link over which the maintenance worker attached here reports the commands it applied
+    /// to its interactive peer.
+    command_progress: Arc<CommandProgressLink>,
+}
+
+/// The two ends of a registry's command progress link, each until a worker takes it.
+///
+/// Each end is handed out once instead of cloned, because an untaken or second source holds the
+/// link's head, which retains every event pushed after it.
+struct CommandProgressLink {
+    pusher: Mutex<Option<ProgressPusher<CommandNumber>>>,
+    source: Mutex<Option<ProgressSource<CommandNumber>>>,
+}
+
+impl Default for CommandProgressLink {
+    fn default() -> Self {
+        let (pusher, source) = progress_link();
+        Self {
+            pusher: Mutex::new(Some(pusher)),
+            source: Mutex::new(Some(source)),
+        }
+    }
 }
 
 impl SharedIndexArrangement {
@@ -126,6 +150,7 @@ impl ArrangementSharingRegistry {
                 inner: Default::default(),
                 order: order.clone(),
                 barrier: Default::default(),
+                command_progress: Default::default(),
             })
             .collect()
     }
@@ -138,6 +163,34 @@ impl ArrangementSharingRegistry {
     /// The barrier between the reconciliations of the two workers attached here.
     pub(crate) fn reconcile_barrier(&self) -> &ReconcileBarrier {
         &self.barrier
+    }
+
+    /// Takes the end of the command progress link the maintenance worker reports through.
+    ///
+    /// # Panics
+    ///
+    /// Panics if taken before.
+    pub(crate) fn take_command_progress_pusher(&self) -> ProgressPusher<CommandNumber> {
+        self.command_progress
+            .pusher
+            .lock()
+            .expect("command progress link poisoned")
+            .take()
+            .expect("the command progress pusher is taken once")
+    }
+
+    /// Takes the end of the command progress link the interactive worker replays.
+    ///
+    /// # Panics
+    ///
+    /// Panics if taken before.
+    pub(crate) fn take_command_progress_source(&self) -> ProgressSource<CommandNumber> {
+        self.command_progress
+            .source
+            .lock()
+            .expect("command progress link poisoned")
+            .take()
+            .expect("the command progress source is taken once")
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
