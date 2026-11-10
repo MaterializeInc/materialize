@@ -122,7 +122,6 @@ url.workspace = true
 assert_cmd.workspace = true
 bytes.workspace = true
 datadriven.workspace = true
-fallible-iterator.workspace = true
 flate2.workspace = true
 http-body-util.workspace = true
 insta.workspace = true

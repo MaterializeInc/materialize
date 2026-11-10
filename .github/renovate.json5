@@ -104,18 +104,8 @@
     {
       // Held back in Cargo.toml
       "matchManagers": ["cargo"],
-      "matchPackageNames": ["fallible-iterator"],
-      "allowedVersions": "<0.3"
-    },
-    {
-      "matchManagers": ["cargo"],
       "matchPackageNames": ["lgalloc"],
       "allowedVersions": "<0.7"
-    },
-    {
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["mysql_common"],
-      "allowedVersions": "<0.38"
     },
     {
       "matchManagers": ["cargo"],

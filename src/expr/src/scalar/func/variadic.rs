@@ -19,7 +19,6 @@ use std::fmt;
 
 use aws_lc_rs::hmac as aws_hmac;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, KeyInit, Mac};
 use itertools::Itertools;
 use md5::Md5;
@@ -768,11 +767,16 @@ impl LazyVariadicFunc for Greatest {
         temp_storage: &'a RowArena,
         exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
-        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-        Ok(datums
-            .filter(|d| Ok(!d.is_null()))
-            .max()?
-            .unwrap_or(Datum::Null))
+        let mut greatest = None;
+        for e in exprs {
+            let d = e.eval(datums, temp_storage)?;
+            // NOTE: The later argument wins a tie. Datums that compare equal can
+            // still differ, e.g. float8 `-0` and `0`.
+            if !d.is_null() && greatest.is_none_or(|g| d >= g) {
+                greatest = Some(d);
+            }
+        }
+        Ok(greatest.unwrap_or(Datum::Null))
     }
 
     fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
@@ -912,11 +916,15 @@ impl LazyVariadicFunc for Least {
         temp_storage: &'a RowArena,
         exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
-        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-        Ok(datums
-            .filter(|d| Ok(!d.is_null()))
-            .min()?
-            .unwrap_or(Datum::Null))
+        let mut least = None;
+        for e in exprs {
+            let d = e.eval(datums, temp_storage)?;
+            // NOTE: The later argument wins a tie, see `Greatest::eval`.
+            if !d.is_null() && least.is_none_or(|l| d <= l) {
+                least = Some(d);
+            }
+        }
+        Ok(least.unwrap_or(Datum::Null))
     }
 
     fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {

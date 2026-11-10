@@ -366,9 +366,6 @@ encoding = "0.2.0"
 enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-# Held back: must match the `FallibleIterator` trait that `postgres-protocol`
-# implements for its message iterators, which is 0.2 up to at least 0.6.12.
-fallible-iterator = "0.2.0"
 fancy-regex = "0.20.0"
 flate2 = "1.1.9"
 frontegg = { version = "0.9.0", default-features = false }
@@ -435,10 +432,7 @@ mappings = "0.7.2"
 md-5 = "0.11.0"
 mime = "0.3.16"
 murmur2 = "0.1.0"
-mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "minimal", "rustls-tls", "tls12", "tracing"] }
-# Held back: must match the `mysql_common` that `mysql_async` re-exports its
-# value and row types from, which is 0.37 for `mysql_async` 0.37.1.
-mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "chrono", "minimal", "rustls-tls", "tls12", "tracing"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
