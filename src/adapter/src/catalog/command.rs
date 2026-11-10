@@ -30,7 +30,10 @@ use mz_sql::plan::{Params, Plan, PlanNotice};
 use mz_sql::session::metadata::SessionMetadata;
 use tokio::sync::mpsc;
 
-use crate::catalog::{CatalogState, Op};
+use crate::catalog::command::source_statement::{
+    SourceCommand, SourceCompilation, SourceResolution,
+};
+use crate::catalog::{CatalogState, CommandExecutionError, CommandWork, Op};
 use crate::session::SessionMeta;
 use crate::{AdapterError, AdapterNotice};
 
@@ -43,6 +46,49 @@ pub enum CatalogCommand {
 }
 
 impl CatalogCommand {
+    /// Resolves a command against the candidate catalog, or requests external work.
+    ///
+    /// The response must belong to this command's index in the replayed batch.
+    pub(super) fn compile(
+        &mut self,
+        state: &CatalogState,
+        index: usize,
+        response: Option<mz_sql::pure::SourcePreparationResponse>,
+    ) -> Result<CommandExecution<'_>, CommandExecutionError> {
+        match self {
+            Self::Rename(command) => Ok(CommandExecution::raw(command.execute(state)?)),
+            Self::Description(command) => {
+                command.execute(state)?;
+                Ok(CommandExecution::raw(Vec::new()))
+            }
+            Self::CatalogResult(command) => {
+                command.execute(state)?;
+                Ok(CommandExecution::raw(Vec::new()))
+            }
+            Self::Source(command) => {
+                let command = Arc::make_mut(command);
+                let resolution = match response {
+                    Some(response) => command.statement.finish(state, response)?,
+                    None => command.statement.resolve(state)?,
+                };
+                match resolution {
+                    SourceResolution::Prepare(request) => Err(CommandExecutionError::Pending {
+                        index,
+                        work: CommandWork::Prepare(request),
+                    }),
+                    SourceResolution::Allocate(keys) => Err(CommandExecutionError::Pending {
+                        index,
+                        work: CommandWork::Allocate(keys),
+                    }),
+                    SourceResolution::Ready(mut compiled) => Ok(CommandExecution {
+                        ops: std::mem::take(&mut compiled.ops),
+                        source: Some((command, compiled)),
+                    }),
+                }
+            }
+        }
+    }
+
     /// The planning notices recorded during preparation.
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         match self {
@@ -51,6 +97,59 @@ impl CatalogCommand {
             Self::Description(_) => &[],
             Self::Source(command) => command.notices(),
         }
+    }
+}
+
+/// Catalog writes and the outcome validation required before publishing them.
+///
+/// Run any collision probe in an isolated transaction before taking the writes.
+/// Apply the writes in order, then call `finish` before executing the next command.
+pub(super) struct CommandExecution<'a> {
+    ops: Vec<Op>,
+    source: Option<(&'a mut SourceCommand, Box<SourceCompilation>)>,
+}
+
+impl CommandExecution<'_> {
+    pub(super) fn raw(ops: Vec<Op>) -> Self {
+        Self { ops, source: None }
+    }
+
+    pub(super) fn collision_probe_ops(&self) -> Option<&[Op]> {
+        self.source.as_ref().and_then(|(command, compiled)| {
+            command
+                .needs_collision_probe(compiled)
+                .then_some(self.ops.as_slice())
+        })
+    }
+
+    /// Validates the isolated probe and returns whether to skip this command's writes.
+    pub(super) fn finish_probe(
+        &mut self,
+        result: Result<(), AdapterError>,
+    ) -> Result<bool, AdapterError> {
+        let (command, compiled) = self.source.as_mut().expect("collision probe requested");
+        let (_, outcome) = compiled.classify_result(result)?;
+        command.check_outcome(outcome)?;
+        Ok(command.skipped_name().is_some())
+    }
+
+    pub(super) fn take_ops(&mut self) -> Vec<Op> {
+        std::mem::take(&mut self.ops)
+    }
+
+    /// Checks the observed outcome and propagates the result unless that outcome changed.
+    pub(super) fn finish<T>(self, result: Result<T, AdapterError>) -> Result<T, AdapterError> {
+        if let Some((command, compiled)) = self.source {
+            match &result {
+                Ok(_) => command.check_outcome(compiled.created())?,
+                Err(error) => {
+                    if let Some(outcome) = compiled.skipped(error) {
+                        command.check_outcome(outcome)?;
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
