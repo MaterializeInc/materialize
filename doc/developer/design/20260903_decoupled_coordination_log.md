@@ -9,13 +9,23 @@ separate. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Next convert `test/0dt/mzcompose.py::workflow_ddl` from read-only/exclusive-fencing
-expectations to compatible writers and explicit retirement. Preserve its source,
-sink, webhook, subscription and DDL assertions while accounting for writes now
-succeeding before promotion. Parallel-workload's coexistence action now separates
-promotion/retirement/cleanup and keeps a shared relay, with helper checks but no
-concurrent stress rerun. Zippy's native actions passed with continuing ingestion
-in both storage topologies. Full randomized zippy and runtime restore remain unrun.
+Resolve the singleton CDC-reader policy decision before completing the uncommitted
+native `workflow_ddl` conversion. Both admitted generations select the same
+PostgreSQL slot/MySQL server ID and repeatedly disconnect one another, before
+OOM-related process restarts. `native-cdc-reader-ownership.md` contains matched
+actors, source evidence and the proposed exception awaiting Aljoscha's agreement.
+Do not implement a new ownership policy or drop the CDC coverage silently.
+
+Helper checks, preservation comparison and independent review pass. Partial runtime
+checks passed candidate/peer writes and DDL, but full lifecycle acceptance remains
+unverified. OOMs, a telemetry soft panic and an unattributed five-second FETCH
+failure are recorded in `native-ddl-runtime-findings.md`. The latest full fixture
+was stopped because the known source conflict prevents healthy-upgrade proof.
+Its `interrupted-cleanup.json` records verified removal of the owned project.
+
+Parallel-workload's coexistence wiring is committed with helper checks but no
+stress rerun. Zippy's native actions passed with continuing ingestion in both
+storage topologies. Full randomized zippy and runtime restore remain unrun.
 
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
@@ -89,6 +99,9 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   workflows, provenance, failures, reviews and cleanup. Cached images mounted current
   debug binaries. The restart test establishes warmup rather than assuming it from
   a fixed sleep. Its recovery bound is unchanged.
+- `native-ddl-review.md`, `native-ddl-helper-tests.log` and
+  `native-ddl-preserved-workload.txt` record current DDL checks. Runtime evidence
+  remains provisional under `native-ddl-latest`.
 - `native-zippy-verification.md` and `native-zippy-review.md` cover standalone
   four-worker recovery, managed multi-process promotion/retirement and continuing
   load-generator ingestion. Backend and full-workload limitations remain explicit.
@@ -107,8 +120,10 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   preserve container and unsupported-upgrade evidence.
 
 No verification task or managed runtime remains running. All owned fixture
-containers, networks and volumes were removed. About 45 GiB is free. Preserve a
-30 GiB reserve, use one low-priority Cargo job and keep heavy work sequential.
+containers, networks and volumes were removed. About 41 GiB is free. Scratch SSO
+was expired on two checks. Local fixture guards enforce backend/OOM checks,
+2 GiB host available memory and 30 GiB disk reserve. Keep heavy work sequential
+and use one low-priority Cargo job.
 Current service binaries contain the compute-owner removal. Retain baseline
 artifacts, measurement reports and third-party cache. Superseded build cleanup is
 recorded in `native-compute-*-cleanup.log` and `native-compute-reserve-reclaim.log`.

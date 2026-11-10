@@ -22,6 +22,43 @@ replica during the activation handoff. This has not been reproduced or repaired.
 The call chain is recorded in
 `~/.local/share/aj/m3-evidence/native-only/native-compute-owner-review.md`.
 
+## Serving readiness before local replica provisioning
+
+Two full native DDL runs reached a healthy candidate SQL listener before its
+deployment-local catalog replicas existed. Testdrive's initial catalog query
+failed with `CLUSTER "mz_catalog_server" has no replicas available`. No candidate
+clusterd launch appears before that failure in the captured logs.
+
+The DDL workflow now waits for `ReadyToPromote` before exercising the candidate.
+That establishes its test starting condition, not general serving-readiness
+acceptance. Decide whether listener readiness should also promise usable builtin
+catalog queries before changing the production health contract. This observation
+does not establish the separate activation race above.
+
+Evidence: `~/.local/share/aj/m3-evidence/native-only/aj-native-ddl-074f5610/`
+and `aj-native-ddl-7422ebf9/`, including exact rerun logs and container inspections.
+
+## Singleton CDC-reader ownership across deployments
+
+The full native DDL fixture proves that two admitted deployments repeatedly steal
+the same PostgreSQL replication slot and collide on the same MySQL server ID.
+Native singleton selection is deployment-local, while the upstream identifiers
+come from the shared source definition. Persist output-write permission does not
+prevent opening these connections. Legacy read-only prewarming skipped these
+connectors. This is persistent contention before process restarts, not merely
+OOM recovery. It does not establish data loss.
+
+The proposed boundary, awaiting Aljoscha's agreement, is one replica-owned,
+catalog-authorized upstream reader across deployments, handed over at promotion.
+SQL/table writers remain independent. Candidate compute can prewarm from shared
+source data, but independent candidate CDC progress would no longer be a readiness
+requirement for these connectors. This requires an explicit exception to the
+current non-sink-execution preservation rule. Independent upstream identifiers
+would instead require slot bootstrap/continuity and retirement-cleanup design.
+
+Evidence: `~/.local/share/aj/m3-evidence/native-only/native-cdc-reader-ownership.md`
+and the matched actor logs in `aj-native-ddl-6f303bf0/`. No policy change is made.
+
 ## Backend writes and blob consumption
 
 The [backend attribution](20260903_decoupled_coordination_backend_load.md)
