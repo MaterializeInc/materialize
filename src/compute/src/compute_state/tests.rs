@@ -40,10 +40,11 @@ use mz_txn_wal::operator::TxnsContext;
 use super::*;
 use crate::arrangement::manager::PaddedTrace;
 use crate::arrangement::manager::TraceBundle;
+use crate::command_progress::CommandProgress;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
 use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
-use crate::sharing::PublishToken;
+use crate::sharing::{PeerIndex, PublishToken, SharedIndexArrangement, SlotCheck};
 use crate::typedefs::{ErrAgent, ErrBatcher, ErrSpine, RowRowAgent, RowRowSpine};
 
 #[mz_ore::test]
@@ -222,29 +223,28 @@ fn walk(peek: Peek, bundle: TraceBundle, stash: StashBounds, metrics: &TestMetri
 }
 
 /// Publishes `rows` (at time 0, sealed to 1) as a real index arrangement into `registry` under
-/// `id` on worker 0 of 1, as a maintained index publishes on the maintenance runtime. The
-/// publication lasts as long as someone holds the slot.
+/// `id` on worker 0 of 1, as incarnation 0 described by `check`, as a maintained index publishes on
+/// the maintenance runtime.
 ///
 /// The publishing dataflow runs to completion and drops its traces, after which the published
 /// `since` follows the writer to the empty frontier, and the replayed holds of a peer end with the
-/// dataflow. Returns readers that hold both points at the minimum from before the publication.
+/// dataflow. Returns the slot, which keeps the publication, and readers that hold both points at
+/// the minimum from the publication on.
 fn publish_kv_index(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
+    check: SlotCheck,
     rows: Vec<(Row, Row)>,
-) -> (SharedOksHandle, SharedErrsHandle) {
-    let slot = registry.get_or_create(id, &Antichain::from_elem(Timestamp::MIN));
-    let minimum = Antichain::from_elem(Timestamp::MIN);
-    let holds = (
-        slot.oks.shared.reader_at_least(&minimum),
-        slot.errs.shared.reader_at_least(&minimum),
-    );
+) -> (
+    Arc<SharedIndexArrangement>,
+    (SharedOksHandle, SharedErrsHandle),
+) {
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
         // agents must outlive the stepping that seals the batches. Production keeps them in the
         // trace manager. `execute_directly` steps only after this closure returns, so step here.
-        let (keep, token) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (keep, token, published) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks =
                 oks_collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("test oks");
@@ -253,12 +253,13 @@ fn publish_kv_index(
             let errs = KeyCollection::from(errs_collection)
                 .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
 
-            let token = registry_in.publish(
-                id,
-                &Antichain::from_elem(Timestamp::MIN),
-                oks.stream.scope(),
-                &oks.trace,
-                &errs.trace,
+            let token =
+                registry_in.publish(id, 0, check, oks.stream.scope(), &oks.trace, &errs.trace);
+            let slot = registry_in.slot(id, 0).expect("published");
+            let minimum = Antichain::from_elem(Timestamp::MIN);
+            let holds = (
+                slot.oks.shared.reader_at_least(&minimum),
+                slot.errs.shared.reader_at_least(&minimum),
             );
 
             for (k, v) in rows {
@@ -268,26 +269,40 @@ fn publish_kv_index(
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
-            ((oks.trace.clone(), errs.trace.clone()), token)
+            (
+                (oks.trace.clone(), errs.trace.clone()),
+                token,
+                (slot, holds),
+            )
         });
         // The token's replay of the hold link would keep the dataflow running.
         drop(token);
         while worker.step() {}
         drop(keep);
-    });
-    holds
+        published
+    })
 }
 
 /// Publishes `kv` under `id` into a fresh registry and returns the bundle through which the
-/// interactive runtime reads it, with readers that hold it at the minimum.
+/// interactive runtime reads it, recorded before the publication and bound after it, with the
+/// slot and readers that hold it at the minimum.
 fn published_kv_bundle(
     id: GlobalId,
     kv: Vec<(Row, Row)>,
-) -> (TraceBundle, (SharedOksHandle, SharedErrsHandle)) {
+) -> (
+    TraceBundle,
+    (
+        Arc<SharedIndexArrangement>,
+        (SharedOksHandle, SharedErrsHandle),
+    ),
+) {
     let registry = ArrangementSharingRegistry::new();
-    let bundle = registry.peer_bundle(id, &Antichain::from_elem(Timestamp::MIN));
-    let holds = publish_kv_index(&registry, id, kv);
-    (bundle, holds)
+    let check = SlotCheck::logging();
+    let mut peer = PeerIndex::new(0, check.clone());
+    let bundle = peer.bundle();
+    let (slot, holds) = publish_kv_index(&registry, id, check, kv);
+    peer.bind(id, Arc::clone(&slot));
+    (bundle, (slot, holds))
 }
 
 #[mz_ore::test]
@@ -430,10 +445,16 @@ pub(crate) fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistCli
 
 /// Builds an interactive-runtime `ComputeState` over `registry`, with a fresh, isolated metrics
 /// registry. Must be called on the worker thread, which it registers as the registry's waker.
+///
+/// Replays the maintenance progress `registry` carries, so the test reports it through
+/// [`maintenance_reporter`].
 pub(crate) fn interactive_compute_state(
+    worker: &mut TimelyWorker,
     persist_clients: Arc<PersistClientCache>,
     registry: ArrangementSharingRegistry,
 ) -> ComputeState {
+    let maintenance_progress =
+        MaintenanceProgress::render(worker, registry.take_command_progress_source());
     let metrics_registry = MetricsRegistry::new();
     let metrics = crate::metrics::ComputeMetrics::register_with(
         &metrics_registry,
@@ -452,8 +473,37 @@ pub(crate) fn interactive_compute_state(
         metrics_registry,
         1,
         Arc::new(PeekPermits::new(1)),
-        None,
+        Some(maintenance_progress),
     )
+}
+
+/// The maintenance runtime's report of the commands it applied, over `registry`, which an
+/// [`interactive_compute_state`] over the same registry replays.
+pub(crate) fn maintenance_reporter(registry: &ArrangementSharingRegistry) -> CommandProgress {
+    CommandProgress::new(registry.take_command_progress_pusher())
+}
+
+/// Reports that maintenance applied every command through `number`, steps the worker so the
+/// replay passes it, and binds what that lets `compute_state` bind.
+pub(crate) fn apply_and_bind(
+    worker: &mut TimelyWorker,
+    compute_state: &mut ComputeState,
+    progress: &mut CommandProgress,
+    number: CreationNumber,
+) {
+    progress.applied(number);
+    for _ in 0..16 {
+        worker.step();
+    }
+    compute_state.bind_peers();
+}
+
+/// The peer index of `id` in `compute_state`.
+pub(crate) fn peer_index<'a>(compute_state: &'a ComputeState, id: &GlobalId) -> &'a PeerIndex {
+    match compute_state.peers.get(id) {
+        Some(Peer::Index(peer)) => peer,
+        _ => panic!("{id} is no peer index"),
+    }
 }
 
 fn activate<'a>(
@@ -501,21 +551,26 @@ pub(crate) struct LivePublisher {
 }
 
 impl LivePublisher {
-    /// Publishes index `id` into `registry` from the current worker, with an upper at the minimum.
+    /// Publishes index `id` into `registry` from the current worker, with an upper at the minimum,
+    /// as the incarnation that `maintained_index_dataflow(id, GlobalId::User(2), Timestamp::MIN)`
+    /// numbered 0 creates.
     pub(crate) fn new(
         worker: &mut TimelyWorker,
         registry: &ArrangementSharingRegistry,
         id: GlobalId,
     ) -> Self {
-        Self::new_at(worker, registry, id, Timestamp::MIN)
+        let check = index_check(GlobalId::User(2), Timestamp::MIN, 0);
+        Self::new_at(worker, registry, id, 0, check)
     }
 
-    /// Publishes the incarnation of index `id` whose dataflow has `as_of`, like [`Self::new`].
+    /// Publishes the incarnation of index `id` that command `creation` created, described by
+    /// `check`, like [`Self::new`].
     pub(crate) fn new_at(
         worker: &mut TimelyWorker,
         registry: &ArrangementSharingRegistry,
         id: GlobalId,
-        as_of: Timestamp,
+        creation: CreationNumber,
+        check: SlotCheck,
     ) -> Self {
         let registry_in = registry.clone();
         worker.dataflow::<Timestamp, _, _>(move |scope| {
@@ -528,7 +583,8 @@ impl LivePublisher {
 
             let token = registry_in.publish(
                 id,
-                &Antichain::from_elem(as_of),
+                creation,
+                check,
                 oks.stream.scope(),
                 &oks.trace,
                 &errs.trace,
@@ -547,6 +603,11 @@ impl LivePublisher {
         for (k, v) in rows {
             self.oks_input.update((k, v), Diff::ONE);
         }
+    }
+
+    /// Inserts `error` into the `errs` arrangement at the current input time.
+    pub(crate) fn insert_error(&mut self, error: DataflowErrorSer) {
+        self.errs_input.update(error, Diff::ONE);
     }
 
     /// Allows both traces to compact logically to `frontier`, as an `AllowCompaction` does.
@@ -609,6 +670,21 @@ pub(crate) fn maintained_index_dataflow(
     dataflow
 }
 
+/// What a reader of the index of `maintained_index_dataflow(_, on_id, as_of)`, keyed by column
+/// `key`, compares against its slot.
+pub(crate) fn index_check(on_id: GlobalId, as_of: Timestamp, key: usize) -> SlotCheck {
+    SlotCheck {
+        as_of: Antichain::from_elem(as_of),
+        index: Some(
+            IndexDesc {
+                on_id,
+                key: vec![MirScalarExpr::column(key)],
+            }
+            .as_lir(),
+        ),
+    }
+}
+
 /// The rows of a peek response with their multiplicities, sorted.
 pub(crate) fn response_rows(response: &PeekResponse) -> Vec<(Row, usize)> {
     let PeekResponse::Rows(collections) = response else {
@@ -642,6 +718,61 @@ pub(crate) fn expect_peek_response(
     }
 }
 
+/// The worker, interactive compute state, response channel, and maintenance progress reporter of
+/// a test of the interactive runtime over `registry`.
+struct Interactive {
+    compute_state: ComputeState,
+    response_tx: ResponseSender,
+    rx: tokio::sync::mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    progress: CommandProgress,
+}
+
+impl Interactive {
+    fn new(
+        worker: &mut TimelyWorker,
+        persist_clients: Arc<PersistClientCache>,
+        registry: &ArrangementSharingRegistry,
+    ) -> Self {
+        let compute_state = interactive_compute_state(worker, persist_clients, registry.clone());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Interactive {
+            compute_state,
+            response_tx: ResponseSender::for_test(tx),
+            rx,
+            progress: maintenance_reporter(registry),
+        }
+    }
+
+    fn active<'a>(&'a mut self, worker: &'a mut TimelyWorker) -> ActiveComputeState<'a> {
+        activate(worker, &mut self.compute_state, &mut self.response_tx)
+    }
+
+    /// Reports that maintenance applied every command through `number`, and binds.
+    fn apply(&mut self, worker: &mut TimelyWorker, number: CreationNumber) {
+        apply_and_bind(worker, &mut self.compute_state, &mut self.progress, number);
+    }
+
+    /// Issues `peek` and sweeps once.
+    fn peek(&mut self, worker: &mut TimelyWorker, peek: Peek) {
+        let mut active = self.active(worker);
+        active.handle_peek(peek);
+        active.process_peeks();
+    }
+
+    /// Sweeps the queued peeks once, and returns how many still wait.
+    fn sweep(&mut self, worker: &mut TimelyWorker) -> usize {
+        let mut active = self.active(worker);
+        active.process_peeks();
+        active.compute_state.queued_peeks.len()
+    }
+
+    /// Drops the peer or collection `id`.
+    fn drop_collection(&mut self, worker: &mut TimelyWorker, id: GlobalId) {
+        self.active(worker)
+            .handle_allow_compaction(id, Antichain::new());
+    }
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn interactive_peek_on_peer_index_waits_for_publication() {
@@ -654,12 +785,10 @@ fn interactive_peek_on_peer_index_waits_for_publication() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut response_tx = ResponseSender::for_test(tx);
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
 
         {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            let mut active = interactive.active(worker);
             active.handle_create_dataflow(
                 maintained_index_dataflow(id, on_id, Timestamp::MIN),
                 Some(0),
@@ -676,48 +805,47 @@ fn interactive_peek_on_peer_index_waits_for_publication() {
                 active.compute_state.traces.get(&id).is_some(),
                 "a peer index must have a trace bundle to peek"
             );
-            assert!(
-                registry.handles(&id).is_some(),
-                "the peer bundle must hold the registry slot before publication"
-            );
-
-            active.handle_peek(make_peek(Timestamp::new(0)));
-            active.process_peeks();
-            assert_eq!(
-                active.compute_state.queued_peeks.len(),
-                1,
-                "a peek on an unpublished peer index must wait in queued_peeks"
-            );
-            assert!(
-                active.compute_state.pending_peeks.is_empty(),
-                "a waiting index peek must not be handed to a driver"
-            );
         }
-        assert!(rx.try_recv().is_err(), "no response before publication");
+        assert!(
+            registry.handles(&id).is_none(),
+            "only the publisher creates a slot"
+        );
+        interactive.peek(worker, make_peek(Timestamp::new(0)));
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "a peek on an unpublished peer index must wait in queued_peeks"
+        );
+        assert!(
+            interactive.compute_state.pending_peeks.is_empty(),
+            "a waiting index peek must not be handed to a driver"
+        );
+        assert!(
+            interactive.rx.try_recv().is_err(),
+            "no response before publication"
+        );
 
         let mut publisher = LivePublisher::new(worker, &registry, id);
         publisher.insert(kv);
         publisher.seal_to(worker, Timestamp::new(1));
+        interactive.apply(worker, 0);
 
-        {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.process_peeks();
-            assert!(
-                active.compute_state.queued_peeks.is_empty(),
-                "a served peek must leave queued_peeks"
-            );
-        }
-        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            interactive.sweep(worker),
+            0,
+            "a served peek must leave queued_peeks"
+        );
+        let response = expect_peek_response(&mut interactive.rx);
         assert_eq!(
             response_rows(&response),
             vec![(peek_row(1, 10), 1), (peek_row(2, 20), 1)],
             "the served peek must carry the published rows"
         );
 
-        activate(worker, &mut compute_state, &mut response_tx)
-            .handle_allow_compaction(id, Antichain::new());
+        interactive.drop_collection(worker, id);
         assert!(
-            compute_state.traces.get(&id).is_none() && !compute_state.peers.contains_key(&id),
+            interactive.compute_state.traces.get(&id).is_none()
+                && !interactive.compute_state.peers.contains_key(&id),
             "compacting a peer to the empty frontier must release it"
         );
     });
@@ -732,11 +860,9 @@ fn interactive_peek_on_peer_index_waits_for_seal() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut response_tx = ResponseSender::for_test(tx);
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
 
-        activate(worker, &mut compute_state, &mut response_tx).handle_create_dataflow(
+        interactive.active(worker).handle_create_dataflow(
             maintained_index_dataflow(id, on_id, Timestamp::MIN),
             Some(0),
         );
@@ -745,38 +871,314 @@ fn interactive_peek_on_peer_index_waits_for_seal() {
         let mut publisher = LivePublisher::new(worker, &registry, id);
         publisher.insert(vec![(row(1), row(10))]);
         publisher.seal_to(worker, Timestamp::new(1));
+        interactive.apply(worker, 0);
 
-        {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.handle_peek(make_peek(Timestamp::new(1)));
-            active.process_peeks();
-            assert_eq!(
-                active.compute_state.queued_peeks.len(),
-                1,
-                "a peek the published upper does not pass must wait in queued_peeks"
-            );
-        }
-        assert!(rx.try_recv().is_err(), "an unsealed peek must not respond");
+        interactive.peek(worker, make_peek(Timestamp::new(1)));
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "a peek the published upper does not pass must wait in queued_peeks"
+        );
+        assert!(
+            interactive.rx.try_recv().is_err(),
+            "an unsealed peek must not respond"
+        );
 
         publisher.seal_to(worker, Timestamp::new(2));
 
-        {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.process_peeks();
-            assert!(
-                active.compute_state.queued_peeks.is_empty(),
-                "a sealed peek must be served by the next sweep"
-            );
-        }
-        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            interactive.sweep(worker),
+            0,
+            "a sealed peek must be served by the next sweep"
+        );
+        let response = expect_peek_response(&mut interactive.rx);
         assert_eq!(
             response_rows(&response),
             vec![(peek_row(1, 10), 1)],
             "the sealed peek must carry the published row"
         );
 
-        activate(worker, &mut compute_state, &mut response_tx)
-            .handle_allow_compaction(id, Antichain::new());
+        interactive.drop_collection(worker, id);
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn an_interactive_peek_waits_until_maintenance_applied_the_creating_command() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(5),
+        );
+        let check = index_check(on_id, Timestamp::MIN, 0);
+        let mut publisher = LivePublisher::new_at(worker, &registry, id, 5, check);
+        publisher.insert(vec![(row(1), row(10))]);
+        publisher.seal_to(worker, Timestamp::new(1));
+
+        interactive.apply(worker, 4);
+        interactive.peek(worker, make_peek(Timestamp::new(0)));
+        assert!(
+            !peer_index(&interactive.compute_state, &id).is_bound(),
+            "the peer bound before maintenance applied its creating command"
+        );
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "the peek must wait until maintenance applied the creating command"
+        );
+
+        interactive.apply(worker, 5);
+        assert_eq!(
+            interactive.sweep(worker),
+            0,
+            "the bound peer serves the peek"
+        );
+        assert_eq!(
+            response_rows(&expect_peek_response(&mut interactive.rx)),
+            vec![(peek_row(1, 10), 1)],
+        );
+        interactive.drop_collection(worker, id);
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peer_binds_only_the_slot_with_its_creation_number() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        let check = || index_check(on_id, Timestamp::MIN, 0);
+        let mut third = LivePublisher::new_at(worker, &registry, id, 3, check());
+        third.insert(vec![(row(3), row(30))]);
+        third.seal_to(worker, Timestamp::new(1));
+        let mut seventh = LivePublisher::new_at(worker, &registry, id, 7, check());
+        seventh.insert(vec![(row(7), row(70))]);
+        seventh.seal_to(worker, Timestamp::new(1));
+
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(7),
+        );
+        interactive.apply(worker, 9);
+        interactive.peek(worker, make_peek(Timestamp::new(0)));
+        assert_eq!(
+            response_rows(&expect_peek_response(&mut interactive.rx)),
+            vec![(peek_row(7, 70), 1)],
+            "the peer at 7 reads the incarnation numbered 7"
+        );
+        interactive.drop_collection(worker, id);
+
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(4),
+        );
+        interactive.apply(worker, 9);
+        assert!(
+            !peer_index(&interactive.compute_state, &id).is_bound(),
+            "a peer at 4 bound a slot of another number"
+        );
+        interactive.peek(worker, make_peek(Timestamp::new(0)));
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "a peer without a slot of its number reads nothing"
+        );
+        interactive.drop_collection(worker, id);
+    });
+}
+
+/// Records a peer of `peer_dataflow` numbered 7 next to a publication of the slot `(id, 7)`
+/// described by `published`, which differs, as a shifted creation number would produce, and
+/// asserts that the bind reports it and leaves the peer and a peek at `peek_at` waiting.
+fn assert_a_mismatched_peer_stays_unbound(
+    peer_dataflow: RenderDataflowDescription<CollectionMetadata>,
+    published: SlotCheck,
+    peek_at: Timestamp,
+) {
+    let id = GlobalId::User(1);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        let mut publisher = LivePublisher::new_at(worker, &registry, id, 7, published);
+        publisher.insert(vec![(row(1), row(10))]);
+        publisher.seal_to(worker, Timestamp::new(10));
+        interactive
+            .active(worker)
+            .handle_create_dataflow(peer_dataflow, Some(7));
+
+        interactive.progress.applied(7);
+        for _ in 0..16 {
+            worker.step();
+        }
+        if mz_ore::assert::soft_assertions_enabled() {
+            let compute_state = &mut interactive.compute_state;
+            let bind = mz_ore::panic::catch_unwind_str(std::panic::AssertUnwindSafe(|| {
+                compute_state.bind_peers()
+            }));
+            let message = bind.expect_err("a mismatched slot is a soft panic");
+            assert!(
+                message.contains("binds a slot of another incarnation"),
+                "unexpected panic: {message}"
+            );
+        } else {
+            interactive.compute_state.bind_peers();
+        }
+        assert!(
+            !peer_index(&interactive.compute_state, &id).is_bound(),
+            "a peer bound a slot that does not match it"
+        );
+        interactive.peek(worker, make_peek(peek_at));
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "a peek on a mismatched peer must wait"
+        );
+        interactive.drop_collection(worker, id);
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peer_whose_as_of_differs_from_the_slot_stays_unbound() {
+    let on_id = GlobalId::User(2);
+    assert_a_mismatched_peer_stays_unbound(
+        maintained_index_dataflow(GlobalId::User(1), on_id, Timestamp::new(5)),
+        index_check(on_id, Timestamp::MIN, 0),
+        Timestamp::new(5),
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peer_whose_index_desc_differs_from_the_slot_stays_unbound() {
+    let on_id = GlobalId::User(2);
+    assert_a_mismatched_peer_stays_unbound(
+        maintained_index_dataflow(GlobalId::User(1), on_id, Timestamp::MIN),
+        index_check(on_id, Timestamp::MIN, 1),
+        Timestamp::new(0),
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peek_cancelled_while_its_binding_is_pending_answers_canceled() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(0),
+        );
+        let peek = make_peek(Timestamp::new(0));
+        let uuid = peek.uuid;
+        interactive.peek(worker, peek);
+        interactive.active(worker).handle_cancel_peek(uuid);
+        assert!(
+            matches!(
+                expect_peek_response(&mut interactive.rx),
+                PeekResponse::Canceled
+            ),
+            "a cancelled peek answers canceled"
+        );
+
+        let mut publisher = LivePublisher::new(worker, &registry, id);
+        publisher.insert(vec![(row(1), row(10))]);
+        publisher.seal_to(worker, Timestamp::new(1));
+        interactive.apply(worker, 0);
+        assert_eq!(interactive.sweep(worker), 0);
+        assert!(
+            interactive.rx.try_recv().is_err(),
+            "the bind answers a cancelled peek again"
+        );
+        interactive.drop_collection(worker, id);
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn a_peer_dropped_before_its_binding_is_never_bound() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(0),
+        );
+        interactive.drop_collection(worker, id);
+
+        let mut publisher = LivePublisher::new(worker, &registry, id);
+        publisher.seal_to(worker, Timestamp::new(11));
+        interactive.apply(worker, 1);
+        assert!(
+            !interactive.compute_state.peers.contains_key(&id),
+            "the bind revived a dropped peer"
+        );
+        // No reader of the interactive runtime holds the incarnation, so the publisher stops
+        // holding it on their behalf.
+        publisher.allow_compaction(Antichain::from_elem(Timestamp::new(10)));
+        publisher.seal_to(worker, Timestamp::new(12));
+        assert_eq!(
+            registry.published_since(&id),
+            Antichain::from_elem(Timestamp::new(10)),
+            "the slot of a dropped peer keeps holding the trace"
+        );
+    });
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn an_error_result_on_a_late_bound_peer_is_served() {
+    let id = GlobalId::User(1);
+    let on_id = GlobalId::User(2);
+    let (_rt, persist_clients) = test_persist_clients();
+
+    timely::execute_directly(move |worker| {
+        let registry = ArrangementSharingRegistry::new();
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
+        interactive.active(worker).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(0),
+        );
+        interactive.peek(worker, make_peek(Timestamp::new(0)));
+
+        let mut publisher = LivePublisher::new(worker, &registry, id);
+        publisher.insert(vec![(row(1), row(10))]);
+        publisher.insert_error(DataflowErrorSer::from(mz_expr::EvalError::DivisionByZero));
+        publisher.seal_to(worker, Timestamp::new(1));
+        assert_eq!(interactive.sweep(worker), 1, "the peek waits for the bind");
+
+        interactive.apply(worker, 0);
+        assert_eq!(
+            interactive.sweep(worker),
+            0,
+            "the bound peer serves the peek"
+        );
+        let response = expect_peek_response(&mut interactive.rx);
+        assert!(
+            matches!(&response, PeekResponse::Error(_)),
+            "expected the published error, got {response:?}"
+        );
+        interactive.drop_collection(worker, id);
     });
 }
 
@@ -924,11 +1326,12 @@ fn make_count_peek(id: GlobalId, timestamp: Timestamp) -> Peek {
     }
 }
 
-/// A one-shot query over a peer index that is not yet published is built on arrival: its import
-/// binds through the peer bundle's placeholder slot, which the publisher adopts in place later.
+/// A one-shot query over a peer index that is not yet bound is built on arrival: its import reads
+/// through the peer's binding, which the bind fills once maintenance published the index and
+/// applied the command that created it.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn interactive_build_over_unpublished_peer_index_is_immediate() {
+fn an_import_built_before_binding_completes_once_bound() {
     let index_id = GlobalId::User(1);
     let on_id = GlobalId::User(2);
     let reduce_id = GlobalId::User(3);
@@ -937,15 +1340,13 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut response_tx = ResponseSender::for_test(tx);
+        let mut interactive = Interactive::new(worker, persist_clients, &registry);
 
         let as_of = Timestamp::new(0);
         let dataflow = reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
 
         {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
+            let mut active = interactive.active(worker);
             active
                 .handle_create_dataflow(maintained_index_dataflow(index_id, on_id, as_of), Some(0));
             active.handle_create_dataflow(dataflow, Some(1));
@@ -957,36 +1358,42 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
             active.handle_schedule(out_index_id);
         }
 
-        // Step so the reduce runs over the empty, unadopted placeholder input. Its output frontier
-        // is held at the minimum, so it never seals past the peek time.
+        // Step so the reduce runs over the unbound input. Its output frontier is held at the
+        // minimum, so it never seals past the peek time.
         for _ in 0..64 {
             worker.step();
         }
 
-        {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.handle_peek(make_count_peek(out_index_id, as_of));
-            active.process_peeks();
-            assert_eq!(
-                active.compute_state.queued_peeks.len(),
-                1,
-                "the result peek must wait while the placeholder input is unadopted"
-            );
-        }
+        interactive.peek(worker, make_count_peek(out_index_id, as_of));
+        assert_eq!(
+            interactive.compute_state.queued_peeks.len(),
+            1,
+            "the result peek must wait while the input is unbound"
+        );
         assert!(
-            rx.try_recv().is_err(),
-            "no result may be produced while the placeholder input is unadopted"
+            interactive.rx.try_recv().is_err(),
+            "no result may be produced while the input is unbound"
         );
 
-        // Publishing backs the placeholder the query already imported, so the query completes.
+        // Publishing alone binds nothing. Once maintenance applied the create, the bind fills the
+        // binding the query already imported, so the query completes.
         let mut publisher = LivePublisher::new(worker, &registry, index_id);
         publisher.insert(vec![(row(1), row(10)), (row(2), row(20))]);
         publisher.seal_to(worker, as_of.step_forward());
         for _ in 0..64 {
             worker.step();
         }
-        activate(worker, &mut compute_state, &mut response_tx).process_peeks();
-        let response = expect_peek_response(&mut rx);
+        assert_eq!(
+            interactive.sweep(worker),
+            1,
+            "the result peek must wait until the input is bound"
+        );
+        interactive.apply(worker, 0);
+        for _ in 0..64 {
+            worker.step();
+        }
+        interactive.sweep(worker);
+        let response = expect_peek_response(&mut interactive.rx);
         assert_eq!(
             response_rows(&response),
             vec![(row(2), 1)],
@@ -994,11 +1401,8 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
         );
 
         // Tear down the query and release the peer so the worker can shut down.
-        {
-            let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.handle_allow_compaction(out_index_id, Antichain::new());
-            active.handle_allow_compaction(index_id, Antichain::new());
-        }
+        interactive.drop_collection(worker, out_index_id);
+        interactive.drop_collection(worker, index_id);
         for _ in 0..16 {
             worker.step();
         }

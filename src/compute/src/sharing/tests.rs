@@ -26,8 +26,8 @@ use timely::progress::Antichain;
 use crate::arrangement::manager::{ErrsTrace, OksTrace};
 use crate::compute_state::ComputeState;
 use crate::compute_state::tests::{
-    LivePublisher, allow_compaction, create_dataflow, interactive_compute_state,
-    maintained_index_dataflow, row, test_persist_clients,
+    LivePublisher, allow_compaction, apply_and_bind, create_dataflow, interactive_compute_state,
+    maintained_index_dataflow, maintenance_reporter, row, test_persist_clients,
 };
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::context::ArrangementFlavor;
@@ -35,6 +35,11 @@ use crate::render::errors::DataflowErrorSer;
 use crate::server::ResponseSender;
 use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
 use crate::shared_trace::{PeerErrsReader, PeerOksReader, SharedOksHandle, adopt_trace};
+
+/// What a reader of the test publications here compares against their slots.
+fn test_check() -> SlotCheck {
+    SlotCheck::logging()
+}
 use crate::typedefs::ErrBatcher;
 
 use super::*;
@@ -45,41 +50,34 @@ fn as_of_min() -> Antichain<Timestamp> {
 }
 
 /// Builds a tiny dataflow that arranges `rows` into a `RowRow` `oks` arrangement and an empty
-/// `errs` arrangement, publishes both, and returns a registry that holds them under `id`, with the
-/// token that keeps the publication. The dataflow runs to completion inside `execute_directly`.
-/// The published chain outlives the worker through its `Arc`s, and nothing compacts the trace, so
-/// the snapshot reads below observe the sealed contents even after the publishing worker has torn
-/// down.
+/// `errs` arrangement, publishes both, and returns a registry that holds them under `id` as
+/// incarnation 0, with the slot that keeps the publication. The dataflow runs to completion inside
+/// `execute_directly`. The published chain outlives the worker through its `Arc`s, and nothing
+/// compacts the trace, so the snapshot reads below observe the sealed contents even after the
+/// publishing worker has torn down.
 fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> (ArrangementSharingRegistry, Publication) {
     let registry = ArrangementSharingRegistry::new();
-    let token = publish_index_into(&registry, id, rows);
+    let token = publish_index_into(&registry, id, 0, rows);
     (registry, token)
 }
 
-/// Like `publish_index`, but publishes into the given `registry` instead of a fresh one, so a
-/// caller can hand the same registry to a concurrent reader before publication happens.
+/// Like `publish_index`, but publishes into the given `registry` instead of a fresh one, as the
+/// incarnation `creation`.
 ///
 /// Routes through [`ArrangementSharingRegistry::publish`], the path the maintenance render side
-/// uses, so whatever slot already exists for `id` is the one that gets filled.
+/// uses.
 fn publish_index_into(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
+    creation: CreationNumber,
     rows: Vec<(Row, Row)>,
 ) -> Publication {
-    // The publishing dataflow runs to completion and drops its trace, which releases the writer's
-    // compaction. A reader's hold is what keeps the published `since` at the minimum after that.
-    let slot = registry.get_or_create(id, &as_of_min());
-    let minimum = Antichain::from_elem(Timestamp::MIN);
-    let holds = (
-        slot.oks.shared.reader_at_least(&minimum),
-        slot.errs.shared.reader_at_least(&minimum),
-    );
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
         // The trace lives as long as an agent does, and the point closes when it drops, so the
         // agents must outlive the stepping that seals the batches. Production keeps them in the
         // trace manager. `execute_directly` steps only after this closure returns, so step here.
-        let (keep, token) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (keep, token, publication) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks =
                 oks_collection.mz_arrange::<RowRowBatcher<_, _>, RowRowSpine<_, _>>("test oks");
@@ -91,10 +89,20 @@ fn publish_index_into(
 
             let token = registry_in.publish(
                 id,
-                &as_of_min(),
+                creation,
+                test_check(),
                 oks.stream.scope(),
                 &oks.trace,
                 &errs.trace,
+            );
+            // The publishing dataflow runs to completion and drops its trace, which releases the
+            // writer's compaction. A reader's hold is what keeps the published `since` at the
+            // minimum after that.
+            let slot = registry_in.slot(id, creation).expect("published");
+            let minimum = Antichain::from_elem(Timestamp::MIN);
+            let holds = (
+                slot.oks.shared.reader_at_least(&minimum),
+                slot.errs.shared.reader_at_least(&minimum),
             );
 
             for (k, v) in rows {
@@ -104,18 +112,22 @@ fn publish_index_into(
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
-            ((oks.trace.clone(), errs.trace.clone()), token)
+            (
+                (oks.trace.clone(), errs.trace.clone()),
+                token,
+                Publication {
+                    _slot: slot,
+                    _holds: holds,
+                },
+            )
         });
         // The token's replay of the hold link would keep the dataflow running. The slot, which the
         // caller holds, keeps the publication.
         drop(token);
         while worker.step() {}
         drop(keep);
-    });
-    Publication {
-        _slot: slot,
-        _holds: holds,
-    }
+        publication
+    })
 }
 
 /// A publication that tests read after its publishing worker has torn down: the slot the
@@ -139,69 +151,37 @@ fn test_rows() -> Vec<(Row, Row)> {
 }
 
 #[mz_ore::test]
-fn get_or_create_converges_on_one_slot() {
-    // A reader and a publisher both touch the same id. Whichever is first creates the
-    // point. The second must observe the same Arc, not a second slot, and after
-    // adoption the reader sees the published rows.
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-
-    // Reader creates the point first and mints its handle straight off it.
-    let slot = registry.get_or_create(id, &as_of_min());
-    let oks = slot.oks.handle();
-
-    // A second get_or_create call for the same id must return
-    // the SAME Arc, not a second, disconnected slot, before we even get to the adopt below.
-    let republished = registry.get_or_create(id, &as_of_min());
-    assert!(Arc::ptr_eq(&slot, &republished));
-
-    // Publisher adopts the same slot and fills it.
-    let _token = publish_index_into(&registry, id, test_rows());
-
-    assert_eq!(
-        read_rows(&oks, Timestamp::from(0_u64)),
-        expected_rows(&test_rows())
-    );
-}
-
-#[mz_ore::test]
-fn a_new_incarnation_gets_its_own_slot() {
-    // An index recreated under its id with another `as_of` is a different incarnation, and a reader
-    // of it must not share the old incarnation's point while the old one is still held.
-    let id = GlobalId::User(1);
-    let registry = ArrangementSharingRegistry::new();
-    let old = registry.get_or_create(id, &as_of_min());
-    let new = registry.get_or_create(id, &Antichain::from_elem(Timestamp::from(5_u64)));
-    assert!(!Arc::ptr_eq(&old, &new));
-    assert!(
-        Arc::ptr_eq(
-            &registry.get_or_create(id, &Antichain::from_elem(Timestamp::from(5_u64))),
-            &new
-        ),
-        "the newest incarnation is the registered one"
-    );
-}
-
-#[mz_ore::test]
-fn a_frozen_slot_is_replaced_by_a_fresh_one() {
+fn a_frozen_slot_is_kept_while_a_new_incarnation_gets_its_own() {
     // The publishing worker tears down, so the slot's traces drop and its points freeze. A new
-    // incarnation at the same `as_of` would be refused by those points, and gets a fresh slot.
+    // incarnation publishes into a slot of its own, and readers of the frozen slot keep its final
+    // view.
     let id = GlobalId::User(1);
-    let (registry, _token) = publish_index(id, test_rows());
-    let old = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
+    let (registry, _old_publication) = publish_index(id, test_rows());
+    let old = registry.slot(id, 0).expect("published");
     assert!(old.is_frozen());
-    let new = registry.get_or_create(id, &as_of_min());
+    let _new_publication = publish_index_into(&registry, id, 1, vec![]);
+    let new = registry.slot(id, 1).expect("published");
     assert!(!Arc::ptr_eq(&old, &new), "a frozen slot is not reused");
-    assert!(!new.is_frozen());
     assert!(
-        Arc::ptr_eq(&registry.get_or_create(id, &as_of_min()), &new),
-        "the fresh slot is the registered one"
+        Arc::ptr_eq(&registry.slot(id, 0).expect("held"), &old),
+        "the old incarnation keeps its slot"
     );
     assert_eq!(
         read_rows(&old.oks.handle(), Timestamp::from(0_u64)),
         expected_rows(&test_rows()),
         "readers of the frozen slot keep its final view"
     );
+}
+
+#[mz_ore::test]
+#[should_panic(expected = "published twice")]
+fn publishing_a_live_identity_twice_is_a_protocol_violation() {
+    let registry = ArrangementSharingRegistry::new();
+    let id = GlobalId::User(1);
+    timely::execute_directly(move |worker| {
+        let (_first, first_traces) = publish_empty(worker, &registry, id, 0);
+        let _second = publish_reexport(worker, &registry, id, 0, &first_traces);
+    });
 }
 
 #[mz_ore::test]
@@ -213,8 +193,8 @@ fn a_frozen_slot_reports_no_hold_gap() {
     let registry = ArrangementSharingRegistry::new();
     timely::execute_directly(move |worker| {
         let (dataflow, token, (mut oks, errs, oks_input, errs_input)) =
-            render_incarnation(worker, &registry, id, &as_of_min());
-        let _peer = registry.peer_bundle(id, &as_of_min());
+            render_incarnation(worker, &registry, id, 0, &as_of_min());
+        let _peer = registry.peer_bundle_at(id, 0, &as_of_min());
         oks.set_logical_compaction(Antichain::from_elem(Timestamp::from(1_u64)).borrow());
         assert_eq!(registry.hold_gaps(), (1, 1), "the peer holds the oks back");
         drop((token, oks, errs, oks_input, errs_input));
@@ -240,12 +220,12 @@ fn handles_available_while_published_gone_after_unpublish() {
 fn a_reader_keeps_the_slot_after_unpublish() {
     let id = GlobalId::User(1);
     let (registry, token) = publish_index(id, test_rows());
-    let reader = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
+    let reader = ArrangementSharingRegistry::newest_slot(&registry.lock(), &id).expect("published");
 
     drop(token);
     assert!(
         Arc::ptr_eq(
-            &ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("held"),
+            &ArrangementSharingRegistry::newest_slot(&registry.lock(), &id).expect("held"),
             &reader
         ),
         "the slot a reader holds is still the registered one"
@@ -285,19 +265,8 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
     let reexport = GlobalId::User(2);
     let registry = ArrangementSharingRegistry::new();
     registry.attach_reader();
-    // A reader bound the re-export's id first on this worker. Publishing backs its point the same
-    // way as a point the publisher creates.
-    let reexport_slot = registry.get_or_create(reexport, &as_of_min());
-    // Readers' holds keep both points readable after the publishing worker has torn down.
-    let target_slot = registry.get_or_create(target, &as_of_min());
-    let _holds = [&target_slot, &reexport_slot].map(|slot| {
-        (
-            slot.oks.shared.reader_at_least(&as_of_min()),
-            slot.errs.shared.reader_at_least(&as_of_min()),
-        )
-    });
     let registry_in = registry.clone();
-    timely::execute_directly(move |worker| {
+    let (target_slot, reexport_slot, _holds) = timely::execute_directly(move |worker| {
         let (oks, errs, mut oks_input, mut errs_input, target_token) = worker
             .dataflow::<Timestamp, _, _>(|scope| {
                 let (oks_input, oks) = scope.new_collection::<(Row, Row), Diff>();
@@ -307,7 +276,8 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
                     .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("test errs");
                 let token = registry_in.publish(
                     target,
-                    &as_of_min(),
+                    0,
+                    test_check(),
                     oks.stream.scope(),
                     &oks.trace,
                     &errs.trace,
@@ -320,15 +290,24 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         // replay of the slot's hold link.
         let before = worker.peek_identifier();
         let other_token = worker.dataflow::<Timestamp, _, _>(|scope| {
-            registry_in.publish(GlobalId::User(3), &as_of_min(), scope, &oks, &errs)
+            registry_in.publish(GlobalId::User(3), 0, test_check(), scope, &oks, &errs)
         });
         let publication = worker.peek_identifier() - before;
         drop(other_token);
         let before = worker.peek_identifier();
         let reexport_token = worker.dataflow::<Timestamp, _, _>(|scope| {
-            registry_in.publish(reexport, &as_of_min(), scope, &oks, &errs)
+            registry_in.publish(reexport, 1, test_check(), scope, &oks, &errs)
         });
         assert_eq!(worker.peek_identifier() - before, publication);
+        // Readers' holds keep both points readable after the publishing worker has torn down.
+        let target_slot = registry_in.slot(target, 0).expect("published");
+        let reexport_slot = registry_in.slot(reexport, 1).expect("published");
+        let holds = [&target_slot, &reexport_slot].map(|slot| {
+            (
+                slot.oks.shared.reader_at_least(&as_of_min()),
+                slot.errs.shared.reader_at_least(&as_of_min()),
+            )
+        });
         // The tokens' replays of the hold links would keep the dataflows running. The slots, which
         // the test holds, keep the publications.
         drop((target_token, reexport_token));
@@ -343,6 +322,7 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
         drop((oks_input, errs_input));
         while worker.step() {}
         drop((oks, errs));
+        (target_slot, reexport_slot, holds)
     });
 
     for id in [target, reexport] {
@@ -355,11 +335,8 @@ fn reexport_publishes_its_own_point_over_the_same_trace() {
 
     // The two collections compact independently, so a hold on one point does not reach the other.
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
-    // Looked up rather than through `get_or_create`, which hands out a fresh slot for a frozen one.
-    let published =
-        |id| ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
-    let target_hold = published(target).oks.shared.reader_at_least(&at(5));
-    let reexport_hold = published(reexport).oks.shared.reader_at_least(&at(10));
+    let target_hold = target_slot.oks.shared.reader_at_least(&at(5));
+    let reexport_hold = reexport_slot.oks.shared.reader_at_least(&at(10));
     drop(_holds);
     assert_eq!(registry.published_logical_holds(&target), Some(at(5)));
     assert_eq!(registry.published_logical_holds(&reexport), Some(at(10)));
@@ -428,7 +405,7 @@ fn cross_runtime_read_sees_published_rows() {
     let registry = ArrangementSharingRegistry::new();
 
     // Runtime A: a bare timely cluster that arranges and publishes the rows, then tears down.
-    let _token = publish_index_into(&registry, id, rows.clone());
+    let _token = publish_index_into(&registry, id, 0, rows.clone());
 
     // Runtime B: read the published rows from a different thread than the one that ran A's
     // dataflow, exercising the `Send` handle across a runtime boundary.
@@ -508,7 +485,8 @@ fn publish_join_input(
 
             let token = registry_in.publish(
                 id,
-                &as_of_min(),
+                0,
+                test_check(),
                 oks.stream.scope(),
                 &oks.trace,
                 &errs.trace,
@@ -911,15 +889,19 @@ fn bare_handle_read_upper_advances_cross_thread() {
                     let errs = KeyCollection::from(errs_collection)
                         .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("spike errs");
 
-                    let slot = publisher_registry.get_or_create(id, &as_of_min());
-                    adopt_trace(&oks.trace, oks.stream.scope().worker(), &slot.oks, || {});
-                    adopt_trace(&errs.trace, errs.stream.scope().worker(), &slot.errs, || {});
-                    publisher_registry.notify();
-                    // The slot is held here for the publisher's life, as `publish`'s token does.
+                    // The token is held here for the publisher's life.
+                    let token = publisher_registry.publish(
+                        id,
+                        0,
+                        test_check(),
+                        oks.stream.scope(),
+                        &oks.trace,
+                        &errs.trace,
+                    );
                     (
                         oks_input,
                         errs_input,
-                        (oks.trace.clone(), errs.trace.clone(), slot),
+                        (oks.trace.clone(), errs.trace.clone(), token),
                     )
                 });
 
@@ -1001,18 +983,26 @@ fn bare_handle_read_upper_advances_cross_thread() {
     assert_eq!(observed, seals);
 }
 
-/// Arranges empty `oks` and `errs` on `worker` and publishes them under `id`. Returns the token and
-/// agents that keep the traces alive until dropped.
+/// The inputs of a test publication's arrangements.
+type TestInputs = (
+    differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
+    differential_dataflow::input::InputSession<Timestamp, DataflowErrorSer, Diff>,
+);
+
+/// Arranges empty `oks` and `errs` on `worker` and publishes them under `id` as incarnation
+/// `creation`. Returns the token, and the agents and inputs that keep the traces alive until
+/// dropped.
 fn publish_empty(
     worker: &mut timely::worker::Worker,
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
+    creation: CreationNumber,
 ) -> (
     PublishToken,
     (
         RowRowAgent<Timestamp, Diff>,
         ErrAgent<Timestamp, Diff>,
-        impl Sized + use<>,
+        TestInputs,
     ),
 ) {
     worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -1021,7 +1011,7 @@ fn publish_empty(
         let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
         let errs = KeyCollection::from(errs_collection)
             .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("errs");
-        let token = registry.publish(id, &as_of_min(), scope, &oks.trace, &errs.trace);
+        let token = registry.publish(id, creation, test_check(), scope, &oks.trace, &errs.trace);
         (
             token,
             (
@@ -1033,72 +1023,79 @@ fn publish_empty(
     })
 }
 
-/// Publishes `id` as a re-export of `base`'s traces, from a dataflow of its own.
+/// Publishes `id` as a re-export of `base`'s traces, as incarnation `creation`, from a dataflow of
+/// its own.
 fn publish_reexport(
     worker: &mut timely::worker::Worker,
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
+    creation: CreationNumber,
     base: &(
         RowRowAgent<Timestamp, Diff>,
         ErrAgent<Timestamp, Diff>,
-        impl Sized,
+        TestInputs,
     ),
 ) -> PublishToken {
     worker.dataflow::<Timestamp, _, _>(|scope| {
-        registry.publish(id, &as_of_min(), scope, &base.0, &base.1)
+        registry.publish(id, creation, test_check(), scope, &base.0, &base.1)
     })
 }
 
+/// A reconnect recreates a re-export. The base trace backs the new incarnation's points while a
+/// reader of the old incarnation, which outlives the old re-exporting index, keeps reading the old
+/// points, and the trace keeps publishing into them.
 #[mz_ore::test]
-fn a_recreated_reexport_publishes_into_a_fresh_slot_once_its_holders_dropped() {
+fn a_recreated_reexport_gets_a_fresh_slot_while_readers_hold_the_old_one() {
     let registry = ArrangementSharingRegistry::new();
     let (base, reexport) = (GlobalId::User(1), GlobalId::User(2));
     timely::execute_directly(move |worker| {
-        let (_base_token, base_traces) = publish_empty(worker, &registry, base);
-        let first = publish_reexport(worker, &registry, reexport, &base_traces);
-        let old = ArrangementSharingRegistry::slot(&registry.lock(), &reexport).expect("published");
+        let (_base_token, mut base_traces) = publish_empty(worker, &registry, base, 0);
+        let first = publish_reexport(worker, &registry, reexport, 1, &base_traces);
+        let old = registry.slot(reexport, 1).expect("published");
+        let mut old_reader = old.oks.shared.reader_at_least(&as_of_min());
         drop(first);
         assert!(
             !old.is_frozen(),
             "the base trace still backs the re-export's points after its token dropped"
         );
-        let old_weak = Arc::downgrade(&old);
-        drop(old);
-        assert!(old_weak.upgrade().is_none(), "nothing holds the old slot");
 
-        let _second = publish_reexport(worker, &registry, reexport, &base_traces);
-        let new = ArrangementSharingRegistry::slot(&registry.lock(), &reexport).expect("published");
+        let _second = publish_reexport(worker, &registry, reexport, 2, &base_traces);
+        let new = registry.slot(reexport, 2).expect("published");
+        assert!(
+            !Arc::ptr_eq(&old, &new),
+            "the new incarnation has its own slot"
+        );
         assert!(!new.is_frozen());
+
+        let (oks_input, errs_input) = &mut base_traces.2;
+        oks_input.advance_to(Timestamp::from(3_u64));
+        oks_input.flush();
+        errs_input.advance_to(Timestamp::from(3_u64));
+        errs_input.flush();
+        for _ in 0..16 {
+            worker.step();
+        }
+        let mut upper = Antichain::new();
+        old_reader.read_upper(&mut upper);
+        assert_eq!(
+            upper,
+            Antichain::from_elem(Timestamp::from(3_u64)),
+            "the old point keeps advancing with the base trace"
+        );
+        assert_eq!(new.oks.shared.upper(), upper);
+        drop((old_reader, old, new));
+        drop(base_traces);
     });
 }
 
-/// The limit the NOTE on `ArrangementSharingRegistry::publish` records: a holder of a re-export's
-/// slot that outlives the re-exporting index hands its live slot to the next incarnation, and the
-/// base trace refuses to back it twice.
-#[mz_ore::test]
-#[should_panic(expected = "trace re-attached to a publication point it already backs")]
-fn a_held_reexport_slot_is_not_replaced() {
-    let registry = ArrangementSharingRegistry::new();
-    let (base, reexport) = (GlobalId::User(1), GlobalId::User(2));
-    timely::execute_directly(move |worker| {
-        let (_base_token, base_traces) = publish_empty(worker, &registry, base);
-        let first = publish_reexport(worker, &registry, reexport, &base_traces);
-        let _stray = ArrangementSharingRegistry::slot(&registry.lock(), &reexport);
-        drop(first);
-        let _second = publish_reexport(worker, &registry, reexport, &base_traces);
-    });
-}
-
-/// The readers through which the interactive runtime holds and reads `id`'s publication at
-/// `as_of`, see [`SharedIndexArrangement::peer_readers`].
+/// The readers through which the interactive runtime holds and reads incarnation 0 of `id` at
+/// `as_of`, see [`ArrangementSharingRegistry::peer_readers_at`].
 fn peer_readers(
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     as_of: &Antichain<Timestamp>,
 ) -> (PeerOksReader, PeerErrsReader) {
-    ArrangementSharingRegistry::slot(&registry.lock(), &id)
-        .expect("published")
-        .peer_readers(as_of)
+    registry.peer_readers_at(id, 0, as_of)
 }
 
 /// Consolidates a captured `(Row, Timestamp, Diff)` stream per `(row, time)`, dropping entries
@@ -1539,12 +1536,14 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
 }
 
 /// Renders a dataflow on `worker` that arranges empty `oks` and `errs` and publishes them under
-/// `id` at `as_of`, as one incarnation of a maintained index. Returns the dataflow's index, the
-/// publication, and agents that keep the traces alive until dropped.
+/// `id` at `as_of`, as the incarnation of a maintained index that command `creation` created.
+/// Returns the dataflow's index, the publication, and agents that keep the traces alive until
+/// dropped.
 fn render_incarnation(
     worker: &mut timely::worker::Worker,
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
+    creation: CreationNumber,
     as_of: &Antichain<Timestamp>,
 ) -> (
     usize,
@@ -1563,7 +1562,11 @@ fn render_incarnation(
         let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
         let errs = KeyCollection::from(errs_collection)
             .mz_arrange::<ErrBatcher<_, _>, ErrSpine<_, _>>("errs");
-        let token = registry.publish(id, as_of, scope, &oks.trace, &errs.trace);
+        let check = SlotCheck {
+            as_of: as_of.clone(),
+            index: None,
+        };
+        let token = registry.publish(id, creation, check, scope, &oks.trace, &errs.trace);
         (
             token,
             (oks.trace.clone(), errs.trace.clone(), oks_input, errs_input),
@@ -1575,11 +1578,10 @@ fn render_incarnation(
     (index, token, keep)
 }
 
-/// A reconnect recreates an index at the same `as_of`, which both runtimes reconcile. Until the
-/// maintenance runtime dropped the old incarnation, the registry key finds the old incarnation's
-/// live slot, so a peer bound then would read that incarnation and, once it drops, its frozen
-/// chain. The barrier holds the interactive runtime back until the drop, after which the peer binds
-/// a fresh slot that the new incarnation publishes into.
+/// A reconnect recreates an index at the same `as_of`, which both runtimes reconcile. The barrier
+/// holds the interactive runtime back until maintenance dropped the old incarnation, after which
+/// the peer binds the slot that the new incarnation, numbered by its own command, publishes into,
+/// never the old incarnation's.
 #[mz_ore::test]
 fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
     use crate::reconcile_barrier::BarrierSide;
@@ -1590,8 +1592,9 @@ fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
     timely::execute_directly(move |worker| {
         let as_of = as_of_min();
         let barrier = registry.reconcile_barrier().clone();
-        let (old_dataflow, old_token, old_keep) = render_incarnation(worker, &registry, id, &as_of);
-        let old = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
+        let (old_dataflow, old_token, old_keep) =
+            render_incarnation(worker, &registry, id, 0, &as_of);
+        let old = registry.slot(id, 0).expect("published");
 
         // The interactive runtime has nothing to drop and arrives first.
         barrier.arrive(BarrierSide::Interactive, position);
@@ -1600,8 +1603,8 @@ fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
             "the interactive runtime passes before maintenance dropped the old incarnation"
         );
         assert!(
-            Arc::ptr_eq(&registry.get_or_create(id, &as_of), &old),
-            "before the drop, the key finds the old incarnation's slot"
+            registry.slot(id, 1).is_none(),
+            "before the drop, the new incarnation has no slot"
         );
 
         // Maintenance drops the old incarnation and arrives.
@@ -1612,21 +1615,14 @@ fn the_reconcile_barrier_keeps_a_new_peer_off_the_old_incarnation() {
         assert!(barrier.passable(BarrierSide::Interactive, position));
         assert!(barrier.passable(BarrierSide::Maintenance, position));
 
-        // Both create. The peer binds a fresh slot, and the new incarnation publishes into it.
-        let _peer = registry.peer_bundle(id, &as_of);
-        let fresh = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("bound");
+        // Both create. The new incarnation publishes into a fresh slot, which the peer binds.
+        let (_new_dataflow, _new_token, _new_keep) =
+            render_incarnation(worker, &registry, id, 1, &as_of);
+        let _peer = registry.peer_bundle_at(id, 1, &as_of);
+        let fresh = registry.slot(id, 1).expect("published");
         assert!(
             !Arc::ptr_eq(&fresh, &old),
-            "the new peer binds the old slot"
-        );
-        let (_new_dataflow, _new_token, _new_keep) =
-            render_incarnation(worker, &registry, id, &as_of);
-        assert!(
-            Arc::ptr_eq(
-                &ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published"),
-                &fresh
-            ),
-            "the new incarnation publishes into the peer's slot"
+            "the new incarnation published into the old slot"
         );
         drop(old);
     });
@@ -1647,7 +1643,7 @@ fn settle(worker: &mut timely::worker::Worker) {
 
 /// A worker hosting the maintenance runtime's publisher of index `id`, which the test seals to
 /// `{11}`, and the interactive runtime's compute state, which records `id` as a peer at the
-/// minimum. Runs `test` with both.
+/// minimum and binds it. Runs `test` with both.
 fn with_peer_of_live_publisher(
     test: impl FnOnce(
         &mut timely::worker::Worker,
@@ -1663,7 +1659,9 @@ fn with_peer_of_live_publisher(
     let (_rt, persist_clients) = test_persist_clients();
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
+        let mut compute_state =
+            interactive_compute_state(worker, persist_clients, registry.clone());
+        let mut progress = maintenance_reporter(&registry);
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
         let mut publisher = LivePublisher::new(worker, &registry, id);
@@ -1674,6 +1672,7 @@ fn with_peer_of_live_publisher(
             maintained_index_dataflow(id, GlobalId::User(2), Timestamp::MIN),
             Some(0),
         );
+        apply_and_bind(worker, &mut compute_state, &mut progress, 0);
         publisher.seal_to(worker, Timestamp::from(11_u64));
         test(
             worker,
@@ -1783,7 +1782,8 @@ fn the_replayed_reader_hold_does_not_hold_back_merging() {
                 publisher.maintain();
             }
             settle(worker);
-            let slot = ArrangementSharingRegistry::slot(&registry.lock(), &id).expect("published");
+            let slot =
+                ArrangementSharingRegistry::newest_slot(&registry.lock(), &id).expect("published");
             assert_eq!(
                 slot.oks.shared.physical_holds(),
                 at(11 + seals),
@@ -1811,7 +1811,9 @@ fn a_padded_peer_import_below_the_peer_hold_holds_at_the_peer_hold() {
     let (_rt, persist_clients) = test_persist_clients();
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
+        let mut compute_state =
+            interactive_compute_state(worker, persist_clients, registry.clone());
+        let mut progress = maintenance_reporter(&registry);
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
         let mut publisher = LivePublisher::new(worker, &registry, id);
@@ -1823,6 +1825,7 @@ fn a_padded_peer_import_below_the_peer_hold_holds_at_the_peer_hold() {
             maintained_index_dataflow(id, GlobalId::User(2), Timestamp::MIN),
             Some(0),
         );
+        apply_and_bind(worker, &mut compute_state, &mut progress, 0);
         publisher.seal_to(worker, Timestamp::from(11_u64));
         publisher.allow_compaction(at(10));
         allow_compaction(worker, &mut compute_state, &mut response_tx, id, at(5));
@@ -1909,26 +1912,41 @@ fn a_padded_peer_import_below_the_peer_hold_holds_at_the_peer_hold() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn a_second_peer_of_a_slot_stays_unbound() {
-    // Release semantics, where the soft panic logs. Nextest runs every test in a process of its
-    // own, so the toggle reaches no other test.
-    mz_ore::assert::SOFT_ASSERTIONS.store(false, std::sync::atomic::Ordering::Relaxed);
     let id = GlobalId::User(1);
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
         let mut publisher = LivePublisher::new(worker, &registry, id);
         publisher.seal_to(worker, Timestamp::from(3_u64));
-        let mut first = registry.peer_bundle(id, &as_of_min());
-        let mut second = registry.peer_bundle(id, &as_of_min());
+        let slot = || registry.slot(id, 0).expect("published");
+        let mut first = PeerIndex::new(0, slot().check.clone());
+        let mut first_bundle = first.bundle();
+        first.bind(id, slot());
         let mut upper = Antichain::new();
-        first.oks_mut().read_upper(&mut upper);
+        first_bundle.oks_mut().read_upper(&mut upper);
         assert_eq!(upper, at(3), "the first peer reads the publication");
+
+        let mut second = PeerIndex::new(0, slot().check.clone());
+        let mut second_bundle = second.bundle();
+        if mz_ore::assert::soft_assertions_enabled() {
+            let bind = mz_ore::panic::catch_unwind_str(std::panic::AssertUnwindSafe(|| {
+                second.bind(id, slot())
+            }));
+            let message = bind.expect_err("a second peer is a soft panic");
+            assert!(
+                message.contains("a second peer"),
+                "unexpected panic: {message}"
+            );
+        } else {
+            second.bind(id, slot());
+        }
+        assert!(!second.is_bound(), "the second peer bound");
         for (half, trace_upper) in [
             ("oks", {
-                second.oks_mut().read_upper(&mut upper);
+                second_bundle.oks_mut().read_upper(&mut upper);
                 upper.clone()
             }),
             ("errs", {
-                second.errs_mut().read_upper(&mut upper);
+                second_bundle.errs_mut().read_upper(&mut upper);
                 upper.clone()
             }),
         ] {

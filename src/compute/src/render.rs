@@ -830,7 +830,8 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 let publication = compute_state.publisher.as_ref().map(|publisher| {
                     publisher.publish(
                         idx_id,
-                        &self.as_of_frontier,
+                        self.publication_creation(),
+                        self.slot_check(idx),
                         oks.stream.scope(),
                         &oks.trace,
                         &errs.trace,
@@ -849,7 +850,14 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Only a trace this runtime maintains can be published.
                 let publication = trace.local().and_then(|(oks, errs)| {
                     let publisher = compute_state.publisher.as_ref()?;
-                    Some(publisher.publish(idx_id, &self.as_of_frontier, self.scope, oks, errs))
+                    Some(publisher.publish(
+                        idx_id,
+                        self.publication_creation(),
+                        self.slot_check(idx),
+                        self.scope,
+                        oks,
+                        errs,
+                    ))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
@@ -941,7 +949,8 @@ where
                 let publication = compute_state.publisher.as_ref().map(|publisher| {
                     publisher.publish(
                         idx_id,
-                        &self.as_of_frontier,
+                        self.publication_creation(),
+                        self.slot_check(idx),
                         oks.stream.scope(),
                         &oks.trace,
                         &errs.trace,
@@ -960,7 +969,14 @@ where
                 // Only a trace this runtime maintains can be published.
                 let publication = trace.local().and_then(|(oks, errs)| {
                     let publisher = compute_state.publisher.as_ref()?;
-                    Some(publisher.publish(idx_id, &self.as_of_frontier, outer, oks, errs))
+                    Some(publisher.publish(
+                        idx_id,
+                        self.publication_creation(),
+                        self.slot_check(idx),
+                        outer,
+                        oks,
+                        errs,
+                    ))
                 });
                 let to_drop = trace.to_drop().clone();
                 compute_state
