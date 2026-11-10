@@ -197,7 +197,7 @@
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.13",
     "@types/react@*": "^18.3.12",
-    "diff": "^4.0.4",
+    "diff": "^9.0.0",
     "esbuild": "^0.25.0",
     "glob": "^14.0.0",
     "ip-address": "^10.4.0",
