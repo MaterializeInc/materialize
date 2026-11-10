@@ -61,6 +61,16 @@
       "automerge": true
     },
     {
+      // Renovate's semver versioning counts every 0.x update as breaking, but
+      // still reports a 0.x minor as `minor`, so the rule above automerges it
+      // on green CI. Console 0.x minors such as kysely 0.29 and
+      // codemirror-toolkit 0.7 needed migrations, so they wait for review.
+      "matchManagers": ["npm"],
+      "matchFileNames": ["console/package.json"],
+      "matchIsBreaking": true,
+      "automerge": false
+    },
+    {
       // Cargo lock file maintenance runs a bare `cargo update`, which bumps
       // every semver-compatible crate in one PR.
       "matchManagers": ["cargo"],
