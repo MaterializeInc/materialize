@@ -48,6 +48,7 @@ from materialize.cargo_bench.compare import (
     confirm,
     render_markdown,
 )
+from materialize.cargo_bench.host import describe_host
 from materialize.cargo_bench.targets import (
     BenchTarget,
     BuiltBench,
@@ -498,6 +499,7 @@ def run_benches(
 def render_report(
     ancestor: str | None,
     threshold: float,
+    host: str,
     report: CompareReport,
     ancestor_failures: list[TargetFailure],
     current_failures: list[TargetFailure],
@@ -514,6 +516,7 @@ def render_report(
         )
     else:
         sections.append("Ancestor run skipped, no comparison performed")
+    sections.append(f"Host: {host}")
     if current_failures:
         sections.append(
             "Bench targets failing on the current commit:\n"
@@ -840,6 +843,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     markdown = render_report(
         ancestor,
         args.threshold,
+        describe_host(),
         report,
         ancestor_failures,
         current_failures,
