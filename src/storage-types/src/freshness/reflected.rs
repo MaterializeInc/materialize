@@ -8,6 +8,16 @@
 // by the Apache License, Version 2.0.
 
 //! The reflected time of a collection, the inverse of its time dependence.
+//!
+//! A [`TimeDependence`] describes how a collection's write frontier follows wall-clock time.
+//! The default dependence follows the wall clock directly. A refresh schedule rounds the
+//! frontier up to the next refresh, so a `REFRESH EVERY` view contains inputs only up to its
+//! last refresh. Nested dependences describe a collection derived from others, whose frontier
+//! is the minimum of its inputs' frontiers.
+//!
+//! Freshness needs the opposite direction: given a write frontier, the latest wall-clock time
+//! whose data the collection contains in full. [`reflected_time`] inverts the dependence
+//! structurally, rounding down to the last refresh and taking the minimum over the inputs.
 
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
