@@ -32,6 +32,11 @@
 //! a suspend-and-restart), so the channel uses a two-hop structure copied from storage's command
 //! sequencer: producers tag commands with a per-producer index, worker 0 fixes one definitive
 //! order and assigns a global index, and receivers restore that order.
+//!
+//! Worker 0's sequencer also numbers compute commands in that definitive order, see
+//! [`CommandNumber`]. Each compute runtime of a process renders its own command channel and is fed
+//! the same non-peek commands in the same order, so both runtimes assign the same number to the
+//! same command without the number crossing the transport.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -68,11 +73,18 @@ pub struct Connection {
     pub position: Option<u64>,
 }
 
+/// The position of a compute command among the numbered compute commands of a command channel.
+///
+/// Numbers count every compute command except `Peek` and `CancelPeek`, which carry none, from 0
+/// for the channel's lifetime, across connections. Storage-internal commands are not counted.
+pub type CommandNumber = u64;
+
 /// A command in the unified command lane.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UnifiedCommand {
-    /// A compute command, tagged with the client connection.
-    Compute(ComputeCommand, Connection),
+    /// A compute command, tagged with the client connection and, once sequenced, its
+    /// [`CommandNumber`].
+    Compute(ComputeCommand, Connection, Option<CommandNumber>),
     /// A storage-internal command.
     Storage(InternalStorageCommand),
 }
@@ -198,7 +210,7 @@ pub fn render(
                                 session.give((
                                     worker_id,
                                     cmd_index,
-                                    UnifiedCommand::Compute(cmd, connection),
+                                    UnifiedCommand::Compute(cmd, connection, None),
                                 ));
                                 cmd_index += 1;
                             }
@@ -257,6 +269,8 @@ pub fn render(
                 "command_channel::sequencer",
                 |cap, _info| {
                     let mut global_index = 0_u64;
+                    // The number of the next numbered compute command.
+                    let mut next_number: CommandNumber = 0;
                     let mut capability = Some(cap);
 
                     // For each producer, keep an ordered list of pending commands, as well as the
@@ -293,7 +307,20 @@ pub fn render(
                                 .first_key_value()
                                 .is_some_and(|(i, _)| i == next_idx)
                             {
-                                let (_, cmd) = commands.pop_first().unwrap();
+                                let (_, mut cmd) = commands.pop_first().unwrap();
+                                // Numbering at this point follows the one definitive order all
+                                // workers observe. The interactive runtime receives peeks and
+                                // cancellations the maintenance runtime never sees, so counting
+                                // them would make the runtimes' numbers diverge.
+                                if let UnifiedCommand::Compute(command, _, number) = &mut cmd
+                                    && !matches!(
+                                        command,
+                                        ComputeCommand::Peek(_) | ComputeCommand::CancelPeek { .. }
+                                    )
+                                {
+                                    *number = Some(next_number);
+                                    next_number += 1;
+                                }
                                 for (target, part) in split_command(cmd, peers) {
                                     session.give((target, global_index, part));
                                 }
@@ -365,7 +392,7 @@ pub fn render(
 /// Split the given command into one part per target worker.
 ///
 /// Compute `CreateDataflow` commands are partitioned among the workers. Every other command is
-/// replicated to all workers.
+/// replicated to all workers. Every part carries the command's number.
 fn split_command(
     command: UnifiedCommand,
     parts: usize,
@@ -373,7 +400,7 @@ fn split_command(
     use itertools::Either;
 
     let commands = match command {
-        UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), connection) => {
+        UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), connection, number) => {
             let dataflow = *dataflow;
 
             // A list of descriptions of objects for each part to build.
@@ -410,7 +437,11 @@ fn split_command(
                 })
                 .map(Box::new)
                 .map(move |dataflow| {
-                    UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), connection)
+                    UnifiedCommand::Compute(
+                        ComputeCommand::CreateDataflow(dataflow),
+                        connection,
+                        number,
+                    )
                 });
             Either::Left(commands)
         }
