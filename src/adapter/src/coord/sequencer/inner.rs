@@ -94,7 +94,7 @@ use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWrite
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
+    Coordinator, CreateConnectionValidationReady, DeferredDdl, ExecuteContext, Message,
     NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult,
     Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
 };
@@ -3625,20 +3625,15 @@ impl Coordinator {
         // It is possible Message::DeferredStatementReady was sent but then a session cancellation
         // was processed, removing the single element from deferred_statements, so it is expected
         // that this is sometimes empty.
-        let Some(DeferredPlanStatement { ctx, ps }) = self.serialized_ddl.pop_front() else {
+        let Some(deferred) = self.serialized_ddl.pop_front() else {
             return;
         };
-        match ps {
-            crate::coord::PlanStatement::Statement { stmt, params } => {
+        match deferred {
+            DeferredDdl::Statement { ctx, stmt, params } => {
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
-            crate::coord::PlanStatement::Plan {
-                plan,
-                resolved_ids,
-                sql_impl_resolved_ids,
-            } => {
-                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
-                    .await;
+            DeferredDdl::Commit(pending) => {
+                Box::pin(self.sequence_ddl_commit(pending)).await;
             }
         }
     }

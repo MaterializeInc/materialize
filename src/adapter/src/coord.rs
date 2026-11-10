@@ -154,6 +154,7 @@ use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
     NetworkPolicyRule, Params, QueryWhen,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
@@ -2053,7 +2054,7 @@ pub struct Coordinator {
     /// - Re-planning a statement is hard because Coordinator and Session state is mutated at
     ///   various points, and we would need to correctly reset those changes before re-planning and
     ///   re-sequencing.
-    serialized_ddl: LockedVecDeque<DeferredPlanStatement>,
+    serialized_ddl: LockedVecDeque<DeferredDdl>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -5631,22 +5632,26 @@ impl<T> LockedVecDeque<T> {
 }
 
 #[derive(Debug)]
-struct DeferredPlanStatement {
-    ctx: ExecuteContext,
-    ps: PlanStatement,
-}
-
-#[derive(Debug)]
-enum PlanStatement {
+enum DeferredDdl {
     Statement {
+        ctx: ExecuteContext,
         stmt: Arc<Statement<Raw>>,
         params: Params,
     },
-    Plan {
-        plan: mz_sql::plan::Plan,
-        resolved_ids: ResolvedIds,
-        sql_impl_resolved_ids: ResolvedIds,
-    },
+    Commit(ddl::PendingDdlCommit),
+}
+
+impl DeferredDdl {
+    fn conn_id(&self) -> &ConnectionId {
+        match self {
+            Self::Statement {
+                ctx,
+                stmt: _,
+                params: _,
+            } => ctx.session().conn_id(),
+            Self::Commit(pending) => pending.conn_id(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

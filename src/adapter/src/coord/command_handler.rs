@@ -74,8 +74,8 @@ use crate::command::{
 use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
-    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
-    PurifiedStatementReady, validate_ip_with_policy_rules,
+    ConnMeta, Coordinator, DeferredDdl, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+    validate_ip_with_policy_rules,
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
@@ -1569,10 +1569,8 @@ impl Coordinator {
                     )));
                     return;
                 }
-                self.serialized_ddl.push_back(DeferredPlanStatement {
-                    ctx,
-                    ps: PlanStatement::Statement { stmt, params },
-                });
+                self.serialized_ddl
+                    .push_back(DeferredDdl::Statement { ctx, stmt, params });
                 return;
             }
         }
@@ -2078,13 +2076,22 @@ impl Coordinator {
         let deferred_ddl_idx = self
             .serialized_ddl
             .iter()
-            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id);
+            .position(|deferred| *deferred.conn_id() == conn_id);
         if let Some(idx) = deferred_ddl_idx {
             let deferred = self
                 .serialized_ddl
                 .remove(idx)
                 .expect("known to exist from call to `position` above");
-            maybe_ctx = Some(deferred.ctx);
+            match deferred {
+                DeferredDdl::Statement {
+                    ctx,
+                    stmt: _,
+                    params: _,
+                } => maybe_ctx = Some(ctx),
+                DeferredDdl::Commit(pending) => {
+                    self.finish_ddl_commit(pending, Err(AdapterError::Canceled));
+                }
+            }
         }
 
         // Cancel reads waiting on being linearized. There is at most one linearized read per

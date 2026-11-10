@@ -48,7 +48,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::coord::{Coordinator, Message, PendingTxn};
+use crate::coord::{Coordinator, DeferredDdl, Message, PendingTxn};
 use crate::session::{Session, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
@@ -77,6 +77,13 @@ enum DdlCommitContext {
 }
 
 impl PendingDdlCommit {
+    pub(super) fn conn_id(&self) -> &ConnectionId {
+        match &self.context {
+            DdlCommitContext::Transaction(txn) => txn.ctx.session().conn_id(),
+            DdlCommitContext::Statement { ctx, response: _ } => ctx.session().conn_id(),
+        }
+    }
+
     pub(super) fn transaction(
         txn: PendingTxn,
         commands: Vec<catalog::command::CatalogCommand>,
@@ -591,7 +598,36 @@ impl Coordinator {
         Ok(())
     }
 
+    pub(super) fn release_ddl_lock(&self, guard: tokio::sync::OwnedMutexGuard<()>) {
+        drop(guard);
+        if !self.serialized_ddl.is_empty() {
+            let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
+        }
+    }
+
     pub(super) async fn sequence_ddl_commit(&mut self, mut pending: PendingDdlCommit) {
+        // Command replay must respect the plans other DDLs hold across off-thread work.
+        // Never await this lock on the coordinator, which its owner needs to finish.
+        let guard = self
+            .active_conns
+            .get_mut(pending.conn_id())
+            .expect("connection must exist")
+            .deferred_lock
+            .take();
+        let guard = match guard {
+            Some(guard) => guard,
+            None => match self.serialized_ddl.try_lock_owned() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    tracing::debug!(
+                        conn_id = %pending.conn_id(),
+                        "deferring catalog commit for DDL lock"
+                    );
+                    self.serialized_ddl.push_back(DeferredDdl::Commit(pending));
+                    return;
+                }
+            },
+        };
         let result = loop {
             match self
                 .catalog_transact_commands(
@@ -621,6 +657,7 @@ impl Coordinator {
                         }
                     }
                     catalog::CommandWork::Prepare(request) => {
+                        self.release_ddl_lock(guard);
                         let config = self.controller.storage.config().clone();
                         let tx = self.internal_cmd_tx.clone();
                         let otel_ctx = OpenTelemetryContext::obtain();
@@ -640,6 +677,15 @@ impl Coordinator {
                 },
             }
         };
+        self.release_ddl_lock(guard);
+        self.finish_ddl_commit(pending, result);
+    }
+
+    pub(super) fn finish_ddl_commit(
+        &self,
+        mut pending: PendingDdlCommit,
+        result: Result<(), AdapterError>,
+    ) {
         if result.is_ok() && matches!(pending.context, DdlCommitContext::Statement { .. }) {
             for command in &pending.commands {
                 self.emit_command_notices(pending.context.context_mut().session(), command);
