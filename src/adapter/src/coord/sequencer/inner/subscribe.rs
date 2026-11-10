@@ -285,14 +285,12 @@ impl Coordinator {
             .cloned()
             .unwrap_or_else(|| self.owned_catalog());
 
-        // Catalog declarations come from planning, while readability observations
-        // still come from the live query connections or controller.
-        let compute_instance = if let Some(client) = &self.query_client {
-            client.instance_snapshot(&catalog, cluster_id)
-        } else {
-            self.instance_snapshot(cluster_id)
-                .expect("compute instance does not exist")
-        };
+        // Planning offers committed declarations independently of execution readiness.
+        let client = self
+            .query_client
+            .as_ref()
+            .expect("query client initialized before serving");
+        let compute_instance = client.instance_snapshot(&catalog, cluster_id);
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
         let debug_name = format!("subscribe-{}", sink_id);
@@ -622,17 +620,15 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
-        if self.query_client.is_some() {
-            // Frontend sequencing may have acquired holds before a concurrent
-            // DROP. Holds protect history, not object lifetime; checking only
-            // logical dependencies misses optimizer-selected index imports.
-            for id in df_desc.import_ids() {
-                if self.catalog().try_get_entry_by_global_id(&id).is_none() {
-                    return Err(AdapterError::ConcurrentDependencyDrop {
-                        dependency_kind: "collection",
-                        dependency_id: id.to_string(),
-                    });
-                }
+        // Frontend sequencing may have acquired holds before a concurrent
+        // DROP. Holds protect history, not object lifetime; checking only
+        // logical dependencies misses optimizer-selected index imports.
+        for id in df_desc.import_ids() {
+            if self.catalog().try_get_entry_by_global_id(&id).is_none() {
+                return Err(AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                });
             }
         }
         let sink_id = df_desc.sink_id();
@@ -684,22 +680,10 @@ impl Coordinator {
         // sequencing, a dependency can be dropped between sequencing (on the session
         // task) and here. The read holds acquired during sequencing don't prevent that:
         // they hold back compaction, not drops.
-        let result = if self.query_client.is_some() {
-            self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds)
-        } else {
-            let result = self
-                .try_ship_dataflow(df_desc, cluster_id, replica_id)
-                .await
-                .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error);
-            drop(read_holds);
-            result
-        };
+        let result = self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds);
         if let Err(e) = result {
-            // Clean up the active compute sink that was added above, since the dataflow
-            // was never created. If we don't do this, the sink_id remains in
-            // `drop_sinks` but no collection exists in the compute controller, causing
-            // a panic when the connection terminates. This also retracts the deferred
-            // `mz_subscriptions` write, so `write_notify` can be dropped.
+            // Failed admission must not leave an active sink or deferred
+            // `mz_subscriptions` row behind. The notify can then be dropped.
             self.remove_active_compute_sink(sink_id).await;
             return Err(e);
         }

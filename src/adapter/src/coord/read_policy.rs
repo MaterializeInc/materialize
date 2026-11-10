@@ -18,7 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
-use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
@@ -30,8 +29,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as _;
 
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::util::ResultExt;
+use crate::coord::timeline::TimelineContext;
 
 /// Read holds kept to ensure a set of collections remains readable at some
 /// time.
@@ -209,11 +207,8 @@ impl ReadHolds {
 }
 
 impl crate::coord::Coordinator {
-    /// Initialize the compute read policies.
-    ///
-    /// This should be called only after a compute collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
+    /// Retain serving-timeline windows for newly committed compute collections.
+    /// Replica followers apply their physical compaction policies.
     pub(crate) async fn initialize_compute_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
@@ -232,11 +227,8 @@ impl crate::coord::Coordinator {
         .await;
     }
 
-    /// Initialize the storage and compute read policies.
-    ///
-    /// This should be called only after a collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
+    /// Queue durable serving-timeline protection and install storage read policies.
+    /// Compute compaction policies belong to replica followers.
     #[instrument(name = "coord::initialize_read_policies")]
     pub(crate) async fn initialize_read_policies(
         &mut self,
@@ -246,26 +238,14 @@ impl crate::coord::Coordinator {
         // Lifecycle policy installation must not wait for query connections or
         // durable client publication. Protected windows are acquired after the
         // installation batch, when readable query replicas can be observed.
-        let query_owned = self.query_client.is_some() || self.controller.replica_owned_compute();
         for (timeline_context, id_bundle) in
             self.catalog().partition_ids_by_timeline_context(id_bundle)
         {
             if let TimelineContext::TimelineDependent(timeline) = timeline_context {
-                if query_owned {
-                    self.ensure_timeline_state(&timeline)
-                        .await
-                        .pending_read_holds
-                        .extend(&id_bundle);
-                    continue;
-                }
-                let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
-                let read_ts = oracle.read_ts().await;
-
-                let mut new_read_holds = self.acquire_read_holds(&id_bundle);
-                new_read_holds.downgrade(read_ts);
-
-                let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
-                read_holds.extend(new_read_holds);
+                self.ensure_timeline_state(&timeline)
+                    .await
+                    .pending_read_holds
+                    .extend(&id_bundle);
             }
         }
 
@@ -280,20 +260,6 @@ impl crate::coord::Coordinator {
         self.controller
             .storage_collections
             .set_read_policies(storage_policies);
-
-        for (instance_id, collection_ids) in &id_bundle.compute_ids {
-            if self.controller.replica_owned_compute() {
-                continue;
-            }
-            let compute_policies = collection_ids
-                .iter()
-                .map(|id| (*id, read_policy.clone()))
-                .collect();
-            self.controller
-                .compute
-                .set_read_policy(*instance_id, compute_policies)
-                .expect("cannot fail to set read policy");
-        }
     }
 
     pub(crate) fn update_storage_read_policies(&self, policies: Vec<(CatalogItemId, ReadPolicy)>) {
@@ -313,104 +279,19 @@ impl crate::coord::Coordinator {
             .set_read_policies(policies);
     }
 
-    pub(crate) fn update_compute_read_policies(
-        &self,
-        mut policies: Vec<(ComputeInstanceId, CatalogItemId, ReadPolicy)>,
-    ) {
-        if self.controller.replica_owned_compute() {
-            return;
-        }
-        policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
-        for (cluster_id, group) in &policies
-            .into_iter()
-            .chunk_by(|&(cluster_id, _, _)| cluster_id)
-        {
-            let group = group
-                .flat_map(|(_, item_id, policy)| {
-                    // Set the read policy for all GlobalIds associated with an item.
-                    self.catalog()
-                        .get_entry(&item_id)
-                        .global_ids()
-                        .map(move |gid| (gid, policy.clone()))
-                })
-                .collect();
-            self.controller
-                .compute
-                .set_read_policy(cluster_id, group)
-                .unwrap_or_terminate("cannot fail to set read policy");
-        }
-    }
-
-    pub(crate) fn update_compute_read_policy(
-        &self,
-        compute_instance: ComputeInstanceId,
-        item_id: CatalogItemId,
-        base_policy: ReadPolicy,
-    ) {
-        self.update_compute_read_policies(vec![(compute_instance, item_id, base_policy)])
-    }
-
-    /// Acquires request-scoped protection at the earliest readable time.
-    /// All request holds use the query client's issuer when one is installed.
+    /// Acquire request-scoped durable protection at the earliest readable time.
     pub(crate) async fn acquire_query_read_holds(
         &mut self,
         id_bundle: &CollectionIdBundle,
     ) -> Result<ReadHolds, crate::AdapterError> {
-        if let Some(client) = &self.query_client {
-            let incarnation = client.protection.incarnation();
-            let (holds, _) = self
-                .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(None))
-                .await?;
-            Ok(holds)
-        } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()
-        {
-            Err(crate::AdapterError::Internal(
-                "durable query read protection is not initialized".into(),
-            ))
-        } else {
-            Ok(self.acquire_read_holds(id_bundle))
-        }
-    }
-
-    /// Attempt to acquire read holds on the indicated collections at the
-    /// earliest available time.
-    ///
-    /// # Panics
-    ///
-    /// Will panic if any of the referenced collections in `id_bundle` don't
-    /// exist.
-    pub(crate) fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
-        let mut read_holds = ReadHolds::new();
-
-        let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
-        let storage_read_holds = self
-            .controller
-            .storage_collections
-            .acquire_read_holds(desired_storage_holds)
-            .expect("missing storage collections");
-        read_holds.storage_holds = storage_read_holds
-            .into_iter()
-            .map(|hold| (hold.id(), hold))
-            .collect();
-
-        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
-            for &id in collection_ids {
-                let hold = self
-                    .controller
-                    .compute
-                    .acquire_read_hold(instance_id, id)
-                    .expect("missing compute collection");
-
-                let prev = read_holds.compute_holds.insert((instance_id, id), hold);
-                assert!(
-                    prev.is_none(),
-                    "duplicate compute ID in id_bundle {id_bundle:?}"
-                );
-            }
-        }
-
-        tracing::debug!(?read_holds, "acquire_read_holds");
-        read_holds
+        let client = self.query_client.as_ref().ok_or_else(|| {
+            crate::AdapterError::Internal("durable query read protection is not initialized".into())
+        })?;
+        let incarnation = client.protection.incarnation();
+        let (holds, _) = self
+            .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(None))
+            .await?;
+        Ok(holds)
     }
 
     /// Stash transaction read holds. They will be released when the transaction

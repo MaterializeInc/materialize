@@ -15,9 +15,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
-use mz_compute_client::controller::error as compute_error;
 
-use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
@@ -44,7 +42,6 @@ use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
-use crate::peek_client::CollectionLookupError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -1144,131 +1141,6 @@ impl AdapterError {
             dependency_id: e.0.to_string(),
         }
     }
-
-    pub fn concurrent_dependency_drop_from_collection_lookup_error(
-        e: CollectionLookupError,
-        compute_instance: ComputeInstanceId,
-    ) -> Self {
-        match e {
-            CollectionLookupError::ReadProtection(error) => *error,
-            CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: id.to_string(),
-            },
-            CollectionLookupError::CollectionMissing(id) => {
-                AdapterError::ConcurrentDependencyDrop {
-                    dependency_kind: "collection",
-                    dependency_id: id.to_string(),
-                }
-            }
-            CollectionLookupError::InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: compute_instance.to_string(),
-            },
-        }
-    }
-
-    pub fn concurrent_dependency_drop_from_watch_set_install_error(
-        e: compute_error::CollectionLookupError,
-    ) -> Self {
-        match e {
-            compute_error::CollectionLookupError::InstanceMissing(id) => {
-                AdapterError::ConcurrentDependencyDrop {
-                    dependency_kind: "cluster",
-                    dependency_id: id.to_string(),
-                }
-            }
-            compute_error::CollectionLookupError::CollectionMissing(id) => {
-                AdapterError::ConcurrentDependencyDrop {
-                    dependency_kind: "collection",
-                    dependency_id: id.to_string(),
-                }
-            }
-        }
-    }
-
-    pub fn concurrent_dependency_drop_from_instance_peek_error(
-        e: mz_compute_client::controller::instance_client::PeekError,
-        compute_instance: ComputeInstanceId,
-    ) -> AdapterError {
-        use mz_compute_client::controller::instance_client::PeekError::*;
-        match e {
-            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "replica",
-                dependency_id: id.to_string(),
-            },
-            InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: compute_instance.to_string(),
-            },
-            e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
-            e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
-        }
-    }
-
-    pub fn concurrent_dependency_drop_from_collection_update_error(
-        e: compute_error::CollectionUpdateError,
-    ) -> Self {
-        use compute_error::CollectionUpdateError::*;
-        match e {
-            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: id.to_string(),
-            },
-            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "collection",
-                dependency_id: id.to_string(),
-            },
-        }
-    }
-
-    pub fn concurrent_dependency_drop_from_peek_error(
-        e: mz_compute_client::controller::error::PeekError,
-    ) -> AdapterError {
-        use mz_compute_client::controller::error::PeekError::*;
-        match e {
-            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: id.to_string(),
-            },
-            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "collection",
-                dependency_id: id.to_string(),
-            },
-            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "replica",
-                dependency_id: id.to_string(),
-            },
-            e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
-                AdapterError::internal("peek error", e)
-            }
-        }
-    }
-
-    pub fn concurrent_dependency_drop_from_dataflow_creation_error(
-        e: compute_error::DataflowCreationError,
-    ) -> Self {
-        use compute_error::DataflowCreationError::*;
-        match e {
-            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: id.to_string(),
-            },
-            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "collection",
-                dependency_id: id.to_string(),
-            },
-            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "replica",
-                dependency_id: id.to_string(),
-            },
-            MissingAsOf
-            | SinceViolation(..)
-            | CompactionBoundViolation(..)
-            | EmptyAsOfForSubscribe
-            | EmptyAsOfForCopyTo => AdapterError::internal("dataflow creation error", e),
-        }
-    }
 }
 
 impl fmt::Display for AdapterError {
@@ -1809,12 +1681,6 @@ impl From<oneshot::error::RecvError> for AdapterError {
 impl From<StorageError> for AdapterError {
     fn from(e: StorageError) -> Self {
         AdapterError::Storage(e)
-    }
-}
-
-impl From<compute_error::InstanceExists> for AdapterError {
-    fn from(e: compute_error::InstanceExists) -> Self {
-        AdapterError::Compute(e.into())
     }
 }
 

@@ -11,7 +11,6 @@
 
 pub mod provisioning;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,8 +18,6 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_compute_client::logging::LogVariant;
 pub use mz_controller_types::clusters::{
     ClusterRole, ClusterStatus, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
     ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
@@ -29,65 +26,30 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::ServicePort;
 use mz_ore::task::AbortOnDropHandle;
-use mz_repr::GlobalId;
 use regex::Regex;
 use tracing::warn;
 
 use crate::Controller;
 
-/// Configures a cluster.
-pub struct ClusterConfig {
-    /// The logging variants to enable on the compute instance.
-    ///
-    /// Each logging variant is mapped to the identifier under which to register
-    /// the arrangement storing the log's data.
-    pub arranged_logs: BTreeMap<LogVariant, GlobalId>,
-    /// An optional arbitrary string that describes the class of the workload
-    /// this cluster is running (e.g., `production` or `staging`).
-    pub workload_class: Option<String>,
-}
-
 /// Identifier of a process within a replica.
 pub type ProcessId = u64;
 
 impl Controller {
-    /// Creates a cluster with the specified identifier and configuration.
-    ///
-    /// A cluster is a combination of a storage instance and a compute instance.
-    /// A cluster has zero or more replicas; each replica colocates the storage
-    /// and compute layers on the same physical resources.
-    pub fn create_cluster(
-        &mut self,
-        id: ClusterId,
-        config: ClusterConfig,
-    ) -> Result<(), anyhow::Error> {
-        self.storage
-            .create_instance(id, config.workload_class.clone());
-        if !self.replica_owned_compute() {
-            self.compute.create_instance(
-                id,
-                config.arranged_logs,
-                config.workload_class.clone(),
-            )?;
-        }
+    /// Registers a committed cluster in local inventory and metrics.
+    pub fn create_cluster(&mut self, id: ClusterId, workload_class: Option<String>) {
+        self.storage.create_instance(id, workload_class.clone());
         self.metrics
-            .set_workload_class(id.to_string(), config.workload_class);
-        Ok(())
+            .set_workload_class(id.to_string(), workload_class);
     }
 
     /// Updates the workload class for a cluster.
     ///
     /// # Panics
     ///
-    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    /// Panics if the instance does not exist in the local storage inventory.
     pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
-        if !self.replica_owned_compute() {
-            self.compute
-                .update_instance_workload_class(id, workload_class.clone())
-                .expect("instance exists");
-        }
         self.metrics
             .set_workload_class(id.to_string(), workload_class);
     }
@@ -99,69 +61,43 @@ impl Controller {
     /// Panics if the cluster still has replicas.
     pub fn drop_cluster(&mut self, id: ClusterId) {
         self.storage.drop_instance(id);
-        if !self.replica_owned_compute() {
-            self.compute.drop_instance(id);
-        }
         self.metrics.set_workload_class(id.to_string(), None);
     }
 
-    /// Creates a replica of the specified cluster with the specified identifier
-    /// and configuration.
+    /// Registers committed replica membership and discovers its HTTP addresses.
+    /// Controllerd provisions the process independently.
     pub fn create_replica(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         config: ReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        let compute_location: ClusterReplicaLocation;
-
-        match config.location {
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs: _,
-                computectl_addrs,
-            }) => {
-                compute_location = ClusterReplicaLocation {
-                    ctl_addrs: computectl_addrs,
-                };
+        if let ReplicaLocation::Managed(m) = config.location {
+            let service = ReplicaServiceName {
+                cluster_id,
+                replica_id,
+                generation: self.deploy_generation,
             }
-            ReplicaLocation::Managed(m) => {
-                let service = ReplicaServiceName {
-                    cluster_id,
-                    replica_id,
-                    generation: self.deploy_generation,
-                }
-                .to_string();
-                let addresses = |name: &str, port_hint| {
-                    self.orchestrator.service_addresses(
-                        &service,
-                        m.allocation.scale,
-                        &ServicePort {
-                            name: name.into(),
-                            port_hint,
-                            tcp_listen_ip: None,
-                        },
-                    )
-                };
-                compute_location = ClusterReplicaLocation {
-                    ctl_addrs: addresses("computectl", 2101)?,
-                };
-                self.replica_http_locator.register_replica(
-                    cluster_id,
-                    replica_id,
-                    addresses("internal-http", 6878)?,
-                );
-            }
+            .to_string();
+            let addresses = |name: &str, port_hint| {
+                self.orchestrator.service_addresses(
+                    &service,
+                    m.allocation.scale,
+                    &ServicePort {
+                        name: name.into(),
+                        port_hint,
+                        tcp_listen_ip: None,
+                    },
+                )
+            };
+            self.replica_http_locator.register_replica(
+                cluster_id,
+                replica_id,
+                addresses("internal-http", 6878)?,
+            );
         }
 
         self.storage.register_replica(cluster_id, replica_id);
-        if !self.replica_owned_compute() {
-            self.compute.add_replica_to_instance(
-                cluster_id,
-                replica_id,
-                compute_location,
-                config.compute,
-            )?;
-        }
 
         Ok(())
     }
@@ -177,9 +113,6 @@ impl Controller {
         self.replica_http_locator
             .remove_replica(cluster_id, replica_id);
 
-        if !self.replica_owned_compute() {
-            self.compute.drop_replica(cluster_id, replica_id)?;
-        }
         self.storage
             .drop_replica(cluster_id, replica_id, publish_status_history);
         Ok(())

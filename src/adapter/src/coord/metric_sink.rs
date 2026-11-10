@@ -11,9 +11,9 @@
 //!
 //! A curated metric sink is a [`CURATED`] entry rendered on every replica, publishing its series
 //! into that replica's process-local Prometheus registry. Unlike a user's `CREATE METRIC SINK` it
-//! is not a catalog item: it gets a transient [`GlobalId`], targets one replica rather than a
-//! cluster. In native protected mode the writer durably selects its plan and the replica executes
-//! it independently of adapter lifetime. Otherwise the coordinator installs it at boot.
+//! is not a catalog item: it gets a transient [`mz_repr::GlobalId`], targets one replica rather than a
+//! cluster. The writer durably selects its plan and the replica executes it independently of
+//! adapter lifetime.
 //! Keeping the curated set out of the SQL catalog means changing a definition needs no builtin
 //! migration.
 //!
@@ -22,50 +22,33 @@
 //! cluster, and the cost scales with `CURATED`. `coord::introspection` already accepts this for its
 //! subscribes.
 //!
-//! In controller-owned mode, `install_metric_sinks` installs every definition on a newly created replica
-//! (`bootstrap_metric_sinks` covers the replicas already present at startup), and
-//! `drop_metric_sinks` drops them before a replica is dropped. This mirrors
-//! [`crate::coord::introspection`], which installs introspection subscribes on the same triggers.
-//!
-//! The `disabled_metric_sinks` system var denies definitions by name, tearing a denied sink down
-//! rather than only gating future installs. Writer admission reconciles native selections in the
-//! config transaction. `reconcile_metric_sinks` converges the controller-owned installed set.
+//! The `disabled_metric_sinks` system var denies definitions by name, withdrawing a denied sink's
+//! selection rather than only gating future admission. Writer admission reconciles selections in
+//! the config transaction.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::bail;
 use mz_catalog::memory::objects::CatalogItem;
-use mz_cluster_client::ReplicaId;
-use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
-use mz_ore::{instrument, soft_panic_or_log};
-use mz_repr::optimize::OverrideFrom;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, RelationDesc};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     HirRelationExpr, METRIC_SINK_CURATED_PREFIX_MARKER, Params, Plan, SubscribeFrom, SubscribePlan,
-    validate_metric_sink_desc, validate_metric_sink_prefix,
+    validate_metric_sink_desc,
 };
-use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
-use mz_sql::session::vars::{ENABLE_METRIC_SINK, SystemVars};
-use tracing::{Span, info, warn};
+use mz_sql::session::vars::SystemVars;
+use tracing::warn;
 
 use crate::catalog::CatalogState;
-use crate::coord::{
-    Coordinator, Message, MetricSinkFinish, MetricSinkOptimize, MetricSinkStage, PlanValidity,
-    StageResult, Staged,
-};
-use crate::optimize::Optimize;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::{AdapterError, ExecuteResponse, optimize};
 
 mod written;
 
 /// A curated metric sink: SQL producing the canonical metric-sink columns, plus the name it is
 /// known by in logs.
 #[derive(Debug)]
-pub(super) struct CuratedMetricSink {
-    /// Stable identifier for the definition: used in logs, as the [`Coordinator::metric_sinks`] key,
+struct CuratedMetricSink {
+    /// Stable identifier for the definition: used in logs, in the durable replica plan owner,
     /// and as the `sink` label on the health gauges (the `GlobalId` is transient, the name is not).
     /// Must be unique within [`CURATED`].
     name: &'static str,
@@ -181,412 +164,17 @@ HAVING sum(count) > 0",
     },
 ];
 
-/// A [`CuratedMetricSink`] installed on one replica.
-#[derive(Debug)]
-pub(super) struct InstalledMetricSink {
-    /// The cluster the replica belongs to, needed to drop the sink's compute collection.
-    cluster_id: ClusterId,
-    /// The transient id of the sink's compute export.
-    sink_id: GlobalId,
-}
-
-/// A [`CuratedMetricSink`] planned once and shared across the replicas it installs on. See
-/// [`Coordinator::plan_metric_sink`].
-#[derive(Clone, Debug)]
-pub(super) struct PlannedMetricSink {
-    /// The shaped source query.
-    expr: HirRelationExpr,
-    /// The shape `expr` produces.
-    desc: RelationDesc,
-    /// The catalog items the source reads.
-    dependencies: BTreeSet<CatalogItemId>,
-}
-
-impl Coordinator {
-    /// Installs the curated metric sinks on all existing replicas.
-    pub(super) async fn bootstrap_metric_sinks(&mut self) {
-        for (cluster_id, replica_id) in self.all_cluster_replicas() {
-            self.install_metric_sinks(cluster_id, replica_id).await;
-        }
-    }
-
-    /// Installs the curated metric sinks on the given replica.
-    ///
-    /// Turning `enable_metric_sink` off stops installing on replicas created from then on. It does
-    /// not tear down what is already installed: those keep running until their replica is dropped
-    /// or envd restarts. A replica that merely reconnects re-renders them from the controller's
-    /// command history, so a replica restart does not clear them either.
-    pub(super) async fn install_metric_sinks(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-    ) {
-        if self.replica_owned_metric_sinks()
-            || !ENABLE_METRIC_SINK.enabled(self.catalog().system_config())
-        {
-            return;
-        }
-
-        // TODO: Skip replicas created with introspection disabled. Their logging dataflows never
-        // run, so a `source_sql` reading introspection relations there never advances. That is not
-        // just wasted work: the sink publishes its input frontier as its write frontier, so a
-        // never-advancing input stalls the sink's frontier at its as-of and pins the read holds it
-        // takes on those collections for the replica's whole life (replica-local, released on
-        // drop). `coord::introspection` installs subscribes on the same triggers and has the same
-        // gap.
-        for definition in CURATED {
-            if metric_sink_denied(self.catalog().system_config(), definition.name) {
-                continue;
-            }
-            self.install_metric_sink(cluster_id, replica_id, definition)
-                .await;
-        }
-    }
-
-    /// Warns about unknown denied names and converges controller-owned curated sinks.
-    ///
-    /// Reconciles the whole set rather than the delta.
-    pub(super) async fn reconcile_metric_sinks(&mut self) {
-        for entry in self.catalog().system_config().disabled_metric_sinks() {
-            if !CURATED.iter().any(|d| d.name == entry) {
-                warn!(
-                    name = %entry,
-                    "disabled_metric_sinks entry matches no curated definition"
-                );
-            }
-        }
-
-        // Native selections are reconciled atomically with the config change
-        // by writer admission, not installed through the compute controller.
-        if self.replica_owned_metric_sinks() {
-            return;
-        }
-
-        let denied: Vec<_> = self
-            .metric_sinks
-            .keys()
-            .copied()
-            .filter(|(_, name)| metric_sink_denied(self.catalog().system_config(), name))
-            .collect();
-        for (replica_id, name) in denied {
-            self.drop_metric_sink(replica_id, name);
-        }
-
-        // Reinstall the full non-denied set on every replica. `install_metric_sink` is
-        // idempotent: it skips a definition already recorded in `metric_sinks`
-        // (`contains_key`, see `install_metric_sink`), so re-running the whole set only
-        // installs the ones a preceding `disabled_metric_sinks` edit un-denied.
-        for (cluster_id, replica_id) in self.all_cluster_replicas() {
-            self.install_metric_sinks(cluster_id, replica_id).await;
-        }
-    }
-
-    async fn install_metric_sink(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        definition: &'static CuratedMetricSink,
-    ) {
-        // Cheap duplicate check before planning: if the definition is already installed on this
-        // replica, there is nothing to do. `metric_sink_finish` keeps a backstop for a double
-        // install still in flight (not yet recorded here).
-        if self
-            .metric_sinks
-            .contains_key(&(replica_id, definition.name))
-        {
-            return;
-        }
-
-        let Some(planned) = self.plan_metric_sink(definition) else {
-            return;
-        };
-
-        let (_, sink_id) = self.allocate_transient_id();
-        // Logged only once the definition is known good, so an abandoned install leaves no
-        // misleading "installing" line.
-        info!(%sink_id, %replica_id, name = definition.name, "installing metric sink");
-
-        let validity = PlanValidity::new(
-            &self.catalog,
-            planned.dependencies.clone(),
-            Some(cluster_id),
-            Some(replica_id),
-            RoleMetadata::new(MZ_SYSTEM_ROLE_ID),
-        );
-        let stage = MetricSinkStage::Optimize(MetricSinkOptimize {
-            validity,
-            definition,
-            sink_id,
-            expr: planned.expr.clone(),
-            desc: planned.desc.clone(),
-            cluster_id,
-            replica_id,
-        });
-        self.sequence_staged((), Span::current(), stage).await;
-    }
-
-    /// Plans a curated definition once, caching the result in [`Coordinator::metric_sink_plans`].
-    ///
-    /// The plan depends only on the catalog, never on the replica, so it is shared across every
-    /// replica the definition installs on rather than re-planned per replica. Curated sources read
-    /// only builtins (enforced by [`ensure_reads_only_logs`]), which do not change while envd runs,
-    /// so a cached plan stays valid for envd's lifetime. Returns `None` for an invalid definition,
-    /// having soft-panicked.
-    fn plan_metric_sink(
-        &mut self,
-        definition: &'static CuratedMetricSink,
-    ) -> Option<PlannedMetricSink> {
-        if let Some(planned) = self.metric_sink_plans.get(definition.name) {
-            return Some(planned.clone());
-        }
-
-        // A user sink's prefix is validated at plan time; a curated one has no such gate, so enforce
-        // the same contract here. A failure is a bug in our own definition, hence
-        // `soft_panic_or_log!`. User-vs-curated collisions need no check: the curated prefix is
-        // reserved against user sinks in `validate_user_metric_sink_prefix`.
-        //
-        // NOTE: curated definitions are not checked against each other; they stay disjoint by
-        // publishing distinct `metric_name`s under the shared curated prefix.
-        if let Err(err) = validate_metric_sink_prefix(definition.prefix) {
-            soft_panic_or_log!(
-                "invalid curated metric sink prefix (name={}): {err}",
-                definition.name
+/// Warns about disabled names that match no curated definition.
+///
+/// Unknown names are inert. Selection changes belong to writer admission, not this diagnostic.
+pub(super) fn warn_unknown_disabled_metric_sinks(system_config: &SystemVars) {
+    for entry in system_config.disabled_metric_sinks() {
+        if !CURATED.iter().any(|definition| definition.name == entry) {
+            warn!(
+                name = %entry,
+                "disabled_metric_sinks entry matches no curated definition"
             );
-            return None;
         }
-
-        let catalog = self.catalog().for_system_session();
-        let (expr, desc, dependencies) = match definition.plan_source(&catalog) {
-            Ok(planned) => planned,
-            Err(err) => {
-                soft_panic_or_log!(
-                    "invalid curated metric sink (name={}): {err}",
-                    definition.name
-                );
-                return None;
-            }
-        };
-
-        // Enforce the introspection-only contract before any optimization work, against what the
-        // definition reads rather than how the optimizer imports it.
-        if let Err(err) = ensure_reads_only_logs(self.catalog().state(), &dependencies) {
-            soft_panic_or_log!(
-                "invalid curated metric sink (name={}): {err}",
-                definition.name
-            );
-            return None;
-        }
-
-        let planned = PlannedMetricSink {
-            expr,
-            desc,
-            dependencies,
-        };
-        self.metric_sink_plans
-            .insert(definition.name, planned.clone());
-        Some(planned)
-    }
-
-    #[instrument]
-    fn metric_sink_optimize(
-        &self,
-        stage: MetricSinkOptimize,
-    ) -> Result<StageResult<Box<MetricSinkStage>>, AdapterError> {
-        let MetricSinkOptimize {
-            mut validity,
-            definition,
-            sink_id,
-            expr,
-            desc,
-            cluster_id,
-            replica_id,
-        } = stage;
-
-        let compute_instance = self
-            .instance_snapshot(cluster_id)
-            .expect("compute instance exists");
-        // A transient id for the view the optimizer builds to shape the source rows, scoped to this
-        // dataflow. See `optimize::metric_sink::shape_metric_sink_source`.
-        let (_, view_id) = self.allocate_transient_id();
-
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
-
-        let mut optimizer = optimize::metric_sink::Optimizer::new(
-            self.owned_catalog(),
-            compute_instance,
-            view_id,
-            sink_id,
-            optimizer_config,
-            self.optimizer_metrics(),
-        );
-        let catalog = self.owned_catalog();
-
-        let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
-            || "optimize metric sink",
-            move || {
-                span.in_scope(|| {
-                    let metric_sink = optimize::metric_sink::MetricSink::new(
-                        format!("metric-sink-{}-{replica_id}", definition.name),
-                        optimize::metric_sink::MetricSinkFrom::Query { expr, desc },
-                        definition.prefix.to_string(),
-                        Some(definition.name.to_string()),
-                    );
-
-                    // Both steps run inside one closure so either failure hits the same log.
-                    // `sequence_staged` has no session to report to for a coordinator-driven
-                    // install, so an error would otherwise vanish.
-                    let global_lir_plan = (|| {
-                        // MIR ⇒ MIR optimization (global)
-                        let global_mir_plan = optimizer.catch_unwind_optimize(metric_sink)?;
-                        // The optimizer imports indexes the SQL never named. Fold them into
-                        // validity so one dropped before the finish stage fails the recheck rather
-                        // than shipping a dataflow that imports a gone collection.
-                        let id_bundle =
-                            dataflow_import_id_bundle(global_mir_plan.df_desc(), cluster_id);
-                        let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
-                        validity.extend_dependencies(&catalog, item_ids);
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        optimizer.catch_unwind_optimize(global_mir_plan)
-                    })()
-                    .inspect_err(|err| {
-                        soft_panic_or_log!(
-                            "curated metric sink failed to optimize (name={}): {err}",
-                            definition.name
-                        )
-                    })?;
-
-                    let stage = MetricSinkStage::Finish(MetricSinkFinish {
-                        validity,
-                        definition,
-                        sink_id,
-                        global_lir_plan,
-                        cluster_id,
-                        replica_id,
-                    });
-                    Ok(Box::new(stage))
-                })
-            },
-        )))
-    }
-
-    #[instrument]
-    async fn metric_sink_finish(
-        &mut self,
-        stage: MetricSinkFinish,
-    ) -> Result<StageResult<Box<MetricSinkStage>>, AdapterError> {
-        let MetricSinkFinish {
-            validity: _,
-            definition,
-            sink_id,
-            global_lir_plan,
-            cluster_id,
-            replica_id,
-        } = stage;
-
-        // `sequence_staged` rechecked validity before this stage ran, so the replica still exists.
-        // The coordinator handles one message at a time, so no replica drop runs between that check
-        // and the ship below.
-
-        // The metainfo is dropped rather than persisted: a curated sink is not a catalog item, so
-        // there is nothing for `mz_optimizer_notices` to hang its notices off.
-        let (mut df_desc, _df_meta) = global_lir_plan.unapply();
-
-        let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-
-        // Backstop for the introspection-only contract; the real gate is `ensure_reads_only_logs`
-        // at install time. A log-only source imports only compute collections, so this should never
-        // fire, but a storage import would couple the sink's frontier to envd.
-        if !id_bundle.storage_ids.is_empty() {
-            soft_panic_or_log!(
-                "curated metric sink reads non-introspection relations (name={}): {:?}",
-                definition.name,
-                id_bundle.storage_ids
-            );
-            return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
-        }
-
-        // `reconcile_metric_sinks` only sees sinks already in `metric_sinks`, so a definition
-        // denied while its install was in flight would ship anyway without this recheck.
-        if metric_sink_denied(self.catalog().system_config(), definition.name) {
-            return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
-        }
-
-        // Hold a read on the imports across shipping, so their since cannot advance past the as-of
-        // just picked. Compute takes its own holds during `create_dataflow`.
-        let read_holds = self.acquire_read_holds(&id_bundle);
-        df_desc.set_as_of(read_holds.least_valid_read());
-
-        // Record the install just before shipping. A failed plan or optimize returns earlier, so it
-        // leaves no entry behind. `drop_metric_sinks` reads this entry to release the sink's
-        // instance-global collection state on replica drop. Recording before the ship is safe because
-        // the coordinator runs one message at a time with no await between the two, so no replica drop
-        // sees an entry whose dataflow has not shipped.
-        let install = InstalledMetricSink {
-            cluster_id,
-            sink_id,
-        };
-        if let Some(previous) = self
-            .metric_sinks
-            .insert((replica_id, definition.name), install)
-        {
-            // The key is already taken. `curated_names_are_unique` rules out a name collision,
-            // so this is the same definition installed twice: reconcile can start a second
-            // install while an earlier one is still in flight. Restore the first and abandon this
-            // one, else we leak the first's collection (unreachable to `drop_metric_sinks`) and
-            // register a second collector under the same `sink` label.
-            self.metric_sinks
-                .insert((replica_id, definition.name), previous);
-            info!(
-                %replica_id,
-                name = definition.name,
-                "abandoning metric sink install, already installed"
-            );
-            return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
-        }
-
-        self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
-            .await;
-
-        drop(read_holds);
-        // Nobody is waiting on this: `StagedContext for ()` drops the result. Reuses the
-        // `CREATE METRIC SINK` response rather than adding a variant no client ever sees.
-        Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink))
-    }
-
-    /// Drops the curated metric sinks installed on the given replica.
-    ///
-    /// Called before the replica itself is dropped. Dropping the replica would tear the sink
-    /// dataflows down anyway, but the controller's collection state for them is instance-global,
-    /// so it has to be released explicitly.
-    pub(super) fn drop_metric_sinks(&mut self, replica_id: ReplicaId) {
-        if self.replica_owned_metric_sinks() {
-            return;
-        }
-        for name in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
-            self.drop_metric_sink(replica_id, name);
-        }
-    }
-
-    /// Drops one curated metric sink, if it is installed.
-    fn drop_metric_sink(&mut self, replica_id: ReplicaId, name: &'static str) {
-        let Some(install) = self.metric_sinks.remove(&(replica_id, name)) else {
-            return;
-        };
-        let InstalledMetricSink {
-            cluster_id,
-            sink_id,
-        } = install;
-        info!(%sink_id, %replica_id, name, "dropping metric sink");
-
-        // The entry exists only for a shipped dataflow, so its collection is present and this
-        // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
-        let _ = self
-            .controller
-            .compute
-            .drop_collections(cluster_id, vec![sink_id]);
     }
 }
 
@@ -598,20 +186,6 @@ fn metric_sink_denied(system_config: &SystemVars, name: &str) -> bool {
         .disabled_metric_sinks()
         .iter()
         .any(|denied| denied == name)
-}
-
-/// The names of the definitions installed on `replica_id`, in key order.
-///
-/// The map is keyed replica-first, so a replica's installs are one contiguous range.
-fn metric_sinks_on_replica(
-    metric_sinks: &BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
-    replica_id: ReplicaId,
-) -> Vec<&'static str> {
-    metric_sinks
-        .range((replica_id, "")..)
-        .take_while(|((id, _), _)| *id == replica_id)
-        .map(|((_, name), _)| *name)
-        .collect()
 }
 
 /// Enforces the introspection-only contract from [`CuratedMetricSink::source_sql`]: every relation
@@ -695,44 +269,11 @@ impl CuratedMetricSink {
     }
 }
 
-impl Staged for MetricSinkStage {
-    type Ctx = ();
-
-    fn validity(&mut self) -> &mut PlanValidity {
-        match self {
-            Self::Optimize(stage) => &mut stage.validity,
-            Self::Finish(stage) => &mut stage.validity,
-        }
-    }
-
-    async fn stage(
-        self,
-        coord: &mut Coordinator,
-        _ctx: &mut (),
-    ) -> Result<StageResult<Box<Self>>, AdapterError> {
-        match self {
-            Self::Optimize(stage) => coord.metric_sink_optimize(stage),
-            Self::Finish(stage) => coord.metric_sink_finish(stage).await,
-        }
-    }
-
-    fn message(self, _ctx: (), span: Span) -> Message {
-        Message::MetricSinkStageReady { span, stage: self }
-    }
-
-    fn cancel_enabled(&self) -> bool {
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     use mz_catalog::memory::objects::CatalogItem;
-    use mz_cluster_client::ReplicaId;
-    use mz_controller_types::ClusterId;
-    use mz_repr::GlobalId;
     use mz_sql::plan::{
         METRIC_SINK_CURATED_PREFIX_MARKER, validate_metric_sink_prefix,
         validate_user_metric_sink_prefix,
@@ -741,38 +282,8 @@ mod tests {
 
     use crate::catalog::Catalog;
     use crate::coord::metric_sink::{
-        CURATED, CuratedMetricSink, InstalledMetricSink, ensure_reads_only_logs,
-        metric_sink_denied, metric_sinks_on_replica,
+        CURATED, CuratedMetricSink, ensure_reads_only_logs, metric_sink_denied,
     };
-
-    /// `drop_metric_sinks` relies on this range scan returning exactly one replica's installs, with
-    /// no bleed into a neighbouring replica's contiguous range.
-    #[mz_ore::test]
-    fn metric_sinks_on_replica_scans_one_replica() {
-        let cluster = ClusterId::user(1).expect("valid cluster id");
-        let install = |sink_id| InstalledMetricSink {
-            cluster_id: cluster,
-            sink_id: GlobalId::Transient(sink_id),
-        };
-        let r = ReplicaId::User;
-
-        let mut sinks = BTreeMap::new();
-        sinks.insert((r(1), "a"), install(10));
-        sinks.insert((r(2), "a"), install(20));
-        sinks.insert((r(2), "b"), install(21));
-        sinks.insert((r(2), "c"), install(22));
-        sinks.insert((r(4), "a"), install(40));
-
-        // A replica with several installs: all of them, in key order, and nothing from r(1)/r(4).
-        assert_eq!(metric_sinks_on_replica(&sinks, r(2)), vec!["a", "b", "c"]);
-        // First and last replicas in the map: the scan stops at each boundary.
-        assert_eq!(metric_sinks_on_replica(&sinks, r(1)), vec!["a"]);
-        assert_eq!(metric_sinks_on_replica(&sinks, r(4)), vec!["a"]);
-        // A replica with no installs, whether ordered between present ones (the r(3) gap) or past
-        // the end, returns nothing rather than the next replica's range.
-        assert!(metric_sinks_on_replica(&sinks, r(3)).is_empty());
-        assert!(metric_sinks_on_replica(&sinks, r(5)).is_empty());
-    }
 
     /// The var is a `Vec<Ident>`, so parsing follows the SQL identifier-list rules: surrounding
     /// whitespace is tolerated, an unquoted name folds to lowercase, and a quoted name keeps its
@@ -841,9 +352,8 @@ mod tests {
         }
     }
 
-    /// The registry is keyed on the name, so a duplicate would make one definition's install
-    /// unreachable to teardown and both collectors collide on the `sink` label. Guarded at runtime
-    /// (`metric_sink_finish`) too, but caught here at build time before it can ship.
+    /// Admission identifies definitions by name, and collectors use it as the `sink` label.
+    /// A duplicate would conflate selections and collide in the registry.
     #[mz_ore::test]
     fn curated_names_are_unique() {
         let mut seen = BTreeSet::new();
@@ -856,10 +366,9 @@ mod tests {
         }
     }
 
-    /// Runs the two checks `plan_metric_sink` does at boot, where a failure soft-panics (a hard panic
-    /// under debug assertions, so a CI boot crash-loop). The gate is the load-bearing one: a source
-    /// can plan cleanly yet still read a storage-backed relation transitively (a builtin view joining
-    /// in an introspection source), which only `ensure_reads_only_logs` catches.
+    /// Admission requires valid source SQL and log-only dependencies. A source can plan cleanly
+    /// yet still read a storage-backed relation transitively (a builtin view joining in an
+    /// introspection source), which only `ensure_reads_only_logs` catches.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn curated_definitions_plan() {

@@ -15,9 +15,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
-use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
@@ -766,9 +764,8 @@ impl Coordinator {
         }
     }
 
-    /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
-    /// called after this function successfully returns on any built
-    /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
+    /// Validate and commit catalog changes, then apply their local implications.
+    /// Replica followers install maintained plans selected by the transaction.
     #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_inner(
         &mut self,
@@ -1568,9 +1565,7 @@ impl Coordinator {
         };
         let mut ops = prepared.ops.clone();
         let mut timeline_publication = None;
-        if self.controller.replica_owned_compute()
-            && let Some(client) = self.query_client.clone()
-        {
+        if let Some(client) = self.query_client.clone() {
             let mut collections: BTreeSet<_> =
                 ops.iter()
                     .filter_map(|op| match op {
@@ -1888,7 +1883,6 @@ impl Coordinator {
         self.cluster_replica_statuses
             .remove_cluster_replica_statuses(&cluster_id, &replica_id);
         self.drop_introspection_subscribes(replica_id);
-        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id, publish_status_history)
@@ -1971,13 +1965,11 @@ impl Coordinator {
         sink_ids: impl IntoIterator<Item = GlobalId>,
     ) -> BTreeMap<GlobalId, (ActiveComputeSink, BuiltinTableAppendNotify)> {
         let mut by_id = BTreeMap::new();
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink_id in sink_ids {
             let query_execution = self
                 .active_compute_sinks
                 .get_mut(&sink_id)
                 .and_then(|sink| sink.query_execution_mut().take());
-            let query_owned = query_execution.is_some();
             // Release installed and pending query work before waiting on catalog
             // bookkeeping. Only its owning connection may compact these exports.
             drop(query_execution);
@@ -1993,22 +1985,7 @@ impl Coordinator {
                 Some(entry) => entry,
             };
 
-            if !query_owned {
-                by_cluster
-                    .entry(sink.cluster_id())
-                    .or_default()
-                    .push(sink_id);
-            }
             by_id.insert(sink_id, (sink, write_notify));
-        }
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
         }
         by_id
     }
@@ -2094,34 +2071,6 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, gid) in collections {
-            if self.pending_compute_installations.remove(&gid) {
-                continue;
-            }
-            by_cluster.entry(cluster_id).or_default().push(gid);
-        }
-        self.metrics.pending_compute_installations.set(
-            self.pending_compute_installations
-                .len()
-                .try_into()
-                .expect("fits u64"),
-        );
-        if self.pending_compute_installations.is_empty() {
-            self.pending_compute_installation_retry = None;
-        }
-        for (cluster_id, gids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, gids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-    }
-
     pub(crate) fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
         // Match the create path (catalog_implications.rs) which gracefully
         // logs an error when cloud_resource_controller is None, rather than
@@ -2195,7 +2144,7 @@ impl Coordinator {
         sink: &Sink,
         publish_status_history: bool,
     ) -> Result<(), AdapterError> {
-        let (desc, read_holds) = self.storage_export_description(id, sink)?;
+        let desc = self.storage_export_description(id, sink)?;
         let collection_desc = CollectionDescription {
             // TODO(sinks): make generic once we have more than one sink type.
             desc: KAFKA_PROGRESS_DESC.clone(),
@@ -2215,8 +2164,6 @@ impl Coordinator {
                 publish_status_history,
             )
             .await;
-        // Legacy installation takes over these temporary dependency holds.
-        drop(read_holds);
         Ok(res?)
     }
 
@@ -2225,60 +2172,31 @@ impl Coordinator {
         sink: &Sink,
         publish_status_history: bool,
     ) -> Result<(), AdapterError> {
-        let (desc, read_holds) = self.storage_export_description(sink.global_id(), sink)?;
+        let desc = self.storage_export_description(sink.global_id(), sink)?;
         let res = self
             .controller
             .storage
             .alter_export(sink.global_id(), desc, publish_status_history)
             .await;
-        drop(read_holds);
         Ok(res?)
     }
 
-    /// Reconstructs an export registration from committed state. Only legacy
-    /// controller installation needs temporary adapter-owned dependency holds.
+    /// Reconstructs an export registration from committed state.
+    /// Replica followers acquire execution protection independently.
     fn storage_export_description(
         &self,
         id: GlobalId,
         sink: &Sink,
-    ) -> Result<(ExportDescription, crate::ReadHolds), AdapterError> {
-        // Validate `sink.from` is in fact a storage collection
+    ) -> Result<ExportDescription, AdapterError> {
         self.controller.storage.check_exists(sink.from)?;
-
-        // The AsOf is used to determine at what time to snapshot reading from
-        // the persist collection.  This is primarily relevant when we do _not_
-        // want to include the snapshot in the sink.
-        let id_bundle = crate::CollectionIdBundle {
-            storage_ids: btreeset! {sink.from},
-            compute_ids: btreemap! {},
-        };
-
-        // Native replicas acquire their own execution protection. Registration
-        // must not retain a second, adapter-owned installer hold.
-        let read_holds = if self.controller.replica_owned_compute() {
-            crate::ReadHolds::default()
-        } else {
-            self.acquire_read_holds(&id_bundle)
-        };
-        let mut as_of = read_holds.least_valid_read();
-        if self.catalog().state().catalog_read_protection_enabled() {
-            let requirement = &self.catalog().state().maintained_read_requirements()[&id];
-            let committed = requirement.frontier.into_iter().collect();
-            // A read-only catalog snapshot can lag the leased since. Actual holds,
-            // not the snapshot's permission, determine what remains executable.
-            as_of.join_assign(&committed);
-        }
-
+        let requirement = &self.catalog().state().maintained_read_requirements()[&id];
+        let as_of = requirement.frontier.into_iter().collect();
         let (storage_sink_desc, cluster_id) =
             self.catalog().state().storage_sink_description(sink, as_of);
-
-        Ok((
-            ExportDescription {
-                sink: storage_sink_desc,
-                instance_id: cluster_id,
-            },
-            read_holds,
-        ))
+        Ok(ExportDescription {
+            sink: storage_sink_desc,
+            instance_id: cluster_id,
+        })
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

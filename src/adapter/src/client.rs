@@ -294,13 +294,12 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
-        // Build the PeekClient with query or legacy storage access returned from startup.
+        // Build the PeekClient with native query access returned from startup.
         let StartupResponse {
             role_id,
             write_notify,
             session_defaults,
             catalog,
-            storage_collections,
             query_client,
             transient_id_gen,
             optimizer_metrics,
@@ -315,7 +314,6 @@ impl Client {
             CoordinatorClient::Session(self.clone()),
             &catalog,
             Default::default(),
-            storage_collections,
             query_client,
             transient_id_gen,
             optimizer_metrics,
@@ -1563,7 +1561,6 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
-                | Command::GetComputeInstanceClient { .. }
                 | Command::AcquireClientReadProtection { .. }
                 | Command::GetOracle { .. }
                 | Command::DetermineRealTimeRecentTimestamp { .. }
@@ -1577,7 +1574,6 @@ impl SessionClient {
                 | Command::LookupConnection { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
-                | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
                 | Command::RegisterConnectionCancelWatch { .. }

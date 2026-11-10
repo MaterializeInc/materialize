@@ -18,7 +18,6 @@ use mz_ore::{assert_none, soft_assert_or_log};
 use timely::PartialOrder;
 use timely::progress::Antichain;
 
-use crate::controller::StorageCollections;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
@@ -285,25 +284,6 @@ where
             }
             !is_peek
         });
-    }
-
-    /// Update the source import uppers to reflect the current state of the imported collections.
-    ///
-    /// This method should be called after compacting the history to make sure that the dataflow
-    /// descriptions do not mention storage collections that don't exist anymore. Its main
-    /// purpose is to advance the uppers when connecting a new replica.
-    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections) {
-        for command in &mut self.commands {
-            if let ComputeCommand::CreateDataflow(dataflow) = command {
-                for (id, import) in dataflow.source_imports.iter_mut() {
-                    let frontiers = storage_collections
-                        .collection_frontiers(*id)
-                        .expect("collection exists");
-
-                    import.upper = frontiers.write_frontier;
-                }
-            }
-        }
     }
 
     /// Iterate through the contained commands.

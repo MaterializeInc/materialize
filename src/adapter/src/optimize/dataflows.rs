@@ -22,10 +22,8 @@ use tracing::warn;
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
 pub use mz_catalog::optimize::ExprPrep;
-use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -63,16 +61,6 @@ pub struct ComputeInstanceSnapshot {
 }
 
 impl ComputeInstanceSnapshot {
-    pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
-        controller
-            .compute
-            .collection_ids(id)
-            .map(|collection_ids| Self {
-                instance_id: id,
-                collections: Some(collection_ids.collect()),
-            })
-    }
-
     pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
         Self {
             instance_id,

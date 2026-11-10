@@ -35,7 +35,6 @@ use mz_expr::{
     RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::task;
@@ -93,8 +92,6 @@ pub(crate) struct PendingPeek {
     /// Context about the execute that produced this peek,
     /// needed by the coordinator for retiring it.
     pub(crate) ctx_extra: ExecuteContextGuard,
-    /// Is this a fast-path peek, i.e. one that doesn't require a dataflow?
-    pub(crate) is_fast_path: bool,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -802,362 +799,164 @@ impl crate::coord::Coordinator {
             self.set_statement_execution_timestamp(id, timestamp)
         }
 
-        // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
-        // In both cases we will want to peek, and the main difference is that we might want to
-        // build a dataflow and drop it once the peek is issued. The peeks are also constructed
-        // differently.
-
-        // Query-client peeks use committed read protection through the response.
-        // Controller peeks acquire a target hold before issuing the peek. For a
-        // transient controller dataflow, creation first pins `since` at `as_of`,
-        // so the subsequent target hold lands at `as_of <= timestamp`.
-        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy, read_hold) =
-            match fast_path {
-                PeekPlan::FastPath(FastPathPlan::PeekExisting(
-                    _coll_id,
-                    idx_id,
-                    literal_constraints,
-                    map_filter_project,
-                )) => {
-                    if let Some(client) = self.query_client.clone() {
-                        let bundle = crate::CollectionIdBundle {
-                            storage_ids: BTreeSet::new(),
-                            compute_ids: BTreeMap::from([(
-                                compute_instance,
-                                BTreeSet::from([idx_id]),
-                            )]),
-                        };
-                        let holds = self.acquire_query_read_holds(&bundle).await?;
-                        if !holds.least_valid_read().less_equal(&timestamp) {
-                            return Err(AdapterError::CollectionUnreadable {
-                                id: idx_id.to_string(),
-                            });
-                        }
-                        return Ok(self.dispatch_query_peek(
-                            Arc::clone(&catalog),
-                            client,
-                            ctx_extra,
-                            conn_id,
-                            source_ids,
-                            compute_instance,
-                            target_replica,
-                            PeekTarget::Index { id: idx_id },
-                            (literal_constraints, timestamp, map_filter_project),
-                            intermediate_result_type,
-                            finishing,
-                            max_result_size,
-                            max_returned_query_size,
-                            StatementExecutionStrategy::FastPath,
-                            holds,
-                            None,
-                        ));
-                    }
-                    let read_hold = self
-                        .controller
-                        .compute
-                        .acquire_read_hold(compute_instance, idx_id)
-                        .map_err(
-                            AdapterError::concurrent_dependency_drop_from_collection_update_error,
-                        )?;
-                    (
-                        (literal_constraints, timestamp, map_filter_project),
-                        None,
-                        true,
-                        PeekTarget::Index { id: idx_id },
-                        StatementExecutionStrategy::FastPath,
-                        read_hold,
-                    )
-                }
-                PeekPlan::FastPath(FastPathPlan::PeekPersist(
-                    coll_id,
-                    literal_constraint,
-                    map_filter_project,
-                )) => {
-                    let peek_command = (
-                        literal_constraint.map(|r| vec![r]),
-                        timestamp,
-                        map_filter_project,
-                    );
-                    if let Some(client) = self.query_client.clone() {
-                        let bundle = crate::CollectionIdBundle {
-                            storage_ids: BTreeSet::from([coll_id]),
-                            compute_ids: BTreeMap::new(),
-                        };
-                        let holds = self.acquire_query_read_holds(&bundle).await?;
-                        if !holds.least_valid_read().less_equal(&timestamp) {
-                            return Err(AdapterError::CollectionUnreadable {
-                                id: coll_id.to_string(),
-                            });
-                        }
-                        let metadata = client.collection_metadata(&catalog, coll_id)?;
-                        return Ok(self.dispatch_query_peek(
-                            Arc::clone(&catalog),
-                            client,
-                            ctx_extra,
-                            conn_id,
-                            source_ids,
-                            compute_instance,
-                            target_replica,
-                            PeekTarget::Persist {
-                                id: coll_id,
-                                metadata,
-                            },
-                            peek_command,
-                            intermediate_result_type,
-                            finishing,
-                            max_result_size,
-                            max_returned_query_size,
-                            StatementExecutionStrategy::PersistFastPath,
-                            holds,
-                            None,
-                        ));
-                    }
-                    let metadata = self
-                        .controller
-                        .storage
-                        .collection_metadata(coll_id)
-                        .expect("storage collection for fast-path peek")
-                        .clone();
-                    let read_hold = self
-                        .controller
-                        .storage_collections
-                        .acquire_read_holds(vec![coll_id])
-                        .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
-                        .into_element();
-                    (
-                        peek_command,
-                        None,
-                        true,
-                        PeekTarget::Persist {
-                            id: coll_id,
-                            metadata,
-                        },
-                        StatementExecutionStrategy::PersistFastPath,
-                        read_hold,
-                    )
-                }
-                PeekPlan::SlowPath(PeekDataflowPlan {
-                    desc: dataflow,
-                    // n.b. this index_id identifies a transient index the
-                    // caller created, so it is guaranteed to be on
-                    // `compute_instance`.
-                    id: index_id,
-                    key: index_key,
-                    permutation: index_permutation,
-                    thinned_arity: index_thinned_arity,
-                }) => {
-                    // The slow-path peek read-hold strategy below acquires a hold for
-                    // `index_id` only. That is sufficient today because slow-path peek
-                    // dataflows have a single export equal to `index_id`. If we ever
-                    // ship multi-output dataflows on this path, the hold acquisition
-                    // needs to be revisited.
-                    let exports: Vec<GlobalId> = dataflow.export_ids().collect();
-                    soft_assert_eq_or_log!(
-                        exports.as_slice(),
-                        &[index_id],
-                        "slow-path peek dataflow must export exactly [index_id]",
-                    );
-                    if exports.as_slice() != [index_id] {
-                        return Err(AdapterError::internal(
-                            "peek error",
-                            format!(
-                                "slow-path peek dataflow exports {exports:?}, expected [{index_id}]",
-                            ),
-                        ));
-                    }
-
-                    if let Some(client) = self.query_client.clone() {
-                        let imports = crate::CollectionIdBundle {
-                            storage_ids: dataflow.source_imports.keys().copied().collect(),
-                            compute_ids: BTreeMap::from([(
-                                compute_instance,
-                                dataflow.index_imports.keys().copied().collect(),
-                            )]),
-                        };
-                        let creation_holds = self.acquire_query_read_holds(&imports).await?;
-                        let as_of = dataflow.as_of.as_ref().ok_or_else(|| {
-                            AdapterError::Internal("slow-path peek requires as_of".into())
-                        })?;
-                        if !timely::PartialOrder::less_equal(
-                            &creation_holds.least_valid_read(),
-                            as_of,
-                        ) || !as_of.less_equal(&timestamp)
-                        {
-                            return Err(AdapterError::CollectionUnreadable {
-                                id: index_id.to_string(),
-                            });
-                        }
-                        let mut mfp = mz_expr::MapFilterProject::new(source_arity);
-                        mfp.permute_fn(
-                            |c| index_permutation[c],
-                            index_key.len() + index_thinned_arity,
-                        );
-                        let map_filter_project = mfp_to_safe_plan(mfp)?;
-                        return Ok(self.dispatch_query_peek(
-                            Arc::clone(&catalog),
-                            client,
-                            ctx_extra,
-                            conn_id,
-                            source_ids,
-                            compute_instance,
-                            target_replica,
-                            PeekTarget::Index { id: index_id },
-                            (None, timestamp, map_filter_project),
-                            intermediate_result_type,
-                            finishing,
-                            max_result_size,
-                            max_returned_query_size,
-                            StatementExecutionStrategy::Standard,
-                            creation_holds,
-                            Some(dataflow),
-                        ));
-                    }
-
-                    // Very important: actually create the dataflow (here, so we can destructure).
-                    self.controller
-                        .compute
-                        .create_dataflow(compute_instance, dataflow, None)
-                        .map_err(
-                            AdapterError::concurrent_dependency_drop_from_dataflow_creation_error,
-                        )?;
-
-                    // Acquire a bare hold on the freshly-shipped index. On failure we must
-                    // drop the dataflow ourselves, otherwise it leaks.
-                    let acquire_result = self
-                        .controller
-                        .compute
-                        .acquire_read_hold(compute_instance, index_id)
-                        .map_err(
-                            AdapterError::concurrent_dependency_drop_from_collection_update_error,
-                        );
-                    let read_hold = match acquire_result {
-                        Ok(hold) => hold,
-                        Err(e) => {
-                            self.drop_compute_collections(vec![(compute_instance, index_id)]);
-                            return Err(e);
-                        }
-                    };
-
-                    // Create an identity MFP operator.
-                    let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-                    map_filter_project.permute_fn(
-                        |c| index_permutation[c],
-                        index_key.len() + index_thinned_arity,
-                    );
-                    let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
-
-                    (
-                        (None, timestamp, map_filter_project),
-                        Some(index_id),
-                        false,
-                        PeekTarget::Index { id: index_id },
-                        StatementExecutionStrategy::Standard,
-                        read_hold,
-                    )
-                }
-                PeekPlan::FastPath(_) => {
-                    unreachable!()
-                }
-            };
-
-        // Endpoints for sending and receiving peek responses.
-        let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
-
-        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
-        // small but unlikely chance that it's not unique to completed peeks.
-        let mut uuid = Uuid::new_v4();
-        while self.pending_peeks.contains_key(&uuid) {
-            uuid = Uuid::new_v4();
-        }
-
-        let (literal_constraints, timestamp, map_filter_project) = peek_command;
-
-        // At this stage we don't know column names for the result because we
-        // only know the peek's result type as a bare SqlRelationType.
-        let peek_result_column_names =
-            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
-        let peek_result_desc =
-            RelationDesc::new(intermediate_result_type, peek_result_column_names);
-
-        let peek_result = self
-            .controller
-            .compute
-            .peek(
-                compute_instance,
-                peek_target,
+        let client = self
+            .query_client
+            .clone()
+            .ok_or_else(|| AdapterError::Internal("query client is not initialized".into()))?;
+        // Both maintained and transient peeks retain committed read protection
+        // through their response.
+        match fast_path {
+            PeekPlan::FastPath(FastPathPlan::PeekExisting(
+                _coll_id,
+                idx_id,
                 literal_constraints,
-                uuid,
-                timestamp,
-                peek_result_desc,
-                finishing.clone(),
                 map_filter_project,
-                read_hold,
-                target_replica,
-                rows_tx,
-            )
-            .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
-        if let Err(e) = peek_result {
-            // If we shipped a transient dataflow above, drop it now to avoid leaking it.
-            if let Some(index_id) = drop_dataflow {
-                self.drop_compute_collections(vec![(compute_instance, index_id)]);
+            )) => {
+                let bundle = crate::CollectionIdBundle {
+                    storage_ids: BTreeSet::new(),
+                    compute_ids: BTreeMap::from([(compute_instance, BTreeSet::from([idx_id]))]),
+                };
+                let holds = self.acquire_query_read_holds(&bundle).await?;
+                if !holds.least_valid_read().less_equal(&timestamp) {
+                    return Err(AdapterError::CollectionUnreadable {
+                        id: idx_id.to_string(),
+                    });
+                }
+                return Ok(self.dispatch_query_peek(
+                    Arc::clone(&catalog),
+                    client,
+                    ctx_extra,
+                    conn_id,
+                    source_ids,
+                    compute_instance,
+                    target_replica,
+                    PeekTarget::Index { id: idx_id },
+                    (literal_constraints, timestamp, map_filter_project),
+                    intermediate_result_type,
+                    finishing,
+                    max_result_size,
+                    max_returned_query_size,
+                    StatementExecutionStrategy::FastPath,
+                    holds,
+                    None,
+                ));
             }
-            return Err(e);
+            PeekPlan::FastPath(FastPathPlan::PeekPersist(
+                coll_id,
+                literal_constraint,
+                map_filter_project,
+            )) => {
+                let peek_command = (
+                    literal_constraint.map(|r| vec![r]),
+                    timestamp,
+                    map_filter_project,
+                );
+                let bundle = crate::CollectionIdBundle {
+                    storage_ids: BTreeSet::from([coll_id]),
+                    compute_ids: BTreeMap::new(),
+                };
+                let holds = self.acquire_query_read_holds(&bundle).await?;
+                if !holds.least_valid_read().less_equal(&timestamp) {
+                    return Err(AdapterError::CollectionUnreadable {
+                        id: coll_id.to_string(),
+                    });
+                }
+                let metadata = client.collection_metadata(&catalog, coll_id)?;
+                return Ok(self.dispatch_query_peek(
+                    Arc::clone(&catalog),
+                    client,
+                    ctx_extra,
+                    conn_id,
+                    source_ids,
+                    compute_instance,
+                    target_replica,
+                    PeekTarget::Persist {
+                        id: coll_id,
+                        metadata,
+                    },
+                    peek_command,
+                    intermediate_result_type,
+                    finishing,
+                    max_result_size,
+                    max_returned_query_size,
+                    StatementExecutionStrategy::PersistFastPath,
+                    holds,
+                    None,
+                ));
+            }
+            PeekPlan::SlowPath(PeekDataflowPlan {
+                desc: dataflow,
+                // n.b. this index_id identifies a transient index the
+                // caller created, so it is guaranteed to be on
+                // `compute_instance`.
+                id: index_id,
+                key: index_key,
+                permutation: index_permutation,
+                thinned_arity: index_thinned_arity,
+            }) => {
+                // Transient execution and response routing own exactly one export.
+                let exports: Vec<GlobalId> = dataflow.export_ids().collect();
+                soft_assert_eq_or_log!(
+                    exports.as_slice(),
+                    &[index_id],
+                    "slow-path peek dataflow must export exactly [index_id]",
+                );
+                if exports.as_slice() != [index_id] {
+                    return Err(AdapterError::internal(
+                        "peek error",
+                        format!(
+                            "slow-path peek dataflow exports {exports:?}, expected [{index_id}]",
+                        ),
+                    ));
+                }
+
+                let imports = crate::CollectionIdBundle {
+                    storage_ids: dataflow.source_imports.keys().copied().collect(),
+                    compute_ids: BTreeMap::from([(
+                        compute_instance,
+                        dataflow.index_imports.keys().copied().collect(),
+                    )]),
+                };
+                let creation_holds = self.acquire_query_read_holds(&imports).await?;
+                let as_of = dataflow.as_of.as_ref().ok_or_else(|| {
+                    AdapterError::Internal("slow-path peek requires as_of".into())
+                })?;
+                if !timely::PartialOrder::less_equal(&creation_holds.least_valid_read(), as_of)
+                    || !as_of.less_equal(&timestamp)
+                {
+                    return Err(AdapterError::CollectionUnreadable {
+                        id: index_id.to_string(),
+                    });
+                }
+                let mut mfp = mz_expr::MapFilterProject::new(source_arity);
+                mfp.permute_fn(
+                    |c| index_permutation[c],
+                    index_key.len() + index_thinned_arity,
+                );
+                let map_filter_project = mfp_to_safe_plan(mfp)?;
+                return Ok(self.dispatch_query_peek(
+                    Arc::clone(&catalog),
+                    client,
+                    ctx_extra,
+                    conn_id,
+                    source_ids,
+                    compute_instance,
+                    target_replica,
+                    PeekTarget::Index { id: index_id },
+                    (None, timestamp, map_filter_project),
+                    intermediate_result_type,
+                    finishing,
+                    max_result_size,
+                    max_returned_query_size,
+                    StatementExecutionStrategy::Standard,
+                    creation_holds,
+                    Some(dataflow),
+                ));
+            }
+            PeekPlan::FastPath(_) => {
+                unreachable!()
+            }
         }
-
-        // Register the pending peek only after compute.peek() succeeds. If it
-        // fails (e.g. concurrent replica/cluster drop), inserting first would
-        // leak entries in these maps and misattribute statement execution reasons.
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
-                cluster_id: compute_instance,
-                depends_on: source_ids,
-                ctx_extra: std::mem::take(ctx_extra),
-                is_fast_path,
-            },
-        );
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, compute_instance);
-
-        let duration_histogram = self.metrics.row_set_finishing_seconds();
-
-        // If a dataflow was created, drop it now that the peek is queued. This is
-        // required: `add_collection` installs implied/warmup holds owned by the
-        // controller and only released via `drop_collections`, so without this call
-        // the transient dataflow's `since` would stay pinned at `as_of` forever. The
-        // peek's own read hold keeps the collection alive on the cluster until the
-        // response arrives.
-        if let Some(index_id) = drop_dataflow {
-            self.drop_compute_collections(vec![(compute_instance, index_id)]);
-        }
-
-        let persist_client = self.persist_client.clone();
-        let peek_stash_read_batch_size_bytes =
-            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
-                .get(self.catalog().system_config().dyncfgs());
-        let peek_stash_read_memory_budget_bytes =
-            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
-                .get(self.catalog().system_config().dyncfgs());
-
-        let peek_response_stream = Self::create_peek_response_stream(
-            rows_rx,
-            finishing,
-            max_result_size,
-            max_returned_query_size,
-            duration_histogram,
-            persist_client,
-            peek_stash_read_batch_size_bytes,
-            peek_stash_read_memory_budget_bytes,
-        );
-
-        Ok(crate::ExecuteResponse::SendingRowsStreaming {
-            rows: Box::pin(peek_response_stream),
-            instance_id: compute_instance,
-            strategy,
-        })
     }
 
     /// Dispatches a protected peek after fallible setup, taking logging ownership.
@@ -1215,7 +1014,6 @@ impl crate::coord::Coordinator {
                 cluster_id: compute_instance,
                 depends_on: source_ids,
                 ctx_extra: std::mem::take(ctx_extra),
-                is_fast_path,
             },
         );
         self.client_pending_peeks
@@ -1531,8 +1329,7 @@ impl crate::coord::Coordinator {
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
                 for uuid in uuids {
-                    let _ =
-                        self.cancel_compute_peek(compute_instance, uuid, PeekResponse::Canceled);
+                    self.cancel_compute_peek(compute_instance, uuid, PeekResponse::Canceled);
                 }
             }
 
@@ -1554,44 +1351,18 @@ impl crate::coord::Coordinator {
         cluster: ComputeInstanceId,
         uuid: Uuid,
         reason: PeekResponse,
-    ) -> Result<(), mz_compute_client::controller::error::InstanceMissing> {
-        if let Some(client) = &self.query_client {
-            if client.cancel_peek(uuid, reason) {
-                for replica in client.replica_clients(cluster, None) {
-                    let _ = replica.cancel_peek(uuid);
-                }
-            }
-            // A completed query may already have released its registration while
-            // its frontend bookkeeping still awaits the completion message.
-            return Ok(());
-        }
-        self.controller.compute.cancel_peek(cluster, uuid, reason)
-    }
-
-    /// Handle a peek notification and retire the corresponding execution. Does nothing for
-    /// already-removed peeks.
-    pub(crate) fn handle_peek_notification(
-        &mut self,
-        uuid: Uuid,
-        notification: PeekNotification,
-        otel_ctx: OpenTelemetryContext,
     ) {
-        // We expect exactly one peek response, which we forward. Then we clean up the
-        // peek's state in the coordinator.
-        if let Some(PendingPeek {
-            conn_id: _,
-            cluster_id: _,
-            depends_on: _,
-            ctx_extra,
-            is_fast_path,
-        }) = self.remove_pending_peek(&uuid)
-        {
-            let reason = peek_notification_reason(notification, is_fast_path);
-            otel_ctx.attach_as_parent();
-            self.retire_execution(reason, ctx_extra.defuse());
+        let client = self
+            .query_client
+            .as_ref()
+            .expect("query client initialized before serving");
+        if client.cancel_peek(uuid, reason) {
+            for replica in client.replica_clients(cluster, None) {
+                let _ = replica.cancel_peek(uuid);
+            }
         }
-        // Cancellation may cause us to receive responses for peeks no
-        // longer in `self.pending_peeks`, so we quietly ignore them.
+        // A completed query may already have released its registration while
+        // its frontend bookkeeping still awaits the completion message.
     }
 
     /// Clean up a peek's state.
@@ -1637,9 +1408,7 @@ impl crate::coord::Coordinator {
         let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
         if let Some(ws) = watch_set {
             self.install_peek_watch_sets(conn_id.clone(), ws)
-                .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
-                })?;
+                .map_err(|e| AdapterError::concurrent_dependency_drop_from_collection_missing(e))?;
         }
 
         let source_arity = intermediate_result_type.arity();
@@ -1713,7 +1482,7 @@ impl crate::coord::Coordinator {
         // for the error case (no ExecuteContextExtra is created here).
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let err = AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e);
+                let err = AdapterError::concurrent_dependency_drop_from_collection_missing(e);
                 send_err(tx, err);
                 return;
             }
@@ -1741,7 +1510,7 @@ impl crate::coord::Coordinator {
 
         // Try to ship the dataflow. We handle errors gracefully because dependencies might have
         // disappeared during sequencing.
-        let result = if self.query_client.is_some() {
+        let result = {
             let imports = crate::coord::id_bundle::CollectionIdBundle {
                 storage_ids: df_desc.source_imports.keys().copied().collect(),
                 compute_ids: [(
@@ -1761,15 +1530,9 @@ impl crate::coord::Coordinator {
                 ),
                 Err(error) => Err(error),
             }
-        } else {
-            self.try_ship_dataflow(df_desc, compute_instance, target_replica)
-                .await
-                .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
         };
         if let Err(e) = result {
-            // Clean up the active compute sink that was added above, since the dataflow was never
-            // created. If we don't do this, the sink_id remains in drop_sinks but no collection
-            // exists in the compute controller, causing a panic when the connection terminates.
+            // Failed admission must not leave an active sink behind.
             self.remove_active_compute_sink(sink_id).await;
             send_err(tx, e);
             return;

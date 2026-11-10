@@ -9,10 +9,6 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use itertools::Itertools;
-use mz_adapter_types::connection::ConnectionId;
-use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::ExplainFormat;
@@ -22,7 +18,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use tracing::{Instrument, Span};
 
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
-use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
     Coordinator, ExplainTimestampFinish, ExplainTimestampLinearizeTimestamp,
     ExplainTimestampOptimize, ExplainTimestampRealTimeRecency, ExplainTimestampStage, Message,
@@ -278,97 +274,20 @@ impl Coordinator {
         ))
     }
 
-    pub(crate) fn explain_timestamp(
-        &self,
-        conn_id: &ConnectionId,
-        session_wall_time: DateTime<Utc>,
-        cluster_id: ClusterId,
-        id_bundle: &CollectionIdBundle,
-        determination: TimestampDetermination,
-    ) -> TimestampExplanation {
-        assert!(
-            self.query_client.is_none(),
-            "legacy frontier observations only"
-        );
-        let mut sources = Vec::new();
-        {
-            let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
-            let frontiers = self
-                .controller
-                .storage
-                .collections_frontiers(storage_ids)
-                .expect("missing collection");
-
-            for (id, since, upper) in frontiers {
-                let name = self
-                    .catalog()
-                    .try_get_entry_by_global_id(&id)
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog()
-                            .resolve_full_name(name, Some(conn_id))
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| id.to_string());
-                sources.push(TimestampSource {
-                    name: format!("{name} ({id}, storage)"),
-                    read_frontier: Some(since.elements().to_vec()),
-                    write_frontier: Some(upper.elements().to_vec()),
-                });
-            }
-        }
-        {
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
-                let catalog = self.catalog();
-                for id in compute_ids {
-                    let frontiers = self
-                        .controller
-                        .compute
-                        .collection_frontiers(*id, Some(cluster_id))
-                        .expect("id does not exist");
-                    let name = catalog
-                        .try_get_entry_by_global_id(id)
-                        .map(|item| item.name())
-                        .map(|name| catalog.resolve_full_name(name, Some(conn_id)).to_string())
-                        .unwrap_or_else(|| id.to_string());
-                    sources.push(TimestampSource {
-                        name: format!("{name} ({id}, compute)"),
-                        read_frontier: Some(frontiers.read_frontier.to_vec()),
-                        write_frontier: Some(frontiers.write_frontier.to_vec()),
-                    });
-                }
-            }
-        }
-        let respond_immediately = determination.respond_immediately();
-        TimestampExplanation {
-            determination,
-            sources,
-            session_wall_time,
-            respond_immediately,
-        }
-    }
-
     /// Build diagnostic work for a cancelable stage. The returned future must
     /// run off the coordinator. Watch cancellation inside the work as well as
     /// in `handle_spawn`, which retires the request but does not abort its task.
     pub(crate) fn timestamp_explanation(
         &self,
         session: &Session,
-        cluster_id: ClusterId,
         id_bundle: CollectionIdBundle,
         determination: TimestampDetermination,
         expires: Option<std::time::Instant>,
     ) -> futures::future::BoxFuture<'static, Result<TimestampExplanation, AdapterError>> {
-        let Some(client) = self.query_client.clone() else {
-            let explanation = self.explain_timestamp(
-                session.conn_id(),
-                session.pcx().wall_time,
-                cluster_id,
-                &id_bundle,
-                determination,
-            );
-            return Box::pin(async { Ok(explanation) });
-        };
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
         let catalog = self.owned_catalog();
         let conn_id = session.conn_id().clone();
         let wall_time = session.pcx().wall_time;
@@ -432,8 +351,7 @@ impl Coordinator {
                 RequireLinearization::NotRequired,
             )
             .await?;
-        let explanation =
-            self.timestamp_explanation(session, cluster_id, id_bundle, determination, deadline);
+        let explanation = self.timestamp_explanation(session, id_bundle, determination, deadline);
         let respond = move |explanation: TimestampExplanation| {
             let s = if is_json {
                 serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
@@ -443,10 +361,6 @@ impl Coordinator {
             let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
             Self::send_immediate_rows(rows)
         };
-        if self.query_client.is_none() {
-            // The legacy helper returns an already-computed explanation.
-            return Ok(StageResult::Response(respond(explanation.await?)));
-        }
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "explain timestamp observations",
             async move { Ok(respond(explanation.await?)) },

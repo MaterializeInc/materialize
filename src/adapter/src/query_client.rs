@@ -1312,6 +1312,281 @@ mod tests {
         PermissionRace(Option<Timestamp>),
         UninstalledIndex,
         DurableProgress,
+        Readiness(ReadinessCase),
+    }
+
+    #[derive(Clone, Copy)]
+    enum ReadinessCase {
+        OutputLag,
+        References,
+        Observations,
+        HydrationOnly,
+        Connection,
+        Placement,
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_uses_output_not_shared_or_refresh_write_progress() {
+        readiness_harness(ReadinessCase::OutputLag).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_uses_furthest_named_reference_not_bystanders() {
+        readiness_harness(ReadinessCase::References).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_distinguishes_missing_observations_from_completed_outputs() {
+        readiness_harness(ReadinessCase::Observations).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_without_lag_gate_requires_only_known_hydration() {
+        readiness_harness(ReadinessCase::HydrationOnly).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_requires_a_ready_target_even_without_expected_exports() {
+        readiness_harness(ReadinessCase::Connection).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn readiness_excludes_references_outside_materialized_view_placement() {
+        readiness_harness(ReadinessCase::Placement).await;
+    }
+
+    async fn readiness_harness(case: ReadinessCase) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Box::pin(acquisition_catalog_harness(AcquisitionCase::Readiness(
+                case,
+            ))),
+        )
+        .await
+        .expect("readiness observations must arrive");
+    }
+
+    const READINESS_REPLICAS: [(ReplicaId, &str); 4] = [
+        (ReplicaId::User(100_010), "readiness_reference"),
+        (ReplicaId::User(100_011), "readiness_ahead"),
+        (ReplicaId::User(100_012), "readiness_target"),
+        (ReplicaId::User(100_013), "readiness_bystander"),
+    ];
+
+    async fn replica_readiness(
+        case: ReadinessCase,
+        catalog: &Catalog,
+        client: &QueryClient,
+        id: GlobalId,
+    ) {
+        use mz_compute_client::protocol::response::{ComputeResponse, FrontiersResponse};
+
+        async fn observe(
+            (replica, peer): &(ReplicaQueryClient, compute::tests::Peer),
+            id: GlobalId,
+            update: FrontiersResponse,
+        ) {
+            // Subscribe before sending so assertions see this transport update,
+            // not a previous notification or a scheduling-dependent cache read.
+            let mut changed = replica.frontier_changes();
+            peer.respond(ComputeResponse::Frontiers(id, update));
+            changed
+                .changed()
+                .await
+                .expect("frontier observation arrives");
+        }
+
+        let entry = catalog.get_entry_by_global_id(&id);
+        let CatalogItem::MaterializedView(mv) = entry.item() else {
+            panic!("readiness fixture must contain a materialized view");
+        };
+        let cluster = mv.cluster_id;
+        let [(reference, _), (ahead, _), (target, _), (bystander, _)] = READINESS_REPLICAS;
+        let ready = |expected: &[GlobalId], lag: Option<u64>, references: &[ReplicaId]| {
+            client.collections_ready_on_replica(
+                catalog,
+                cluster,
+                target,
+                &expected.iter().copied().collect(),
+                lag.map(Timestamp::new),
+                &references.iter().copied().collect(),
+            )
+        };
+        assert!(!ready(&[], None, &[]), "no target connection is not ready");
+        let mut replicas = BTreeMap::new();
+        for (replica, _) in READINESS_REPLICAS {
+            assert!(
+                catalog
+                    .state()
+                    .replica_matches_target(cluster, replica, None)
+            );
+            let (connection, peer) = compute::tests::connect().await;
+            client
+                .connections
+                .insert_test_client((cluster, replica), connection.clone());
+            replicas.insert(replica, (connection, peer));
+        }
+        let ac = |t| Antichain::from_elem(Timestamp::new(t));
+        let progress = |write, output| FrontiersResponse {
+            write_frontier: Some(ac(write)),
+            output_frontier: Some(ac(output)),
+            hydrated: Some(true),
+            ..Default::default()
+        };
+        let output = |frontier| FrontiersResponse {
+            output_frontier: Some(frontier),
+            ..Default::default()
+        };
+        let hydration = |hydrated| FrontiersResponse {
+            hydrated: Some(hydrated),
+            ..Default::default()
+        };
+        match case {
+            ReadinessCase::OutputLag => {
+                observe(&replicas[&reference], id, progress(10_000, 10_000)).await;
+                observe(&replicas[&target], id, progress(10_000, 101)).await;
+                assert!(
+                    !ready(&[id], Some(60), &[reference]),
+                    "shared writes hide no output lag"
+                );
+                observe(&replicas[&target], id, output(ac(9_940))).await;
+                assert!(
+                    ready(&[id], Some(60), &[reference]),
+                    "lag allowance is inclusive"
+                );
+
+                observe(&replicas[&reference], id, progress(20_000, 10_000)).await;
+                observe(&replicas[&target], id, progress(20_000, 10_000)).await;
+                assert!(
+                    ready(&[id], Some(0), &[reference]),
+                    "refresh writes ahead of both outputs do not block readiness"
+                );
+            }
+            ReadinessCase::References => {
+                for (replica, upper) in [
+                    (reference, 9_000),
+                    (ahead, 10_000),
+                    (target, 8_990),
+                    (bystander, 1_000_000),
+                ] {
+                    observe(&replicas[&replica], id, progress(upper, upper)).await;
+                }
+                assert!(
+                    ready(&[id], Some(60), &[reference]),
+                    "unnamed replicas are not references"
+                );
+                assert!(
+                    !ready(&[id], Some(60), &[reference, ahead]),
+                    "the furthest named output wins"
+                );
+                assert!(
+                    ready(&[id], Some(0), &[]),
+                    "no references means nothing to regress"
+                );
+                assert!(ready(&[id], Some(0), &[target]));
+                observe(&replicas[&target], id, output(ac(9_940))).await;
+                assert!(ready(&[id], Some(60), &[reference, ahead]));
+            }
+            ReadinessCase::Observations => {
+                assert!(!ready(&[id], None, &[]), "missing target is not hydrated");
+                observe(&replicas[&target], id, hydration(true)).await;
+                observe(&replicas[&reference], id, progress(1_000, 1_000)).await;
+                assert!(
+                    !ready(&[id], Some(0), &[reference]),
+                    "hydration does not supply a missing target output"
+                );
+                observe(&replicas[&target], id, output(ac(1_000))).await;
+                assert!(ready(&[id], Some(0), &[reference]));
+                assert!(
+                    !ready(&[id], Some(0), &[ahead]),
+                    "missing reference is not completed"
+                );
+                observe(&replicas[&ahead], id, hydration(true)).await;
+                assert!(
+                    !ready(&[id], Some(0), &[ahead]),
+                    "missing reference output is unknown"
+                );
+                assert!(
+                    !ready(&[id, GlobalId::User(100_001)], None, &[]),
+                    "every expected export needs an observation"
+                );
+
+                observe(&replicas[&reference], id, output(Antichain::new())).await;
+                assert!(
+                    !ready(&[id], Some(u64::MAX), &[reference]),
+                    "finite output cannot catch completed output with any finite lag allowance"
+                );
+                observe(&replicas[&target], id, output(Antichain::new())).await;
+                assert!(
+                    ready(&[id], Some(0), &[reference]),
+                    "observed empty outputs are completed"
+                );
+                assert!(
+                    !ready(&[id], Some(0), &[reference, ahead]),
+                    "completion does not excuse a missing named reference"
+                );
+                replicas[&reference].0.disconnect();
+                assert!(
+                    !ready(&[id], Some(0), &[reference]),
+                    "a disconnected reference has no usable observation"
+                );
+            }
+            ReadinessCase::HydrationOnly => {
+                observe(&replicas[&target], id, FrontiersResponse::default()).await;
+                assert!(
+                    !ready(&[id], None, &[reference]),
+                    "unknown hydration is not ready"
+                );
+                observe(&replicas[&target], id, hydration(false)).await;
+                assert!(!ready(&[id], None, &[reference]));
+                observe(&replicas[&target], id, hydration(true)).await;
+                assert!(
+                    ready(&[id], None, &[reference]),
+                    "hydration-only needs neither output nor reference observations"
+                );
+                observe(&replicas[&reference], id, progress(10_000, 10_000)).await;
+                observe(&replicas[&target], id, progress(10_000, 101)).await;
+                assert!(ready(&[id], None, &[reference]));
+                assert!(!ready(&[id], Some(60), &[reference]));
+            }
+            ReadinessCase::Connection => {
+                assert!(
+                    ready(&[], None, &[]),
+                    "QueryReady suffices for an empty expected set"
+                );
+                assert!(!ready(&[id], None, &[]));
+                observe(&replicas[&target], id, progress(1_000, 1_000)).await;
+                observe(&replicas[&reference], id, progress(1_000, 1_000)).await;
+                assert!(ready(&[id], Some(0), &[reference]));
+                replicas[&target].0.disconnect();
+                assert!(
+                    !ready(&[], None, &[]),
+                    "a disconnected target cannot satisfy even an empty expected set"
+                );
+                assert!(
+                    !ready(&[id], None, &[]),
+                    "another ready replica cannot substitute for the target"
+                );
+            }
+            ReadinessCase::Placement => {
+                assert_eq!(mv.target_replica, Some(reference));
+                observe(&replicas[&target], id, progress(1_000, 1_000)).await;
+                observe(&replicas[&ahead], id, progress(10_000, 10_000)).await;
+                assert!(
+                    !ready(&[id], Some(0), &[reference, ahead]),
+                    "the hosting reference still needs an observation"
+                );
+                observe(&replicas[&reference], id, progress(1_000, 1_000)).await;
+                assert!(
+                    ready(&[id], Some(0), &[reference, ahead, bystander]),
+                    "neither ahead nor missing observations outside the pin block readiness"
+                );
+                observe(&replicas[&reference], id, output(ac(2_000))).await;
+                assert!(!ready(&[id], Some(0), &[reference, ahead, bystander]));
+                observe(&replicas[&target], id, output(ac(2_000))).await;
+                assert!(ready(&[id], Some(0), &[reference, ahead, bystander]));
+            }
+        }
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1512,13 +1787,39 @@ mod tests {
                 .get_schemas()
                 .find(|s| s.name == "public")
                 .expect("public schema exists");
+            if matches!(case, AcquisitionCase::Readiness(_)) {
+                let cluster = tx
+                    .get_clusters()
+                    .find(|c| c.name == "quickstart")
+                    .expect("quickstart cluster exists");
+                let replica = tx
+                    .get_cluster_replicas()
+                    .find(|r| r.cluster_id == cluster.id)
+                    .expect("quickstart has a replica configuration");
+                for (id, name) in READINESS_REPLICAS {
+                    tx.insert_cluster_replica_with_id(
+                        cluster.id,
+                        id,
+                        name,
+                        replica.config.clone(),
+                        MZ_SYSTEM_ROLE_ID,
+                    )
+                    .expect("can declare readiness replica in this deployment");
+                }
+            }
+            let placement = if matches!(case, AcquisitionCase::Readiness(ReadinessCase::Placement))
+            {
+                " REPLICA readiness_reference"
+            } else {
+                ""
+            };
             tx.insert_item(
                 CatalogItemId::User(100_000),
                 mz_pgrepr::oid::FIRST_USER_OID,
                 id,
                 schema.id,
                 "history",
-                "CREATE MATERIALIZED VIEW materialize.public.history IN CLUSTER quickstart AS SELECT 1 AS a".into(),
+                format!("CREATE MATERIALIZED VIEW materialize.public.history IN CLUSTER quickstart{placement} AS SELECT 1 AS a"),
                 MZ_SYSTEM_ROLE_ID,
                 vec![],
                 BTreeMap::new(),
@@ -1579,6 +1880,7 @@ mod tests {
             if race.is_some()
                 || uninstalled_index
                 || matches!(case, AcquisitionCase::SnapshotBeforeIncarnation)
+                || matches!(case, AcquisitionCase::Readiness(_))
             {
                 tx.set_config("catalog_read_protection_enabled".into(), Some(1))
                     .expect("can enable joined protection writers");
@@ -1602,6 +1904,14 @@ mod tests {
             .open(SYSTEM_TIME().into(), &bootstrap)
             .await
             .expect("can reopen seeded catalog");
+        let mut system_parameter_defaults =
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]);
+        if matches!(case, AcquisitionCase::Readiness(ReadinessCase::Placement)) {
+            system_parameter_defaults.insert(
+                "enable_replica_targeted_materialized_views".into(),
+                "true".into(),
+            );
+        }
         let mut catalog = Box::pin(Catalog::open_debug_catalog_inner(
             persist.clone(),
             storage,
@@ -1612,7 +1922,7 @@ mod tests {
                     .expect("valid test environment ID"),
             ),
             &mz_build_info::DUMMY_BUILD_INFO,
-            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            system_parameter_defaults,
             &bootstrap,
             None,
             None,
@@ -1666,6 +1976,10 @@ mod tests {
                 },
             )),
         );
+        if let AcquisitionCase::Readiness(case) = case {
+            replica_readiness(case, &catalog, &client, id).await;
+            return;
+        }
         let metadata = client
             .collection_metadata(&catalog, id)
             .expect("collection metadata exists");

@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Support for selecting as-ofs of compute dataflows during system initialization.
+//! Pure as-of selection for pending compute dataflows in the native catalog follower.
 //!
-//! The functionality implemented here is invoked by the coordinator during its bootstrap process.
-//! Ideally, it would be part of the controller and transparent to the coordinator, but that's
-//! difficult to reconcile with the current controller API. For now, we still make the coordinator
-//! worry about as-of selection but keep the implementation in a compute crate because it really is
-//! a compute implementation concern.
+//! Callers supply secured input sinces and observed write frontiers for storage and live compute
+//! inputs. Selection acquires no protection and performs no storage I/O. Committed index bounds
+//! and pending replacements' initial as-ofs constrain reconstruction alongside storage frontiers.
 //!
 //! The as-of selection process takes a list of `DataflowDescription`s, determines compatible
 //! as-ofs for the compute collections they export, and augments the `DataflowDescription`s with
@@ -34,13 +32,8 @@
 //! frontier) and marked as "sealed". Subsequent constraint applications against the sealed bounds
 //! are no-ops. This is done to avoid log noise from repeated constraint application failures.
 //!
-//! In [`run`], failing to apply a hard constraint does not abort as-of selection for the
-//! affected collection. Instead the failure is handled gracefully by logging an error and
-//! assigning the collection a best-effort as-of. This is done, rather than panicking or returning
-//! an error and letting the coordinator panic, to ensure the availability of the system. Ideally,
-//! we would instead mark the affected dataflow as failed/poisoned, but such a mechanism doesn't
-//! currently exist.
-//! [`select`] instead returns an error without assigning any as-ofs if a hard constraint fails.
+//! [`select`] returns an error without changing any dataflow description if an input boundary
+//! is missing or ambiguous, or a hard constraint fails.
 //!
 //! The as-of selection process applies constraints in order of importance, because once a
 //! constraint application fails, the respective `AsOfBounds` are sealed and later applications
@@ -82,98 +75,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
-use mz_ore::collections::CollectionExt;
-use mz_ore::soft_panic_or_log;
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
-use mz_storage_types::read_holds::ReadHold;
+use mz_storage_client::storage_collections::CollectionFrontiers;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::PartialOrder;
 use timely::progress::Antichain;
-use tracing::{info, warn};
-
-/// Runs as-of selection for the given dataflows.
-///
-/// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
-/// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
-/// with the compute controller.
-///
-/// Committed index bounds are hard upper bounds on reconstruction as-ofs. Catalog admission
-/// protects governed indexes' actual and logical inputs at their current bound. Indexes without
-/// a committed bound use the storage constraints and soft preferences.
-///
-/// `pending_replacements` supplies creation frontiers for exports that do not yet own output
-/// writes. Protected replacements retain that history independently of their target's progress.
-/// Unprotected replacements may recover later as their input holds advance with the target.
-pub fn run(
-    dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
-    read_policies: &BTreeMap<GlobalId, ReadPolicy>,
-    committed_index_bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-    pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-    storage_collections: &dyn StorageCollections,
-    current_time: Timestamp,
-    read_only_mode: bool,
-    catalog_read_protection: bool,
-) -> BTreeMap<GlobalId, ReadHold> {
-    // Get read holds for the storage inputs of the dataflows.
-    // This ensures that storage frontiers don't advance past the selected as-ofs.
-    let mut storage_read_holds = BTreeMap::new();
-    for dataflow in &*dataflows {
-        for id in dataflow.source_imports.keys() {
-            if !storage_read_holds.contains_key(id) {
-                let read_hold = storage_collections
-                    .acquire_read_holds(vec![*id])
-                    .expect("storage collection exists")
-                    .into_element();
-                storage_read_holds.insert(*id, read_hold);
-            }
-        }
-    }
-
-    let protected_storage_sinces = storage_read_holds
-        .iter()
-        .map(|(id, hold)| (*id, hold.since().clone()))
-        .collect();
-    let storage_ids: BTreeSet<_> = dataflows
-        .iter()
-        .flat_map(|dataflow| {
-            dataflow
-                .source_imports
-                .keys()
-                .copied()
-                .chain(dataflow.export_ids())
-        })
-        .collect();
-    let storage_frontiers = storage_ids
-        .into_iter()
-        .filter_map(|id| {
-            storage_collections
-                .collection_frontiers(id)
-                .ok()
-                .map(|frontiers| (id, frontiers))
-        })
-        .collect();
-
-    select_inner(
-        dataflows,
-        read_policies,
-        committed_index_bounds,
-        pending_replacements,
-        &protected_storage_sinces,
-        &storage_frontiers,
-        &BTreeMap::new(),
-        current_time,
-        read_only_mode,
-        catalog_read_protection,
-        false,
-    )
-    .expect("legacy selection handles hard conflicts with best-effort as-ofs");
-
-    storage_read_holds
-}
+use tracing::info;
 
 /// Captured frontiers of an already-running compute input, including logging indexes.
 ///
@@ -240,8 +149,13 @@ impl std::error::Error for SelectionError {}
 /// constraint. Every storage input, including inputs of pruned dataflows, must have both a
 /// protected since entry and observed frontiers.
 ///
-/// This function acquires no protection and performs no storage I/O. Policy, committed-bound,
-/// pending-replacement, and mode arguments have the same meaning as in [`run`].
+/// `committed_index_bounds` are hard upper bounds on reconstruction as-ofs. Catalog admission
+/// protects governed indexes' actual and logical inputs at their committed bound.
+/// `pending_replacements` supplies initial as-ofs for exports that do not yet own output writes.
+/// These are hard upper bounds that retain creation history independently of the target's progress.
+/// Index read policies and `current_time` are soft preferences, applied after hard constraints.
+///
+/// This function acquires no protection and performs no storage I/O.
 /// On error, all dataflow descriptions remain unchanged. Hard failures are recorded when they
 /// occur, because sealing conflicting bounds can hide the violation from subsequent constraints.
 pub fn select(
@@ -253,8 +167,6 @@ pub fn select(
     storage_frontiers: &BTreeMap<GlobalId, CollectionFrontiers>,
     live_inputs: &BTreeMap<GlobalId, CapturedLiveInput>,
     current_time: Timestamp,
-    read_only_mode: bool,
-    catalog_read_protection: bool,
 ) -> Result<(), SelectionError> {
     let mut exports = BTreeSet::new();
     let mut indexes = BTreeSet::new();
@@ -293,9 +205,6 @@ pub fn select(
         storage_frontiers,
         live_inputs,
         current_time,
-        read_only_mode,
-        catalog_read_protection,
-        true,
     )
 }
 
@@ -308,9 +217,6 @@ fn select_inner(
     storage_frontiers: &BTreeMap<GlobalId, CollectionFrontiers>,
     live_inputs: &BTreeMap<GlobalId, CapturedLiveInput>,
     current_time: Timestamp,
-    read_only_mode: bool,
-    catalog_read_protection: bool,
-    strict: bool,
 ) -> Result<(), SelectionError> {
     let mut ctx = Context::new(
         dataflows,
@@ -318,7 +224,6 @@ fn select_inner(
         read_policies,
         live_inputs,
         current_time,
-        strict,
     );
 
     // Dataflows that sink into a storage collection that has advanced to the empty frontier don't
@@ -326,17 +231,9 @@ fn select_inner(
     // assign them an empty as-of at the end.
     ctx.prune_sealed_persist_sinks();
 
-    // During 0dt upgrades, it can happen that the leader environment drops storage collections,
-    // making the read-only environment observe inconsistent read frontiers (database-issues#8836).
-    // To avoid hard-constraint failures, we prune all collections depending on these dropped
-    // storage collections.
-    if read_only_mode {
-        ctx.prune_dropped_collections();
-    }
-
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(protected_storage_sinces);
-    ctx.apply_downstream_storage_constraints(pending_replacements, catalog_read_protection);
+    ctx.apply_downstream_storage_constraints(pending_replacements);
     ctx.apply_committed_index_bounds(committed_index_bounds);
 
     // At this point all collections have as-of bounds that reflect what is required for
@@ -464,7 +361,7 @@ struct Constraint<'a> {
     frontier: &'a Antichain<Timestamp>,
     /// A short description of the reason for applying this constraint.
     ///
-    /// Used only for logging.
+    /// Used in logs and hard-constraint errors.
     reason: &'a str,
 }
 
@@ -538,7 +435,6 @@ struct Context<'a> {
     collections: BTreeMap<GlobalId, Collection<'a>>,
     storage_frontiers: &'a BTreeMap<GlobalId, CollectionFrontiers>,
     live_inputs: &'a BTreeMap<GlobalId, CapturedLiveInput>,
-    strict: bool,
     hard_failure: RefCell<Option<SelectionError>>,
     current_time: Timestamp,
 }
@@ -551,7 +447,6 @@ impl<'a> Context<'a> {
         read_policies: &'a BTreeMap<GlobalId, ReadPolicy>,
         live_inputs: &'a BTreeMap<GlobalId, CapturedLiveInput>,
         current_time: Timestamp,
-        strict: bool,
     ) -> Self {
         // Construct initial collection state for each dataflow export. Dataflows might have their
         // as-ofs already fixed, which we need to take into account when constructing `AsOfBounds`.
@@ -582,7 +477,6 @@ impl<'a> Context<'a> {
             collections,
             storage_frontiers,
             live_inputs,
-            strict,
             hard_failure: RefCell::new(None),
             current_time,
         }
@@ -614,19 +508,13 @@ impl<'a> Context<'a> {
             }
             Err(changed) => {
                 match constraint.type_ {
-                    ConstraintType::Hard if self.strict => {
+                    ConstraintType::Hard => {
                         self.hard_failure.borrow_mut().get_or_insert_with(|| {
                             SelectionError::HardConstraint {
                                 id,
                                 reason: format!("bounds={bounds}, constraint={constraint:?}"),
                             }
                         });
-                    }
-                    ConstraintType::Hard => {
-                        soft_panic_or_log!(
-                            "failed to apply hard as-of constraint \
-                             (id={id}, bounds={bounds}, constraint={constraint:?})"
-                        );
                     }
                     ConstraintType::Soft => {
                         info!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
@@ -707,7 +595,6 @@ impl<'a> Context<'a> {
     fn apply_downstream_storage_constraints(
         &self,
         pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        catalog_read_protection: bool,
     ) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
@@ -723,14 +610,10 @@ impl<'a> Context<'a> {
                 step_back_frontier(&frontiers.write_frontier)
             };
             let (upper, reason) = if let Some(initial_as_of) = pending_replacements.get(id) {
-                // Protected pending requirements retain creation history. Without that
-                // durable promise, input holds can advance with the target's progress.
-                let upper = if catalog_read_protection {
-                    initial_as_of.clone()
-                } else {
-                    initial_as_of.join(&output_upper)
-                };
-                (upper, format!("pending replacement {id} creation frontier"))
+                (
+                    initial_as_of.clone(),
+                    format!("pending replacement {id} creation frontier"),
+                )
             } else {
                 (output_upper, format!("storage export {id} write frontier"))
             };
@@ -1053,51 +936,6 @@ impl<'a> Context<'a> {
                 .map_or(true, |f| !f.write_frontier.is_empty())
         });
     }
-
-    /// Removes collections depending on storage collections with empty read frontiers.
-    ///
-    /// The dataflows of these collections will get an empty default as-of assigned at the end of
-    /// the as-of selection process, ensuring that they won't get installed.
-    ///
-    /// This exists only to work around database-issues#8836.
-    fn prune_dropped_collections(&mut self) {
-        // Remove collections with dropped storage inputs.
-        let mut pruned = BTreeSet::new();
-        self.collections.retain(|id, c| {
-            let input_dropped = c.storage_inputs.iter().any(|id| {
-                let frontiers = self
-                    .storage_frontiers
-                    .get(id)
-                    .expect("storage collection exists");
-                frontiers.read_capabilities.is_empty()
-            });
-
-            if input_dropped {
-                pruned.insert(*id);
-                false
-            } else {
-                true
-            }
-        });
-
-        warn!(?pruned, "pruned dependants of dropped storage collections");
-
-        // Remove (transitive) dependants of pruned collections.
-        while !pruned.is_empty() {
-            let pruned_inputs = std::mem::take(&mut pruned);
-
-            self.collections.retain(|id, c| {
-                if c.compute_inputs.iter().any(|id| pruned_inputs.contains(id)) {
-                    pruned.insert(*id);
-                    false
-                } else {
-                    true
-                }
-            });
-
-            warn!(?pruned, "pruned collections with pruned inputs");
-        }
-    }
 }
 
 /// Runs `step` in a loop until it stops reporting changes.
@@ -1251,8 +1089,6 @@ mod tests {
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
             $( committed_bounds: { $( $bound_id:literal: $bound:expr, )* }, )?
             $( pending_replacements: { $( $replacement_id:literal: $initial:expr, )* }, )?
-            $( read_only: $read_only:expr, )?
-            $( catalog_read_protection: $catalog_read_protection:expr, )?
         }) => {
             #[mz_ore::test]
             fn $name() {
@@ -1289,14 +1125,6 @@ mod tests {
                     $($( ($policy_id.parse().unwrap(), $policy), )*)?
                 ]);
 
-                #[allow(unused_variables)]
-                let read_only = false;
-                $( let read_only = $read_only; )?
-
-                #[allow(unused_variables)]
-                let catalog_read_protection = false;
-                $( let catalog_read_protection = $catalog_read_protection; )?
-
                 super::select(
                     &mut dataflows,
                     &read_policies,
@@ -1318,8 +1146,6 @@ mod tests {
                         ), )*)?
                     ]),
                     $current_time.into(),
-                    read_only,
-                    catalog_read_protection,
                 )
                 .unwrap();
 
@@ -1340,17 +1166,6 @@ mod tests {
         current_time: 90,
         protected_sinces: { "s1": 10, },
         committed_bounds: { "u1": 10, },
-        catalog_read_protection: true,
-    });
-
-    testcase!(dropped_input_uses_observed_read_frontier, {
-        storage: { "s1": (SEALED, SEALED), },
-        dataflows: [ "u1" <- ["s1"] => SEALED, ],
-        current_time: 90,
-        protected_sinces: { "s1": 10, },
-        committed_bounds: { "u1": 10, },
-        read_only: true,
-        catalog_read_protection: true,
     });
 
     testcase!(cold_recovery_before_index_bound, {
@@ -1364,7 +1179,6 @@ mod tests {
         ],
         current_time: 90,
         committed_bounds: { "u1": 20, },
-        catalog_read_protection: true,
     });
 
     testcase!(mixed_live_and_pending_reverse_ids, {
@@ -1380,7 +1194,6 @@ mod tests {
         current_time: 90,
         live_inputs: { "u4": (5, 100), },
         committed_bounds: { "u2": 20, "u3": 20, },
-        catalog_read_protection: true,
     });
 
     testcase!(live_upper_constrains_transitive_warmup, {
@@ -1416,8 +1229,6 @@ mod tests {
             storage_frontiers,
             live_inputs,
             90.into(),
-            false,
-            true,
         )
     }
 
@@ -1553,19 +1364,53 @@ mod tests {
         // the pending refresh. Reconstruct it from protected logical history.
         committed_bounds: { "u1": 80, },
         pending_replacements: { "u2": 50, },
-        read_only: true,
-        catalog_read_protection: true,
     });
 
-    testcase!(unprotected_pending_replacement_advances_with_target, {
-        storage: {
-            "s1": (60, 100),
-            "u1": (10, 100),
-        },
-        dataflows: [ "u1" <- ["s1"] => 99, ],
-        current_time: 90,
-        pending_replacements: { "u1": 50, },
-    });
+    #[mz_ore::test]
+    fn pending_replacement_rejects_since_beyond_creation() {
+        let storage_frontiers = BTreeMap::from([
+            (
+                "s1".parse().unwrap(),
+                CollectionFrontiers {
+                    id: "s1".parse().unwrap(),
+                    read_capabilities: ts_to_frontier(60),
+                    implied_capability: ts_to_frontier(60),
+                    write_frontier: ts_to_frontier(100),
+                },
+            ),
+            (
+                "u1".parse().unwrap(),
+                CollectionFrontiers {
+                    id: "u1".parse().unwrap(),
+                    read_capabilities: ts_to_frontier(10),
+                    implied_capability: ts_to_frontier(10),
+                    write_frontier: ts_to_frontier(100),
+                },
+            ),
+        ]);
+        let protected_sinces = storage_frontiers
+            .iter()
+            .map(|(id, frontiers)| (*id, frontiers.read_capabilities.clone()))
+            .collect();
+        let storage_ids = BTreeSet::from(["s1", "u1"]);
+        let mut dataflows = [dataflow("u1", &["s1"], &storage_ids)];
+        let unchanged = dataflows.clone();
+        let result = select(
+            &mut dataflows,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([("u1".parse().unwrap(), ts_to_frontier(50))]),
+            &protected_sinces,
+            &storage_frontiers,
+            &BTreeMap::new(),
+            90.into(),
+        );
+        assert!(matches!(
+            result,
+            Err(SelectionError::HardConstraint { id, .. }) if id == "u1".parse().unwrap()
+        ));
+        assert_eq!(dataflows, unchanged);
+    }
 
     // Current bounds retain admitted history rather than the soft preference at 90.
     testcase!(protected_index_bounds, {
@@ -1577,7 +1422,6 @@ mod tests {
         ],
         current_time: 90,
         committed_bounds: { "u1": 10, "u2": 30, "u3": 10, },
-        catalog_read_protection: true,
     });
 
     // Reverse ID order requires fixed-point propagation. The downstream storage
@@ -1596,8 +1440,6 @@ mod tests {
         ],
         current_time: 90,
         committed_bounds: { "u1": 30, "u2": 30, "u3": 30, },
-        read_only: true,
-        catalog_read_protection: true,
     });
 
     testcase!(committed_index_caps, {
@@ -1621,13 +1463,40 @@ mod tests {
         committed_bounds: { "u2": 20, },
     });
 
-    testcase!(committed_index_dropped_input, {
-        storage: { "s1": (SEALED, SEALED), },
-        dataflows: [ "u1" <- ["s1"] => SEALED, ],
-        current_time: 90,
-        committed_bounds: { "u1": 10, },
-        read_only: true,
-    });
+    #[mz_ore::test]
+    fn committed_index_rejects_dropped_input() {
+        let storage_frontiers = BTreeMap::from([(
+            "s1".parse().unwrap(),
+            CollectionFrontiers {
+                id: "s1".parse().unwrap(),
+                read_capabilities: ts_to_frontier(SEALED),
+                implied_capability: ts_to_frontier(SEALED),
+                write_frontier: ts_to_frontier(SEALED),
+            },
+        )]);
+        let protected_sinces = storage_frontiers
+            .iter()
+            .map(|(id, frontiers)| (*id, frontiers.read_capabilities.clone()))
+            .collect();
+        let storage_ids = BTreeSet::from(["s1"]);
+        let mut dataflows = [dataflow("u1", &["s1"], &storage_ids)];
+        let unchanged = dataflows.clone();
+        let result = select(
+            &mut dataflows,
+            &BTreeMap::new(),
+            &BTreeMap::from([("u1".parse().unwrap(), ts_to_frontier(10))]),
+            &BTreeMap::new(),
+            &protected_sinces,
+            &storage_frontiers,
+            &BTreeMap::new(),
+            90.into(),
+        );
+        assert!(matches!(
+            result,
+            Err(SelectionError::HardConstraint { id, .. }) if id == "u1".parse().unwrap()
+        ));
+        assert_eq!(dataflows, unchanged);
+    }
 
     testcase!(upstream_storage_constraints, {
         storage: {
@@ -1729,21 +1598,65 @@ mod tests {
         current_time: 100,
     });
 
-    testcase!(read_only_dropped_storage_inputs, {
-        storage: {
-            "s1": (10, 20),
-            "s2": (SEALED, SEALED),
-            "u4": (10, 20),
-        },
-        dataflows: [
-            "u1" <- ["s1"] => 15,
-            "u2" <- ["s2"] => SEALED,
-            "u3" <- ["s1", "s2"] => SEALED,
-            "u4" <- ["u2"] => SEALED,
-        ],
-        current_time: 15,
-        read_only: true,
-    });
+    #[mz_ore::test]
+    fn dropped_storage_input_conflicts_with_downstream_output() {
+        let storage_frontiers = BTreeMap::from([
+            (
+                "s1".parse().unwrap(),
+                CollectionFrontiers {
+                    id: "s1".parse().unwrap(),
+                    read_capabilities: ts_to_frontier(10),
+                    implied_capability: ts_to_frontier(10),
+                    write_frontier: ts_to_frontier(20),
+                },
+            ),
+            (
+                "s2".parse().unwrap(),
+                CollectionFrontiers {
+                    id: "s2".parse().unwrap(),
+                    read_capabilities: ts_to_frontier(SEALED),
+                    implied_capability: ts_to_frontier(SEALED),
+                    write_frontier: ts_to_frontier(SEALED),
+                },
+            ),
+            (
+                "u4".parse().unwrap(),
+                CollectionFrontiers {
+                    id: "u4".parse().unwrap(),
+                    read_capabilities: ts_to_frontier(10),
+                    implied_capability: ts_to_frontier(10),
+                    write_frontier: ts_to_frontier(20),
+                },
+            ),
+        ]);
+        let protected_sinces = storage_frontiers
+            .iter()
+            .map(|(id, frontiers)| (*id, frontiers.read_capabilities.clone()))
+            .collect();
+        let storage_ids = BTreeSet::from(["s1", "s2", "u4"]);
+        let mut dataflows = [
+            dataflow("u1", &["s1"], &storage_ids),
+            dataflow("u2", &["s2"], &storage_ids),
+            dataflow("u3", &["s1", "s2"], &storage_ids),
+            dataflow("u4", &["u2"], &storage_ids),
+        ];
+        let unchanged = dataflows.clone();
+        let result = select(
+            &mut dataflows,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &protected_sinces,
+            &storage_frontiers,
+            &BTreeMap::new(),
+            15.into(),
+        );
+        assert!(matches!(
+            result,
+            Err(SelectionError::HardConstraint { id, .. }) if id == "u4".parse().unwrap()
+        ));
+        assert_eq!(dataflows, unchanged);
+    }
 
     // Regression test for database-issues#9273.
     testcase!(github_9273, {

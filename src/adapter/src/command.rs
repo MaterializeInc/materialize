@@ -13,7 +13,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::Stream;
@@ -22,7 +21,6 @@ use mz_auth::password::Password;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_controller_types::ClusterId;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -63,9 +61,7 @@ use crate::statement_logging::{
 use crate::statement_logging::{StatementLoggingId, WatchSetCreation};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{
-    AdapterNotice, AppendWebhookError, CollectionIdBundle, ReadHolds, TimestampExplanation,
-};
+use crate::{AdapterNotice, AppendWebhookError, CollectionIdBundle, ReadHolds};
 
 /// A handle for pgwire to stream raw byte chunks to the coordinator's
 /// parallel background batch builder tasks during COPY FROM STDIN.
@@ -250,16 +246,6 @@ pub enum Command {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
 
-    GetComputeInstanceClient {
-        instance_id: ComputeInstanceId,
-        tx: oneshot::Sender<
-            Result<
-                mz_compute_client::controller::instance_client::InstanceClient,
-                mz_compute_client::controller::error::InstanceMissing,
-            >,
-        >,
-    },
-
     /// Establishes durable coverage on a query client's local acquisition miss.
     AcquireClientReadProtection {
         incarnation: u64,
@@ -381,7 +367,6 @@ pub enum Command {
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
         depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
         /// If statement logging is enabled, contains all info needed for installing watch sets
         /// and logging the statement execution.
         watch_set: Option<WatchSetCreation>,
@@ -399,17 +384,6 @@ pub enum Command {
         uuid: Uuid,
         reason: StatementEndedExecutionReason,
         tx: oneshot::Sender<()>,
-    },
-
-    /// Generate a legacy, unprotected timestamp explanation for a notice.
-    /// Protected callers observe frontiers directly through QueryClient.
-    ExplainTimestamp {
-        conn_id: ConnectionId,
-        session_wall_time: DateTime<Utc>,
-        cluster_id: ClusterId,
-        id_bundle: CollectionIdBundle,
-        determination: TimestampDetermination,
-        tx: oneshot::Sender<TimestampExplanation>,
     },
 
     /// Statement logging event from frontend peek sequencing.
@@ -512,7 +486,6 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::GetComputeInstanceClient { .. }
             | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
@@ -526,7 +499,6 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
-            | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
@@ -558,7 +530,6 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::GetComputeInstanceClient { .. }
             | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
@@ -572,7 +543,6 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
-            | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
@@ -610,8 +580,7 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-    pub storage_collections: Option<crate::peek_client::StorageCollectionsHandle>,
-    pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
+    pub(crate) query_client: Arc<crate::query_client::QueryClient>,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,

@@ -101,10 +101,9 @@ impl Coordinator {
             ActiveSubscribeOwner::Background => {}
         }
 
-        if self.query_client.is_some()
-            && let Some(id) = df_desc
-                .import_ids()
-                .find(|id| self.catalog().try_get_entry_by_global_id(id).is_none())
+        if let Some(id) = df_desc
+            .import_ids()
+            .find(|id| self.catalog().try_get_entry_by_global_id(id).is_none())
         {
             let _ = response_tx.send(Err(
                 AdapterError::concurrent_dependency_drop_from_collection_missing(
@@ -141,35 +140,17 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let read_holds = if self.query_client.is_some() {
-            // Register before spawning execution so early rows and progress have
-            // an owner. Admission must not block the coordinator event loop.
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-                .await;
-            if let Err(error) =
-                self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds)
-            {
-                self.remove_active_compute_sink(sink_id).await;
-                let _ = response_tx.send(Err(error));
-                return;
-            }
-            None
-        } else {
-            // The off-loop planning snapshot can lose dependencies before this
-            // command arrives. Report that conflict rather than halt.
-            if let Err(error) = self
-                .try_ship_dataflow(df_desc, cluster_id, replica_id)
-                .await
-            {
-                let _ = response_tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(error),
-                ));
-                return;
-            }
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-                .await;
-            Some(read_holds)
-        };
+        // Register before spawning execution so early rows and progress have
+        // an owner. Admission must not block the coordinator event loop.
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
+        if let Err(error) =
+            self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds)
+        {
+            self.remove_active_compute_sink(sink_id).await;
+            let _ = response_tx.send(Err(error));
+            return;
+        }
 
         if response_tx.send(Ok(rx)).is_err() {
             // The receiver is gone, so cancellation or a statement timeout
@@ -181,9 +162,6 @@ impl Coordinator {
             self.drop_internal_subscribe(sink_id).await;
             return;
         }
-
-        // Query execution owns its holds. Legacy shipping has installed its own.
-        drop(read_holds);
     }
 
     /// Enqueues a write attempt, answering through `result_tx`.

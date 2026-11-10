@@ -92,12 +92,11 @@ impl Staged for PeekStage {
             PeekStage::TimestampValidated(stage) => coord.peek_timestamp_validated(ctx, stage),
             PeekStage::Optimize(stage) => coord.peek_optimize(ctx, stage).await,
             PeekStage::Finish(stage) => {
-                if coord.query_client.is_some() && ctx.session().vars().emit_timestamp_notice() {
+                if ctx.session().vars().emit_timestamp_notice() {
                     // Finish observations before dispatch so timeout cannot leave
                     // an executing peek without a consumer for its response.
                     let explanation = coord.timestamp_explanation(
                         ctx.session(),
-                        stage.cluster_id,
                         stage.id_bundle.clone(),
                         stage.determination.clone(),
                         ctx.statement_deadline(),
@@ -975,15 +974,7 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation = timestamp_notice.unwrap_or_else(|| {
-                self.explain_timestamp(
-                    ctx.session().conn_id(),
-                    ctx.session().pcx().wall_time,
-                    cluster_id,
-                    &id_bundle,
-                    determination,
-                )
-            });
+            let explanation = timestamp_notice.expect("timestamp notice prepared by finish stage");
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
@@ -1083,30 +1074,25 @@ impl Coordinator {
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
         drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
-        if self.query_client.is_some() {
-            let imports = CollectionIdBundle {
-                storage_ids: df_desc.source_imports.keys().copied().collect(),
-                compute_ids: [(cluster_id, df_desc.index_imports.keys().copied().collect())]
-                    .into_iter()
-                    .collect(),
-            };
-            let result = match self.acquire_query_read_holds(&imports).await {
-                Ok(holds) => self.start_query_sink(
-                    Arc::clone(&catalog),
-                    df_desc,
-                    cluster_id,
-                    target_replica,
-                    holds,
-                ),
-                Err(error) => Err(error),
-            };
-            if let Err(error) = result {
-                self.remove_active_compute_sink(sink_id).await;
-                return Err(error);
-            }
-        } else {
-            self.ship_dataflow(df_desc, cluster_id, target_replica)
-                .await;
+        let imports = CollectionIdBundle {
+            storage_ids: df_desc.source_imports.keys().copied().collect(),
+            compute_ids: [(cluster_id, df_desc.index_imports.keys().copied().collect())]
+                .into_iter()
+                .collect(),
+        };
+        let result = match self.acquire_query_read_holds(&imports).await {
+            Ok(holds) => self.start_query_sink(
+                Arc::clone(&catalog),
+                df_desc,
+                cluster_id,
+                target_replica,
+                holds,
+            ),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            self.remove_active_compute_sink(sink_id).await;
+            return Err(error);
         }
 
         let span = Span::current();

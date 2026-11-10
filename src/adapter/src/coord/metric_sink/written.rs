@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! Writer admission for replica-owned curated sinks. No controller effects run here.
+//!
+//! Requires protected catalog admission and native compute.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -33,11 +35,6 @@ use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 
 impl Coordinator {
-    pub(in crate::coord) fn replica_owned_metric_sinks(&self) -> bool {
-        self.controller.replica_owned_compute()
-            && self.catalog().state().catalog_read_protection_enabled()
-    }
-
     /// Admit new replicas and reconcile denylist changes in the same transaction.
     /// An `enable_metric_sink` change alone neither backfills existing replicas
     /// nor withdraws their selections.
@@ -47,9 +44,6 @@ impl Coordinator {
         ops: &mut Vec<Op>,
         write_ts: Timestamp,
     ) -> Result<(), AdapterError> {
-        if !self.replica_owned_metric_sinks() {
-            return Ok(());
-        }
         let replicas: BTreeSet<_> = ops
             .iter()
             .filter_map(|op| match op {
@@ -94,9 +88,6 @@ impl Coordinator {
     pub(in crate::coord) async fn bootstrap_replica_metric_sink_selections(
         &mut self,
     ) -> Result<Vec<Op>, AdapterError> {
-        if !self.replica_owned_metric_sinks() {
-            return Ok(Vec::new());
-        }
         let revision = self.catalog().transient_revision();
         let write_ts = self.get_catalog_write_ts().await.lower_bound();
         let selections = prepare_selections(

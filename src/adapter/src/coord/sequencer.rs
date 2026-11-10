@@ -1155,16 +1155,14 @@ pub fn eval_copy_to_uri(
 /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN, i.e., compute the filter pushdown
 /// statistics for the given collections with the given MFPs.
 ///
-/// (Shared helper fn between the old and new sequencing. This doesn't take the Coordinator as a
-/// parameter, but instead just the specifically necessary things are passed in, so that the
-/// frontend peek sequencing can also call it.)
+/// Callers retain read protection until the returned future finishes.
+/// Coordinator callers must execute that future off the coordinator loop.
 pub(crate) async fn explain_pushdown_future_inner<
     I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
-    query_client: Option<&Arc<crate::query_client::QueryClient>>,
+    query_client: &Arc<crate::query_client::QueryClient>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
     imports: I,
@@ -1185,34 +1183,22 @@ pub(crate) async fn explain_pushdown_future_inner<
             .relation_desc()
             .expect("source should have a proper desc")
             .into_owned();
-        let stats_future = if let Some(client) = query_client {
-            let metadata = client.collection_metadata(catalog, id);
-            let client = Arc::clone(client);
-            let as_of = as_of.clone();
-            async move {
-                let metadata = metadata?;
-                client
-                    .collection_reader()
-                    .await
-                    .snapshot_parts_stats(id, metadata, as_of)
-                    .await
-                    .map_err(AdapterError::from)
-            }
-            .boxed()
-        } else {
-            storage_collections
-                .expect("unprotected pushdown explanations require storage collections")
-                .snapshot_parts_stats(id, as_of.clone())
+        let metadata = query_client.collection_metadata(catalog, id);
+        let client = Arc::clone(query_client);
+        let as_of = as_of.clone();
+        let stats_future = async move {
+            let metadata = metadata?;
+            client
+                .collection_reader()
                 .await
-                .map(|result| result.map_err(AdapterError::from))
-                .boxed()
+                .snapshot_parts_stats(id, metadata, as_of)
+                .await
+                .map_err(AdapterError::from)
         };
 
         let mz_now = mz_now.clone();
         // These futures may block if the source is not yet readable at the as-of;
         // stash them in `futures` and only block on them in a separate task.
-        // TODO(peek-seq): This complication won't be needed once this function will only be called
-        // from the new peek sequencing, in which case it will be fine to block the current task.
         futures.push_back(async move {
             let snapshot_stats = match stats_future.await {
                 Ok(stats) => stats,

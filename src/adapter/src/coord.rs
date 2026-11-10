@@ -104,19 +104,12 @@ use mz_catalog::memory::objects::{
     MaterializedView, MetricSink, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
-use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::{
-    CollectionLookupError, CollectionMissing, DataflowCreationError, InstanceMissing,
-};
+use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
-};
-use mz_controller::{ControllerConfig, Readiness};
+use mz_controller::ControllerConfig;
+use mz_controller::clusters::{ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_dyncfg::{ConfigUpdates, ParameterScope};
+use mz_dyncfg::ParameterScope;
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -147,8 +140,8 @@ use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, Params, QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, NetworkPolicyRule, Params,
+    QueryWhen,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
@@ -159,14 +152,11 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDes
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
-use mz_storage_types::read_holds::ReadHold;
-use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::TimestampOracleConfig;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::notice::OptimizerNotice;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use thiserror::Error;
@@ -194,7 +184,6 @@ use crate::coord::appends::{
 };
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
-use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_protection::CATALOG_SUBSCRIPTION_INTERVAL;
 use crate::coord::statement_logging::StatementLogging;
@@ -340,9 +329,7 @@ pub enum Message {
     QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
     QueryWatchSetReady(WatchSetId, Result<(), AdapterError>),
     ClientReadProtectionReady(Box<read_protection::PendingReadProtection>),
-    ControllerReady {
-        controller: ControllerReadiness,
-    },
+    StorageReady,
     ExecuteCatalogReady {
         ctx: ExecuteContext,
         continuation: catalog_reads::ExecuteCatalogContinuation,
@@ -452,10 +439,6 @@ pub enum Message {
         span: Span,
         stage: IntrospectionSubscribeStage,
     },
-    MetricSinkStageReady {
-        span: Span,
-        stage: MetricSinkStage,
-    },
     SecretStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -508,7 +491,6 @@ impl Message {
                 Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
                 Command::CheckRoleCanLogin { .. } => "command-check_role_can_login",
-                Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
                 Command::AcquireClientReadProtection { .. } => "acquire-client-read-protection",
                 Command::GetOracle { .. } => "get-oracle",
                 Command::DetermineRealTimeRecentTimestamp { .. } => {
@@ -526,7 +508,6 @@ impl Message {
                 Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
-                Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
@@ -535,15 +516,7 @@ impl Message {
                 Command::AttemptWrite { .. } => "attempt-write",
                 Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
-            Message::ControllerReady {
-                controller: ControllerReadiness::Compute,
-            } => "controller_ready(compute)",
-            Message::ControllerReady {
-                controller: ControllerReadiness::Storage,
-            } => "controller_ready(storage)",
-            Message::ControllerReady {
-                controller: ControllerReadiness::Internal,
-            } => "controller_ready(internal)",
+            Message::StorageReady => "controller_ready(storage)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
             Message::QueryWatchSetReady(..) => "query_watch_set_ready",
             Message::ClientReadProtectionReady(..) => "client_read_protection_ready",
@@ -586,7 +559,6 @@ impl Message {
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
-            Message::MetricSinkStageReady { .. } => "metric_sink_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
@@ -596,17 +568,6 @@ impl Message {
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
-}
-
-/// The reason for why a controller needs processing on the main loop.
-#[derive(Debug)]
-pub enum ControllerReadiness {
-    /// The storage controller is ready.
-    Storage,
-    /// The compute controller is ready.
-    Compute,
-    /// An internally-generated message is ready to be returned.
-    Internal,
 }
 
 #[derive(Derivative)]
@@ -1257,36 +1218,6 @@ pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds,
-    cluster_id: ComputeInstanceId,
-    replica_id: ReplicaId,
-}
-
-#[derive(Debug)]
-pub enum MetricSinkStage {
-    Optimize(MetricSinkOptimize),
-    Finish(MetricSinkFinish),
-}
-
-#[derive(Debug)]
-pub struct MetricSinkOptimize {
-    validity: PlanValidity,
-    definition: &'static CuratedMetricSink,
-    /// The transient id of the sink's compute export. Recorded in
-    /// [`Coordinator::metric_sinks`] once the finish stage ships the dataflow.
-    sink_id: GlobalId,
-    /// The planned `source_sql`, and the shape it produces.
-    expr: HirRelationExpr,
-    desc: RelationDesc,
-    cluster_id: ComputeInstanceId,
-    replica_id: ReplicaId,
-}
-
-#[derive(Debug)]
-pub struct MetricSinkFinish {
-    validity: PlanValidity,
-    definition: &'static CuratedMetricSink,
-    sink_id: GlobalId,
-    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -2269,21 +2200,6 @@ pub struct Coordinator {
     /// Hydration-history sweep owned by the coordinator while one is in flight.
     hydration_history_sweep: Option<AbortOnDropHandle<()>>,
     retired_rows_sweep: Option<AbortOnDropHandle<()>>,
-    /// The curated metric sinks installed on each replica.
-    ///
-    /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
-    /// drop is the only lookup that is not by exact key.
-    metric_sinks: BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
-    /// Curated metric-sink plans, cached per definition so each is planned once rather than once
-    /// per replica. See [`Coordinator::plan_metric_sink`].
-    metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
-
-    /// Committed maintained exports waiting for selected plans or local imports.
-    /// Publication and reclamation cannot overtake their installation.
-    pending_compute_installations: BTreeSet<GlobalId>,
-    /// Next installation attempt and its backoff, reset by new relevant catalog state.
-    pending_compute_installation_retry: Option<(Instant, Duration)>,
-
     /// Plans waiting for session-startup builtin table appends.
     deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
 
@@ -2603,52 +2519,6 @@ impl Coordinator {
         })
     }
 
-    /// Renders the replica-local scoped overrides in the catalog working copy as
-    /// per-replica [`ConfigUpdates`], grouped by cluster.
-    ///
-    /// Sparse: only replicas with an override are present. Parameters that are
-    /// not dyncfgs are skipped, as are values that fail to parse.
-    pub(crate) fn replica_dyncfg_overrides(
-        &self,
-    ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
-        mz_catalog::compute_config::replica_dyncfg_overrides(self.catalog())
-    }
-
-    /// Resolves the replica-local scoped overrides from the catalog working copy
-    /// into the controllers' per-replica dyncfg layers, then re-pushes the
-    /// environment-wide configuration so replicas observe the new values.
-    /// Driven by the catalog implication for replica-scoped configuration
-    /// changes, and called once on bootstrap.
-    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
-        let instance_overrides = self.replica_dyncfg_overrides();
-
-        // Both controllers carry a per-replica dyncfg layer, because the two
-        // protocols realize configs in different worker `ConfigSet`s on
-        // `clusterd`. The compute worker's `handle_update_configuration`
-        // applies the pushed dyncfg updates to compute's own worker
-        // `ConfigSet`, to the shared persist client `ConfigSet`
-        // (`persist_clients.cfg()`) that the co-located storage server reads
-        // from the same `Arc`, and to `mz_metrics`, which covers
-        // persist-backed and process-global configs such as persist client
-        // tuning and `lgalloc`. Configs realized from the storage worker's own
-        // `ConfigSet` (read in its `UpdateConfiguration` handler) are reached
-        // only by the storage controller's layer. A third class is not pushed
-        // to a running replica at all but baked into its process configuration
-        // when the controller provisions it, which is why the overrides also go
-        // to the outer controller.
-        self.controller
-            .update_replica_dyncfg_overrides(instance_overrides);
-        // Re-push the env-wide configs so existing replicas pick up their
-        // (possibly changed) overrides. This also reverts a removed override:
-        // the per-replica layer no longer carries the key, so the replica
-        // falls back to the env-wide value, which both configs always include
-        // because they render the full dyncfg set.
-        let compute_config = crate::flags::compute_config(self.catalog().system_config());
-        self.controller.compute.update_configuration(compute_config);
-        let storage_config = crate::flags::storage_config(self.catalog().system_config());
-        self.controller.storage.update_parameters(storage_config);
-    }
-
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
     /// `cluster_id`. See
     /// [`CatalogState::cluster_scoped_optimizer_overrides`](crate::catalog::CatalogState::cluster_scoped_optimizer_overrides).
@@ -2781,16 +2651,10 @@ impl Coordinator {
         mz_metrics::update_dyncfg(&system_config.dyncfg_updates());
 
         // Inform the controllers about their initial configuration.
-        let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
-        self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
 
-        // Install scoped controller overrides before registering replicas.
-        // Controllerd reconstructs process launch configuration from the catalog.
-        let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
-        self.controller
-            .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
+        self.update_arithmetic_behavior();
 
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
@@ -2817,15 +2681,9 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
 
-        self.restore_compute_read_protection().await?;
         for instance in self.catalog.clusters() {
-            self.controller.create_cluster(
-                instance.id,
-                ClusterConfig {
-                    arranged_logs: instance.log_indexes.clone(),
-                    workload_class: instance.config.workload_class.clone(),
-                },
-            )?;
+            self.controller
+                .create_cluster(instance.id, instance.config.workload_class.clone());
             for replica in instance.replicas() {
                 self.controller.create_replica(
                     instance.id,
@@ -2834,19 +2692,6 @@ impl Coordinator {
                 )?;
             }
         }
-
-        // Now that the compute instances and their replicas exist, push the
-        // replica-local scoped overrides into the controllers so existing
-        // replicas observe them at startup. The scoped (per-cluster and
-        // per-replica) working copy was restored from the durable cache into
-        // `CatalogState` while opening the catalog, so the last-known values are
-        // in effect before the first parameter sync and through a sync outage.
-        // This must run after the creation loop above: the push iterates the
-        // controller's instances, so before they exist it is a no-op. It also
-        // runs before dataflows are rendered later in bootstrap, so render-frozen
-        // replica flags take effect. The cluster-coherent layer is read at plan
-        // time.
-        self.push_replica_dyncfg_overrides();
 
         info!(
             "startup: coordinator init: bootstrap: preamble complete in {:?}",
@@ -2860,12 +2705,6 @@ impl Coordinator {
             "startup: coordinator init: bootstrap: storage collections init complete in {:?}",
             init_storage_collections_start.elapsed()
         );
-
-        // The storage controller knows about the introspection collections now, so we can start
-        // sinking introspection updates in the compute controller. It makes sense to do that as
-        // soon as possible, to avoid updates piling up in the compute controller's internal
-        // buffers.
-        self.controller.start_compute_introspection_sink();
 
         let sorting_start = Instant::now();
         info!("startup: coordinator init: bootstrap: sorting catalog entries");
@@ -2912,9 +2751,7 @@ impl Coordinator {
         } else {
             None
         };
-        if self.controller.replica_owned_compute()
-            && let Some(client) = &bootstrap_client
-        {
+        if let Some(client) = &bootstrap_client {
             let indexes: BTreeSet<_> = entries
                 .iter()
                 .filter_map(|entry| match entry.item() {
@@ -3048,21 +2885,6 @@ impl Coordinator {
             Default::default(),
         );
 
-        // Select dataflow as-ofs. This step relies on the storage collections created by
-        // `bootstrap_storage_collections` and the dataflow plans created by
-        // `bootstrap_dataflow_plans`.
-        let bootstrap_as_ofs_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: dataflow as-of bootstrapping beginning");
-        let dataflow_read_holds = if self.controller.replica_owned_compute() {
-            BTreeMap::new()
-        } else {
-            self.bootstrap_dataflow_as_ofs().await?
-        };
-        info!(
-            "startup: coordinator init: bootstrap: dataflow as-of bootstrapping complete in {:?}",
-            bootstrap_as_ofs_start.elapsed()
-        );
-
         let postamble_start = Instant::now();
         info!("startup: coordinator init: bootstrap: postamble beginning");
 
@@ -3152,20 +2974,13 @@ impl Coordinator {
                             );
                         }
 
-                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
-                        // but we cannot call that as it will also downgrade the read hold on the index.
+                        // Retain serving-timeline windows for declared exports,
+                        // independently of replica installation.
                         policy_entry
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(df_desc.export_ids());
-
-                        if !self.controller.replica_owned_compute() {
-                            self.controller
-                                .compute
-                                .create_dataflow(idx.cluster_id, df_desc, None)
-                                .unwrap_or_terminate("cannot fail to create dataflows");
-                        }
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -3181,14 +2996,6 @@ impl Coordinator {
                         .storage_ids
                         .extend(mview.global_ids());
 
-                    let mut df_desc = self
-                        .catalog()
-                        .try_get_physical_plan(&mview.global_id_writes())
-                        .expect("added in `bootstrap_dataflow_plans`")
-                        .clone();
-
-                    mview.apply_execution_bounds(&mut df_desc);
-
                     let df_meta = self
                         .catalog()
                         .try_get_dataflow_metainfo(&mview.global_id_writes())
@@ -3202,32 +3009,8 @@ impl Coordinator {
                             Diff::ONE,
                         );
                     }
-
-                    if !self.controller.replica_owned_compute() {
-                        let target = self
-                            .materialized_view_physical_target(
-                                mview.cluster_id,
-                                mview.target_replica,
-                            )
-                            .unwrap_or_terminate("dataflow target unavailable");
-                        self.ship_dataflow(df_desc, mview.cluster_id, target).await;
-                    }
-
-                    // A pending `REPLACEMENT FOR` MV must stay read-only until
-                    // `ALTER ... APPLY REPLACEMENT` swaps it in.
-                    if mview.replacement_target.is_none()
-                        && !self.controller.replica_owned_compute()
-                    {
-                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
-                    }
                 }
                 CatalogItem::MetricSink(metric_sink) => {
-                    let df_desc = self
-                        .catalog()
-                        .try_get_physical_plan(&metric_sink.global_id)
-                        .expect("added in `bootstrap_dataflow_plans`")
-                        .clone();
-
                     let df_meta = self
                         .catalog()
                         .try_get_dataflow_metainfo(&metric_sink.global_id)
@@ -3242,12 +3025,7 @@ impl Coordinator {
                         );
                     }
 
-                    // No read policy to set: the export is a sink, not a readable collection, so
-                    // `ship_dataflow` has no index export to initialize a policy for.
-                    if !self.controller.replica_owned_compute() {
-                        self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
-                            .await;
-                    }
+                    // Sinks have no readable exports requiring serving-timeline windows.
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -3300,9 +3078,6 @@ impl Coordinator {
             }
         }
 
-        // Having installed all entries, creating all constraints, we can now drop read holds and
-        // relax read policies.
-        drop(dataflow_read_holds);
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
@@ -3433,11 +3208,6 @@ impl Coordinator {
         );
         // Announce the completion of initialization.
         self.controller.initialization_complete();
-
-        if !self.controller.replica_owned_compute() {
-            self.bootstrap_introspection_subscribes().await;
-            self.bootstrap_metric_sinks().await;
-        }
 
         info!(
             "startup: coordinator init: bootstrap complete in {:?}",
@@ -4229,7 +3999,7 @@ impl Coordinator {
                 .await?;
             selections.push(publication.op());
             Some(publication)
-        } else if self.controller.replica_owned_compute() {
+        } else {
             let indexes = selections
                 .iter()
                 .filter_map(|op| match op {
@@ -4281,13 +4051,6 @@ impl Coordinator {
                 .await?;
             selections.push(publication.op());
             Some(publication)
-        } else {
-            let requirements = client.protection.prepare_grant_publication(BTreeMap::new());
-            selections.push(crate::catalog::Op::GrantClientReadRequirements {
-                incarnation: client.protection.incarnation(),
-                requirements,
-            });
-            None
         };
         let mut holds = ReadHolds::new();
         let result = self
@@ -4349,15 +4112,10 @@ impl Coordinator {
             .catalog()
             .clusters()
             .map(|cluster| {
-                let snapshot = if self.catalog().state().catalog_read_protection_enabled() {
-                    ComputeInstanceSnapshot::new_from_parts(
-                        cluster.id,
-                        cluster.log_indexes.values().copied().collect(),
-                    )
-                } else {
-                    self.instance_snapshot(cluster.id)
-                        .expect("compute instance exists")
-                };
+                let snapshot = ComputeInstanceSnapshot::new_from_parts(
+                    cluster.id,
+                    cluster.log_indexes.values().copied().collect(),
+                );
                 (cluster.id, snapshot)
             })
             .collect();
@@ -4641,7 +4399,6 @@ impl Coordinator {
                 break expressions;
             };
             if prepare
-                && self.controller.replica_owned_compute()
                 && matches!(entry.item(), CatalogItem::Index(_))
                 && !self
                     .catalog()
@@ -4733,84 +4490,6 @@ impl Coordinator {
         }
         result?;
         Ok(())
-    }
-
-    /// Selects for each compute dataflow an as-of suitable for bootstrapping it.
-    ///
-    /// Returns a set of [`ReadHold`]s that ensures the read frontiers of involved collections stay
-    /// in place and that must not be dropped before all compute dataflows have been created with
-    /// the compute controller.
-    ///
-    /// This method expects all storage collections and dataflow plans to be available, so it must
-    /// run after [`Coordinator::bootstrap_storage_collections`] and
-    /// [`Coordinator::bootstrap_dataflow_plans`].
-    async fn bootstrap_dataflow_as_ofs(
-        &mut self,
-    ) -> Result<BTreeMap<GlobalId, ReadHold>, AdapterError> {
-        let mut catalog_ids = Vec::new();
-        let mut dataflows = Vec::new();
-        let mut read_policies: BTreeMap<GlobalId, ReadPolicy> = BTreeMap::new();
-        let mut pending_replacements = BTreeMap::new();
-        for entry in self.catalog.entries() {
-            let gid = match entry.item() {
-                CatalogItem::Index(idx) => idx.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
-                CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
-                CatalogItem::Table(_)
-                | CatalogItem::Source(_)
-                | CatalogItem::Log(_)
-                | CatalogItem::View(_)
-                | CatalogItem::Sink(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => continue,
-            };
-            if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
-                catalog_ids.push(gid);
-                dataflows.push(plan.clone());
-
-                if let CatalogItem::MaterializedView(mv) = entry.item()
-                    && mv.replacement_target.is_some()
-                {
-                    pending_replacements.insert(
-                        gid,
-                        mv.initial_as_of
-                            .clone()
-                            .expect("pending replacement has an initial visibility frontier"),
-                    );
-                }
-                if let Some(compaction_window) = entry.item().initial_logical_compaction_window() {
-                    read_policies.insert(gid, compaction_window.into());
-                }
-            }
-        }
-
-        let index_bounds: BTreeMap<_, _> = self
-            .catalog()
-            .state()
-            .collection_compaction_bounds()
-            .iter()
-            .map(|(&id, bound)| (id, bound.clone()))
-            .collect();
-        let read_ts = self.get_local_read_ts().await;
-        let read_holds = as_of_selection::run(
-            &mut dataflows,
-            &read_policies,
-            &index_bounds,
-            &pending_replacements,
-            &*self.controller.storage_collections,
-            read_ts,
-            false,
-            self.catalog().state().catalog_read_protection_enabled(),
-        );
-
-        let catalog = self.catalog_mut();
-        for (id, plan) in catalog_ids.into_iter().zip_eq(dataflows) {
-            catalog.set_physical_plan(id, plan);
-        }
-
-        Ok(read_holds)
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -4942,7 +4621,7 @@ impl Coordinator {
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
             tokio::pin!(frontier_timer);
 
-            let catalog_progress = if self.controller.replica_owned_compute() {
+            let catalog_progress = {
                 let progress = self
                     .catalog()
                     .upper_frontiers()
@@ -4955,8 +4634,6 @@ impl Coordinator {
                     )
                     .abort_on_drop(),
                 )
-            } else {
-                None
             };
 
             async fn trace_maintenance<T>(
@@ -5005,32 +4682,17 @@ impl Coordinator {
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // is independent of the publication cadence.
-                    _ = subscription_timer.as_mut(),
-                        if self.query_client.is_some()
-                            || self.controller.replica_owned_compute()
-                            || !self.pending_compute_installations.is_empty() => {
-                        if self.controller.replica_owned_compute() {
-                            if let Err(error) = trace_maintenance(
-                                "subscription_refresh", self.refresh_observed_catalog()
-                            ).await {
-                                warn!(%error, "unable to follow committed native catalog state");
-                            }
-                            if let Err(error) = trace_maintenance(
-                                "subscription_reconcile", self.reconcile_declared_replicas()
-                            ).await {
-                                warn!(%error, "unable to realize declared replicas");
-                            }
+                    _ = subscription_timer.as_mut() => {
+                        if let Err(error) = trace_maintenance(
+                            "subscription_refresh", self.refresh_observed_catalog()
+                        ).await {
+                            warn!(%error, "unable to follow committed native catalog state");
                         }
-                        if !self.controller.replica_owned_compute()
-                            && self.query_client.is_some()
-                        {
-                            if let Err(error) = self.refresh_catalog(None).await {
-                                warn!(%error, "unable to follow adapter execution state");
-                            }
+                        if let Err(error) = trace_maintenance(
+                            "subscription_reconcile", self.reconcile_declared_replicas()
+                        ).await {
+                            warn!(%error, "unable to realize declared replicas");
                         }
-                        trace_maintenance(
-                            "subscription_install", self.install_pending_compute_collections()
-                        ).await;
                         subscription_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
                             CATALOG_SUBSCRIPTION_INTERVAL,
                         )));
@@ -5057,7 +4719,7 @@ impl Coordinator {
                     }
                     // Polling the pinned Sleep is cancellation-safe. Snapshot
                     // observations, not permissions or controller installation.
-                    _ = frontier_timer.as_mut(), if self.controller.replica_owned_compute() => {
+                    _ = frontier_timer.as_mut() => {
                         self.update_native_frontier_introspection();
                         frontier_timer.set(tokio::time::sleep(Duration::from_secs(1)));
                     },
@@ -5065,20 +4727,11 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     // Receive a batch of commands.
                     _ = internal_cmd_rx.recv_many(&mut messages, MESSAGE_BATCH) => {},
-                    // See [`mz_controller::Controller::Controller::ready`] for notes
+                    // See [`mz_controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
                     // Receive a single command.
                     () = self.controller.ready() => {
-                        // NOTE: We don't get a `Readiness` back from `ready()`
-                        // because the controller wants to keep it and it's not
-                        // trivially `Clone` or `Copy`. Hence this accessor.
-                        let controller = match self.controller.get_readiness() {
-                            Readiness::Storage => ControllerReadiness::Storage,
-                            Readiness::Compute => ControllerReadiness::Compute,
-                            Readiness::Internal(_) => ControllerReadiness::Internal,
-                            Readiness::NotReady => unreachable!("just signaled as ready"),
-                        };
-                        messages.push(Message::ControllerReady { controller });
+                        messages.push(Message::StorageReady);
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                     // Receive a single command.
@@ -5388,27 +5041,19 @@ impl Coordinator {
         DataflowBuilder::new(self.catalog().state(), compute)
     }
 
-    /// Return a reference-less snapshot to the indicated compute instance.
-    pub fn instance_snapshot(
-        &self,
-        id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        ComputeInstanceSnapshot::new(&self.controller, id)
-    }
-
     /// Query planning offers catalog-declared indexes independently of readiness.
     fn query_instance_snapshot(
         &self,
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        if let Some(client) = self.query_client.as_ref() {
-            self.catalog()
-                .try_get_cluster(id)
-                .ok_or(InstanceMissing(id))?;
-            Ok(client.instance_snapshot(self.catalog(), id))
-        } else {
-            self.instance_snapshot(id)
-        }
+        self.catalog()
+            .try_get_cluster(id)
+            .ok_or(InstanceMissing(id))?;
+        let client = self
+            .query_client
+            .as_ref()
+            .expect("query client initialized before serving");
+        Ok(client.instance_snapshot(self.catalog(), id))
     }
 
     /// Maintained DDL produces a planning candidate from catalog declarations.
@@ -5417,9 +5062,6 @@ impl Coordinator {
         &self,
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        if !self.catalog().state().catalog_read_protection_enabled() {
-            return self.instance_snapshot(id);
-        }
         self.catalog()
             .try_get_cluster(id)
             .ok_or(InstanceMissing(id))?;
@@ -5429,220 +5071,45 @@ impl Coordinator {
         ))
     }
 
-    /// Validate an MV pin for legacy controller installation. An explicit pin
-    /// without a local realization is an error, never an untargeted dataflow.
-    fn materialized_view_physical_target(
-        &self,
-        cluster: ComputeInstanceId,
-        target: Option<ReplicaId>,
-    ) -> Result<Option<ReplicaId>, DataflowCreationError> {
-        target
-            .map(|target| {
-                self.catalog()
-                    .state()
-                    .physical_replica_for_target(cluster, target)
-                    .ok_or(DataflowCreationError::ReplicaMissing(target))
-            })
-            .transpose()
-    }
-
-    /// Call into the compute controller to install a finalized dataflow, and
-    /// initialize the read policies for its exported readable objects.
-    ///
-    /// # Panics
-    ///
-    /// Panics if dataflow creation fails.
-    pub(crate) async fn ship_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        target_replica: Option<ReplicaId>,
-    ) {
-        self.try_ship_dataflow(dataflow, instance, target_replica)
-            .await
-            .unwrap_or_terminate("dataflow creation cannot fail");
-    }
-
-    /// Call into the compute controller to install a finalized dataflow, and
-    /// initialize the read policies for its exported readable objects.
-    pub(crate) async fn try_ship_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        target_replica: Option<ReplicaId>,
-    ) -> Result<(), DataflowCreationError> {
-        // We must only install read policies for indexes, not for sinks.
-        // Sinks are write-only compute collections that don't have read policies.
-        let export_ids = dataflow.exported_index_ids().collect();
-
-        self.controller
-            .compute
-            .create_dataflow(instance, dataflow, target_replica)?;
-
-        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
-            .await;
-
-        Ok(())
-    }
-
-    /// Call into the compute controller to allow writes to the specified IDs
-    /// from the specified instance. Calling this function multiple times and
-    /// calling it on a read-only instance has no effect.
-    pub(crate) fn allow_writes(&mut self, instance: ComputeInstanceId, id: GlobalId) {
-        if self.controller.replica_owned_compute() {
-            return;
-        }
-        self.controller
-            .compute
-            .allow_writes(instance, id)
-            .unwrap_or_terminate("allow_writes cannot fail");
-    }
-
-    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
-    /// hold once compute has taken its own (compute puts in its own read holds during
-    /// `create_dataflow`, so it is safe to release this one right after shipping).
-    ///
-    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
-    /// as-of just picked.
-    async fn ship_new_dataflow(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-        mut df_desc: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
-    ) {
-        let read_holds = self.acquire_read_holds(id_bundle);
-        let since = read_holds.least_valid_read();
-        df_desc.set_as_of(since.clone());
-        self.ship_dataflow_and_notice_builtin_table_updates(
-            df_desc,
-            instance,
-            notice_builtin_updates_fut,
-            None,
-        )
-        .await;
-
-        drop(read_holds);
-    }
-
-    /// Persist already-rendered optimizer notices for a newly created
-    /// non-transient dataflow.
-    ///
-    /// Protected writers publish notices from committed plan selections instead.
-    /// Installation must not overwrite that metadata or append those notices again.
-    /// Legacy installation retains local metadata on followers too, but only the
-    /// originating committer may set `publish_derived_rows`.
-    ///
-    /// This:
-    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
-    /// - stores the rendered metainfo on the catalog object via
-    ///   `set_dataflow_metainfo`,
-    /// - and returns a future that resolves once the builtin-table append
-    ///   has been observed, or `None` if nothing was appended.
-    fn persist_dataflow_metainfo(
-        &mut self,
-        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
-        export_id: GlobalId,
-        publish_derived_rows: bool,
-    ) -> Option<BuiltinTableAppendNotify> {
-        if self.catalog().state().catalog_read_protection_enabled() {
-            return None;
-        }
-        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
-        // in-memory state.
-        if publish_derived_rows
-            && self.catalog().state().system_config().enable_mz_notices()
-            && !df_meta.optimizer_notices.is_empty()
-        {
-            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
-            self.catalog().state().pack_optimizer_notices(
-                &mut builtin_table_updates,
-                df_meta.optimizer_notices.iter(),
-                Diff::ONE,
-            );
-
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            Some(self.builtin_table_update().execute(builtin_table_updates))
-        } else {
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            None
-        }
-    }
-
-    /// Like `ship_dataflow`, but also await on builtin table updates.
-    pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
-        target_replica: Option<ReplicaId>,
-    ) {
-        if let Some(notice_builtin_updates_fut) = notice_builtin_updates_fut {
-            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, target_replica);
-            let ((), ()) =
-                futures::future::join(notice_builtin_updates_fut, ship_dataflow_fut).await;
-        } else {
-            self.ship_dataflow(dataflow, instance, target_replica).await;
-        }
-    }
-
-    /// Install a _watch set_ in the controller that is automatically associated with the given
-    /// connection id. The watchset will be automatically cleared if the connection terminates
-    /// before the watchset completes.
+    /// Wait for observed progress on behalf of a connection.
+    /// Disconnecting cancels the wait, including admission and initial observation.
     pub fn install_compute_watch_set(
         &mut self,
         conn_id: ConnectionId,
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) -> Result<(), CollectionLookupError> {
-        if let Some(client) = self.query_client.clone() {
-            let catalog = self.owned_catalog();
-            let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-            for id in objects {
-                let cluster = catalog
-                    .try_get_entry_by_global_id(&id)
-                    .and_then(|entry| entry.item().cluster_id())
-                    .ok_or(CollectionLookupError::CollectionMissing(id))?;
-                compute_ids.entry(cluster).or_default().insert(id);
-            }
-            self.install_query_watch_set(conn_id, state, async move {
-                client
-                    .wait_for_progress(
-                        &catalog,
-                        &CollectionIdBundle {
-                            storage_ids: BTreeSet::new(),
-                            compute_ids,
-                        },
-                        t,
-                    )
-                    .await
-            });
-            return Ok(());
+    ) -> Result<(), CollectionMissing> {
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
+        let catalog = self.owned_catalog();
+        let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        for id in objects {
+            let cluster = catalog
+                .try_get_entry_by_global_id(&id)
+                .and_then(|entry| entry.item().cluster_id())
+                .ok_or(CollectionMissing(id))?;
+            compute_ids.entry(cluster).or_default().insert(id);
         }
-        let ws_id = self.controller.install_compute_watch_set(objects, t)?;
-        self.connection_watch_sets
-            .entry(conn_id.clone())
-            .or_default()
-            .insert(ws_id);
-        self.installed_watch_sets.insert(
-            ws_id,
-            InstalledWatchSet {
-                conn_id,
-                response: state,
-                _execution: None,
-            },
-        );
+        self.install_query_watch_set(conn_id, state, async move {
+            client
+                .wait_for_progress(
+                    &catalog,
+                    &CollectionIdBundle {
+                        storage_ids: BTreeSet::new(),
+                        compute_ids,
+                    },
+                    t,
+                )
+                .await
+        });
         Ok(())
     }
 
-    /// Install a _watch set_ in the controller that is automatically associated with the given
-    /// connection id. The watchset will be automatically cleared if the connection terminates
-    /// before the watchset completes.
+    /// Wait for observed progress on behalf of a connection.
+    /// Disconnecting cancels the wait, including admission and initial observation.
     pub fn install_storage_watch_set(
         &mut self,
         conn_id: ConnectionId,
@@ -5650,40 +5117,28 @@ impl Coordinator {
         t: Timestamp,
         state: WatchSetResponse,
     ) -> Result<(), CollectionMissing> {
-        if let Some(client) = self.query_client.clone() {
-            let catalog = self.owned_catalog();
-            for id in &objects {
-                client
-                    .collection_metadata(&catalog, *id)
-                    .map_err(|_| CollectionMissing(*id))?;
-            }
-            self.install_query_watch_set(conn_id, state, async move {
-                client
-                    .wait_for_progress(
-                        &catalog,
-                        &CollectionIdBundle {
-                            storage_ids: objects,
-                            compute_ids: BTreeMap::new(),
-                        },
-                        t,
-                    )
-                    .await
-            });
-            return Ok(());
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
+        let catalog = self.owned_catalog();
+        for id in &objects {
+            client
+                .collection_metadata(&catalog, *id)
+                .map_err(|_| CollectionMissing(*id))?;
         }
-        let ws_id = self.controller.install_storage_watch_set(objects, t)?;
-        self.connection_watch_sets
-            .entry(conn_id.clone())
-            .or_default()
-            .insert(ws_id);
-        self.installed_watch_sets.insert(
-            ws_id,
-            InstalledWatchSet {
-                conn_id,
-                response: state,
-                _execution: None,
-            },
-        );
+        self.install_query_watch_set(conn_id, state, async move {
+            client
+                .wait_for_progress(
+                    &catalog,
+                    &CollectionIdBundle {
+                        storage_ids: objects,
+                        compute_ids: BTreeMap::new(),
+                    },
+                    t,
+                )
+                .await
+        });
         Ok(())
     }
 
@@ -5710,7 +5165,7 @@ impl Coordinator {
             InstalledWatchSet {
                 conn_id,
                 response,
-                _execution: Some(execution),
+                _execution: execution,
             },
         );
     }
@@ -5955,26 +5410,6 @@ fn arrangement_sizes_expired_retractions(
         }
     }
     expired
-}
-
-#[cfg(test)]
-impl Coordinator {
-    #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-    ) {
-        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
-        // called after `catalog_transact`, after which no errors are allowed. This test exists to
-        // prevent us from incorrectly teaching those functions how to return errors (which has
-        // happened twice and is the motivation for this test).
-
-        // An arbitrary compute instance ID to satisfy the function calls below. Note that
-        // this only works because this function will never run.
-        let compute_instance = ComputeInstanceId::user(1).expect("1 is a valid ID");
-
-        let _: () = self.ship_dataflow(dataflow, compute_instance, None).await;
-    }
 }
 
 /// Contains information about the last message the [`Coordinator`] processed.
@@ -6391,10 +5826,6 @@ pub fn serve(
                     hydration_history_replica_cursor: None,
                     hydration_history_sweep: None,
                     retired_rows_sweep: None,
-                    metric_sinks: BTreeMap::new(),
-                    metric_sink_plans: BTreeMap::new(),
-                    pending_compute_installations: BTreeSet::new(),
-                    pending_compute_installation_retry: None,
                     deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
@@ -6456,11 +5887,10 @@ pub fn serve(
 
                     coord.prune_arrangement_sizes_history_on_startup().await;
                     coord.initialize_query_client(prepared_client).await?;
-                    if coord.controller.replica_owned_compute() {
+                    {
                         // These observations execute through the query client.
                         // Their admission must not delay storage/WAL bootstrap.
                         coord.bootstrap_introspection_subscribes().await;
-                        coord.bootstrap_metric_sinks().await;
                     }
 
                     Ok(())
@@ -6658,7 +6088,7 @@ pub async fn load_remote_system_parameters(
 struct InstalledWatchSet {
     conn_id: ConnectionId,
     response: WatchSetResponse,
-    _execution: Option<AbortOnDropHandle<()>>,
+    _execution: AbortOnDropHandle<()>,
 }
 
 #[derive(Debug)]

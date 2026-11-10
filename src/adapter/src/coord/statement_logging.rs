@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_client::controller::error::CollectionLookupError;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
@@ -22,6 +21,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_types::errors::CollectionMissing;
 use qcell::QCell;
 use rand::SeedableRng;
 use sha2::{Digest, Sha256};
@@ -826,7 +826,7 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         watch_set: WatchSetCreation,
-    ) -> Result<(), CollectionLookupError> {
+    ) -> Result<(), CollectionMissing> {
         let WatchSetCreation {
             logging_id,
             timestamp,

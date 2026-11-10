@@ -302,7 +302,11 @@ impl Coordinator {
             ));
         }
         let id_bundle = stage.global_mir_plan.id_bundle(stage.cluster_id);
-        let read_holds = if let Some(client) = &self.query_client {
+        let client = self
+            .query_client
+            .as_ref()
+            .ok_or_else(|| AdapterError::Internal("query client is not initialized".into()))?;
+        let read_holds = {
             let request = stage.read_protection.get_or_insert_with(|| {
                 super::read_protection::ReadProtectionRequest::new(
                     client.protection.incarnation(),
@@ -320,8 +324,6 @@ impl Coordinator {
                 })));
             };
             holds
-        } else {
-            self.acquire_query_read_holds(&id_bundle).await?
         };
         let IntrospectionSubscribeTimestampOptimizeLir {
             catalog,
@@ -380,23 +382,12 @@ impl Coordinator {
         // dataflow for it.
         if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
-            if self.query_client.is_some() {
-                let execution = self.spawn_query_sink(
-                    catalog,
-                    df_desc,
-                    cluster_id,
-                    Some(replica_id),
-                    read_holds,
-                )?;
-                self.introspection_subscribes
-                    .get_mut(&subscribe_id)
-                    .expect("registered subscribe")
-                    .query_execution = Some(execution);
-            } else {
-                self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
-                    .await;
-                drop(read_holds);
-            }
+            let execution =
+                self.spawn_query_sink(catalog, df_desc, cluster_id, Some(replica_id), read_holds)?;
+            self.introspection_subscribes
+                .get_mut(&subscribe_id)
+                .expect("registered subscribe")
+                .query_execution = Some(execution);
 
             Ok(StageResult::Response(
                 ExecuteResponse::CreatedIntrospectionSubscribe,
@@ -442,16 +433,6 @@ impl Coordinator {
             "dropping introspection subscribe",
         );
 
-        // This can fail if the sequencing hasn't finished yet for the subscribe. In this case,
-        // `sequence_introspection_subscribe_finish` will skip installing the compute collection in
-        // the first place.
-        if self.query_client.is_none() {
-            let _ = self
-                .controller
-                .compute
-                .drop_collections(subscribe.cluster_id, vec![id]);
-        }
-
         self.controller.storage.update_introspection_collection(
             subscribe.spec.introspection_type,
             subscribe.delete_write_op(),
@@ -487,18 +468,6 @@ impl Coordinator {
         // Abort pending admission as well as installed exports before assigning
         // the replacement a new ID. Queued responses retain the old ID.
         drop(subscribe.query_execution.take());
-        if self.query_client.is_none()
-            && let Err(error) = self
-                .controller
-                .compute
-                .drop_collections(cluster_id, vec![old_id])
-        {
-            soft_panic_or_log!(
-                "error dropping compute collection for introspection subscribe: {error} \
-                 (id={old_id}, cluster_id={cluster_id})"
-            );
-        }
-
         // Ensure that the contents of the target storage collection are cleaned when the new
         // subscribe starts reporting data.
         subscribe.deferred_write = Some(subscribe.delete_write_op());

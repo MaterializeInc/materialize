@@ -33,11 +33,10 @@ use crate::query_client::QueryClient;
 
 impl Coordinator {
     pub(super) fn collect_retired_rows(&mut self) {
-        if !self.controller.replica_owned_compute()
-            || self
-                .retired_rows_sweep
-                .as_ref()
-                .is_some_and(|task| !task.is_finished())
+        if self
+            .retired_rows_sweep
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
         {
             return;
         }

@@ -1353,12 +1353,10 @@ impl TestDeploymentResources {
             },
             timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
             controller: ControllerConfig {
-                timestamp_oracle_url: Some(self.timestamp_oracle_url.clone()),
                 timestamp_oracle_clock_file: self
                     ._timestamp_oracle_clock
                     .as_ref()
                     .map(|clock| clock.path.clone()),
-                build_info: &crate::BUILD_INFO,
                 orchestrator: self.orchestrator.clone(),
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,

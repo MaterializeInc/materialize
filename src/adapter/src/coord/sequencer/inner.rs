@@ -96,7 +96,6 @@ use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::{Instrument, Span, info, warn};
 
-use crate::ReadHolds;
 use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
@@ -2493,26 +2492,6 @@ impl Coordinator {
         };
     }
 
-    /// Executes an EXPLAIN FILTER PUSHDOWN, with read holds passed in.
-    async fn execute_explain_pushdown_with_read_holds(
-        &self,
-        ctx: ExecuteContext,
-        as_of: Antichain<Timestamp>,
-        mz_now: ResultSpec<'static>,
-        read_holds: Option<ReadHolds>,
-        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
-    ) {
-        let fut = self
-            .explain_pushdown_future(ctx.session(), as_of, mz_now, imports)
-            .await;
-        task::spawn(|| "render explain pushdown", async move {
-            // Transfer the necessary read holds over to the background task
-            let _read_holds = read_holds;
-            let res = fut.await;
-            ctx.retire(res);
-        });
-    }
-
     /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN.
     async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
         &self,
@@ -2526,9 +2505,8 @@ impl Coordinator {
             session,
             &self.catalog,
             self.query_client
-                .is_none()
-                .then(|| self.controller.storage_collections.as_ref()),
-            self.query_client.as_ref(),
+                .as_ref()
+                .expect("query client initialized before serving"),
             as_of,
             mz_now,
             imports,
@@ -4414,92 +4392,17 @@ impl Coordinator {
         let replacement = self.catalog.get_entry(&replacement_id);
         let replacement_gid = replacement.latest_global_id();
 
-        if let Some(client) = self.query_client.clone() {
-            let cluster = replacement
-                .cluster_id()
-                .expect("materialized view has a cluster");
-            let name = target.name().item.clone();
-            let catalog = self.owned_catalog();
-            self.install_query_watch_set(
-                ctx.session().conn_id().clone(),
-                WatchSetResponse::AlterMaterializedViewReady(AlterMaterializedViewReadyContext {
-                    ctx: Some(ctx),
-                    otel_ctx: OpenTelemetryContext::obtain(),
-                    plan,
-                    plan_validity,
-                    prepared: None,
-                }),
-                async move {
-                    // Sharing the target's Persist shard does not prove that the
-                    // replacement has been installed. Require its own observation.
-                    let upper = client
-                        .wait_for_compute_frontier(cluster, replacement_gid, None)
-                        .await;
-                    let timestamp = upper
-                        .into_option()
-                        .ok_or(AdapterError::ReplaceMaterializedViewSealed { name })?
-                        .step_back()
-                        .unwrap_or(Timestamp::MIN);
-                    client
-                        .wait_for_progress(
-                            &catalog,
-                            &crate::CollectionIdBundle {
-                                storage_ids: BTreeSet::from([target_gid]),
-                                compute_ids: BTreeMap::new(),
-                            },
-                            timestamp,
-                        )
-                        .await
-                },
-            );
-            return;
-        }
-
-        let target_upper = self
-            .controller
-            .storage_collections
-            .collection_frontiers(target_gid)
-            .expect("target MV exists")
-            .write_frontier;
-        let replacement_upper = self
-            .controller
-            .compute
-            .collection_frontiers(replacement_gid, replacement.cluster_id())
-            .expect("replacement MV exists")
-            .write_frontier;
-
-        info!(
-            %id, %replacement_id, ?target_upper, ?replacement_upper,
-            "preparing materialized view replacement application",
-        );
-
-        let Some(replacement_upper_ts) = replacement_upper.into_option() else {
-            // A replacement's write frontier can only become empty if the target's write frontier
-            // has advanced to the empty frontier. In this case the MV is sealed for all times and
-            // applying the replacement wouldn't have any effect. We use this opportunity to alert
-            // the user by returning an error, rather than applying the useless replacement.
-            //
-            // Note that we can't assert on `target_upper` being empty here, because the reporting
-            // of the target's frontier might be delayed. We'd have to fetch the current frontier
-            // from persist, which we cannot do without incurring I/O.
-            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
-                name: target.name().item.clone(),
-            }));
-            return;
-        };
-
-        // A watch set resolves when the watched objects' frontier becomes _greater_ than the
-        // specified timestamp. Since we only need to wait until the target frontier is >= the
-        // replacement's frontier, we can step back the timestamp.
-        let replacement_upper_ts = replacement_upper_ts.step_back().unwrap_or(Timestamp::MIN);
-
-        // TODO(database-issues#9820): If the target MV is dropped while we are waiting for
-        // progress, the watch set never completes and neither does the `ALTER MATERIALIZED VIEW`
-        // command.
-        self.install_storage_watch_set(
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
+        let cluster = replacement
+            .cluster_id()
+            .expect("materialized view has a cluster");
+        let name = target.name().item.clone();
+        let catalog = self.owned_catalog();
+        self.install_query_watch_set(
             ctx.session().conn_id().clone(),
-            BTreeSet::from_iter([target_gid]),
-            replacement_upper_ts,
             WatchSetResponse::AlterMaterializedViewReady(AlterMaterializedViewReadyContext {
                 ctx: Some(ctx),
                 otel_ctx: OpenTelemetryContext::obtain(),
@@ -4507,8 +4410,29 @@ impl Coordinator {
                 plan_validity,
                 prepared: None,
             }),
-        )
-        .expect("target collection exists");
+            async move {
+                // Sharing the target's Persist shard does not prove that the
+                // replacement has been installed. Require its own observation.
+                let upper = client
+                    .wait_for_compute_frontier(cluster, replacement_gid, None)
+                    .await;
+                let timestamp = upper
+                    .into_option()
+                    .ok_or(AdapterError::ReplaceMaterializedViewSealed { name })?
+                    .step_back()
+                    .unwrap_or(Timestamp::MIN);
+                client
+                    .wait_for_progress(
+                        &catalog,
+                        &crate::CollectionIdBundle {
+                            storage_ids: BTreeSet::from([target_gid]),
+                            compute_ids: BTreeMap::new(),
+                        },
+                        timestamp,
+                    )
+                    .await
+            },
+        );
     }
 
     /// Finishes applying a replacement materialized view after the frontier wait completed.

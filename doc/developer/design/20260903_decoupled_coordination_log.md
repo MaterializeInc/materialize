@@ -9,164 +9,115 @@ Performance changes remain separate from this cleanup.
 
 ## Next concrete action
 
-Remove the adapter-side legacy compute-controller execution graph and its
-fallback callers. The boundary survey is `native-compute-owner-boundary.md`.
-Preserve native query transport, transient execution, subscriptions, grants,
-shared readiness/peek helpers and native response handling. Account for the
-adapter-process overflow configuration currently applied by the old controller.
-Bootstrap's temporary absence of QueryClient must not enable legacy execution.
-Storage-owner removal is verified. Its evidence is linked below.
+Convert native multi-generation launch/test harnesses to a shared relay and
+explicit retirement. Start with the promotion/retirement helper split and one
+working native lifecycle. Verify compatible writers before and after promotion,
+warmed replicas and surviving deployments. Preserve current-source script
+coverage. The caller inventory and exact API/topology contracts are in
+`native-lifecycle-harness-seams.md` under the evidence directory below.
 
-Use one Cargo job for the next heavy build to avoid overlapping large links.
-Preserve the 30 GiB disk reserve.
+Replica-side execution cleanup is a separate unit. Its inspected boundary is in
+`native-replica-execution-boundary.md`. A user decision is pending on preserving
+the headless driver's programmable low-level coverage through a test-only native
+runtime, rather than retaining catalog-free production execution. Keep query
+transport, native nonleader workers and both Timely topologies. No implementation
+or runtime verification of that unit is claimed.
 
-A user decision is pending on retiring the unused legacy final-preflight hook
-with an explicit unsupported result. It has no enabled CI caller, but can run
-an old-to-old check when manually configured. Keep that hook unchanged pending
-the answer. Do not add image-classification machinery or conversion/reset
-workarounds. Research: `final-preflight-boundary-research.md` in the evidence
-directory below.
+A decision is also pending on retiring the unused legacy final-preflight hook
+with an explicit unsupported result. It has no enabled CI caller, but supports
+manually configured old-to-old checks. Leave it unchanged pending the answer.
+Do not add image-classification machinery or conversion/reset workarounds.
+See `final-preflight-boundary-research.md`.
 
-Convert native multi-generation harnesses to shared relay topology and
-explicit retirement. Verify compatible writers before and after promotion,
-warmed replicas and surviving deployments. Current-source script selection is
-preserved, but its multi-container runtime remains unverified. The remaining compute-owner removal is the next implementation unit.
+## Cleanup outcome
 
-## Committed cleanup outcome
+Adapter-side provisioning and controller-owned storage/compute execution are
+removed. Controllerd owns processes. Replica followers own maintained execution.
+Adapters retain cluster policy, validated catalog transactions, serving-timeline
+protection and query-owned transient work. Native query clients are required,
+without legacy execution or local-protection fallbacks. Shared timestamp/as-of
+solvers and all native introspection publishers and SQL consumers remain.
+Combined/read-only serving, private migration execution, alternate protection
+catalogs and exclusive age-based cleanup are removed. Required formats remain.
 
-Adapter-side replica provisioning, cleanup, process events and metrics ownership
-are removed. Controllerd remains the process owner. Adapter policy, endpoint
-discovery, child configuration and native observations remain. Combined library
-serving rejects before TLS or metadata access. Combined/read-only bootstrap and
-DDL-triggered upgrade restarts are removed. Native admission precedes readiness,
-while explicit promotion and candidate-only restart remain. Alternate protection
-catalogs and compaction subscribers are removed. Native grants, recovery holds and
-publication barriers remain on the main catalog. The adapter deployment read-only
-mode, private bootstrap update buffer/backfill and mode-only frontend restrictions
-are removed. SQL transaction access, native writer admission, WAL ordering and
-replica output authority remain intact. Private migration workers, migrated-MV
-write exceptions and readiness exclusions are also removed. Shared builtin-schema
-admission, native WAL recovery and readiness classification remain protected.
-Remote COPY uses request-owned query transport without controller callbacks.
-Native cancellation, completion, error handling and restart checks pass.
-Controller-owned storage execution, replay and capability state are removed.
-Passive inventory/observations, durable progress, read-only collection APIs and
-WAL contracts remain. Native recovery and complete Kafka ALTER SINK checks pass.
-All affected targets compile
-and native owner tests pass. Independent review is resolved. Exclusive cleanup
-based on deployment age or local inventory is also removed. Its old retry interval
-remains accepted but ignored for persisted configuration compatibility.
+Targeted native debug checks pass for startup, adapter restart preserving
+execution, readiness, configuration, durable protection, SQL SUBSCRIBE/COPY/EXPLAIN
+and complete Kafka ALTER SINK behavior. The latest service binaries contain the
+compute-owner removal. Independent review found no new correctness regression.
+Its readiness coverage gap is addressed at the native query-client boundary.
+A pre-existing startup activation race remains separately recorded below.
 
-Native frontier publishers and SQL selectors, controller-backed Rust/SLT fixtures,
-and the controller-managed container entrypoint are committed and reviewed.
-Targeted SQL/schema, authentication, retained-status and lifecycle checks passed.
-Fresh debug-container checks covered SQL/HTTP, controller and adapter recovery,
-retained process identities, surviving sessions and persisted table/MV contents.
-This was a cached image with current binaries and entrypoint mounted, not a rebuilt
-image or broad CI. Port6881 is SASL SQL, not HTTP. Relay diagnostics use6883.
-
-Historical legacy-upgrade cases, incident-1007 repair paths, PG CDC published-to-local
-upgrades and mixed pre-native/native platform plans produce explicit skipped results before
-workflow startup/reset. Obsolete old-checkout preflight selection is removed,
-and its CI triggers retain explicit unsupported skips. Old-only and
-all-native plans remain selected. Prepared randomized plans execute once.
-Skips continue, failures remain fail-fast, and SQL errors retain scenario/source
-identity. Reporting tests, a real blocked parallel-worker test and a real CLI
-invocation in CI mode passed. The local CLI still eagerly acquires initial images
-before workflow dispatch. Its probe timed out during pulls, without starting
-services. Newly pulled unused image tags were removed.
-
-Evidence under `~/.local/share/aj/m3-evidence/native-only/`:
-- `native-storage-owner-verification.md` links the source review, native runtime
-  checks and complete Kafka ALTER SINK run using rebuilt current services.
-- `query-copy-verification.md` links native HTTP COPY, query transport, restart
-  and WAL checks, with the independent review and resolved test-only findings.
-- `private-migration-verification.md` links passing native startup/readiness,
-  infrastructure and WAL/protection checks, source review and cache cleanup.
-- `adapter-serving-mode-verification.md` links source review and passing native
-  startup, WAL/protection, SQL transaction, pgwire and statement logging checks.
-- `alternate-protection-verification.md` links protection, ownership and native
-  restart evidence, including the reproduced and corrected namespace fixture.
-  `adapter-read-only-research.md` records the removed mode/migration boundaries.
-- `native-bootstrap-verification.md` links native bootstrap checks and runtime
-  coverage. `alternate-protection-catalog-research.md` records that removal boundary.
-- `adapter-actuator-verification.md` links current-source build, review, boundary
-  and runtime evidence. `container-runtime/aj-native-runtime-1c5c0a71/` contains
-  the actuator-removal lifecycle run.
-- `pg-upgrade-boundary.md` links regression tests and the real CLI skipped result.
-- `exclusive-cleanup-review.md`, `exclusive-cleanup-check.log`,
-  `exclusive-cleanup-combined-tests.log`.
-- `container-runtime/verification.md`, `native-bind-review.md`,
-  `native-bind-reviewed-green.log`, `native-bind-reviewed-check.log`.
-- `unsupported-reporting-review.md`, `unsupported-reporting-combined.log`.
-- `fixed-upgrade-combined.log`, `fixed-upgrade-cli-corrected.log` and
-  `junit_mzcompose_local-incident-skip.xml` cover the removed fixed historical paths.
-  Full CI pipeline generation was not run.
-- `platform-boundary-followup.md`, `platform-boundary-combined.log`,
-  `platform-cli/` for actual CLI output, JUnit and cleanup evidence.
-- `upgrade-boundary-classification.md` for remaining workflow boundaries.
-  Its original claim that legacy-upgrade already had named cases was incorrect.
-- `controller-alternatives.md`, `frontier-review.md`, `harness-decision.md`,
-  `native-frontiers.log`, and `work-notes.md` for implementation/evidence pointers.
-
-All owned verification services and monitors are stopped. Current service
-binaries are rebuilt, with 35 GiB free after cache cleanup. Old stopped
-experiment containers and their owned volumes were removed, with inspect records
-in `obsolete-runtime-inspect.json`. Superseded native benchmark binaries
-were removed, with checksums retained in `archived-binary-cleanup.log`. Baseline
-artifacts, measurement reports and current binaries remain. Recreate isolated
-prerequisites before runtime checks. Pre/post-cleanup builtin schemas are incompatible, so use
-matching post-cleanup schemas for native version demonstrations.
-The prior [publication comparison](20260903_decoupled_coordination_publication_interval.md)
-remains the load baseline, not a performance claim for this cleanup.
+Earlier native container checks covered controller/adapter recovery, surviving
+sessions and persisted table/MV contents. Historical mixed pre-native/native
+upgrade plans report explicit unsupported skips. Old-only and all-native plans
+remain selected. These outcomes are targeted evidence, not broad CI or a fresh
+multiversion proof for this cleanup.
 
 ## Live limitations
 
 Broad CI remains non-green and was not rerun. The last broad evidence is
 [Build141419](https://buildkite.com/materialize/test/builds/141419), including the
 unpublished pubsubd image. Registry visibility, merge skew, the prior Persist
-JSON-order check and the stale hydration expectation remain unresolved.
-The last full formatting check failed on an unchanged generic call in
-`src/catalog/src/catalog.rs`. The prior changed-file Python checks passed. The native Rust/SLT fixture, observation SQL and targeted native-container checks
-pass. Broad container/upgrade suites and remaining execution cleanup are still
-outstanding. The PR stays draft.
+JSON-order check and stale hydration expectation remain unresolved. The last
+full formatting check failed on an unchanged generic call in
+`src/catalog/src/catalog.rs`. Changed-file Rust formatting and combined all-target
+checks pass. The PR stays draft.
 
-Arbitrary-version compatibility and external-sink handover remain unverified.
-Pre-native-to-native conversion is out of scope.
-The birth-ordering concern is source-inspected, not reproduced. The original
-four-adapter workload has not been rerun with the txn-WAL retirement repair.
-The [follow-up inventory](20260903_decoupled_coordination_followups.md) preserves
-these and the other architectural opportunities.
+Native multi-generation harness conversion and broad container/upgrade suites
+remain outstanding. Pre/post-cleanup builtin schemas are incompatible. Use
+matching post-cleanup schemas for native version demonstrations.
+Pre-native-to-native conversion is out of scope. Arbitrary-version compatibility
+and external-sink handover remain unverified.
 
-## Verified outcomes
-
-Shared-input plans, two-adapter churn and catalog-replica recovery with retained
-frontier reads passed. Catalog goldens and the isolated index inventory assertion
-passed. The two-version prototype previously demonstrated compatible full writers,
-surviving sessions and explicit retirement. The durable authority projection
-removed retained introspection's catalog-history dependency. These outcomes do
-not establish arbitrary-version compatibility or green CI.
+Catalog catch-up can start introspection for a peer-created replica before
+QueryClient activation. This startup race predates the compute-owner removal.
+The call chain is source-reviewed, not reproduced or fixed. The birth-ordering
+concern is also source-inspected, not reproduced. The original four-adapter
+workload has not been rerun with the txn-WAL retirement repair. These and the
+other architectural opportunities remain in the
+[follow-up inventory](20260903_decoupled_coordination_followups.md).
 
 ## Essential evidence and local state
 
-- Current comparison and raw evidence are linked above. Primary and scan-audit
-  instrumentation differ, so their windows are not pooled. Reader correction,
-  policy progress and background recovery are distinct contracts.
-- Reference evidence: `~/.local/share/aj/m3-evidence/logical-component-load/`.
-  Valid heaps precede CPU profiling. The baseline's post-window inventory failure
-  was reproduced and repaired without rewriting its original failed status.
-- Shared-input lifecycle and plan evidence: `shared-frontier-inputs/` under the
-  same evidence parent. Its initial symlink-discovery run remains excluded.
-- Previous [backend attribution](20260903_decoupled_coordination_backend_load.md),
-  [resource review](20260903_decoupled_coordination_resource_review.md),
-  [read reductions](20260903_decoupled_coordination_observed_progress.md) and
-  [scan attribution](20260903_decoupled_coordination_replica_scans.md).
-- Lifecycle/plan evidence: `~/.local/share/aj/m3-evidence/lifecycle/verification.md`
-  and `shared-plans/verification.md`. Authority evidence is in
-  `authority-projection/replacement/`, txn-WAL evidence in `txn-retirement/repair.md`.
-- Older details: [archive](20260903_decoupled_coordination_log_archive.md).
+Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
 
-The unrelated persist-traffic worktree is untouched. Keep heavy work sequential,
-use low concurrency and preserve a 30 GiB free-disk reserve. When switching older
-source trees through the same target directory, invalidate workspace packages
-rather than risk stale Cargo metadata. Preserve the third-party cache.
+- `native-compute-owner-verification.md` links source review, exact commands,
+  passing native checks, binary hashes and the standalone Kafka run. The four
+  compute introspection inputs remain deliberately. Publisher/consumer evidence:
+  `native-compute-introspection-boundary.md`.
+- `native-storage-owner-verification.md`, `query-copy-verification.md`,
+  `private-migration-verification.md`, `adapter-serving-mode-verification.md`,
+  `alternate-protection-verification.md`, `native-bootstrap-verification.md`
+  and `adapter-actuator-verification.md` preserve earlier removal evidence.
+- `container-runtime/verification.md`, `unsupported-reporting-review.md`,
+  `pg-upgrade-boundary.md`, `platform-boundary-followup.md` and
+  `exclusive-cleanup-review.md` preserve harness, reporting and ownership evidence.
+
+All owned verification services are stopped. Test metadata, Kafka fixture
+containers, network and volume were removed. About 45 GiB is free. Current
+services, baseline artifacts and measurement reports remain. Superseded build
+outputs and inactive incremental caches were reclaimed. Cleanup records are in
+`native-compute-*-cleanup.log` and `native-compute-reserve-reclaim.log`.
+Keep heavy work sequential, use one low-priority Cargo job and serial tests,
+and preserve a 30 GiB disk reserve. The unrelated persist-traffic worktree is
+untouched. When switching older source trees through the same target directory,
+invalidate workspace packages rather than risk stale Cargo metadata. Preserve
+the third-party cache.
+
+The prior [publication comparison](20260903_decoupled_coordination_publication_interval.md)
+remains the load baseline, not a performance claim for this cleanup. Primary and
+scan-audit instrumentation differ, so their windows are not pooled. Reference
+measurements are in `~/.local/share/aj/m3-evidence/logical-component-load/`.
+Valid heaps precede CPU profiling. The baseline inventory failure was reproduced
+and repaired without rewriting its original failed status.
+
+Earlier lifecycle/plan evidence is in `lifecycle/verification.md`,
+`shared-plans/verification.md` and `shared-frontier-inputs/` under the same evidence
+parent. It demonstrated compatible full writers, surviving sessions and explicit
+retirement before this cleanup. Authority evidence is in
+`authority-projection/replacement/`, txn-WAL evidence in `txn-retirement/repair.md`.
+Further context: [backend attribution](20260903_decoupled_coordination_backend_load.md),
+[resource review](20260903_decoupled_coordination_resource_review.md),
+[read reductions](20260903_decoupled_coordination_observed_progress.md),
+[scan attribution](20260903_decoupled_coordination_replica_scans.md) and the
+[archive](20260903_decoupled_coordination_log_archive.md).

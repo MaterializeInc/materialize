@@ -9,16 +9,9 @@
 
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_client::client::AppendOnlyUpdate;
-use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
-use mz_storage_types::controller::StorageError;
+use mz_repr::{Datum, Timestamp};
 use timely::PartialOrder;
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, oneshot};
-use tracing::info;
-
-pub type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 
 /// Returns `(last_completed_refresh, next_refresh)` for a REFRESH materialized view.
 ///
@@ -65,85 +58,5 @@ pub fn refresh_introspection(
                 |last_completed_refresh| last_completed_refresh.into(),
             );
         (last_completed_refresh, (*write_frontier).into())
-    }
-}
-
-/// Spawn a task sinking introspection updates produced by the compute controller to storage.
-pub fn spawn_introspection_sink(
-    mut rx: mpsc::UnboundedReceiver<IntrospectionUpdates>,
-    storage_controller: &dyn StorageController,
-) {
-    let sink = IntrospectionSink::new(storage_controller);
-
-    mz_ore::task::spawn(|| "compute-introspection-sink", async move {
-        info!("running introspection sink task");
-
-        while let Some((type_, updates)) = rx.recv().await {
-            sink.send(type_, updates);
-        }
-
-        info!("introspection sink task shutting down");
-    });
-}
-
-type Notifier = oneshot::Sender<Result<(), StorageError>>;
-type AppendOnlySender = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier)>;
-type DifferentialSender = mpsc::UnboundedSender<(StorageWriteOp, Notifier)>;
-
-/// A sink for introspection updates produced by the compute controller.
-///
-/// The sender is connected to the storage controller's CollectionManager, which writes received
-/// updates to persist.
-#[derive(Debug)]
-struct IntrospectionSink {
-    /// Sender for [`IntrospectionType::ComputeDependencies`] updates.
-    compute_dependencies_tx: DifferentialSender,
-    /// Sender for [`IntrospectionType::ComputeMaterializedViewRefreshes`] updates.
-    compute_materialized_view_refreshes_tx: DifferentialSender,
-    /// Sender for [`IntrospectionType::WallclockLagHistory`] updates.
-    wallclock_lag_history_tx: AppendOnlySender,
-    /// Sender for [`IntrospectionType::WallclockLagHistogram`] updates.
-    wallclock_lag_histogram_tx: AppendOnlySender,
-}
-
-impl IntrospectionSink {
-    /// Create a new `IntrospectionSink`.
-    pub fn new(storage_controller: &dyn StorageController) -> Self {
-        use IntrospectionType::*;
-        Self {
-            compute_dependencies_tx: storage_controller
-                .differential_introspection_tx(ComputeDependencies),
-            compute_materialized_view_refreshes_tx: storage_controller
-                .differential_introspection_tx(ComputeMaterializedViewRefreshes),
-            wallclock_lag_history_tx: storage_controller
-                .append_only_introspection_tx(WallclockLagHistory),
-            wallclock_lag_histogram_tx: storage_controller
-                .append_only_introspection_tx(WallclockLagHistogram),
-        }
-    }
-
-    /// Send a batch of updates of the given introspection type.
-    pub fn send(&self, type_: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let send_append_only = |tx: &AppendOnlySender, updates: Vec<_>| {
-            let updates = updates.into_iter().map(AppendOnlyUpdate::Row).collect();
-            let (notifier, _) = oneshot::channel();
-            let _ = tx.send((updates, notifier));
-        };
-        let send_differential = |tx: &DifferentialSender, updates: Vec<_>| {
-            let op = StorageWriteOp::Append { updates };
-            let (notifier, _) = oneshot::channel();
-            let _ = tx.send((op, notifier));
-        };
-
-        use IntrospectionType::*;
-        match type_ {
-            ComputeDependencies => send_differential(&self.compute_dependencies_tx, updates),
-            ComputeMaterializedViewRefreshes => {
-                send_differential(&self.compute_materialized_view_refreshes_tx, updates);
-            }
-            WallclockLagHistory => send_append_only(&self.wallclock_lag_history_tx, updates),
-            WallclockLagHistogram => send_append_only(&self.wallclock_lag_histogram_tx, updates),
-            _ => panic!("unexpected introspection type: {type_:?}"),
-        }
     }
 }

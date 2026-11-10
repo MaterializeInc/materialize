@@ -1,6 +1,6 @@
 [package]
 name = "mz-controller"
-description = "Controller for unified storage and compute layers."
+description = "Adapter-local storage inventory and replica provisioning helpers."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -12,18 +12,13 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytesize.workspace = true
-chrono.workspace = true
 futures.workspace = true
-mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
-mz-compute-client = { path = "../compute-client" }
-mz-compute-types = { path = "../compute-types" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
-mz-dyncfgs = { path = "../dyncfgs" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist-client = { path = "../persist-client" }
-mz-ore = { path = "../ore", features = ["process"] }
+mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-secrets-cli = { path = "../secrets-cli" }
 mz-storage-client = { path = "../storage-client" }
@@ -31,12 +26,9 @@ mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
 regex.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-timely.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 bytesize.workspace = true

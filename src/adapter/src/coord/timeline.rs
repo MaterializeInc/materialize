@@ -33,7 +33,6 @@ use crate::catalog::Catalog;
 use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
-use crate::coord::timestamp_selection::TimestampProvider;
 use crate::optimize::dataflows::DataflowBuilder;
 
 /// An enum describing whether or not a query belongs to a timeline and whether the query can be
@@ -318,6 +317,11 @@ impl Coordinator {
             return;
         }
 
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
+
         // Take the map so we can call `&self` methods while mutating the timeline states.
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (timeline, mut state) in global_timelines {
@@ -335,7 +339,7 @@ impl Coordinator {
             // Otherwise we'd advance to the empty frontier, meaning we
             // close it off for ever.
             if !id_bundle.is_empty() {
-                let least_valid_write = if let Some(client) = &self.query_client {
+                let least_valid_write =
                     match client.write_frontier(self.catalog(), &id_bundle).await {
                         Ok(upper) => upper,
                         Err(error) => {
@@ -345,10 +349,7 @@ impl Coordinator {
                             self.global_timelines.insert(timeline, state);
                             continue;
                         }
-                    }
-                } else {
-                    self.least_valid_write(&id_bundle)
-                };
+                    };
                 let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
                 oracle.apply_write(now).await;
                 debug!(

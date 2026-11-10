@@ -12,7 +12,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
@@ -133,52 +132,7 @@ impl TimestampContext {
     }
 }
 
-#[async_trait(?Send)]
-impl TimestampProvider for Coordinator {
-    /// Reports a collection's current read frontier.
-    fn compute_read_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp> {
-        self.controller
-            .compute
-            .collection_frontiers(id, Some(instance))
-            .expect("id does not exist")
-            .read_frontier
-    }
-
-    /// Reports a collection's current write frontier.
-    fn compute_write_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp> {
-        self.controller
-            .compute
-            .collection_frontiers(id, Some(instance))
-            .expect("id does not exist")
-            .write_frontier
-    }
-
-    fn storage_frontiers(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)> {
-        self.controller
-            .storage
-            .collections_frontiers(ids)
-            .expect("missing collections")
-    }
-
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
-        self.acquire_read_holds(id_bundle)
-    }
-
-    fn catalog_state(&self) -> &CatalogState {
-        self.catalog().state()
-    }
-}
+impl TimestampProvider for Coordinator {}
 
 /// A timestamp determination, which includes the timestamp, constraints, and session oracle read
 /// timestamp.
@@ -189,28 +143,7 @@ pub struct RawTimestampDetermination {
     pub session_oracle_read_ts: Option<Timestamp>,
 }
 
-#[async_trait(?Send)]
 pub trait TimestampProvider {
-    fn compute_read_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp>;
-    fn compute_write_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp>;
-
-    /// Returns the implied capability (since) and write frontier (upper) for
-    /// the specified storage collections.
-    fn storage_frontiers(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)>;
-
-    fn catalog_state(&self) -> &CatalogState;
-
     fn get_timeline(timeline_context: &TimelineContext) -> Option<Timeline> {
         let timeline = match timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
@@ -493,43 +426,9 @@ pub trait TimestampProvider {
         })
     }
 
-    /// Determines the timestamp for a query.
-    ///
-    /// Timestamp determination may fail due to the restricted validity of
-    /// traces. Each has a `since` and `upper` frontier, and are only valid
-    /// after `since` and sure to be available not after `upper`.
-    ///
-    /// The timeline that `id_bundle` belongs to is also returned, if one exists.
-    fn determine_timestamp_for(
-        &self,
-        session: &Session,
-        id_bundle: &CollectionIdBundle,
-        when: &QueryWhen,
-        timeline_context: &TimelineContext,
-        oracle_read_ts: Option<Timestamp>,
-        real_time_recency_ts: Option<Timestamp>,
-        isolation_level: &IsolationLevel,
-    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
-        // First, we acquire read holds that will ensure the queried collections
-        // stay queryable at the chosen timestamp.
-        let read_holds = self.acquire_read_holds(id_bundle);
-
-        let upper = self.least_valid_write(id_bundle);
-
-        Self::determine_timestamp_for_inner(
-            session,
-            id_bundle,
-            when,
-            timeline_context,
-            oracle_read_ts,
-            real_time_recency_ts,
-            isolation_level,
-            read_holds,
-            upper,
-        )
-    }
-
-    /// Same as determine_timestamp_for, but read_holds and least_valid_write are already passed in.
+    /// Determines a query timestamp from supplied read holds and a common write frontier.
+    /// Returns the determination and read holds on success, or an error if the
+    /// retained history and timestamp constraints do not permit a valid timestamp.
     fn determine_timestamp_for_inner(
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -608,43 +507,6 @@ pub trait TimestampProvider {
 
         Ok((determination, read_holds))
     }
-
-    /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
-    /// times.
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds;
-
-    /// The smallest common valid write frontier among the specified collections.
-    ///
-    /// Times that are not greater or equal to this frontier are complete for all collections
-    /// identified as arguments.
-    fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
-        let mut upper = Antichain::new();
-        {
-            for (_id, _since, collection_upper) in
-                self.storage_frontiers(id_bundle.storage_ids.iter().cloned().collect_vec())
-            {
-                upper.extend(collection_upper);
-            }
-        }
-        {
-            for (instance, compute_ids) in &id_bundle.compute_ids {
-                for id in compute_ids.iter() {
-                    upper.extend(self.compute_write_frontier(*instance, *id));
-                }
-            }
-        }
-        upper
-    }
-
-    /// Returns `least_valid_write` - 1, i.e., each time in `least_valid_write` stepped back in a
-    /// saturating way.
-    fn greatest_available_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<Timestamp> {
-        let mut frontier = Antichain::new();
-        for t in self.least_valid_write(id_bundle) {
-            frontier.insert(t.step_back().unwrap_or(t));
-        }
-        frontier
-    }
 }
 
 impl Coordinator {
@@ -715,9 +577,12 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
-        let (read_holds, upper) = if let Some(client) = &self.query_client {
-            let incarnation = client.protection.incarnation();
-            self.acquire_client_read_protection(incarnation, id_bundle.clone(), |upper| {
+        let client = self.query_client.as_ref().ok_or_else(|| {
+            AdapterError::Internal("durable query read protection is not initialized".into())
+        })?;
+        let incarnation = client.protection.incarnation();
+        let (read_holds, upper) = self
+            .acquire_client_read_protection(incarnation, id_bundle.clone(), |upper| {
                 Self::read_protection_timestamp(
                     session,
                     when,
@@ -727,18 +592,7 @@ impl Coordinator {
                     upper,
                 )
             })
-            .await?
-        } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()
-        {
-            return Err(AdapterError::Internal(
-                "durable query read protection is not initialized".into(),
-            ));
-        } else {
-            (
-                self.acquire_read_holds(id_bundle),
-                self.least_valid_write(id_bundle),
-            )
-        };
+            .await?;
         let (det, read_holds) = Self::determine_timestamp_for_inner(
             session,
             id_bundle,

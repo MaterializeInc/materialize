@@ -9,6 +9,19 @@ owns a fact. Reuse existing identities, catalog changes and Persist listeners.
 Do not introduce a designated maintenance adapter, another consensus protocol,
 or a general sampling framework.
 
+## Startup activation ordering
+
+Source review found a pre-existing join race. `initialize_query_client` refreshes
+the catalog before activating the prepared client. A replica created by a peer
+can enter through that refresh and start query-dependent introspection too early,
+terminating the joining adapter. The previous controller fallback failed too.
+
+A joining adapter must tolerate that catch-up and install each intended
+introspection subscription once query execution is ready. Verify a peer-created
+replica during the activation handoff. This has not been reproduced or repaired.
+The call chain is recorded in
+`~/.local/share/aj/m3-evidence/native-only/native-compute-owner-review.md`.
+
 ## Backend writes and blob consumption
 
 The [backend attribution](20260903_decoupled_coordination_backend_load.md)

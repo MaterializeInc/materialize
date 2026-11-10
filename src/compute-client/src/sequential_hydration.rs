@@ -95,8 +95,7 @@ pub struct SequentialHydration {
 }
 
 impl SequentialHydration {
-    /// Registers the queue metric once per runtime registry. Both lifecycle
-    /// owners use the same descriptor and replica labels.
+    /// Registers the queue metric once per runtime registry, labeled by replica.
     pub fn register_queue_metric(registry: &MetricsRegistry) -> UIntGaugeVec {
         registry.register(mz_ore::metric! {
             name: "mz_compute_controller_hydration_queue_size",
@@ -305,27 +304,19 @@ enum State {
 
 #[cfg(test)]
 mod tests {
-    use mz_cluster_client::metrics::ControllerMetrics;
-    use mz_compute_types::ComputeInstanceId;
     use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
     use mz_dyncfg::ConfigUpdates;
-    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::metrics::{MetricVecExt, MetricsRegistry};
     use mz_repr::ReprRelationType;
 
-    use crate::metrics::ComputeControllerMetrics;
     use crate::protocol::command::ComputeParameters;
 
     use super::*;
 
     fn metrics() -> DeleteOnDropGauge<AtomicU64, Vec<String>> {
         let registry = MetricsRegistry::new();
-        let shared = ControllerMetrics::new(&registry);
-        ComputeControllerMetrics::new(&registry, shared)
-            .for_instance(ComputeInstanceId::User(1))
-            .for_replica(mz_cluster_client::ReplicaId::User(1))
-            .inner
-            .hydration_queue_size
-            .clone()
+        SequentialHydration::register_queue_metric(&registry)
+            .get_delete_on_drop_metric(vec!["u1".to_owned(), "u1".to_owned()])
     }
 
     /// A `CreateDataflow` command for a non-transient dataflow exporting `id`.

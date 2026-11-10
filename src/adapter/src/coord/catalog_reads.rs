@@ -125,6 +125,7 @@ impl Coordinator {
 
     /// A client for coordinator-owned work that must not wait on the coordinator
     /// loop. Requests return through the normal internal command channel.
+    /// Only used after bootstrap has initialized durable query protection.
     pub(crate) fn background_peek_client(&self, catalog: &Arc<Catalog>) -> PeekClient {
         let build_version = catalog.state().config().build_info.human_version(None);
         // Certification can hold DDL admission. Reuse the live epoch oracle handle
@@ -143,10 +144,11 @@ impl Coordinator {
             },
             catalog,
             oracles,
-            self.query_client
-                .is_none()
-                .then(|| Arc::clone(&self.controller.storage_collections)),
-            self.query_client.clone(),
+            Arc::clone(
+                self.query_client
+                    .as_ref()
+                    .expect("background peeks start after query-client initialization"),
+            ),
             Arc::clone(&self.transient_id_gen),
             self.optimizer_metrics.clone(),
             self.persist_client.clone(),

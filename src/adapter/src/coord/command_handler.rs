@@ -413,10 +413,6 @@ impl Coordinator {
                     let _ = tx.send(self.dump().await);
                 }
 
-                Command::GetComputeInstanceClient { instance_id, tx } => {
-                    let _ = tx.send(self.controller.compute.instance_client(instance_id));
-                }
-
                 Command::AcquireClientReadProtection {
                     incarnation,
                     bundle,
@@ -641,39 +637,15 @@ impl Coordinator {
                     conn_id,
                     cluster_id,
                     depends_on,
-                    is_fast_path,
                     watch_set,
                     tx,
                 } => {
                     self.handle_register_frontend_peek(
-                        uuid,
-                        conn_id,
-                        cluster_id,
-                        depends_on,
-                        is_fast_path,
-                        watch_set,
-                        tx,
+                        uuid, conn_id, cluster_id, depends_on, watch_set, tx,
                     );
                 }
                 Command::UnregisterFrontendPeek { uuid, reason, tx } => {
                     self.handle_unregister_frontend_peek(uuid, reason, tx);
-                }
-                Command::ExplainTimestamp {
-                    conn_id,
-                    session_wall_time,
-                    cluster_id,
-                    id_bundle,
-                    determination,
-                    tx,
-                } => {
-                    let explanation = self.explain_timestamp(
-                        &conn_id,
-                        session_wall_time,
-                        cluster_id,
-                        &id_bundle,
-                        determination,
-                    );
-                    let _ = tx.send(explanation);
                 }
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
@@ -1007,11 +979,11 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog,
-                    storage_collections: self
-                        .query_client
-                        .is_none()
-                        .then(|| Arc::clone(&self.controller.storage_collections)),
-                    query_client: self.query_client.clone(),
+                    query_client: Arc::clone(
+                        self.query_client
+                            .as_ref()
+                            .expect("query client initialized before serving sessions"),
+                    ),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
@@ -2476,7 +2448,6 @@ impl Coordinator {
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
         depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
         watch_set: Option<WatchSetCreation>,
         tx: oneshot::Sender<Result<(), AdapterError>>,
     ) {
@@ -2484,7 +2455,7 @@ impl Coordinator {
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
                 let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                    AdapterError::concurrent_dependency_drop_from_collection_missing(e),
                 ));
                 return;
             }
@@ -2501,7 +2472,6 @@ impl Coordinator {
                     statement_logging_id,
                     self.internal_cmd_tx.clone(),
                 ),
-                is_fast_path,
             },
         );
 

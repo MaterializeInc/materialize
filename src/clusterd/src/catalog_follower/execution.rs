@@ -756,8 +756,6 @@ impl ReplicaEnactment {
                 frontiers,
                 &live,
                 now,
-                false,
-                true,
             )
         };
         if let Err(error) = select(&mut plans, &frontiers) {

@@ -11,16 +11,12 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
-use mz_compute_client::controller::instance_client::InstanceClient;
-use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
@@ -33,7 +29,6 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use qcell::QCell;
-use thiserror::Error;
 use timely::progress::Antichain;
 use tokio::sync::{Semaphore, oneshot};
 use tracing::Instrument;
@@ -52,10 +47,6 @@ use crate::statement_logging::{
 };
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging};
 
-/// Storage collections trait alias we need to consult for since/frontiers.
-pub type StorageCollectionsHandle =
-    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
-
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug, Clone)]
 pub struct PeekClient {
@@ -67,14 +58,7 @@ pub struct PeekClient {
     /// Holds a `Weak` so that an idle session does not keep a superseded
     /// catalog version alive.
     catalog_cache: Weak<Catalog>,
-    /// Channels to talk to each compute Instance task directly. Lazily populated.
-    /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
-    /// if a long-running user session keeps peeking on clusters that are being created and dropped
-    /// in a hot loop. Hopefully this won't occur any time soon.
-    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient>,
-    /// Legacy storage access, present only without durable query-client protection.
-    pub storage_collections: Option<StorageCollectionsHandle>,
-    pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
+    pub(crate) query_client: Arc<crate::query_client::QueryClient>,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
@@ -161,8 +145,7 @@ impl PeekClient {
         coordinator_client: CoordinatorClient,
         catalog: &Arc<Catalog>,
         oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-        storage_collections: Option<StorageCollectionsHandle>,
-        query_client: Option<Arc<crate::query_client::QueryClient>>,
+        query_client: Arc<crate::query_client::QueryClient>,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
@@ -170,12 +153,9 @@ impl PeekClient {
         occ_write_semaphore: Arc<Semaphore>,
         group_commit_notifier: GroupCommitNotifier,
     ) -> Self {
-        assert_eq!(storage_collections.is_some(), query_client.is_none());
         Self {
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
-            compute_instances: Default::default(), // lazily populated
-            storage_collections,
             query_client,
             transient_id_gen,
             optimizer_metrics,
@@ -185,28 +165,6 @@ impl PeekClient {
             occ_write_semaphore,
             group_commit_notifier,
         }
-    }
-
-    pub async fn ensure_compute_instance_client(
-        &mut self,
-        compute_instance: ComputeInstanceId,
-    ) -> Result<InstanceClient, CollectionLookupError> {
-        assert!(self.query_client.is_none(), "legacy compute access only");
-        if !self.compute_instances.contains_key(&compute_instance) {
-            let client = self
-                .call_coordinator(|tx| Command::GetComputeInstanceClient {
-                    instance_id: compute_instance,
-                    tx,
-                })
-                .await
-                .map_err(|_| CollectionLookupError::InstanceShutDown)??;
-            self.compute_instances.insert(compute_instance, client);
-        }
-        Ok(self
-            .compute_instances
-            .get(&compute_instance)
-            .expect("ensured above")
-            .clone())
     }
 
     pub async fn ensure_oracle(
@@ -387,7 +345,7 @@ impl PeekClient {
         let start = std::time::Instant::now();
         // Session clients keep the coordinator loop alive. A dropped response
         // here therefore indicates an internal lifecycle bug, unlike a
-        // background compute lookup racing coordinator shutdown.
+        // background command racing coordinator shutdown.
         let CatalogSnapshot { catalog, .. } = self
             .call_coordinator(|tx| Command::CatalogSnapshot {
                 tx,
@@ -424,97 +382,33 @@ impl PeekClient {
         &self.coordinator_client
     }
 
-    /// Acquire read holds on the given compute/storage collections, and
-    /// determine the smallest common valid write frontier among the specified collections.
+    /// Acquire durable read protection on the given compute/storage collections,
+    /// and determine their smallest common valid write frontier.
     ///
-    /// Similar to `Coordinator::acquire_read_holds` and `TimestampProvider::least_valid_write`
-    /// combined.
-    ///
-    /// Note: Unlike the Coordinator/StorageController's `least_valid_write` that treats sinks
-    /// specially when fetching storage frontiers (see `mz_storage_controller::collections_frontiers`),
-    /// we intentionally do not special‑case sinks here because peeks never read from sinks.
-    /// Therefore, using `StorageCollections::collections_frontiers` is sufficient.
-    ///
-    /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
+    /// The timestamp selector receives the observed write frontier. Callers
+    /// must validate the chosen timestamp against the acquired read holds.
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
         timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
-    ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
-        if let Some(client) = self.query_client.clone() {
-            let catalog = self.catalog_snapshot("query read protection").await;
-            return client
-                .acquire_read_holds_and_upper(&catalog, id_bundle, timestamp)
-                .await
-                .map_err(|error| CollectionLookupError::ReadProtection(Box::new(error)));
-        }
-        self.acquire_controller_read_holds_and_upper(id_bundle)
+    ) -> Result<(ReadHolds, Antichain<Timestamp>), AdapterError> {
+        let client = Arc::clone(&self.query_client);
+        let catalog = self.catalog_snapshot("query read protection").await;
+        client
+            .acquire_read_holds_and_upper(&catalog, id_bundle, timestamp)
             .await
-    }
-
-    async fn acquire_controller_read_holds_and_upper(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-    ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
-        let mut read_holds = ReadHolds::new();
-        let mut upper = Antichain::new();
-
-        if !id_bundle.storage_ids.is_empty() {
-            let storage_collections = self
-                .storage_collections
-                .as_ref()
-                .expect("unprotected peeks require storage collections");
-            let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            let storage_read_holds = storage_collections.acquire_read_holds(desired_storage)?;
-            read_holds.storage_holds = storage_read_holds
-                .into_iter()
-                .map(|hold| (hold.id(), hold))
-                .collect();
-
-            let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            for f in storage_collections.collections_frontiers(storage_ids)? {
-                upper.extend(f.write_frontier);
-            }
-        }
-
-        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
-            let client = self.ensure_compute_instance_client(instance_id).await?;
-
-            for (id, read_hold, write_frontier) in client
-                .acquire_read_holds_and_collection_write_frontiers(
-                    collection_ids.iter().copied().collect(),
-                )
-                .await?
-            {
-                let prev = read_holds
-                    .compute_holds
-                    .insert((instance_id, id), read_hold);
-                assert!(
-                    prev.is_none(),
-                    "duplicate compute ID in id_bundle {id_bundle:?}"
-                );
-
-                upper.extend(write_frontier);
-            }
-        }
-
-        Ok((read_holds, upper))
     }
 
     /// Implement a fast-path peek plan.
     /// This is similar to `Coordinator::implement_peek_plan`, but only for fast path peeks.
     ///
-    /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
-    ///
-    /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
-    /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
-    /// into the Controller to acquire a hold on the peek target after we create the dataflow.
+    /// `input_read_holds` protects all inputs, including the peek target.
     ///
     /// For a constant peek the logging slot stays armed and the caller logs the
     /// end from the returned result. For a `PeekExisting`/`PeekPersist` peek,
     /// successful registration with the coordinator hands ownership of the end
-    /// to the coordinator and the slot is defused here. That holds even when the
-    /// subsequent `client.peek()` fails to issue.
+    /// to the coordinator and the slot is defused here. Query-client failures
+    /// are reported through the peek response and retire the registered peek.
     pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
         catalog: Arc<Catalog>,
@@ -608,15 +502,7 @@ impl PeekClient {
             }
             FastPathPlan::PeekPersist(coll_id, literal_constraint, mfp) => {
                 let literal_constraints = literal_constraint.map(|r| vec![r]);
-                let metadata = if let Some(client) = self.query_client.clone() {
-                    client.collection_metadata(&catalog, coll_id)?
-                } else {
-                    self.storage_collections
-                        .as_ref()
-                        .expect("unprotected peeks require storage collections")
-                        .collection_metadata(coll_id)
-                        .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
-                };
+                let metadata = self.query_client.collection_metadata(&catalog, coll_id)?;
                 let peek_target = PeekTarget::Persist {
                     id: coll_id,
                     metadata,
@@ -641,9 +527,7 @@ impl PeekClient {
             }
         };
 
-        if self.query_client.is_some()
-            && !input_read_holds.least_valid_read().less_equal(&timestamp)
-        {
+        if !input_read_holds.least_valid_read().less_equal(&timestamp) {
             return Err(AdapterError::CollectionUnreadable {
                 id: peek_target.id().to_string(),
             });
@@ -656,35 +540,15 @@ impl PeekClient {
         let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
         let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
 
-        let query_client = self.query_client.clone();
-        let query_registration = query_client
-            .as_ref()
-            .map(|client| client.register_peek(uuid));
-        let controller_client = if query_client.is_none() {
-            Some(
-                self.ensure_compute_instance_client(compute_instance)
-                    .await
-                    .map_err(|error| {
-                        AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
-                            error,
-                            compute_instance,
-                        )
-                    })?,
-            )
-        } else {
-            None
-        };
+        let client = Arc::clone(&self.query_client);
+        let registration = client.register_peek(uuid);
 
         // Register coordinator tracking of this peek. This has to complete before issuing the peek.
-        //
-        // Warning: If we fail to actually issue the peek after this point, then we need to
-        // unregister it to avoid an orphaned registration.
         self.call_coordinator(|tx| Command::RegisterFrontendPeek {
             uuid,
             conn_id: conn_id.clone(),
             cluster_id: compute_instance,
             depends_on,
-            is_fast_path: true,
             watch_set,
             tx,
         })
@@ -703,13 +567,11 @@ impl PeekClient {
         // workflow_test_drop_cluster_during_registered_peeks_fast_path.
         fail::fail_point!("peek_after_register_before_issue");
 
-        let finishing_for_instance = finishing.clone();
-        let peek_result = if let Some(client) = query_client {
+        {
             use mz_compute_client::controller::PeekNotification;
             use mz_compute_client::protocol::command::Peek;
             use mz_compute_client::protocol::response::{PeekError, PeekResponse};
             let coordinator = self.coordinator_client.clone();
-            let registration = query_registration.expect("registered query peek");
             let peek = Peek {
                 catalog_position: catalog.planning_position(),
                 target: peek_target,
@@ -717,7 +579,7 @@ impl PeekClient {
                 literal_constraints,
                 uuid,
                 timestamp,
-                finishing: finishing_for_instance,
+                finishing: finishing.clone(),
                 map_filter_project: mfp,
                 otel_ctx: mz_ore::tracing::OpenTelemetryContext::obtain(),
             };
@@ -751,47 +613,6 @@ impl PeekClient {
                 }
                 .instrument(tracing::Span::current()),
             );
-            Ok(())
-        } else {
-            controller_client
-                .expect("controller client selected")
-                .peek(
-                    peek_target,
-                    literal_constraints,
-                    uuid,
-                    timestamp,
-                    result_desc,
-                    finishing_for_instance,
-                    mfp,
-                    target_read_hold,
-                    target_replica,
-                    rows_tx,
-                )
-                .await
-                .map_err(|error| {
-                    AdapterError::concurrent_dependency_drop_from_instance_peek_error(
-                        error,
-                        compute_instance,
-                    )
-                })
-        };
-
-        if let Err(err) = peek_result {
-            // The peek failed to issue, so no peek response will ever arrive.
-            // The coordinator owns end-of-execution logging (see above), so we
-            // ask it to unregister the peek and retire it with this error. If
-            // a concurrent teardown already retired the peek, the end is
-            // already logged and the unregistration is a no-op.
-            let _ = self
-                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
-                    uuid,
-                    reason: statement_logging::StatementEndedExecutionReason::Errored {
-                        error: err.to_string(),
-                    },
-                    tx,
-                })
-                .await;
-            return Err(err);
         }
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
@@ -1213,49 +1034,5 @@ fn terminates_elsewhere(response: &ExecuteResponse) -> bool {
             !matches!(**resp, ExecuteResponse::SendingRowsImmediate { .. })
         }
         _ => false,
-    }
-}
-
-/// Errors arising during collection lookup in peek client operations.
-#[derive(Error, Debug)]
-pub enum CollectionLookupError {
-    /// Durable query-client protection could not be established.
-    #[error(transparent)]
-    ReadProtection(Box<AdapterError>),
-    /// The specified compute instance does not exist.
-    #[error("instance does not exist: {0}")]
-    InstanceMissing(ComputeInstanceId),
-    /// The specified compute instance has shut down.
-    #[error("the instance has shut down")]
-    InstanceShutDown,
-    /// The compute collection does not exist.
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-}
-
-impl From<InstanceMissing> for CollectionLookupError {
-    fn from(error: InstanceMissing) -> Self {
-        Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<InstanceShutDown> for CollectionLookupError {
-    fn from(_error: InstanceShutDown) -> Self {
-        Self::InstanceShutDown
-    }
-}
-
-impl From<CollectionMissing> for CollectionLookupError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
-impl From<AcquireReadHoldsError> for CollectionLookupError {
-    fn from(error: AcquireReadHoldsError) -> Self {
-        match error {
-            AcquireReadHoldsError::CollectionMissing(id) => Self::CollectionMissing(id),
-            AcquireReadHoldsError::InstanceShutDown => Self::InstanceShutDown,
-        }
     }
 }

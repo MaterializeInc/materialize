@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_audit_log::VersionedStorageUsage;
-use mz_controller::ControllerResponse;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -43,6 +42,16 @@ use crate::coord::{
     AlterConnectionValidationReady, ArrangementSizeRecord, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+
+/// Responses normalized from connection-local query execution.
+#[derive(Debug)]
+enum QuerySinkResponse {
+    SubscribeResponse(
+        mz_repr::GlobalId,
+        mz_compute_client::protocol::response::SubscribeBatch,
+    ),
+    CopyToResponse(mz_repr::GlobalId, Result<u64, anyhow::Error>),
+}
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -94,7 +103,7 @@ impl Coordinator {
                             %id, upper = ?batch.upper,
                             "native subscribe dispatched by coordinator"
                         );
-                        ControllerResponse::SubscribeResponse(id, batch)
+                        QuerySinkResponse::SubscribeResponse(id, batch)
                     }
                     DataflowResponse::CopyTo(id, response) => {
                         let result = match response {
@@ -104,19 +113,15 @@ impl Coordinator {
                                 Err(anyhow::anyhow!("query COPY dataflow was dropped"))
                             }
                         };
-                        ControllerResponse::CopyToResponse(id, result)
+                        QuerySinkResponse::CopyToResponse(id, result)
                     }
                 };
-                self.message_controller(response).boxed_local().await;
+                self.message_query_sink(response).boxed_local().await;
             }
-            Message::ControllerReady { controller: _ } => {
-                if let Some(m) = self
-                    .controller
+            Message::StorageReady => {
+                self.controller
                     .process()
-                    .expect("`process` never returns an error")
-                {
-                    self.message_controller(m).boxed_local().await
-                }
+                    .expect("`process` never returns an error");
             }
             Message::ExecuteCatalogReady {
                 ctx,
@@ -310,9 +315,6 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
-                self.sequence_staged((), span, stage).boxed_local().await;
-            }
-            Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
             Message::ExplainTimestampStageReady { ctx, span, stage } => {
@@ -605,10 +607,7 @@ impl Coordinator {
             .latest_global_id();
 
         let oracle = self.get_local_timestamp_oracle();
-        let deployment_generation = self
-            .controller
-            .replica_owned_compute()
-            .then(|| self.catalog().state().deployment_generation());
+        let deployment_generation = Some(self.catalog().state().deployment_generation());
         let storage_collections = Arc::clone(&self.controller.storage_collections);
         let collection_metric = self
             .metrics
@@ -702,11 +701,7 @@ impl Coordinator {
         let history_item_id = self
             .catalog()
             .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
-        let generation = self
-            .controller
-            .replica_owned_compute()
-            .then(|| self.catalog().state().deployment_generation())
-            .map_or(Datum::Null, Datum::UInt64);
+        let generation = Datum::UInt64(self.catalog().state().deployment_generation());
 
         let updates: Vec<_> = records
             .into_iter()
@@ -762,13 +757,10 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn message_controller(&mut self, message: ControllerResponse) {
+    async fn message_query_sink(&mut self, message: QuerySinkResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
-                self.handle_peek_notification(uuid, response, otel_ctx);
-            }
-            ControllerResponse::SubscribeResponse(sink_id, response) => {
+            QuerySinkResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
                     self.active_compute_sinks.get_mut(&sink_id)
                 {
@@ -824,7 +816,7 @@ impl Coordinator {
                     // tracked, so we quietly ignore them.
                 }
             }
-            ControllerResponse::CopyToResponse(sink_id, response) => {
+            QuerySinkResponse::CopyToResponse(sink_id, response) => {
                 match self.drop_compute_sink(sink_id).await {
                     Some((ActiveComputeSink::CopyTo(active_copy_to), _write_notify)) => {
                         active_copy_to.retire_with_response(response);
@@ -833,11 +825,6 @@ impl Coordinator {
                         // Cancellation may cause us to receive responses for subscribes no longer
                         // tracked, so we quietly ignore them.
                     }
-                }
-            }
-            ControllerResponse::WatchSetFinished(ws_ids) => {
-                for id in ws_ids {
-                    self.message_watch_set_ready(id, Ok(())).await;
                 }
             }
         }

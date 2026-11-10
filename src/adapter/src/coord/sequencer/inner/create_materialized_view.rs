@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use mz_catalog::durable::objects::MaintainedReadRequirement;
@@ -53,7 +52,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
+use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, catalog};
 
 /// Reuses a compatible candidate, or replaces both global plans and their raw
 /// notices using an optimizer restricted to `indexes`. The caller must protect
@@ -1307,16 +1306,16 @@ impl Coordinator {
                     refresh_schedule.round_up_timestamp(*least_valid_read_ts)
                 {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
-                    let greatest_available = if let Some(client) = self.query_client.as_ref() {
-                        client
-                            .write_frontier(self.catalog(), &id_bundle)
-                            .await?
-                            .iter()
-                            .map(|time| time.step_back().unwrap_or(*time))
-                            .collect()
-                    } else {
-                        self.greatest_available_read(&id_bundle)
-                    };
+                    let client = self
+                        .query_client
+                        .as_ref()
+                        .expect("query client initialized before serving");
+                    let greatest_available: Antichain<_> = client
+                        .write_frontier(self.catalog(), &id_bundle)
+                        .await?
+                        .iter()
+                        .map(|time| time.step_back().unwrap_or(*time))
+                        .collect();
                     dataflow_as_of.join_assign(&greatest_available.meet(&storage_as_of));
                 } else {
                     let last_refresh = refresh_schedule.last_refresh().expect(
@@ -1425,99 +1424,40 @@ impl Coordinator {
         let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&item_id).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
-        let gid = mview.global_id_writes();
         let mview = mview.clone();
 
-        if let Some(client) = self.query_client.clone() {
-            let catalog = self.owned_catalog();
-            let expires = ctx.statement_deadline();
-            let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
-            if let Some((_, previous)) = self.connection_cancel_watches.insert(
-                ctx.session().conn_id().clone(),
-                (cancel_tx, cancel_rx.clone()),
-            ) && *previous.borrow()
-            {
-                ctx.retire(Err(AdapterError::Canceled));
-                return;
-            }
-            mz_ore::task::spawn(
-                || "explain written materialized view pushdown",
-                async move {
-                    let canceled = async {
-                        let _ = cancel_rx.wait_for(|canceled| *canceled).await;
-                    };
-                    let result = crate::util::run_cancellable(
-                        canceled,
-                        expires,
-                        Self::explain_written_materialized_view_pushdown(
-                            &catalog, &client, &ctx, &mview,
-                        ),
-                    )
-                    .await;
-                    ctx.retire(result);
-                },
-            );
+        let client = self
+            .query_client
+            .clone()
+            .expect("query client initialized before serving");
+        let catalog = self.owned_catalog();
+        let expires = ctx.statement_deadline();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        if let Some((_, previous)) = self.connection_cancel_watches.insert(
+            ctx.session().conn_id().clone(),
+            (cancel_tx, cancel_rx.clone()),
+        ) && *previous.borrow()
+        {
+            ctx.retire(Err(AdapterError::Canceled));
             return;
         }
-
-        let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
-            let msg = format!("cannot find plan for materialized view {item_id} in catalog");
-            tracing::error!("{msg}");
-            ctx.retire(Err(anyhow!("{msg}").into()));
-            return;
-        };
-
-        // We don't have any way to "duplicate" the read hold of the actual collection, which we
-        // obtain below... but the current implementation of read holds guarantees that the storage
-        // holds we obtain here will not be any greater than the hold we actually want.
-        //
-        // We hold only the plan's storage imports, whose persist part stats the pushdown
-        // explanation reads. We must not acquire holds on the plan's compute imports: an index
-        // that the materialized view was planned against can be dropped while the view keeps
-        // running, and a dropped index no longer has a compute collection to hold.
-        let id_bundle = CollectionIdBundle {
-            storage_ids: plan.source_imports.keys().copied().collect(),
-            compute_ids: BTreeMap::new(),
-        };
-        let read_holds = match self.acquire_query_read_holds(&id_bundle).await {
-            Ok(holds) => Some(holds),
-            Err(error) => {
-                ctx.retire(Err(error));
-                return;
-            }
-        };
-
-        let frontiers = self
-            .controller
-            .compute
-            .collection_frontiers(gid, Some(mview.cluster_id))
-            .expect("materialized view exists");
-
-        let as_of = frontiers.read_frontier.to_owned();
-
-        let until = mview
-            .refresh_schedule
-            .as_ref()
-            .and_then(|s| s.last_refresh())
-            .unwrap_or(mz_repr::Timestamp::MAX);
-
-        let mz_now = match as_of.as_option() {
-            Some(&as_of) => {
-                ResultSpec::value_between(Datum::MzTimestamp(as_of), Datum::MzTimestamp(until))
-            }
-            None => ResultSpec::value_all(),
-        };
-
-        self.execute_explain_pushdown_with_read_holds(
-            ctx,
-            as_of,
-            mz_now,
-            read_holds,
-            plan.source_imports
-                .into_iter()
-                .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
-        )
-        .await
+        mz_ore::task::spawn(
+            || "explain written materialized view pushdown",
+            async move {
+                let canceled = async {
+                    let _ = cancel_rx.wait_for(|canceled| *canceled).await;
+                };
+                let result = crate::util::run_cancellable(
+                    canceled,
+                    expires,
+                    Self::explain_written_materialized_view_pushdown(
+                        &catalog, &client, &ctx, &mview,
+                    ),
+                )
+                .await;
+                ctx.retire(result);
+            },
+        );
     }
 
     /// Describe selected source operators at an input snapshot protected by this
@@ -1560,8 +1500,7 @@ impl Coordinator {
         let future = crate::coord::sequencer::explain_pushdown_future_inner(
             ctx.session(),
             catalog,
-            None,
-            Some(client),
+            client,
             as_of,
             mz_now,
             plan.source_imports

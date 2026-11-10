@@ -43,7 +43,6 @@ use mz_cluster_controller::ctx::{
 };
 use mz_cluster_controller::strategy::duration_to_ts;
 use mz_compute_types::config::ComputeReplicaConfig;
-use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
 use mz_repr::Timestamp;
@@ -51,7 +50,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason};
-use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
+use crate::coord::{Coordinator, Message};
 use crate::error::AdapterError;
 
 fn matches_declaration_config(
@@ -408,9 +407,6 @@ impl Coordinator {
     /// Realize shared explicit declarations without borrowing a peer's inventory.
     /// The existing catalog transaction owns admission and derived provisioning.
     pub(super) async fn reconcile_declared_replicas(&mut self) -> Result<(), AdapterError> {
-        if !self.controller.replica_owned_compute() {
-            return Ok(());
-        }
         let mut declarations: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for declaration in self.catalog().state().replica_declarations() {
             declarations
@@ -666,15 +662,6 @@ impl Coordinator {
             // Native readiness below requires a deployment-local QueryReady
             // connection, even with no expected exports. Its adapter does not
             // receive backend process events from the separate provisioner.
-            if !self.controller.replica_owned_compute() {
-                let status = self
-                    .cluster_replica_statuses
-                    .try_get_cluster_replica_statuses(cluster_id, replica_id)
-                    .map(ClusterReplicaStatuses::cluster_replica_status);
-                if !matches!(status, Some(ClusterStatus::Online)) {
-                    continue;
-                }
-            }
             let exclude: BTreeSet<mz_repr::GlobalId> = pinned_mvs
                 .iter()
                 .filter(|(target, _)| {
@@ -686,7 +673,7 @@ impl Coordinator {
                 })
                 .map(|(_, id)| *id)
                 .collect();
-            let compute_fut = if self.controller.replica_owned_compute() {
+            let compute_fut = {
                 let Some(client) = &self.query_client else {
                     continue;
                 };
@@ -735,17 +722,6 @@ impl Coordinator {
                     reference,
                 ));
                 rx
-            } else {
-                match self.controller.compute.collections_ready_for_replicas(
-                    cluster_id,
-                    vec![replica_id],
-                    exclude.clone(),
-                    allowed_lag,
-                    reference.clone(),
-                ) {
-                    Ok(fut) => fut,
-                    Err(_) => continue,
-                }
             };
             let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(
                 Some(vec![replica_id]),
@@ -1070,7 +1046,6 @@ impl Coordinator {
                     }
                     if self.catalog().state().active_deployment_generation()
                         != Some(self.catalog().state().deployment_generation())
-                        && self.controller.replica_owned_compute()
                     {
                         mutations.push(Op::DropClusterReplicaRealization {
                             cluster_id,
@@ -1313,7 +1288,6 @@ impl Coordinator {
 
         if self.catalog().state().active_deployment_generation()
             != Some(self.catalog().state().deployment_generation())
-            && self.controller.replica_owned_compute()
         {
             return Ok(Some(Op::CreateClusterReplicaRealization {
                 cluster_id,

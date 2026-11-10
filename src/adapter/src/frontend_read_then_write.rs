@@ -161,7 +161,7 @@ use crate::coord::{Coordinator, TargetCluster};
 use crate::error::AdapterError;
 use crate::metrics::{OCC_CALLER_BACKGROUND, OCC_CALLER_SESSION};
 use crate::optimize::Optimize;
-use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::peek_client::CoordinatorClient;
 use crate::session::{Session, TransactionOps, WriteOp};
 use crate::statement_logging::{StatementLifecycleEvent, StatementLoggingId};
@@ -998,21 +998,10 @@ impl PeekClient {
         if session.vars().emit_timestamp_notice() {
             let conn_id = session.conn_id().clone();
             let session_wall_time = session.pcx().wall_time;
-            let explanation = if let Some(client) = &self.query_client {
-                client
-                    .explain_timestamp(catalog, &conn_id, session_wall_time, &bundle, determination)
-                    .await
-            } else {
-                self.call_coordinator(|tx| Command::ExplainTimestamp {
-                    conn_id,
-                    session_wall_time,
-                    cluster_id,
-                    id_bundle: bundle,
-                    determination,
-                    tx,
-                })
-                .await?
-            };
+            let explanation = self
+                .query_client
+                .explain_timestamp(catalog, &conn_id, session_wall_time, &bundle, determination)
+                .await;
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
@@ -1282,11 +1271,7 @@ impl PeekClient {
 
         // Catalog definitions determine access paths, as for frontend SELECTs.
         // Execution separately waits for the selected imports to become readable.
-        let compute_instance = self
-            .query_client
-            .as_ref()
-            .map(|client| client.instance_snapshot(catalog, cluster_id))
-            .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster_id));
+        let compute_instance = self.query_client.instance_snapshot(catalog, cluster_id);
         let (_, view_id) = self.transient_id_gen.allocate_id();
         let (_, sink_id) = self.transient_id_gen.allocate_id();
         let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);

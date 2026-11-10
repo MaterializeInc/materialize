@@ -6981,15 +6981,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytesize",
- "chrono",
  "futures",
- "mz-build-info",
  "mz-cluster-client",
- "mz-compute-client",
- "mz-compute-types",
  "mz-controller-types",
  "mz-dyncfg",
- "mz-dyncfgs",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
@@ -7000,12 +6995,9 @@ dependencies = [
  "mz-storage-types",
  "mz-txn-wal",
  "regex",
- "serde",
  "serde_json",
- "timely",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]

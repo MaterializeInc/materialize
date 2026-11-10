@@ -502,10 +502,7 @@ impl Coordinator {
                 orchestrator: std::sync::Arc::clone(&self.query_orchestrator),
                 deploy_generation: self.query_deploy_generation,
                 build_info: self.catalog().config().build_info,
-                observations: self
-                    .controller
-                    .replica_owned_compute()
-                    .then(|| self.controller.storage.replica_observations()),
+                observations: Some(self.controller.storage.replica_observations()),
             },
         ));
         connections.sync_catalog(self.catalog());
@@ -913,31 +910,6 @@ impl Coordinator {
             })
     }
 
-    /// Restores published compute bounds before installing clusters and dataflows.
-    pub(super) async fn restore_compute_read_protection(&mut self) -> Result<(), AdapterError> {
-        if self.controller.replica_owned_compute() {
-            return Ok(());
-        }
-        if !self.catalog().state().catalog_read_protection_enabled() {
-            return Ok(());
-        }
-        let state = self.catalog().state();
-        let storage = &state.storage_metadata().collection_metadata;
-        let bounds = state
-            .collection_compaction_bounds()
-            .iter()
-            .filter(|(id, _)| !storage.contains_key(*id))
-            .map(|(&id, bound)| (id, bound.clone()))
-            .collect::<Vec<_>>();
-        for (id, bound) in bounds {
-            self.controller
-                .compute
-                .apply_compaction_bound(id, bound)
-                .map_err(|error| AdapterError::Unstructured(error.into()))?;
-        }
-        Ok(())
-    }
-
     /// Publishes changed client protection, recovery progress and permitted bounds atomically.
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
         let start = Instant::now();
@@ -946,10 +918,8 @@ impl Coordinator {
             // validation and CAS reject a stale candidate rather than refreshing
             // past the sampled prefix. Native following already repairs lost
             // notifications through its retained Persist watch.
-            if self.controller.replica_owned_compute() {
+            {
                 self.refresh_observed_catalog().await?;
-            } else {
-                self.refresh_catalog_for_write().await?;
             }
         }
         if self
@@ -1046,9 +1016,7 @@ impl Coordinator {
         &mut self,
         client_update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
     ) -> Option<PublicationCandidates> {
-        if !self.catalog().state().catalog_read_protection_enabled()
-            || !self.pending_compute_installations.is_empty()
-        {
+        if !self.catalog().state().catalog_read_protection_enabled() {
             return None;
         }
 
@@ -1081,39 +1049,10 @@ impl Coordinator {
             .iter()
             .map(|(&id, (_, frontier))| (id, frontier.clone()))
             .collect();
-        let compute_changes = self
-            .controller
-            .compute
-            .take_compaction_bound_proposals(&self.read_protection_pending);
         self.read_protection_pending.extend(storage.keys().copied());
-        self.read_protection_pending
-            .extend(compute_changes.keys().copied());
-        let bounds = self.catalog().state().collection_compaction_bounds();
-        let mut compute_proposals: BTreeMap<_, _> = compute_changes
-            .into_iter()
-            .filter_map(|(id, proposal)| {
-                let entry = self.catalog().try_get_entry_by_global_id(&id)?;
-                if !matches!(entry.item(), CatalogItem::Index(_)) {
-                    return None;
-                }
-                let frontier = if bounds.contains_key(&id) {
-                    proposal
-                } else {
-                    // First publication records installed readability.
-                    self.controller
-                        .compute
-                        .collection_frontiers(id, None)
-                        .expect("proposal belongs to installed index")
-                        .read_frontier
-                };
-                Some((id, frontier))
-            })
-            .collect();
-        for (id, proposal) in self.catalog().state().index_retention_proposals(&frontiers) {
-            // Input progress also covers indexes without replicas. Where both
-            // paths propose a bound, retain the history required by either.
-            compute_proposals.entry(id).or_default().extend(proposal);
-        }
+        // Committed input progress determines retention even without an
+        // installed replica. Execution observations do not grant permission.
+        let compute_proposals = self.catalog().state().index_retention_proposals(&frontiers);
         let candidates = publication_candidates(
             self.catalog().state().maintained_read_requirements(),
             self.catalog().state().collection_compaction_bounds(),

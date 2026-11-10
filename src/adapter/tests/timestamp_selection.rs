@@ -11,9 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use async_trait::async_trait;
 use mz_adapter::ReadHolds;
-use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
@@ -63,7 +61,6 @@ struct Frontiers {
     compute: BTreeMap<(ComputeInstanceId, GlobalId), Frontier>,
     storage: BTreeMap<GlobalId, Frontier>,
     oracle: Timestamp,
-    catalog_state: CatalogState,
 }
 
 struct Frontier {
@@ -80,37 +77,20 @@ impl From<SetFrontier> for Frontier {
     }
 }
 
-#[async_trait(?Send)]
-impl TimestampProvider for Frontiers {
-    fn compute_read_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp> {
-        self.compute.get(&(instance, id)).unwrap().read.clone()
-    }
+impl TimestampProvider for Frontiers {}
 
-    fn compute_write_frontier(
-        &self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> Antichain<Timestamp> {
-        self.compute.get(&(instance, id)).unwrap().write.clone()
-    }
-
-    fn storage_frontiers(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Vec<(
-        GlobalId,
-        timely::progress::Antichain<Timestamp>,
-        timely::progress::Antichain<Timestamp>,
-    )> {
-        self.storage
-            .iter()
-            .filter(|(id, _frontiers)| ids.contains(id))
-            .map(|(id, frontiers)| (*id, frontiers.read.clone(), frontiers.write.clone()))
-            .collect()
+impl Frontiers {
+    fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<Timestamp> {
+        let mut upper = Antichain::new();
+        for id in &id_bundle.storage_ids {
+            upper.extend(self.storage.get(id).unwrap().write.clone());
+        }
+        for (instance, ids) in &id_bundle.compute_ids {
+            for id in ids {
+                upper.extend(self.compute.get(&(*instance, *id)).unwrap().write.clone());
+            }
+        }
+        upper
     }
 
     fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
@@ -138,10 +118,6 @@ impl TimestampProvider for Frontiers {
         }
 
         read_holds
-    }
-
-    fn catalog_state(&self) -> &CatalogState {
-        &self.catalog_state
     }
 }
 
@@ -190,20 +166,11 @@ fn parse_query_when(s: &str) -> QueryWhen {
     }
 }
 
-/// Tests determine_timestamp.
-///
-/// This works by mocking out the compute and storage controllers and timestamp oracle. Then we can
-/// call determine_timestamp for specified sources and QueryWhens. The testdrive language supports
-/// various set directives that can be used to set the state of the fake controllers or timestamp
-/// oracle. The tuple of two timestamps for those specifies the `(read frontier, write frontier)`.
-/// Transaction isolation can also be set. The `determine` directive runs determine_timestamp and
-/// returns the chosen timestamp. Append `full` as an argument to it to see the entire
-/// TimestampDetermination.
-// TODO(aljoscha): We allow `futures::block_on` for testing because
-// `determine_timestamp_for()` is now async. We will remove async here again
-// once we have sufficiently evolved the TimestampOracle API and are done with
-// adding the new Durable TimestampOracle based on Postgres/CRDB.
-#[allow(clippy::disallowed_methods)]
+/// Tests timestamp selection with explicit mock read holds, write frontiers, and oracle timestamps.
+/// The datadriven language supports directives that set these inputs and transaction isolation.
+/// The tuple of two timestamps specifies `(read frontier, write frontier)`.
+/// The `determine` directive runs the pure solver for the specified collections and `QueryWhen`.
+/// It returns the chosen timestamp, or the full determination if `full` is specified.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
@@ -212,7 +179,6 @@ fn test_timestamp_selection() {
             compute: BTreeMap::new(),
             storage: BTreeMap::new(),
             oracle: Timestamp::MIN,
-            catalog_state: CatalogState::empty_test(),
         };
         let mut isolation = TransactionIsolationLevel::StrictSerializable;
         tf.run(move |tc| -> String {
@@ -278,17 +244,21 @@ fn test_timestamp_selection() {
                         Some(_) | None => None,
                     };
 
-                    let (ts, _read_holds) = f
-                        .determine_timestamp_for(
-                            &session,
-                            &det.id_bundle.into(),
-                            &parse_query_when(&det.when),
-                            &TimelineContext::TimestampDependent,
-                            oracle_read_ts,
-                            None, /* real_time_recency_ts */
-                            &IsolationLevel::from(isolation),
-                        )
-                        .unwrap();
+                    let id_bundle = det.id_bundle.into();
+                    let read_holds = f.acquire_read_holds(&id_bundle);
+                    let upper = f.least_valid_write(&id_bundle);
+                    let (ts, _read_holds) = Frontiers::determine_timestamp_for_inner(
+                        &session,
+                        &id_bundle,
+                        &when,
+                        &timeline_ctx,
+                        oracle_read_ts,
+                        None, /* real_time_recency_ts */
+                        &isolation_level,
+                        read_holds,
+                        upper,
+                    )
+                    .unwrap();
 
                     if tc.args.contains_key("full") {
                         format!("{}\n", serde_json::to_string_pretty(&ts).unwrap())

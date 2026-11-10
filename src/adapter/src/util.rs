@@ -11,9 +11,7 @@ use std::fmt::Debug;
 
 use itertools::Itertools;
 use mz_catalog::durable::{DurableCatalogError, FenceError};
-use mz_compute_client::controller::error::{
-    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
-};
+use mz_compute_client::controller::error::InstanceMissing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{exit, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
@@ -382,52 +380,6 @@ impl ShouldTerminateGracefully for StorageError {
             | StorageError::MissingSubsourceReference { .. }
             | StorageError::RtrTimeout(_)
             | StorageError::RtrDropFailure(_) => false,
-        }
-    }
-}
-
-impl ShouldTerminateGracefully for DataflowCreationError {
-    fn should_terminate_gracefully(&self) -> bool {
-        match self {
-            DataflowCreationError::SinceViolation(_)
-            | DataflowCreationError::CompactionBoundViolation(_)
-            | DataflowCreationError::InstanceMissing(_)
-            | DataflowCreationError::CollectionMissing(_)
-            | DataflowCreationError::ReplicaMissing(_)
-            | DataflowCreationError::MissingAsOf
-            | DataflowCreationError::EmptyAsOfForSubscribe
-            | DataflowCreationError::EmptyAsOfForCopyTo => false,
-        }
-    }
-}
-
-impl ShouldTerminateGracefully for CollectionUpdateError {
-    fn should_terminate_gracefully(&self) -> bool {
-        match self {
-            CollectionUpdateError::InstanceMissing(_)
-            | CollectionUpdateError::CollectionMissing(_) => false,
-        }
-    }
-}
-
-impl ShouldTerminateGracefully for PeekError {
-    fn should_terminate_gracefully(&self) -> bool {
-        match self {
-            PeekError::SinceViolation(_)
-            | PeekError::ReadHoldIdMismatch(_)
-            | PeekError::InstanceMissing(_)
-            | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => false,
-        }
-    }
-}
-
-impl ShouldTerminateGracefully for ReadPolicyError {
-    fn should_terminate_gracefully(&self) -> bool {
-        match self {
-            ReadPolicyError::InstanceMissing(_)
-            | ReadPolicyError::CollectionMissing(_)
-            | ReadPolicyError::WriteOnlyCollection(_) => false,
         }
     }
 }

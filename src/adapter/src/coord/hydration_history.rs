@@ -276,10 +276,7 @@ impl Coordinator {
             client,
             object_history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
             replica_history_id: catalog.resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
-            deployment_generation: self
-                .controller
-                .replica_owned_compute()
-                .then(|| catalog.state().deployment_generation()),
+            deployment_generation: Some(catalog.state().deployment_generation()),
             catalog,
             metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
