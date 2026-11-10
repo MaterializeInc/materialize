@@ -51,6 +51,20 @@ leaf temporary view instead, retaining nested dependency cleanup, table-version
 and privilege-update checks. A rename-rewriter repair needs separate scope.
 Evidence: `~/.local/share/aj/m3-evidence/native-only/native-temporary-runtime-alter-enabled.log`.
 
+## Persist output authority after a non-active deployment restarts
+
+A running former active replica keeps its granted Persist output permission
+after promotion. A restarted replica in that still-admitted deployment starts
+without it because `ReplicaEnactment::has_output_write_authority` checks the
+current active generation. SQL, DDL and table-write admission remains intact.
+
+Clarify whether restart should recover prior output enablement or intentionally
+pause those maintained outputs. The design permits overlapping Persist writers
+but distinguishes serving admission from maintained output authority. Changing
+this behavior needs a policy decision, not a test expectation workaround.
+See `src/clusterd/src/catalog_follower/execution.rs` and
+`src/clusterd/src/catalog_follower/execution/storage.rs`.
+
 ## Kafka sink metric ownership
 
 Each worker creates `KafkaSinkMetrics` with only a sink-ID label. Non-producing

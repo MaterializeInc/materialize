@@ -249,8 +249,8 @@ def workflow_default(c: Composition) -> None:
     c.test_parts(workflows, process)
 
 
-def workflow_read_only(c: Composition) -> None:
-    """Verify read-only mode."""
+def workflow_candidate_without_active_processes(c: Composition) -> None:
+    """Keep candidate writes available while the active deployment is offline."""
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -394,8 +394,41 @@ def workflow_read_only(c: Composition) -> None:
         AAA
         """))
 
-    # Restart in a new deploy generation, which will cause Materialize to
-    # boot in read-only mode.
+    sink_topic = c.sql_query(
+        "SELECT k.topic FROM mz_catalog.mz_kafka_sinks k "
+        "JOIN mz_catalog.mz_sinks s ON s.id = k.id WHERE s.name = 'kafka_sink'",
+        service="mz_old",
+        reuse_connection=False,
+    )[0][0]
+
+    def sink_end_offsets() -> dict[int, int]:
+        output = c.exec(
+            "kafka",
+            "env",
+            "KAFKA_HEAP_OPTS=-Xms16m -Xmx64m",
+            "kafka-get-offsets",
+            "--bootstrap-server=kafka:9092",
+            f"--topic={sink_topic}",
+            "--time=-1",
+            capture=True,
+        ).stdout
+        offsets = {}
+        for line in output.splitlines():
+            topic, partition, offset = line.rsplit(":", 2)
+            assert topic == sink_topic, line
+            assert int(partition) not in offsets, output
+            offsets[int(partition)] = int(offset)
+        assert offsets, output
+        return offsets
+
+    # The initial row is already committed and read back above. No further
+    # writes to this sink's data topic are authorized until promotion.
+    sink_before = sink_end_offsets()
+
+    # Replace the only running deployment with a candidate. The catalog still
+    # assigns singleton CDC readers and sink output to generation zero. The
+    # candidate can write tables, webhooks and DDL before taking that authority.
+    # Maintained Persist output is still gated, including MVs and Kafka sources.
     with c.override(
         native_mz(
             name="mz_old",
@@ -406,9 +439,10 @@ def workflow_read_only(c: Composition) -> None:
         )
     ):
         c.up("mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
 
         c.testdrive(dedent(f"""
-            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            $ webhook-append database=materialize schema=public name=webhook_source
             BBB
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
@@ -432,26 +466,25 @@ def workflow_read_only(c: Composition) -> None:
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            ! INSERT INTO t VALUES (3, 4);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (3, 4);
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            # Admission permits table writes, not maintained Persist output.
+            # The index serves the new rows while the MV output remains frozen.
             > SELECT * FROM mv;
             1
-            # TODO: Currently hangs
-            # > SELECT max(b) FROM t;
-            # 2
+            > SELECT max(b) FROM t;
+            4
             > SELECT mz_unsafe.mz_sleep(5)
             <null>
-            ! INSERT INTO t VALUES (5, 6);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (5, 6);
             > SELECT * FROM mv;
             1
-            ! DROP INDEX t_idx
-            contains: cannot write in read-only mode
-            ! CREATE INDEX t_idx2 ON t (a, b)
-            contains: cannot write in read-only mode
-            ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
-            contains: cannot write in read-only mode
+            > DROP INDEX t_idx
+            > CREATE INDEX t_idx2 ON t (a, b)
+            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+            # Its output is checked after promotion, not before it can write.
+            > SELECT max(b) FROM t;
+            6
 
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
@@ -470,13 +503,71 @@ def workflow_read_only(c: Composition) -> None:
             <null> <null> 1 2
             > SELECT * FROM webhook_source
             AAA
+            BBB
+
             """))
 
-        c.up("mz_old")
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
-        c.promote_mz("mz_old", retire_mz_service=None)
+        # Rows alone cannot distinguish an unauthorized reader from one that
+        # has not caught up. Observe the upstream reader sessions as well.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            assert c.sql_query(
+                "SELECT count(*) FROM pg_stat_replication WHERE usename = 'postgres1'",
+                service="postgres",
+                user="postgres",
+                password="postgres",
+                database="postgres",
+            ) == [(0,)]
+            with pymysql.connect(
+                host="localhost",
+                user="root",
+                password=MySql.DEFAULT_ROOT_PASSWORD,
+                port=c.default_port("mysql"),
+                autocommit=True,
+                connect_timeout=5,
+                read_timeout=5,
+                write_timeout=5,
+            ) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT count(*) FROM information_schema.PROCESSLIST "
+                        "WHERE USER = 'mysql1' AND COMMAND LIKE 'Binlog Dump%'"
+                    )
+                    assert cursor.fetchone() == (0,)
+            sessions = c.exec(
+                "sql-server",
+                "bash",
+                "-c",
+                "SQLCMD=/opt/mssql-tools18/bin/sqlcmd; "
+                '[ -x "$SQLCMD" ] || SQLCMD=/opt/mssql-tools/bin/sqlcmd; '
+                'exec "$SQLCMD" -b -C -S localhost -U sa -P "$1" -h -1 -W -l 5 -t 5 -Q "$2"',
+                "sqlcmd",
+                SqlServer.DEFAULT_SA_PASSWORD,
+                "SET NOCOUNT ON; SELECT COUNT(*) FROM sys.dm_exec_sessions s "
+                "JOIN sys.dm_exec_connections c ON c.session_id = s.session_id "
+                "LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id "
+                "CROSS APPLY sys.dm_exec_sql_text(COALESCE(r.sql_handle, c.most_recent_sql_handle)) q "
+                "WHERE s.program_name = 'materialize' AND c.client_net_address IS NOT NULL "
+                "AND (r.session_id IS NOT NULL OR s.last_request_start_time >= DATEADD(second, -5, SYSDATETIME())) "
+                "AND (q.text LIKE '%fn_cdc_get_max_lsn%' OR q.text LIKE '%fn_cdc_get_all_changes_%')",
+                capture=True,
+                silent=True,
+            ).stdout.strip()
+            assert sessions == "0", sessions
+            time.sleep(1)
 
-    # After promotion, the deployment should boot with writes allowed.
+        # Broker end offsets, rather than a possibly lagging MZ source, prove
+        # the candidate did not append either buffered table write during the
+        # observation window. Transaction markers also count as appends.
+        sink_after = sink_end_offsets()
+        assert sink_after == sink_before, (sink_before, sink_after)
+
+        c.promote_mz("mz_old", retire_mz_service=None)
+        # Promotion acknowledgement precedes its durable commit. Do not recreate
+        # the container below until the generation is actually active.
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_old")
+
+    # Restart the promoted generation and verify buffered output and CDC catch up.
     with c.override(
         native_mz(
             name="mz_old",
@@ -497,18 +588,22 @@ def workflow_read_only(c: Composition) -> None:
             CCC
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
-            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+            > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
             > SELECT * FROM mv;
-            1
+            9
             > SELECT * FROM mv2;
-            1
+            9
+            > SELECT * FROM mv3;
+            9
             > SELECT max(b) FROM t;
-            2
+            6
             > INSERT INTO t VALUES (7, 8);
             > SELECT * FROM mv;
-            8
+            16
             > SELECT * FROM mv2;
-            8
+            16
+            > SELECT * FROM mv3;
+            16
             > SELECT max(b) FROM t;
             8
             > SELECT * FROM kafka_source_tbl
@@ -525,6 +620,8 @@ def workflow_read_only(c: Composition) -> None:
             B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
             <null> <null> 7 8
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
@@ -563,8 +660,11 @@ def workflow_read_only(c: Composition) -> None:
             C 2
             > SELECT * FROM webhook_source
             AAA
+            BBB
             CCC
             """))
+
+        c.retire_mz_deployment("mz_old", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
 
 
 def workflow_basic(c: Composition) -> None:

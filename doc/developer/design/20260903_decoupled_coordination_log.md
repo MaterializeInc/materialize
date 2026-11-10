@@ -9,15 +9,21 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Audit the remaining read-only/fencing and forced-migration workflow expectations
-against native compatible writers, then run the applicable current-source
-workloads. Preserve predecessor workloads and explicit retirement checks.
+Convert `workflow_basic` from candidate write rejection and promotion fencing
+to native coexistence followed by explicit retirement. The phase/state audit is
+complete. Preserve source workloads, cursor subscriptions, cross-deployment DDL
+and exact sink rows. Forced-migration and remaining pruning cases still need
+separate treatment.
 Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
 final-preflight coverage still need the scope decisions below.
 
 The current-source distinct-version full DDL and sink-handover demonstration
 passed. Its receipts and limits are in `native-compatible-current/verification.md`.
-No production Kafka metrics change was needed. All runtime fixtures are removed.
+No production Kafka metrics change was needed. The replacement-deployment
+workflow also passes with no active-generation processes: candidate SQL/table
+writes work before promotion, while maintained output waits for authority.
+See `native-compatible-current/offline-candidate-verification.md`.
+All runtime fixtures are removed.
 
 ## Verified outcome
 
