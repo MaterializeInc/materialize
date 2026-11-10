@@ -17,7 +17,10 @@ from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
+    get_default_system_parameters,
+)
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -86,6 +89,11 @@ class RestartMz(TransactionDef):
             with self.composition.override(
                 Materialized(
                     name=self.workload.mz_service,
+                    depends_on=["pubsub"],
+                    options=[
+                        "--persist-pubsub-external",
+                        "--persist-pubsub-url=http://pubsub:6879",
+                    ],
                     ports=ports,
                     external_blob_store=True,
                     blob_store_is_azure=self.azurite,
@@ -123,6 +131,7 @@ class ZeroDowntimeDeploy(TransactionDef):
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
+            previous_generation = self.workload.deploy_generation
             self.workload.deploy_generation += 1
 
             previous_mz_service = self.workload.mz_service
@@ -140,6 +149,11 @@ class ZeroDowntimeDeploy(TransactionDef):
             with self.composition.override(
                 Materialized(
                     name=self.workload.mz_service,
+                    depends_on=["pubsub"],
+                    options=[
+                        "--persist-pubsub-external",
+                        "--persist-pubsub-url=http://pubsub:6879",
+                    ],
                     ports=ports,
                     external_blob_store=True,
                     blob_store_is_azure=self.azurite,
@@ -159,7 +173,16 @@ class ZeroDowntimeDeploy(TransactionDef):
                     DeploymentStatus.READY_TO_PROMOTE, self.workload.mz_service
                 )
                 self.composition.promote_mz(
-                    self.workload.mz_service, retire_mz_service=previous_mz_service
+                    self.workload.mz_service, retire_mz_service=None
                 )
+                self.composition.await_mz_deployment_status(
+                    DeploymentStatus.IS_LEADER, self.workload.mz_service
+                )
+                self.composition.retire_mz_deployment(
+                    self.workload.mz_service,
+                    previous_generation,
+                    environment_id=DEFAULT_MZ_ENVIRONMENT_ID,
+                )
+                self.composition.kill_fenced_mz(previous_mz_service)
 
         yield None

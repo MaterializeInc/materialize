@@ -26,13 +26,13 @@ from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -41,6 +41,7 @@ from materialize.mzcompose.services.sql_server import (
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
+    Pubsub(),
     Postgres(),
     MySql(),
     SqlServer(),
@@ -64,7 +65,6 @@ SERVICES = [
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),
-    Clusterd(name="clusterd1", scratch_directory="/mzdata/source_data"),
 ]
 
 
@@ -123,6 +123,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
         Materialized(
+            depends_on=["pubsub"],
+            options=[
+                "--persist-pubsub-external",
+                "--persist-pubsub-url=http://pubsub:6879",
+            ],
             ports=["16875:6875", "16877:6877"],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
@@ -134,6 +139,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Materialized(
             name="materialized2",
+            depends_on=["pubsub"],
+            options=[
+                "--persist-pubsub-external",
+                "--persist-pubsub-url=http://pubsub:6879",
+            ],
             ports=["26875:6875", "26877:6877"],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,

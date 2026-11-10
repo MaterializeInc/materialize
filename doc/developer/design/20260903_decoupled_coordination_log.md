@@ -59,8 +59,8 @@ check and stale hydration expectations remain unresolved. Full formatting last
 failed on an unchanged generic call in `src/catalog/src/catalog.rs`. Changed-file
 formatting and scoped combined all-target Rust checks pass. The PR stays draft.
 
-The current-source preservation and full upsert-stress container workflows have
-not been rerun after their lifecycle conversion. Broad native container/upgrade
+The current-source preservation, upsert-stress and data-ingest container workflows
+have not been rerun after their lifecycle conversion. Broad native container/upgrade
 coverage remains outstanding. Use matching post-cleanup builtin schemas for the
 next version demonstration. Arbitrary-release compatibility, external-sink handover
 and matched performance acceptance remain unverified.
@@ -81,8 +81,9 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   workflows, provenance, failures, reviews and cleanup. Cached images mounted current
   debug binaries. The restart test establishes warmup rather than assuming it from
   a fixed sleep. Its recovery bound is unchanged.
-- `native-current-source-verification.md` and `native-upsert-lifecycle-verification.md`
-  distinguish checked harness contracts from unexecuted container/stress coverage.
+- `native-current-source-verification.md`, `native-upsert-lifecycle-verification.md`
+  and `native-data-ingest-verification.md` distinguish checked harness contracts
+  from unexecuted container/stress coverage.
 - `native-compute-owner-verification.md` records scoped Rust checks, native tests,
   binary hashes and Kafka execution. The four compute introspection inputs remain
   intentionally, as explained in `native-compute-introspection-boundary.md`.

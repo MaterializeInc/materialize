@@ -388,6 +388,49 @@ def test_current_source_native_lifecycle(legacy_upgrade, retirement_fails):
     assert c.run_testdrive_files.call_count == (1 if retirement_fails else 2)
 
 
+def test_data_ingest_retirement_tracks_generations_across_service_reuse():
+    from materialize.data_ingest import transaction_def
+
+    c = MagicMock(spec=Composition)
+    workload = SimpleNamespace(deploy_generation=0, mz_service="materialized")
+    deploy = transaction_def.ZeroDowntimeDeploy(c, 1, workload, azurite=False)
+    expected = []
+    for generation in range(3):
+        previous = workload.mz_service
+        assert list(deploy.generate([])) == [None]
+        target = workload.mz_service
+        expected.extend(
+            [
+                call.promote_mz(target, retire_mz_service=None),
+                call.retire_mz_deployment(
+                    target,
+                    generation,
+                    environment_id=transaction_def.DEFAULT_MZ_ENVIRONMENT_ID,
+                ),
+                call.kill_fenced_mz(previous),
+            ]
+        )
+        service = c.override.call_args.args[0]
+        assert service.name == target
+        assert f"--deploy-generation={generation + 1}" in service.config["command"]
+
+    assert [
+        invocation
+        for invocation in c.method_calls
+        if invocation[0] in {"promote_mz", "retire_mz_deployment", "kill_fenced_mz"}
+    ] == expected
+
+    restart = transaction_def.RestartMz(c, 1, workload, azurite=False)
+    assert list(restart.generate([])) == [None]
+    assert c.retire_mz_deployment.call_count == 3
+    assert "--deploy-generation=3" in c.override.call_args.args[0].config["command"]
+    for invocation in c.override.call_args_list:
+        service = invocation.args[0]
+        assert "pubsub" in service.config["depends_on"]
+        assert "--persist-pubsub-external" in service.config["command"]
+        assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+
+
 @pytest.fixture
 def platform_checks(composition, monkeypatch):
     path = MZ_ROOT / "test/platform-checks/mzcompose.py"
