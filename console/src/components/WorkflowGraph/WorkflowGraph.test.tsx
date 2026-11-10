@@ -545,7 +545,11 @@ describe("WorkflowGraph from the edges collection", () => {
     await renderAt(WITH_EDGES, REVENUE.id);
     expect(await findNode(TOP)).toBeVisible();
 
-    await setFakeEnvironment(getStore().set, "aws/us-east-1", CRASHED);
+    // In `act`, since the environment atom is async: the change suspends the
+    // page until it resolves, and the node is found while still hidden.
+    await act(() =>
+      setFakeEnvironment(getStore().set, "aws/us-east-1", CRASHED),
+    );
 
     // The SQL path would suspend on its own query in place of the canvas.
     expect(await findNode(TOP)).toBeVisible();
