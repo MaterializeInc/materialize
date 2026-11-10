@@ -47,11 +47,13 @@
   },
   "labels": ["A-dependencies"],
   "timezone": "Etc/UTC",
-  "schedule": ["* 22-23 * * 0", "* 0-1 * * 1"],
+  // The Mend app runs this repo at irregular times. A 4-hour window once
+  // passed without a run, deferring every weekly group by a week.
+  "schedule": ["* * * * 0", "* 0-5 * * 1"],
+  "lockFileMaintenance": {"schedule": ["* * * * 0", "* 0-5 * * 1"]},
   "internalChecksFilter": "strict",
   "prConcurrentLimit": 200,
   "prHourlyLimit": 10,
-  "platformAutomerge": false,
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
@@ -79,15 +81,6 @@
       "enabled": false
     },
     {
-      // Renovate reads Docker release timestamps only from Docker Hub. Without
-      // one, the preset's minimumReleaseAgeBehaviour=timestamp-optional skips
-      // the age check anyway, and warns about it under "Repository problems"
-      // on every run.
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["/^([^/]*[.:][^/]*|localhost)\\//", "!docker.io/**"],
-      "minimumReleaseAge": null
-    },
-    {
       // Renovate learns stage names only from `FROM x AS name`, so a stage
       // declared by `MZFROM x AS name` looks like an untagged image wherever
       // it is used. pinDigests would pin a Docker Hub image of the same name
@@ -106,6 +99,23 @@
       // updates, so setting `enabled` in it would override this rule.
       "matchManagers": ["cargo"],
       "matchPackageNames": ["postgres", "tokio-postgres", "postgres-protocol", "postgres-replication", "postgres-types", "postgres-openssl", "chrono-tz", "serde-value", "rdkafka", "rdkafka-sys", "mysql_async", "tiberius", "async-compression", "iceberg", "iceberg-catalog-rest", "iceberg-storage-opendal"],
+      "enabled": false
+    },
+    {
+      // Held back in Cargo.toml
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["lgalloc"],
+      "allowedVersions": "<0.7"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tungstenite"],
+      "allowedVersions": "<0.30"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchJsonata": ["packageName != depName"],
+      "matchIsBreaking": true,
       "enabled": false
     },
     {

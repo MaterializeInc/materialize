@@ -17,7 +17,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::collections::CollectionExt;
@@ -31,6 +30,7 @@ use postgres::error::SqlState;
 use postgres::types::Type;
 use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
+use tokio_postgres::fallible_iterator::FallibleIterator;
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]

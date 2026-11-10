@@ -24,7 +24,6 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-source-schema-change = { path = "../source-schema-change" }
 mz-ssh-util = { path = "../ssh-util" }
-mysql_common.workspace = true
 mysql_async.workspace = true
 prost.workspace = true
 proptest = { workspace = true, optional = true }

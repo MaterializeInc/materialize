@@ -14,8 +14,7 @@ use sqlparser::parser::Parser;
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
-use mysql_async::binlog::events::OptionalMetaExtractor;
-use mysql_common::binlog::events::{QueryEvent, RowsEventData};
+use mysql_async::binlog::events::{OptionalMetaExtractor, QueryEvent, RowsEventData};
 use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Diff, Row};

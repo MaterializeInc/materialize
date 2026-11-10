@@ -7230,7 +7230,6 @@ dependencies = [
  "datadriven",
  "derivative",
  "fail",
- "fallible-iterator 0.2.0",
  "flate2",
  "futures",
  "headers",
@@ -7338,7 +7337,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "tungstenite 0.30.0",
+ "tungstenite",
  "url",
  "uuid",
 ]
@@ -7363,7 +7362,6 @@ dependencies = [
  "derivative",
  "encoding",
  "enum-iterator",
- "fallible-iterator 0.2.0",
  "hex",
  "hmac 0.13.0",
  "insta",
@@ -7697,7 +7695,6 @@ dependencies = [
  "itertools 0.15.0",
  "maplit",
  "mysql_async",
- "mysql_common",
  "mz-build-tools",
  "mz-cloud-resources",
  "mz-mysql-util",
@@ -8160,12 +8157,12 @@ dependencies = [
  "bytes",
  "clap",
  "datadriven",
- "fallible-iterator 0.2.0",
  "mz-ore",
  "postgres-protocol",
  "regex",
  "serde",
  "serde_json",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -8765,7 +8762,6 @@ dependencies = [
  "chrono",
  "clap",
  "dec",
- "fallible-iterator 0.2.0",
  "futures",
  "hex",
  "itertools 0.15.0",
@@ -8855,7 +8851,6 @@ dependencies = [
  "itertools 0.15.0",
  "maplit",
  "mysql_async",
- "mysql_common",
  "mz-arrow-util",
  "mz-aws-glue-schema-registry",
  "mz-build-info",
@@ -13743,7 +13738,7 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite 0.29.0",
+ "tungstenite",
 ]
 
 [[package]]
@@ -14249,22 +14244,6 @@ dependencies = [
  "log",
  "rand 0.9.4",
  "sha1 0.10.7",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
-dependencies = [
- "bytes",
- "data-encoding",
- "http 1.5.0",
- "httparse",
- "log",
- "rand 0.10.3",
- "sha1 0.11.0",
  "thiserror 2.0.21",
 ]
 
