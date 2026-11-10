@@ -8542,6 +8542,65 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     assert not upper_empty, "the target MV's shard was sealed, its data is lost"
 
 
+def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> None:
+    """
+    Restarting environmentd after applying a replacement must not advance the
+    target's since past the upper of a stalled downstream MV.
+    """
+
+    def frontier(column: str, name: str) -> int | None:
+        rows = c.sql_query(f"""
+            SELECT f.{column}
+            FROM mz_internal.mz_frontiers f
+            JOIN mz_objects o ON o.id = f.object_id
+            WHERE o.name = '{name}'
+            """)
+        if not rows or rows[0][0] is None:
+            return None
+        return int(rows[0][0])
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER down_cluster SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+        CREATE MATERIALIZED VIEW mv AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 IN CLUSTER down_cluster AS SELECT a FROM mv;
+        """)
+    assert c.sql_query("SELECT * FROM mv2") == [(1,)]
+    c.sql("ALTER CLUSTER down_cluster SET (REPLICATION FACTOR 0)")
+
+    # Wait for the since of `t` to pass the upper of `mv2`, so that the as-of
+    # of the replacement lands beyond that upper.
+    for _ in range(30):
+        time.sleep(1)
+        t_since = frontier("read_frontier", "t")
+        mv2_upper = frontier("write_frontier", "mv2")
+        if t_since is not None and mv2_upper is not None and t_since > mv2_upper:
+            break
+    else:
+        raise RuntimeError("t's since didn't advance beyond mv2's upper")
+
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        """)
+
+    # With soft assertions enabled, a violated as-of constraint for `mv2`
+    # panics environmentd during bootstrap.
+    c.kill("materialized")
+    c.up("materialized")
+
+    mv_since = frontier("read_frontier", "mv")
+    mv2_upper = frontier("write_frontier", "mv2")
+    assert mv_since is not None and mv2_upper is not None
+    assert (
+        mv_since <= mv2_upper
+    ), f"mv's since {mv_since} advanced past mv2's upper {mv2_upper}"
+
+
 def workflow_test_github_10102(c: Composition) -> None:
     """
     Regression test for database-issues#10102:
