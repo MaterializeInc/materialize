@@ -8622,8 +8622,8 @@ def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    # The first refresh of `mv` is an hour out. The offset of 1 ms keeps it
-    # off the replacement's refresh grid.
+    # The first refresh of `mv` is an hour out. The replacement's refresh grid
+    # is shifted off it, so its first refresh after that is a different time.
     c.sql("""
         CREATE TABLE t (a int);
         INSERT INTO t VALUES (1);
@@ -8631,7 +8631,7 @@ def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
           WITH (REFRESH AT mz_now()::text::int8 + 3600001)
           AS SELECT a FROM t;
         CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
-          WITH (REFRESH EVERY '7 seconds')
+          WITH (REFRESH EVERY '7 seconds' ALIGNED TO mz_now()::text::int8 + 3000)
           AS SELECT a + 1 AS a FROM t;
         ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
         """)
@@ -8639,13 +8639,23 @@ def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
-    c.testdrive(input=dedent("""
-        > SELECT r.last_completed_refresh IS NULL, r.next_refresh IS NOT NULL
-          FROM mz_internal.mz_materialized_view_refreshes r
-          JOIN mz_materialized_views m ON m.id = r.materialized_view_id
-          WHERE m.name = 'mv'
-        true true
-        """))
+    for _ in range(30):
+        rows = c.sql_query("""
+            SELECT r.last_completed_refresh, r.next_refresh, f.write_frontier
+            FROM mz_internal.mz_materialized_view_refreshes r
+            JOIN mz_materialized_views m ON m.id = r.materialized_view_id
+            JOIN mz_internal.mz_frontiers f ON f.object_id = r.materialized_view_id
+            WHERE m.name = 'mv'
+            """)
+        if rows:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("no refresh introspection for mv")
+    print(f"refresh introspection for mv: {rows}")
+    [(last_completed_refresh, next_refresh, _)] = rows
+    assert last_completed_refresh is None, rows
+    assert next_refresh is not None, rows
 
 
 def workflow_test_github_10102(c: Composition) -> None:

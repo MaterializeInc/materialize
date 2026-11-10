@@ -3042,15 +3042,13 @@ impl RefreshIntrospectionState {
                 let initial_as_of = self.initial_as_of.as_option().expect(
                     "initial_as_of can't be [], because then there would be no refreshes at all",
                 );
-                let first_refresh = self
+                // Sequencing sets `initial_as_of` to the first refresh. An applied replacement
+                // keeps the target's `initial_as_of` but brings its own schedule, whose first
+                // refresh can be later, or absent if its last refresh is earlier.
+                self.next_refresh = self
                     .refresh_schedule
                     .round_up_timestamp(*initial_as_of)
-                    .expect("sequencing makes sure that REFRESH MVs always have a first refresh");
-                soft_assert_or_log!(
-                    first_refresh == *initial_as_of,
-                    "initial_as_of should be set to the first refresh"
-                );
-                self.next_refresh = first_refresh.into();
+                    .map_or(Datum::Null, Datum::from);
             } else {
                 // The first refresh has already happened.
                 let write_frontier = write_frontier.as_option().expect("checked above");

@@ -3335,11 +3335,12 @@ impl Coordinator {
                         .replacement_target
                         .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
                     // Storage joins the shard's since with this `since` when opening the
-                    // critical handle, which initializes the since of a new shard. After an
-                    // applied replacement, `initial_as_of` is the replacement's as-of, and the
-                    // join would advance the since past the uppers of stalled dependents,
-                    // whose read holds do not exist yet during bootstrap. The shard's since was
-                    // initialized when the oldest version was created, so skip the join.
+                    // critical handle, which initializes the since of a new shard. Catalogs
+                    // that applied a replacement before `apply_replacement` kept the target's
+                    // as-of store the replacement's as-of instead. Joining it would advance the
+                    // since past the uppers of stalled dependents, whose read holds do not
+                    // exist yet during bootstrap. The shard's since was initialized when the
+                    // oldest version was created, so skip the join.
                     let has_applied_replacement = mv.collections.len() > 1;
                     let since = if has_applied_replacement {
                         None
