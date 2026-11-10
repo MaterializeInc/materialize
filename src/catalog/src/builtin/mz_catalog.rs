@@ -3171,6 +3171,8 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         (
             "disabled",
             "Whether the size is disabled. Existing replicas keep running on a disabled size, but new clusters and replicas cannot choose it.",
+        ),
+        (
             "allowed_workloads",
             "The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, `compute_interactive`, and `compute_introspection`.",
         ),
