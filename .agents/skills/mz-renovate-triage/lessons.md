@@ -117,7 +117,8 @@ the PR that taught it. Add to this file when a triage teaches something new.
 - **Current holds:** `jotai` `~2.9.3`, the `@types/react@*` resolution to React
   18 types, and Chakra majors disabled in `.github/renovate.json5`. #40648
   adds `js-yaml` below 5, `@babel/core` below 8 and no `framer-motion`
-  replacement. #40649 stops automerging breaking 0.x console updates.
+  replacement. Breaking 0.x minors keep automerging, so review them after
+  they merge (`SKILL.md` section 3).
 
 ## Working with Renovate PRs
 
