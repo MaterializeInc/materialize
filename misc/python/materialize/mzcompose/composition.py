@@ -1813,7 +1813,7 @@ class Composition:
                 if result["status"] == status.value:
                     print(" Reached!")
                     return
-            except:
+            except Exception:
                 pass
             print(".", end="")
             if sleep_time:
