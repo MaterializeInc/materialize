@@ -29,9 +29,12 @@ storage topologies. Full randomized zippy and runtime restore remain unrun.
 
 The same-build and bumped-version platform scenarios now share their relay and
 explicitly retire predecessors before cleanup. Helper checks preserve check phases,
-version-bump steps and historical-image behavior. Runtime acceptance remains
-unverified. See `native-platform-verification.md` and
-`native-bumped-platform-verification.md`. Other platform scenarios remain to be converted.
+version-bump steps and historical-image behavior. The unchanged `CreateTable`
+check passed the same-build action sequence across four generations, including
+three retirements and relay continuity. Full platform and bumped-version runtime
+acceptance remain unverified. See `native-platform-runtime-verification.md`,
+`native-platform-verification.md` and `native-bumped-platform-verification.md`.
+Other platform scenarios remain to be converted.
 
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
