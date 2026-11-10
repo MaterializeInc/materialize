@@ -61,6 +61,8 @@ adapter execution incarnation as ownership metadata in the same transaction.
 Keep normal disconnect cleanup. Reclaim only catalog-confirmed replaced or retired
 executions, preserving items on promotion. Do not make `mz_sessions` a correctness
 dependency or add per-connection catalog records.
+Experimental catalog-format changes may require fresh environments. Do not add
+an in-branch migration or infer ownership for existing UUID-only temporary Items.
 Read-only prewarming or build-metadata variants of one version do not satisfy
 this outcome. Keep schema/encoding/semantic compatibility checks. Document and
 execute the commands, not only test coverage. Reuse catalog admission and Persist

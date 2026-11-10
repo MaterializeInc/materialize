@@ -161,6 +161,12 @@ the affected older generations are fenced. This is a contract for participating
 versions, not a requirement that unmodified pre-feature binaries understand the
 deployment model.
 
+Experimental catalog-format changes may require fresh environments. M3 does not
+require migration between formats developed on this branch. Keep admission
+fail-closed across incompatible formats. Compatible software versions sharing the
+current format must still coexist as full writers. Do not infer execution
+ownership for UUID-only temporary Items from an earlier format.
+
 ## Approach
 
 Use catalog implications to derive lifecycle effects from committed catalog
