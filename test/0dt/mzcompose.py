@@ -24,7 +24,6 @@ from typing import Any
 
 import psycopg
 import pymysql
-import requests
 from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
@@ -1070,7 +1069,7 @@ def workflow_basic(c: Composition) -> None:
 def workflow_index_read_protection(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """Follow committed index permissions beyond a readonly catalog savepoint."""
+    """Follow shared index permissions in every candidate replica while both adapters write."""
     parser.add_argument(
         "--index-count",
         type=int,
@@ -1085,12 +1084,18 @@ def workflow_index_read_protection(
     c.up("mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    def query(sql: str, service: str = "mz_old") -> list[tuple]:
+    def query(
+        sql: str, service: str = "mz_old", replica: str | None = None
+    ) -> list[tuple]:
         with c.sql_connection(
             service=service,
             port=6877,
             user="mz_system",
-            startup_params={"statement_timeout": "5s", "cluster": "cluster"},
+            startup_params={
+                "statement_timeout": "5s",
+                "cluster": "cluster",
+                **({"cluster_replica": replica} if replica is not None else {}),
+            },
         ) as conn:
             cursor = conn.execute(sql.encode())
             return cursor.fetchall() if cursor.description is not None else []
@@ -1098,7 +1103,7 @@ def workflow_index_read_protection(
     query("ALTER SYSTEM SET enable_logical_compaction_window = true")
     query("ALTER SYSTEM SET enable_index_options = true")
     query(f"ALTER SYSTEM SET max_objects_per_schema = {args.index_count + 100}")
-    query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+    query("ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = true")
     unpublished_start = time.monotonic()
     c.testdrive(dedent("""
         > CREATE CLUSTER permission_suspended SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
@@ -1144,41 +1149,136 @@ def workflow_index_read_protection(
     stable_ids = [ids[name] for name in ["permission_keep_idx", *extra_names]]
 
     def catalog_bounds(service: str) -> dict:
-        # mz_catalog_raw tails the writer even in readonly mode. The memory dump,
-        # not a SQL query over that live collection, exposes the frozen savepoint.
-        response = requests.get(
-            f"http://localhost:{c.port(service, 6878)}/api/catalog/dump", timeout=30
+        # Strict-serializable reads certify this adapter's catalog through the
+        # query timestamp, so a returned bound has also been applied locally.
+        # Avoid serializing the entire catalog just to observe these permissions.
+        rows = query(
+            """
+            SELECT mz_internal.parse_catalog_id(data->'key'->'id'),
+                   (data->'value'->>'frontier')::numeric
+            FROM mz_internal.mz_catalog_shared
+            WHERE data->>'kind' = 'CollectionCompactionBound'
+            """,
+            service,
         )
-        response.raise_for_status()
-        return response.json()["collection_compaction_bounds"]
+        bounds = {}
+        for gid, frontier in rows:
+            if gid in ids.values():
+                assert gid not in bounds, (gid, rows)
+                bounds[gid] = {"elements": [] if frontier is None else [int(frontier)]}
+        return bounds
 
-    def frozen_bounds() -> dict:
-        bounds = catalog_bounds("mz_new")
-        return {name: bounds.get(gid) for name, gid in ids.items()}
+    def permission(bounds: dict, gid: str) -> int:
+        elements = bounds[gid]["elements"]
+        assert len(elements) == 1, (gid, bounds[gid])
+        return elements[0]
+
+    def await_bounds(
+        targets: dict[str, int],
+        service: str = "mz_new",
+        *,
+        deadline: float | None = None,
+    ) -> None:
+        if deadline is None:
+            deadline = time.monotonic() + 300
+        while True:
+            bounds = catalog_bounds(service)
+            if all(
+                gid in bounds and permission(bounds, gid) >= target
+                for gid, target in targets.items()
+            ):
+                return
+            assert time.monotonic() < deadline, (service, targets, bounds)
+            time.sleep(0.5)
+
+    def assert_dropped(name: str) -> None:
+        deadline = time.monotonic() + 300
+        for service in ("mz_old", "mz_new"):
+            while True:
+                absent = query(
+                    f"SELECT count(*) FROM mz_indexes WHERE name = '{name}'", service
+                ) == [(0,)]
+                if absent and ids[name] not in catalog_bounds(service):
+                    break
+                assert time.monotonic() < deadline, (service, name)
+                time.sleep(0.5)
+
+    def replicas(generation: int, cluster: str = "cluster") -> list[tuple]:
+        return query(
+            f"""
+            SELECT mz_internal.parse_catalog_id(c.data->'key'->'id'),
+                   c.data->'value'->>'name'
+            FROM mz_internal.mz_catalog_shared c
+            JOIN mz_clusters cl ON cl.id = mz_internal.parse_catalog_id(c.data->'value'->'cluster_id')
+            WHERE c.data->>'kind' = 'ClusterReplica'
+              AND COALESCE((c.data->'key'->>'deployment_generation')::uint8, 0) = {generation}
+              AND cl.name = '{cluster}'
+        """,
+            "mz_new",
+        )
 
     bounds = catalog_bounds("mz_old")
-    assert all(gid not in bounds for gid in ids.values())
-    # Starting without the health wait overlaps DDL with boot, but does not prove
-    # whether the savepoint includes this index. Both schedules must boot.
+    birth = {gid: permission(bounds, gid) for gid in ids.values()}
+    # Either ordering of bootstrap and DROP must work. Neither requires a frozen
+    # catalog: candidate adapters and replicas follow subsequent committed DDL.
     c.up("mz_new", wait=False)
     query("DROP INDEX permission_bootstrap_drop_idx")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-    bounds = catalog_bounds("mz_old")
-    assert all(gid not in bounds for gid in ids.values())
+    assert_dropped("permission_bootstrap_drop_idx")
+    surviving_birth = {
+        gid: value
+        for gid, value in birth.items()
+        if gid != ids["permission_bootstrap_drop_idx"]
+    }
+    await_bounds(surviving_birth)
     assert time.monotonic() - unpublished_start < 300
-    frozen = frozen_bounds()
-    assert all(bound is None for bound in frozen.values()), frozen
-    assert (
-        query(
-            """
-        SELECT count(*) FROM mz_cluster_replicas r
-        JOIN mz_clusters c ON c.id = r.cluster_id
-        WHERE c.name = 'permission_suspended'
-    """,
+    assert replicas(1, "permission_suspended") == []
+    candidate_replicas = replicas(1)
+    assert len(candidate_replicas) == 2, candidate_replicas
+    replica_ids = {rid for rid, _ in candidate_replicas}
+    assert len(replica_ids) == 2, candidate_replicas
+
+    def observations(gids: list[str]) -> dict[tuple[str, str], tuple[int, int]]:
+        gids_sql = ", ".join(f"'{gid}'" for gid in gids)
+        rows = query(
+            f"""
+            SELECT o.object_id, o.replica_id,
+                   o.read_frontier::text::numeric, o.write_frontier::text::numeric
+            FROM mz_internal.mz_replica_frontier_observations o
+            WHERE o.object_id IN ({gids_sql}) AND o.deployment_generation = 1
+              AND o.read_known AND o.write_known
+              AND o.read_frontier IS NOT NULL AND o.write_frontier IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM mz_internal.mz_catalog_shared c
+                  WHERE c.data->>'kind' = 'ClientIncarnation'
+                    AND (c.data->'key'->>'id')::uint8 = o.client_incarnation
+                    AND COALESCE((c.data->'value'->>'deployment_generation')::uint8, 0) = o.deployment_generation
+                    AND mz_internal.parse_catalog_id(c.data->'value'->'realization'->'Replica') = o.replica_id
+              )
+        """,
             "mz_new",
         )
-        == [(0,)]
-    )
+        result = {(gid, rid): (int(read), int(write)) for gid, rid, read, write in rows}
+        assert len(result) == len(rows), rows
+        return result
+
+    def expected_pairs(gids: list[str]) -> set[tuple[str, str]]:
+        return {(gid, rid) for gid in gids for rid in replica_ids}
+
+    def synchronize_pause() -> None:
+        # An indexed read routed to each replica follows the certified post-pause
+        # catalog before answering. Do this for both deployments before taking a cap.
+        for generation, service in enumerate(("mz_old", "mz_new")):
+            members = replicas(generation)
+            assert len(members) == 2, members
+            assert len({rid for rid, _ in members}) == 2, members
+            for _, name in members:
+                query("SELECT * FROM permission_keep", service, replica=name)
+                plan = query(
+                    "EXPLAIN SELECT * FROM permission_keep", service, replica=name
+                )[0][0]
+                assert "permission_keep_idx" in plan, plan
+
     with c.override(
         Testdrive(
             materialize_url="postgres://materialize@mz_new:6875",
@@ -1194,72 +1294,84 @@ def workflow_index_read_protection(
         c.testdrive(dedent("""
             > SET statement_timeout = '5s';
             > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
-            ! INSERT INTO permission_input VALUES (99);
-            contains: cannot write in read-only mode
-            > SELECT DISTINCT name, hydrated
-              FROM mz_internal.mz_hydration_statuses
-              JOIN mz_indexes ON (id = object_id)
-              WHERE name IN ('permission_keep_idx', 'permission_drop_idx');
-            permission_drop_idx true
-            permission_keep_idx true
             > SELECT * FROM permission_keep;
             2
             > SELECT * FROM permission_drop;
             3
         """))
-        assert frozen_bounds() == frozen
-        bounds = catalog_bounds("mz_old")
-        assert all(gid not in bounds for gid in ids.values())
+        initial_gids = stable_ids + [ids["permission_drop_idx"]]
+        deadline = time.monotonic() + 300
+        while True:
+            observed = observations(initial_gids)
+            if all(
+                pair in observed and observed[pair][1] > birth[pair[0]]
+                for pair in expected_pairs(initial_gids)
+            ):
+                break
+            assert time.monotonic() < deadline, (initial_gids, observed)
+            time.sleep(0.5)
+        # Startup and grant acquisition must not advance paused permission, even
+        # for RF0 indexes. Every installed candidate index must retain that history.
+        for service in ("mz_old", "mz_new"):
+            bounds = catalog_bounds(service)
+            assert all(
+                permission(bounds, gid) == initial
+                for gid, initial in surviving_birth.items()
+            ), (service, surviving_birth, bounds)
+        assert all(
+            observed[pair][0] <= birth[pair[0]] for pair in expected_pairs(initial_gids)
+        ), (birth, observed)
         assert time.monotonic() - unpublished_start < 300
         query(
             "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
             f"'{args.publication_interval_ms}ms'"
         )
 
-        # The subscriber follows permissions, not SQL schema changes. A removed
-        # writer index must not prevent delivery for another stable global ID.
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = false"
+        )
+        # Both adapters write. A peer DROP must not prevent permission delivery
+        # to the stable cohort or leave the candidate's catalog frozen.
         for value in (2, 3):
             if value == 3:
                 query("DROP INDEX permission_drop_idx")
-            query(f"INSERT INTO permission_input VALUES ({value})")
+                assert_dropped("permission_drop_idx")
+            query(
+                f"INSERT INTO permission_input VALUES ({value})",
+                "mz_new" if value == 2 else "mz_old",
+            )
             keep = ids["permission_keep_idx"]
             cohort = stable_ids + ([ids["permission_drop_idx"]] if value == 2 else [])
             bounds = catalog_bounds("mz_old")
-            baseline = {
-                gid: bounds.get(gid, {"elements": [0]})["elements"][0] for gid in cohort
-            }
+            baseline = {gid: permission(bounds, gid) for gid in cohort}
             deadline = time.monotonic() + 300
             publication_start = time.monotonic()
             while True:
                 writer_request_start = time.monotonic()
                 bounds = catalog_bounds("mz_old")
                 committed_observed = time.monotonic()
-                targets = {
-                    gid: bounds.get(gid, {"elements": [0]})["elements"][0]
-                    for gid in cohort
-                }
+                targets = {gid: permission(bounds, gid) for gid in cohort}
                 if all(targets[gid] > baseline[gid] for gid in cohort):
                     break
                 assert time.monotonic() < deadline, (baseline, targets)
                 time.sleep(0.5)
             committed = targets[keep]
             assert committed > 0
-            # Freeze the writer snapshot. One aggregate query checks every target
-            # without installing execution read holds on the governed indexes.
-            targets_sql = ", ".join(
-                f"('{gid}', {permission})" for gid, permission in targets.items()
-            )
+            # Capture one committed target set. Candidate adapter catch-up and
+            # replica compaction are separate observations of that permission.
+            await_bounds(targets, deadline=deadline)
             follower_requests = 0
             follower_request_seconds = 0.0
             while True:
                 follower_request_start = time.monotonic()
-                [(observed_count,)] = query(
-                    f"""
-                    SELECT count(*) FROM (VALUES {targets_sql}) AS targets(gid, permission)
-                    JOIN mz_internal.mz_frontiers f ON f.object_id = targets.gid
-                    WHERE f.read_frontier::text::numeric >= targets.permission
-                    """,
-                    "mz_new",
+                observed = observations(cohort)
+                observed_count = sum(
+                    all(
+                        (gid, rid) in observed
+                        and observed[(gid, rid)][0] >= targets[gid]
+                        for rid in replica_ids
+                    )
+                    for gid in cohort
                 )
                 follower_observed = time.monotonic()
                 follower_requests += 1
@@ -1273,9 +1385,6 @@ def workflow_index_read_protection(
                 )
                 time.sleep(0.5)
             c.testdrive(dedent(f"""
-                > SELECT read_frontier::text::numeric >= {committed}
-                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
-                true
                 > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
                 > SELECT count(*), sum(a) FROM permission_keep;
                 {value} {sum(range(2, value + 2))}
@@ -1289,7 +1398,7 @@ def workflow_index_read_protection(
                         "initial_live_index_count": len(stable_ids) + 1,
                         "cohort_index_count": len(cohort),
                         "follower_observed_index_count": observed_count,
-                        "observer": "writer catalog dump and follower SQL frontier polling at 500ms",
+                        "observer": "certified permission reads on both adapters and generation-qualified current replica observations at 500ms",
                         "measurement_scope": "snapshot observation to all-complete read frontier observation, not isolated subscriber CPU or unobserved commit-to-poll latency",
                         "committed_permission": committed,
                         "writer_permission_observation_seconds": committed_observed
@@ -1311,39 +1420,57 @@ def workflow_index_read_protection(
                     sort_keys=True,
                 )
             )
-            assert frozen_bounds() == frozen
+            await_bounds(targets)
             plan = query("EXPLAIN SELECT * FROM permission_keep", "mz_new")[0][0]
             assert "permission_keep_idx" in plan, plan
 
-        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = true"
+        )
+        synchronize_pause()
         capped_start = time.monotonic()
-        cap = catalog_bounds("mz_old")[keep]["elements"][0]
+        query("SELECT 1")
+        cap = permission(catalog_bounds("mz_old"), keep)
+        await_bounds({keep: cap})
+        assert permission(catalog_bounds("mz_new"), keep) == cap
         for value in (4, 5, 6):
+            previous = observations([keep])
+            assert expected_pairs([keep]) <= previous.keys(), previous
             query(f"INSERT INTO permission_input VALUES ({value})")
-            [(upper,)] = query(
-                "SELECT write_frontier::text::numeric FROM mz_internal.mz_frontiers "
-                f"WHERE object_id = '{keep}'",
-                "mz_new",
+            deadline = time.monotonic() + 300
+            while True:
+                observed = observations([keep])
+                if all(
+                    pair in observed
+                    and observed[pair][1] > max(previous[pair][1], cap + 1000)
+                    for pair in expected_pairs([keep])
+                ):
+                    break
+                assert time.monotonic() < deadline, (previous, observed, cap)
+                time.sleep(0.5)
+            assert all(observed[pair][0] <= cap for pair in expected_pairs([keep])), (
+                observed,
+                cap,
             )
-            c.testdrive(dedent(f"""
-                > SELECT write_frontier::text::numeric > {max(upper, cap + 1000)},
-                         read_frontier::text::numeric <= {cap}
-                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
-                true true
-            """))
-            assert catalog_bounds("mz_old")[keep]["elements"] == [cap]
+            for service in ("mz_old", "mz_new"):
+                assert permission(catalog_bounds(service), keep) == cap
             assert time.monotonic() - capped_start < 300
 
         query(
-            "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
-            f"'{args.publication_interval_ms}ms'"
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = false"
         )
-        c.testdrive(dedent(f"""
-            > SELECT read_frontier::text::numeric > {cap}
-              FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
-            true
-        """))
-        assert frozen_bounds() == frozen
+        deadline = time.monotonic() + 300
+        await_bounds({keep: cap + 1}, "mz_old", deadline=deadline)
+        await_bounds({keep: cap + 1}, deadline=deadline)
+        while True:
+            observed = observations([keep])
+            if all(
+                pair in observed and observed[pair][0] > cap
+                for pair in expected_pairs([keep])
+            ):
+                break
+            assert time.monotonic() < deadline, (observed, cap)
+            time.sleep(0.5)
 
 
 def workflow_kafka_source_rehydration(
