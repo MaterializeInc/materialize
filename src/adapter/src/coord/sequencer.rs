@@ -188,9 +188,9 @@ impl Coordinator {
                     ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateConnection(_) => {
-                    ctx.retire(Err(AdapterError::Unsupported(
-                        "CREATE CONNECTION requires submitted intent",
-                    )));
+                    let msg = "CREATE CONNECTION must execute as a catalog command";
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateDatabase(plan) => {
                     let result = self.sequence_create_database(ctx.session_mut(), plan).await;
