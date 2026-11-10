@@ -22,7 +22,7 @@ export function buildRoleGraphEdgesQuery() {
   return buildRoleMembershipQuery({
     excludeSystemRoles: true,
     memberType: "roles",
-  });
+  }).select(["parent.id as parentId", "child.id as childId"]);
 }
 
 export async function fetchRoleGraphEdges({
