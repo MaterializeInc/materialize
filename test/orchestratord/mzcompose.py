@@ -5497,6 +5497,28 @@ def helm_install_cert_manager():
 
 
 def init(definition: dict[str, Any]) -> None:
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            "materialize-environment",
+            "--ignore-not-found",
+            "--wait=false",
+        ],
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "pods",
+            "--all",
+            "--namespace=materialize-environment",
+            "--ignore-not-found",
+            "--grace-period=0",
+            "--force",
+        ],
+    )
     # `--wait=true` blocks until the namespace is fully terminated. If the
     # timeout is hit and we proceed anyway, the next `kubectl apply` races the
     # terminating namespace and fails with "is being terminated", so let any
