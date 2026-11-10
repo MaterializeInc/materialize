@@ -75,6 +75,28 @@ expression caching alone does not remove the raw store because fallback opens
 remain. Preserve admin validation, committed selection, cross-cluster producer
 schemas and catalog-authorized retirement. No measured saving is claimed yet.
 
+## Temporary-item cleanup after native retirement
+
+The legacy temporary-item upgrade tests require durable reclamation after their
+session is excluded. Native promotion must preserve those sessions, but explicit
+retirement currently does not replace that cleanup. `retired_realizations` removes
+execution metadata/protection, not Items. The remaining bulk temporary-item
+reclamation call is the unprotected catalog-open path in durable `persist.rs`.
+Graceful session close remains separate.
+
+Items store their session UUID, while `mz_sessions_raw` reports client incarnation
+asynchronously. `coord/retired_rows.rs` can remove retired session observations
+without reclaiming their Items, so joining those observations is not a durable
+ownership contract. This is the unresolved ownership issue discussed on October 30,
+not a new regression from the lifecycle harness changes.
+
+Proposed separate repair, awaiting approval: store the existing adapter execution
+owner on temporary Items and let adapters reclaim only catalog-retired owners.
+Keep cleanup transactional and preserve surviving sessions. Do not restore global
+promotion cleanup, add a controllerd maintenance owner, or turn every connection
+into a durable catalog write. Leave the existing temporary-item lifecycle test
+unconverted until that contract is resolved.
+
 ## Native source-status latency
 
 The native source-failpoint lifecycle passed, but its final successful status-query

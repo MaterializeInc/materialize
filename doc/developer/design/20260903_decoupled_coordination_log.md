@@ -92,6 +92,13 @@ matching post-cleanup schemas for native version demonstrations.
 Pre-native-to-native conversion is out of scope. Arbitrary-version compatibility
 and external-sink handover remain unverified.
 
+Temporary-item reclamation after explicit retirement is not implemented. Items
+have session UUIDs but no durable adapter-execution owner. Asynchronous session
+observations cannot safely fill that gap. Approval is pending for a separate
+Item-ownership/adapter-cleanup repair. Leave the legacy temporary-item test
+unconverted rather than deleting its reclamation assertion. See the follow-up
+inventory for concrete callers and the proposed boundary.
+
 The source-failpoint run's final successful status-query attempt reported 673
 seconds. Its cause is untraced. Do not treat that passing scenario as responsive
 SQL evidence or assume CPU caps explain the delay.
