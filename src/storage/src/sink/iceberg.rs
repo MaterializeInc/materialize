@@ -971,8 +971,10 @@ async fn try_commit_batch(
     }
 }
 
-/// Whether the sink can write into a table that already carries `current`,
-/// where `expected` is the schema the sink would create today.
+/// Why the sink can't write into a table that already carries `current`,
+/// where `expected` is the schema the sink would create today, or `None` if it
+/// can. The reason names only the first field that differs, so it stays short
+/// however wide the schema is.
 ///
 /// Names and nullability have to match. Types have to match too,
 /// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
@@ -988,34 +990,88 @@ async fn try_commit_batch(
 /// Field IDs are not checked as Materialize may generate them differently than
 /// the catalog (i.e., DFS vs BFS for nested types), which could result in
 /// failures on sink restart.
-fn is_compatible(current: &Schema, expected: &Schema) -> bool {
-    struct_is_compatible(current.as_struct(), expected.as_struct())
+fn schema_mismatch(current: &Schema, expected: &Schema) -> Option<String> {
+    struct_mismatch(None, current.as_struct(), expected.as_struct())
 }
 
-fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
-    current.fields().len() == expected.fields().len()
-        && std::iter::zip(current.fields(), expected.fields())
-            .all(|(c, e)| field_is_compatible(c, e))
+fn struct_mismatch(
+    parent: Option<&str>,
+    current: &StructType,
+    expected: &StructType,
+) -> Option<String> {
+    let (current, expected) = (current.fields(), expected.fields());
+    if let Some(mismatch) =
+        std::iter::zip(current, expected).find_map(|(c, e)| field_mismatch(parent, c, e))
+    {
+        return Some(mismatch);
+    }
+    match current.len().cmp(&expected.len()) {
+        Ordering::Less => Some(format!(
+            "the table is missing `{}`",
+            field_path(parent, &expected[current.len()].name)
+        )),
+        Ordering::Greater => Some(format!(
+            "the table has an extra field `{}`",
+            field_path(parent, &current[expected.len()].name)
+        )),
+        Ordering::Equal => None,
+    }
 }
 
-fn field_is_compatible(current: &NestedField, expected: &NestedField) -> bool {
-    current.name == expected.name
-        && current.required == expected.required
-        && match (&*current.field_type, &*expected.field_type) {
-            // A uuid column written before uuids became strings.
-            (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => {
-                true
-            }
-            (Type::Struct(c), Type::Struct(e)) => struct_is_compatible(c, e),
-            (Type::List(c), Type::List(e)) => {
-                field_is_compatible(&c.element_field, &e.element_field)
-            }
-            (Type::Map(c), Type::Map(e)) => {
-                field_is_compatible(&c.key_field, &e.key_field)
-                    && field_is_compatible(&c.value_field, &e.value_field)
-            }
-            (c, e) => c == e,
+fn field_mismatch(
+    parent: Option<&str>,
+    current: &NestedField,
+    expected: &NestedField,
+) -> Option<String> {
+    let path = field_path(parent, &expected.name);
+    if current.name != expected.name {
+        return Some(format!(
+            "the table has `{}` where `{path}` is expected",
+            field_path(parent, &current.name)
+        ));
+    }
+    if current.required != expected.required {
+        let nullability = |required| if required { "required" } else { "optional" };
+        return Some(format!(
+            "`{path}` is {} in the table but {} in the sink",
+            nullability(current.required),
+            nullability(expected.required)
+        ));
+    }
+    match (&*current.field_type, &*expected.field_type) {
+        // A uuid column written before uuids became strings.
+        (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => None,
+        (Type::Struct(c), Type::Struct(e)) => struct_mismatch(Some(&path), c, e),
+        (Type::List(c), Type::List(e)) => {
+            field_mismatch(Some(&path), &c.element_field, &e.element_field)
         }
+        (Type::Map(c), Type::Map(e)) => field_mismatch(Some(&path), &c.key_field, &e.key_field)
+            .or_else(|| field_mismatch(Some(&path), &c.value_field, &e.value_field)),
+        (c, e) if c == e => None,
+        (c, e) => Some(format!(
+            "`{path}` has type {} in the table but {} in the sink",
+            type_name(c),
+            type_name(e)
+        )),
+    }
+}
+
+fn field_path(parent: Option<&str>, name: &str) -> String {
+    match parent {
+        Some(parent) => format!("{parent}.{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// A primitive's full name, but only the kind of a nested type, whose full
+/// name would spell out its whole subtree.
+fn type_name(ty: &Type) -> String {
+    match ty {
+        Type::Primitive(primitive) => primitive.to_string(),
+        Type::Struct(_) => "struct".to_string(),
+        Type::List(_) => "list".to_string(),
+        Type::Map(_) => "map".to_string(),
+    }
 }
 
 /// Load an existing Iceberg table or create it if it doesn't exist.
@@ -1034,13 +1090,11 @@ async fn load_or_create_table(
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
             let current_schema = table.metadata().current_schema();
-            if !is_compatible(current_schema, schema) {
+            if let Some(mismatch) = schema_mismatch(current_schema, schema) {
                 anyhow::bail!(
-                    "Iceberg table '{}' schema does not match expected schema. \
-                     Current schema: {:?}, expected schema: {:?}",
+                    "Iceberg table '{}' schema does not match expected schema: {}",
                     table_name,
-                    current_schema,
-                    schema
+                    mismatch
                 );
             }
             Ok(table)
@@ -2317,7 +2371,7 @@ mod tests {
     /// A table created before uuid columns became strings holds `fixed[16]` and
     /// must stay writable, while any other difference is still a mismatch.
     #[mz_ore::test]
-    fn test_is_compatible_accepts_legacy_uuid() {
+    fn test_schema_mismatch_accepts_legacy_uuid() {
         let desc = mz_repr::RelationDesc::builder()
             .with_column("id", SqlScalarType::Int32.nullable(false))
             .with_column("u", SqlScalarType::Uuid.nullable(true))
@@ -2325,32 +2379,32 @@ mod tests {
         let (_, expected) =
             relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
 
-        assert!(is_compatible(&expected, &expected));
+        assert_eq!(schema_mismatch(&expected, &expected), None);
 
         // The halt this tolerance exists to prevent.
         let legacy = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Fixed(16)));
-        assert!(is_compatible(&legacy, &expected));
+        assert_eq!(schema_mismatch(&legacy, &expected), None);
 
         // Only that direction: nothing produces a string column where the sink
         // derives fixed binary.
-        assert!(!is_compatible(&expected, &legacy));
+        assert!(schema_mismatch(&expected, &legacy).is_some());
 
         // An unrelated type difference is still a mismatch.
         let wrong_type = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Long));
-        assert!(!is_compatible(&wrong_type, &expected));
+        assert!(schema_mismatch(&wrong_type, &expected).is_some());
 
         // So is a missing column.
         let truncated = Schema::builder()
             .with_fields(expected.as_struct().fields().iter().take(1).cloned())
             .build()
             .expect("valid schema");
-        assert!(!is_compatible(&truncated, &expected));
+        assert!(schema_mismatch(&truncated, &expected).is_some());
     }
 
     /// The tolerance reaches a uuid nested inside a list, which the type
     /// overrides remap just like a top-level column.
     #[mz_ore::test]
-    fn test_is_compatible_accepts_legacy_uuid_in_list() {
+    fn test_schema_mismatch_accepts_legacy_uuid_in_list() {
         let desc = mz_repr::RelationDesc::builder()
             .with_column("id", SqlScalarType::Int32.nullable(false))
             .with_column(
@@ -2383,7 +2437,7 @@ mod tests {
             }),
         );
 
-        assert!(is_compatible(&legacy, &expected));
+        assert_eq!(schema_mismatch(&legacy, &expected), None);
     }
 
     /// Rebuilds `schema` with the field ids a Java-based REST catalog (Polaris,
@@ -2506,7 +2560,7 @@ mod tests {
     /// case because `_mz_diff` and `_mz_timestamp` are appended. Flat relations
     /// pass only because the two numberings coincide.
     #[mz_ore::test]
-    fn test_is_compatible_accepts_catalog_assigned_field_ids() {
+    fn test_schema_mismatch_accepts_catalog_assigned_field_ids() {
         let desc = mz_repr::RelationDesc::builder()
             .with_column("id", SqlScalarType::Int64.nullable(true))
             .with_column(
@@ -2537,14 +2591,14 @@ mod tests {
 
         // Renumbering must not hide a real difference: a top-level type ...
         let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
-        assert!(!is_compatible(&wrong_type, &expected));
+        assert!(schema_mismatch(&wrong_type, &expected).is_some());
         // ... a type nested inside the array ...
         let wrong_element =
             with_array_element_type(&catalog, "a", Type::Primitive(PrimitiveType::String));
-        assert!(!is_compatible(&wrong_element, &expected));
+        assert!(schema_mismatch(&wrong_element, &expected).is_some());
         // ... or nullability.
         let wrong_required = with_field_required(&catalog, "w", true);
-        assert!(!is_compatible(&wrong_required, &expected));
+        assert!(schema_mismatch(&wrong_required, &expected).is_some());
 
         // A flat relation gets identical ids under both schemes, which is why
         // such sinks never hit this.
@@ -2554,16 +2608,83 @@ mod tests {
             .finish();
         let (_, flat_expected) =
             relation_desc_to_iceberg_schema(&flat).expect("schema conversion should succeed");
-        assert!(is_compatible(
-            &with_catalog_field_ids(&flat_expected),
-            &flat_expected
-        ));
+        assert_eq!(
+            schema_mismatch(&with_catalog_field_ids(&flat_expected), &flat_expected),
+            None
+        );
 
         // The table the catalog created differs from the expected schema only
         // in ids, and the sink must accept it.
-        assert!(
-            is_compatible(&catalog, &expected),
+        assert_eq!(
+            schema_mismatch(&catalog, &expected),
+            None,
             "a table that differs from the expected schema only in field ids must be accepted"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_schema_mismatch_names_the_first_differing_field() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int64.nullable(true))
+            .with_column(
+                "a",
+                SqlScalarType::Array(Box::new(SqlScalarType::Int64)).nullable(true),
+            )
+            .with_column("w", SqlScalarType::Int64.nullable(true))
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        let wrong_type = with_field_type(&expected, "w", Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            schema_mismatch(&wrong_type, &expected).as_deref(),
+            Some("`w` has type string in the table but long in the sink")
+        );
+
+        let wrong_element =
+            with_array_element_type(&expected, "a", Type::Primitive(PrimitiveType::String));
+        let mismatch = schema_mismatch(&wrong_element, &expected).expect("schemas differ");
+        assert!(
+            mismatch.starts_with("`a.")
+                && mismatch.ends_with("has type string in the table but long in the sink"),
+            "nested mismatch should name the path into the array: {mismatch}"
+        );
+
+        let wrong_required = with_field_required(&expected, "w", true);
+        assert_eq!(
+            schema_mismatch(&wrong_required, &expected).as_deref(),
+            Some("`w` is required in the table but optional in the sink")
+        );
+
+        let truncated = Schema::builder()
+            .with_fields(expected.as_struct().fields().iter().take(1).cloned())
+            .build()
+            .expect("valid schema");
+        assert_eq!(
+            schema_mismatch(&truncated, &expected).as_deref(),
+            Some("the table is missing `a`")
+        );
+        assert_eq!(
+            schema_mismatch(&expected, &truncated).as_deref(),
+            Some("the table has an extra field `a`")
+        );
+
+        // A table of any width yields one line naming the column, which is what
+        // keeps the sink's status rows small.
+        let mut wide = mz_repr::RelationDesc::builder();
+        for i in 0..500 {
+            wide = wide.with_column(format!("column_{i}"), SqlScalarType::Int64.nullable(true));
+        }
+        let (_, wide_expected) = relation_desc_to_iceberg_schema(&wide.finish())
+            .expect("schema conversion should succeed");
+        let wide_current = with_field_type(
+            &wide_expected,
+            "column_499",
+            Type::Primitive(PrimitiveType::String),
+        );
+        assert_eq!(
+            schema_mismatch(&wide_current, &wide_expected).as_deref(),
+            Some("`column_499` has type string in the table but long in the sink")
         );
     }
 
