@@ -15,8 +15,8 @@
 //! applies the holds readers register there to its own compaction. This module is the
 //! Materialize-side glue over that primitive.
 //!
-//! * [`Published`] is a publication point. A runtime that reads it as a peer holds it through a
-//!   logical-only *peer handle*, which tracks the frontier that runtime has applied.
+//! * [`Published`] is a publication point. A runtime that reads it as a peer holds and reads it
+//!   through a [`BindingReader`], whose logical holds reach the publisher as a stream.
 //! * [`adopt_trace`] attaches an arrangement's trace to a point on the owning worker.
 //! * [`SharedReader`] is the `Clone + Send` reader, implementing
 //!   [`TraceReader`] so it drives compaction and cursors
@@ -27,7 +27,7 @@ mod publish;
 
 use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::shared_trace::SharedReader;
+use mz_timely_util::shared_trace::{BindingReader, SharedReader};
 
 pub(crate) use self::publish::{Published, adopt_trace};
 
@@ -39,6 +39,13 @@ pub(crate) type SharedOksHandle =
 /// A `Send` reader handle for a published `errs` arrangement.
 pub(crate) type SharedErrsHandle =
     SharedReader<Timestamp, <ErrSpine<Timestamp, Diff> as TraceReader>::Batch>;
+
+/// A reader of a peer's published `oks` arrangement.
+pub(crate) type PeerOksReader =
+    BindingReader<Timestamp, <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch>;
+/// A reader of a peer's published `errs` arrangement.
+pub(crate) type PeerErrsReader =
+    BindingReader<Timestamp, <ErrSpine<Timestamp, Diff> as TraceReader>::Batch>;
 
 // `pub(crate)` for sibling test modules. The peek and render tests in `crate::render` and
 // `crate::sharing` read a published arrangement through `SharedReaderExt::snapshot_at` and inspect

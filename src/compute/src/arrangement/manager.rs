@@ -20,7 +20,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{Span, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_timely_util::arrange_agent::TraceAgent;
-use mz_timely_util::shared_trace::SharedReader;
+use mz_timely_util::shared_trace::BindingReader;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -28,7 +28,7 @@ use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
-use crate::shared_trace::{SharedErrsHandle, SharedOksHandle};
+use crate::shared_trace::{PeerErrsReader, PeerOksReader};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
@@ -259,7 +259,7 @@ pub enum IndexTrace<Tr: TraceReader<Time = Timestamp>> {
     Local(PaddedTrace<TraceAgent<Tr>>),
     /// A trace the other runtime publishes. Its logical compaction is this runtime's hold on the
     /// publication, padded as the local variant is.
-    Shared(PaddedTrace<SharedReader<Timestamp, Tr::Batch>>),
+    Shared(PaddedTrace<BindingReader<Timestamp, Tr::Batch>>),
 }
 
 /// The `oks` trace of an index.
@@ -337,9 +337,9 @@ impl<Tr: TraceReader<Time = Timestamp> + 'static> IndexTrace<Tr> {
     /// Imports the trace into `scope`, restricted to `[since, until)`.
     ///
     /// A local import comes with the button that shuts its operator down. A shared import reads
-    /// through a reader minted for it, never through this handle: the import holds the publisher
-    /// physically at the boundary it was seeded with, which this handle, a logical hold only, does
-    /// not.
+    /// through a reader minted for it at `since`, never through this handle: the import holds the
+    /// publisher physically at the boundary it was seeded with, which this handle, a logical hold
+    /// only, does not.
     pub fn import_frontier_core<'scope>(
         &mut self,
         scope: Scope<'scope, Timestamp>,
@@ -364,7 +364,9 @@ impl<Tr: TraceReader<Time = Timestamp> + 'static> IndexTrace<Tr> {
                 (arranged, Some(button))
             }
             IndexTrace::Shared(handle) => {
-                let reader = handle.unpadded().fresh_reader();
+                // Joined with the handle's hold, because a padded handle reports a `since`
+                // below what it holds, and the publisher may have compacted up to the hold.
+                let reader = handle.unpadded().reader_at_least(&since);
                 let arranged =
                     reader.import_frontier_core(scope, name, since.clone(), until.clone());
                 let trace = IndexTrace::Shared(PaddedTrace::from(reader));
@@ -403,7 +405,7 @@ impl TraceBundle {
     }
 
     /// Constructs a trace bundle over traces the process's other compute runtime publishes.
-    pub fn shared(oks: SharedOksHandle, errs: SharedErrsHandle) -> TraceBundle {
+    pub fn shared(oks: PeerOksReader, errs: PeerErrsReader) -> TraceBundle {
         TraceBundle {
             oks: OksTrace::Shared(oks.into()),
             errs: ErrsTrace::Shared(errs.into()),

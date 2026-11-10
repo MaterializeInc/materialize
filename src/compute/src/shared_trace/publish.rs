@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use differential_dataflow::trace::{Trace, TraceReader};
 use mz_timely_util::arrange_agent::TraceAgent;
-use mz_timely_util::shared_trace::{Shared, SharedReader};
+use mz_timely_util::shared_trace::Shared;
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::worker::Worker;
@@ -24,7 +24,7 @@ use timely::worker::Worker;
 /// Holding it keeps the point registered. Once it and every reader minted from it are dropped, the
 /// trace stops publishing into the point at its next mutation.
 pub(crate) struct Published<Tr: TraceReader> {
-    pub(super) shared: Arc<Shared<Tr::Time, Tr::Batch>>,
+    pub(crate) shared: Arc<Shared<Tr::Time, Tr::Batch>>,
 }
 
 impl<Tr: TraceReader> Published<Tr>
@@ -56,9 +56,9 @@ where
     ///
     /// The handle registers a logical hold at the current published `since`, so the arrangement
     /// will not compact past it until the handle (and all its clones) drop. Test-only: production
-    /// reads hold the point through [`Self::peer_handle`].
+    /// reads hold the point through a `BindingReader`.
     #[cfg(test)]
-    pub(crate) fn handle(&self) -> SharedReader<Tr::Time, Tr::Batch> {
+    pub(crate) fn handle(&self) -> mz_timely_util::shared_trace::SharedReader<Tr::Time, Tr::Batch> {
         self.shared.reader()
     }
 
@@ -66,15 +66,6 @@ where
     /// `TraceFrontiers::requested_logical`.
     pub(crate) fn logical_frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
         self.shared.logical_frontiers()
-    }
-
-    /// A hold on the published arrangement for a runtime that reads it as a peer: logical only, at
-    /// the join of `as_of` and the published `since`. See `Shared::reader_at_least`.
-    pub(crate) fn peer_handle(
-        &self,
-        as_of: &Antichain<Tr::Time>,
-    ) -> SharedReader<Tr::Time, Tr::Batch> {
-        self.shared.reader_at_least(as_of)
     }
 }
 
