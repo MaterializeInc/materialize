@@ -15,6 +15,7 @@ Deployments use the same version unless a workflow selects a compatible image.
 import json
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -142,6 +143,41 @@ def _wait_for_mz_count(
                 f"Timed out waiting for {query} to return {expected}, got {result[0][0]}"
             )
         time.sleep(1)
+
+
+def _wait_for_cdc_reader(
+    observe: Callable[[], Sequence[str | None]],
+    *,
+    expected_host: str | None = None,
+    excluded_host: str | None = None,
+) -> str:
+    """Wait for one stable upstream reader host, allowing transient handover overlap."""
+    deadline = time.monotonic() + 300
+    stable_since = None
+    stable_host = None
+    while True:
+        hosts = observe()
+        now = time.monotonic()
+        if (
+            len(hosts) == 1
+            and hosts[0] is not None
+            and hosts[0] != excluded_host
+            and (expected_host is None or hosts[0] == expected_host)
+        ):
+            if hosts[0] != stable_host:
+                stable_host = hosts[0]
+                stable_since = now
+            assert stable_since is not None
+            if now - stable_since >= 10:
+                print(
+                    f"Stable CDC reader: {stable_host} (expected={expected_host}, excluded={excluded_host})"
+                )
+                return hosts[0]
+        else:
+            stable_host = None
+            stable_since = None
+        assert now < deadline, (expected_host, excluded_host, hosts)
+        time.sleep(0.5)
 
 
 def _pg_direct_ingest(c: Composition, table: str, count: int, repeats: int) -> None:
@@ -1793,15 +1829,38 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
             """))
 
 
-def workflow_pg_source_rehydration(c: Composition) -> None:
-    """Verify Postgres source rehydration in 0dt deployment"""
+def workflow_pg_source_rehydration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Verify shared-source prewarming and reader handover with both deployments alive."""
+    parser.add_argument("--rows-per-batch", type=int, default=500000)
+    args = parser.parse_args()
+    if args.rows_per_batch < 1:
+        parser.error("rows per batch must be positive")
     c.down(destroy_volumes=True)
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    count = 500000
+    count = args.rows_per_batch
     repeats = 100
     total = count * repeats
+
+    def upstream(sql: str) -> list[tuple]:
+        return c.sql_query(
+            sql,
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database="postgres",
+        )
+
+    def reader_hosts() -> list[str | None]:
+        return [
+            row[0]
+            for row in upstream(
+                "SELECT client_addr::text FROM pg_stat_replication WHERE usename = 'postgres1'"
+            )
+        ]
 
     # Setup upstream Postgres table and publication
     c.testdrive(
@@ -1850,6 +1909,8 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         quiet=True,
     )
 
+    old_reader = _wait_for_cdc_reader(reader_hosts)
+
     with c.override(
         native_mz(
             name="mz_new",
@@ -1875,12 +1936,22 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
+        _wait_for_cdc_reader(reader_hosts, expected_host=old_reader)
+        # Promotion restarts the candidate adapter, not its warmed replicas.
+        # Do not cache this prewarming session across that restart.
+        with c.sql_connection(service="mz_new") as connection:
+            assert connection.execute(
+                "SELECT * FROM postgres_source_cnt"
+            ).fetchall() == [(total,)]
         # Retire mz_old only after timing the promotion.
         c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
+        # Include the replacement adapter's SQL startup in promotion time,
+        # rather than in the separate hydrated-query measurement below.
+        c.sql_connection(service="mz_new", reuse_connection=True)
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
@@ -1891,9 +1962,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
-        # Keep cleanup outside both promotion and first-query timing windows.
-        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
-        c.kill_fenced_mz("mz_old")
+        promoted_reader = _wait_for_cdc_reader(reader_hosts, excluded_host=old_reader)
 
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
@@ -1920,16 +1989,65 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         )
         assert result[0][0] == post_total, f"Wrong result: {result}"
 
+        # Recovery must not revive the former reader while its deployment still
+        # serves SQL. Exercise actual connector restart, not process cleanup.
+        terminated = upstream(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_replication "
+            "WHERE usename = 'postgres1'"
+        )
+        assert terminated and all(row == (True,) for row in terminated), terminated
+        _pg_direct_ingest(c, "postgres_source_table", 1, 1)
+        for service in ("mz_new", "mz_old"):
+            _wait_for_mz_count(
+                c, "SELECT * FROM postgres_source_cnt", post_total + 1, service=service
+            )
+        _wait_for_cdc_reader(reader_hosts, expected_host=promoted_reader)
 
-def workflow_mysql_source_rehydration(c: Composition) -> None:
-    """Verify MySQL source rehydration in 0dt deployment"""
+        # Keep retirement separate from reader handover and outside timing windows.
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
+        _pg_direct_ingest(c, "postgres_source_table", 1, 1)
+        _wait_for_mz_count(
+            c, "SELECT * FROM postgres_source_cnt", post_total + 2, service="mz_new"
+        )
+
+
+def workflow_mysql_source_rehydration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Verify shared-source prewarming and reader handover with both deployments alive."""
+    parser.add_argument("--rows-per-batch", type=int, default=1000000)
+    args = parser.parse_args()
+    if args.rows_per_batch < 1:
+        parser.error("rows per batch must be positive")
     c.down(destroy_volumes=True)
     c.up("mysql", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    count = 1000000
+    count = args.rows_per_batch
     repeats = 100
     total = count * repeats
+
+    def upstream(sql: str) -> list[tuple]:
+        with pymysql.connect(
+            host="localhost",
+            user="root",
+            password=MySql.DEFAULT_ROOT_PASSWORD,
+            port=c.default_port("mysql"),
+            autocommit=True,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql)
+                return list(cursor.fetchall())
+
+    def reader_hosts() -> list[str]:
+        return [
+            row[0].rsplit(":", 1)[0]
+            for row in upstream(
+                "SELECT HOST FROM information_schema.PROCESSLIST "
+                "WHERE USER = 'mysql1' AND COMMAND LIKE 'Binlog Dump%'"
+            )
+        ]
 
     # Setup upstream MySQL table and replication user
     c.testdrive(
@@ -1977,6 +2095,8 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         quiet=True,
     )
 
+    old_reader = _wait_for_cdc_reader(reader_hosts)
+
     with c.override(
         native_mz(
             name="mz_new",
@@ -2002,12 +2122,20 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        # Retire mz_old only after timing the promotion.
+        _wait_for_cdc_reader(reader_hosts, expected_host=old_reader)
+        # The candidate adapter restarts on promotion, but its replicas stay warm.
+        with c.sql_connection(service="mz_new") as connection:
+            assert connection.execute("SELECT * FROM mysql_source_cnt").fetchall() == [
+                (total,)
+            ]
+        # Retire mz_old only after handover and connector recovery are verified.
         c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
+        # Count replacement SQL startup as promotion, not hydrated query time.
+        c.sql_connection(service="mz_new", reuse_connection=True)
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
@@ -2018,9 +2146,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
-        # Keep cleanup outside both promotion and first-query timing windows.
-        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
-        c.kill_fenced_mz("mz_old")
+        promoted_reader = _wait_for_cdc_reader(reader_hosts, excluded_host=old_reader)
 
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
@@ -2047,16 +2173,44 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         )
         assert result[0][0] == post_total, f"Wrong result: {result}"
 
+        # A reconnect must not revive the superseded reader while it serves SQL.
+        readers = upstream(
+            "SELECT ID FROM information_schema.PROCESSLIST "
+            "WHERE USER = 'mysql1' AND COMMAND LIKE 'Binlog Dump%'"
+        )
+        assert readers, "no binlog reader to terminate"
+        for (reader_id,) in readers:
+            upstream(f"KILL CONNECTION {int(reader_id)}")
+        _mysql_direct_ingest(c, "mysql_source_table", 1, 1)
+        for service in ("mz_new", "mz_old"):
+            _wait_for_mz_count(
+                c, "SELECT * FROM mysql_source_cnt", post_total + 1, service=service
+            )
+        _wait_for_cdc_reader(reader_hosts, expected_host=promoted_reader)
 
-def workflow_sql_server_source_rehydration(c: Composition) -> None:
-    """Verify SQL Server source rehydration in 0dt deployment"""
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
+        _mysql_direct_ingest(c, "mysql_source_table", 1, 1)
+        _wait_for_mz_count(
+            c, "SELECT * FROM mysql_source_cnt", post_total + 2, service="mz_new"
+        )
+
+
+def workflow_sql_server_source_rehydration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Verify shared-source prewarming and reader handover with both deployments alive."""
+    parser.add_argument("--rows-per-batch", type=int, default=1000)
+    args = parser.parse_args()
+    if not 1 <= args.rows_per_batch <= 1000:
+        parser.error("rows per batch must be between 1 and SQL Server's 1000-row limit")
     c.down(destroy_volumes=True)
     c.up("sql-server", "mz_old", Service("testdrive", idle=True))
     setup(c)
     setup_sql_server_testing(c)
 
     # The number of row value expressions in the INSERT statement exceeds the maximum allowed number of 1000 row values.
-    count = 1000
+    count = args.rows_per_batch
     repeats = 100
     total = count * repeats
 
@@ -2065,6 +2219,41 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         + ", ".join([f"({i})" for i in range(count)])
         + ";"
     )
+
+    def upstream(sql: str) -> list[str]:
+        result = c.exec(
+            "sql-server",
+            "bash",
+            "-c",
+            "SQLCMD=/opt/mssql-tools18/bin/sqlcmd; "
+            '[ -x "$SQLCMD" ] || SQLCMD=/opt/mssql-tools/bin/sqlcmd; '
+            'exec "$SQLCMD" -b -C -S localhost -U sa -P "$1" '
+            '-h -1 -W -Q "$2"',
+            "sqlcmd",
+            SqlServer.DEFAULT_SA_PASSWORD,
+            "SET NOCOUNT ON; " + sql,
+            capture=True,
+            silent=True,
+        )
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    # Observe CDC polling, not idle auxiliary connections. The recent-activity
+    # bound also excludes a detached connection after its reader stopped polling.
+    reader_sessions = (
+        "FROM sys.dm_exec_sessions s "
+        "JOIN sys.dm_exec_connections c ON c.session_id = s.session_id "
+        "LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id "
+        "CROSS APPLY sys.dm_exec_sql_text(COALESCE(r.sql_handle, c.most_recent_sql_handle)) q "
+        "WHERE s.program_name = 'materialize' "
+        "AND c.client_net_address IS NOT NULL "
+        "AND (r.session_id IS NOT NULL "
+        "OR s.last_request_start_time >= DATEADD(second, -5, SYSDATETIME())) "
+        "AND (q.text LIKE '%fn_cdc_get_max_lsn%' "
+        "OR q.text LIKE '%fn_cdc_get_all_changes_%')"
+    )
+
+    def reader_hosts() -> list[str]:
+        return upstream("SELECT DISTINCT c.client_net_address " + reader_sessions)
 
     # Setup table and enable CDC
     c.testdrive(
@@ -2111,6 +2300,8 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         quiet=True,
     )
 
+    old_reader = _wait_for_cdc_reader(reader_hosts)
+
     with c.override(
         native_mz(
             name="mz_new",
@@ -2136,12 +2327,20 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         elapsed = time.time() - start_time
         print(f"re-hydration took {elapsed} seconds")
-        # Retire mz_old only after timing the promotion.
+        _wait_for_cdc_reader(reader_hosts, expected_host=old_reader)
+        with c.sql_connection(service="mz_new") as connection:
+            assert connection.execute(
+                "SELECT * FROM sql_server_source_cnt"
+            ).fetchall() == [(total,)]
+        # Keep the old deployment alive through handover and connector recovery.
         c.promote_mz("mz_new", retire_mz_service=None)
         start_time = time.time()
         c.await_mz_deployment_status(
             DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
         )
+        # The adapter restarts on promotion, but its replicas stay warm.
+        # Include SQL startup in promotion rather than hydrated query time.
+        c.sql_connection(service="mz_new", reuse_connection=True)
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
@@ -2152,9 +2351,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         assert (
             elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
-        # Keep cleanup outside both promotion and first-query timing windows.
-        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
-        c.kill_fenced_mz("mz_old")
+        promoted_reader = _wait_for_cdc_reader(reader_hosts, excluded_host=old_reader)
 
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
@@ -2180,6 +2377,36 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
         )
         assert result[0][0] == post_total, f"Wrong result: {result}"
+
+        readers = upstream(
+            "SELECT TOP 1 c.session_id "
+            + reader_sessions
+            + f" AND c.client_net_address = '{promoted_reader}'"
+        )
+        assert len(readers) == 1, "no promoted CDC polling session to terminate"
+        # Either polling operator's failure restarts the ingestion. Its teardown
+        # can close sibling sessions, so do not KILL a captured list of their IDs.
+        upstream(f"KILL {int(readers[0])}")
+        _sql_server_direct_ingest(
+            c, "INSERT INTO sql_server_source_table VALUES (0);", 1
+        )
+        for service in ("mz_new", "mz_old"):
+            _wait_for_mz_count(
+                c,
+                "SELECT * FROM sql_server_source_cnt",
+                post_total + 1,
+                service=service,
+            )
+        _wait_for_cdc_reader(reader_hosts, expected_host=promoted_reader)
+
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
+        _sql_server_direct_ingest(
+            c, "INSERT INTO sql_server_source_table VALUES (0);", 1
+        )
+        _wait_for_mz_count(
+            c, "SELECT * FROM sql_server_source_cnt", post_total + 2, service="mz_new"
+        )
 
 
 def workflow_kafka_source_failpoint(c: Composition) -> None:

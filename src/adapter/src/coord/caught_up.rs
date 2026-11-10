@@ -75,7 +75,7 @@ use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
-use mz_storage_types::sources::SourceData;
+use mz_storage_types::sources::{SourceConnection, SourceData};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::oneshot;
 
@@ -637,12 +637,36 @@ impl Coordinator {
         // Admission requires compatible shared builtin identities. They participate
         // in readiness like other exports, without private-migration exclusions.
         let mut ignored_compute_collections = BTreeSet::new();
+        let warming_from_shared_cdc = self
+            .catalog()
+            .state()
+            .active_deployment_generation()
+            .is_some_and(|active| active != self.catalog().state().deployment_generation());
         let storage_frontiers = self
             .controller
             .storage
             .active_ingestion_exports(cluster.id)
             .copied()
             .filter(|id| !id.is_transient())
+            .filter(|id| {
+                if !warming_from_shared_cdc {
+                    return true;
+                }
+                // Singleton readers start only after promotion. Candidate
+                // compute must hydrate from their shared Persist output, but
+                // there is no candidate ingestion execution to hydrate yet.
+                // Unrecognized collections retain the normal readiness check.
+                let source = self
+                    .catalog()
+                    .try_get_entry_by_global_id(id)
+                    .and_then(|entry| match entry.source_export_details() {
+                        Some((ingestion, ..)) => self.catalog().try_get_entry(&ingestion),
+                        None => Some(entry),
+                    });
+                !source
+                    .and_then(|entry| entry.source_desc().ok().flatten())
+                    .is_some_and(|desc| desc.connection.prefers_single_replica())
+            })
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;

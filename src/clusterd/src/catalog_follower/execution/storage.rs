@@ -202,29 +202,45 @@ impl StorageState {
     }
 }
 
-fn ingestions(
-    catalog: &Catalog,
-    cluster: ClusterId,
-    replica: ReplicaId,
-) -> BTreeMap<GlobalId, IngestionDescription<()>> {
-    let single_replica = catalog
-        .get_cluster(cluster)
-        .replicas()
-        .map(|r| r.replica_id)
-        .min();
-    catalog
-        .entries()
-        .filter_map(|entry| {
-            let description = catalog.state().ingestion_description(entry.id())?;
-            (description.instance_id == cluster
-                && (!description.desc.connection.prefers_single_replica()
-                    || single_replica == Some(replica)))
-            .then_some((entry.latest_global_id(), description))
-        })
-        .collect()
-}
-
 impl ReplicaEnactment {
+    fn ingestion_eligible(
+        &self,
+        catalog: &Catalog,
+        cluster: ClusterId,
+        replica: ReplicaId,
+        description: &IngestionDescription<()>,
+    ) -> bool {
+        // Singleton CDC readers can take over an upstream connection before
+        // writing Persist output. Select their deployment at admission, rather
+        // than relying on AllowWrites to prevent competing readers. Followers
+        // retire superseded readers through the ordinary source teardown path.
+        description.instance_id == cluster
+            && (!description.desc.connection.prefers_single_replica()
+                || (self.has_output_write_authority(catalog)
+                    && catalog
+                        .get_cluster(cluster)
+                        .replicas()
+                        .map(|r| r.replica_id)
+                        .min()
+                        == Some(replica)))
+    }
+
+    fn desired_ingestions(
+        &self,
+        catalog: &Catalog,
+        cluster: ClusterId,
+        replica: ReplicaId,
+    ) -> BTreeMap<GlobalId, IngestionDescription<()>> {
+        catalog
+            .entries()
+            .filter_map(|entry| {
+                let description = catalog.state().ingestion_description(entry.id())?;
+                self.ingestion_eligible(catalog, cluster, replica, &description)
+                    .then_some((entry.latest_global_id(), description))
+            })
+            .collect()
+    }
+
     pub fn storage_wanted(
         &self,
         catalog: &Catalog,
@@ -234,7 +250,7 @@ impl ReplicaEnactment {
         if self.io.storage.is_none() {
             return BTreeSet::new();
         }
-        ingestions(catalog, cluster, replica)
+        self.desired_ingestions(catalog, cluster, replica)
             .values()
             .flat_map(|i| i.collection_ids())
             .chain(
@@ -257,7 +273,7 @@ impl ReplicaEnactment {
         if self.io.storage.is_none() {
             return;
         }
-        self.retire_sources_not_in(&ingestions(catalog, cluster, replica));
+        self.retire_sources_not_in(&self.desired_ingestions(catalog, cluster, replica));
         let sinks = self.desired_sinks(catalog, cluster);
         self.retire_sinks_not_in(catalog, &sinks);
     }
@@ -307,7 +323,7 @@ impl ReplicaEnactment {
         }
         self.ensure_live(catalog)?;
         self.apply_storage_progress();
-        let desired = ingestions(catalog, cluster, replica);
+        let desired = self.desired_ingestions(catalog, cluster, replica);
         self.retire_sources_not_in(&desired);
         let mut pending = false;
         for (id, definition) in desired {
@@ -362,13 +378,7 @@ impl ReplicaEnactment {
                 .try_get_entry_by_global_id(&id)
                 .and_then(|entry| catalog.state().ingestion_description(entry.id()));
             if current.as_ref() != Some(&definition)
-                || (definition.desc.connection.prefers_single_replica()
-                    && catalog
-                        .get_cluster(cluster)
-                        .replicas()
-                        .map(|r| r.replica_id)
-                        .min()
-                        != Some(replica))
+                || !self.ingestion_eligible(catalog, cluster, replica, &definition)
                 || definition.collection_ids().any(|output| {
                     catalog
                         .state()

@@ -94,6 +94,65 @@ def test_native_deployment_overrides_keep_the_external_relay(image):
     assert "volumes" not in relay
 
 
+@pytest.mark.parametrize("expected_host", [None, "new"])
+def test_cdc_reader_wait_requires_stable_convergence(monkeypatch, expected_host):
+    spec = importlib.util.spec_from_file_location(
+        "native_reader_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    now = 0.0
+
+    def sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    def observe():
+        if now < 1:
+            return []
+        if now < 2:
+            return [None]
+        if now < 3:
+            return ["old", "new"]
+        if now < 4:
+            return ["old"]
+        if now < 9:
+            return ["intermediate"]
+        return ["new"]
+
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: now, sleep=sleep)
+    )
+    assert (
+        module._wait_for_cdc_reader(
+            observe, expected_host=expected_host, excluded_host="old"
+        )
+        == "new"
+    )
+    # Neither overlap nor a changing eligible host satisfies the stable window.
+    assert now == 19
+
+
+def test_cdc_reader_wait_rejects_sustained_old_ownership(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "native_reader_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    now = 0.0
+
+    def sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: now, sleep=sleep)
+    )
+    with pytest.raises(AssertionError, match="old"):
+        module._wait_for_cdc_reader(lambda: ["old"], excluded_host="old")
+    assert now == 300
+
+
 @pytest.mark.parametrize(
     "receipt",
     [
