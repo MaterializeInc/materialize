@@ -19,6 +19,7 @@ from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import StartMz
 from materialize.checks.scenarios_zero_downtime import (
+    ZeroDowntimeBumpedVersion,
     ZeroDowntimeRestartEntireMz,
     wait_ready_and_promote,
 )
@@ -110,10 +111,16 @@ def test_native_platform_cleanup_tolerates_retirement_exit(monkeypatch, state):
         wait.assert_called_once_with("mz_1")
 
 
-def test_native_platform_restart_preserves_workload_and_shared_relay(monkeypatch):
+@pytest.mark.parametrize(
+    "scenario_type,deployment_count",
+    [(ZeroDowntimeRestartEntireMz, 4), (ZeroDowntimeBumpedVersion, 3)],
+)
+def test_native_platform_preserves_workload_and_shared_relay(
+    monkeypatch, scenario_type, deployment_count
+):
     c = composition()
     e = MzcomposeExecutor(c)
-    scenario = ZeroDowntimeRestartEntireMz([], e, Features([]))
+    scenario = scenario_type([], e, Features([]))
     actions = scenario.actions()
     phases = [
         (
@@ -128,12 +135,12 @@ def test_native_platform_restart_preserves_workload_and_shared_relay(monkeypatch
         (Initialize, "mz_1", None),
         (Manipulate, "mz_1", 0),
         (Manipulate, "mz_2", 1),
-        (Validate, "mz_3", None),
-        (Validate, "mz_4", None),
+        (Validate, f"mz_{deployment_count - 1}", None),
+        (Validate, f"mz_{deployment_count}", None),
     ]
     monkeypatch.setattr(mzcompose_actions, "setup_default_ssh_test_connection", Mock())
     starts = [action for action in actions if isinstance(action, StartMz)]
-    assert len(starts) == 4
+    assert len(starts) == deployment_count
     for generation, action in enumerate(starts):
         action.execute(e)
         mz = c.override.call_args.args[0]
@@ -146,7 +153,10 @@ def test_native_platform_restart_preserves_workload_and_shared_relay(monkeypatch
         (action.mz_service, action.deploy_generation)
         for action in actions
         if isinstance(action, mzcompose_actions.RetireMzDeployment)
-    ] == [("mz_2", 0), ("mz_3", 1), ("mz_4", 2)]
+    ] == [
+        (f"mz_{generation + 2}", generation)
+        for generation in range(deployment_count - 1)
+    ]
 
 
 @pytest.mark.parametrize("tag", [None, MzVersion.parse_mz("v26.45.0")])

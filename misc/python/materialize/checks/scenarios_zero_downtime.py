@@ -235,29 +235,33 @@ class ZeroDowntimeBumpedVersion(Scenario):
             StartMz(
                 self,
                 mz_service="mz_1",
+                deploy_generation=0,
+                external_pubsub=True,
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Initialize(self, mz_service="mz_1"),
             start_mz_read_only(
                 self,
                 deploy_generation=1,
+                external_pubsub=True,
                 mz_service="mz_2",
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             BumpVersion(),
             UseOptimizedProfile(),
-            *wait_ready_and_promote("mz_2", "mz_1"),
+            *wait_ready_and_promote("mz_2", "mz_1", previous_generation=0),
             Manipulate(self, phase=2, mz_service="mz_2"),
             start_mz_read_only(
                 self,
                 deploy_generation=2,
+                external_pubsub=True,
                 mz_service="mz_3",
                 system_parameter_defaults=system_parameter_defaults,
                 publish=False,  # Allows us to build the image during the test in CI
             ),
             Validate(self, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", "mz_2"),
+            *wait_ready_and_promote("mz_3", "mz_2", previous_generation=1),
             Validate(self, mz_service="mz_3"),
             GitResetHard(),  # Undo the previous version bump in case we need to run the mz container
         ]
