@@ -549,6 +549,10 @@ pub enum Command {
         schema: Option<String>,
         /// The timestamp to peek at.
         ts: u64,
+        /// Fail if the peek has not responded after this many seconds. Waits indefinitely if
+        /// absent.
+        #[serde(default)]
+        timeout_secs: Option<u64>,
     },
     /// Wait for subscribe sink `id`'s upper to reach `up_to`, then emit its
     /// accumulated updates as `<ts> <diff> <datums>` lines (consolidated, sorted).
@@ -1160,7 +1164,12 @@ impl ScriptState {
                 let plan = builder.explain()?;
                 Ok(plan.trim_end().to_string())
             }
-            Command::Peek { id, schema, ts } => {
+            Command::Peek {
+                id,
+                schema,
+                ts,
+                timeout_secs,
+            } => {
                 let desc = self.resolve_schema(&schema)?;
                 // A materialized-view sink id resolves to a persist peek of its
                 // output shard; any other id is an index peek. The persist peek
@@ -1173,7 +1182,13 @@ impl ScriptState {
                     },
                     None => PeekTarget::Index { id },
                 };
-                let rows = self.driver.peek(target, desc, Timestamp::from(ts)).await?;
+                let peek = self.driver.peek(target, desc, Timestamp::from(ts));
+                let rows = match timeout_secs {
+                    Some(secs) => tokio::time::timeout(Duration::from_secs(secs), peek)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("peek at {ts} timed out after {secs}s"))??,
+                    None => peek.await?,
+                };
                 Ok(render_rows(&rows))
             }
             Command::AwaitSubscribe {

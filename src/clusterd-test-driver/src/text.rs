@@ -555,6 +555,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             id: req_id(&args, "id")?,
             schema: opt_string(&args, "schema"),
             ts: req_u64(&args, "ts")?,
+            timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
         "await-subscribe" => Command::AwaitSubscribe {
             id: req_id(&args, "id")?,

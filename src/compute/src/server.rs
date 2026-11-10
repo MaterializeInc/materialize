@@ -47,13 +47,14 @@ use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
-use crate::command_channel::{self, StorageLaneInput, UnifiedCommand};
+use crate::command_channel::{self, Connection, StorageLaneInput, UnifiedCommand};
 use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::placement::Placement;
 use crate::process_globals::ProcessGlobals;
+use crate::reconcile_barrier::BarrierSide;
 use crate::sharing::ArrangementSharingRegistry;
 
 /// Caller-provided configuration for compute.
@@ -151,6 +152,16 @@ impl ComputeRuntimeRole {
     /// Whether this role reads the indexes the process's other runtime publishes.
     pub(crate) fn reads_peer_indexes(self) -> bool {
         matches!(self, ComputeRuntimeRole::Interactive)
+    }
+
+    /// The side this role takes in the reconciliation barrier, or `None` for a runtime alone in
+    /// its process.
+    pub(crate) fn barrier_side(self) -> Option<BarrierSide> {
+        match self {
+            ComputeRuntimeRole::Solo => None,
+            ComputeRuntimeRole::Maintenance => Some(BarrierSide::Maintenance),
+            ComputeRuntimeRole::Interactive => Some(BarrierSide::Interactive),
+        }
     }
 }
 
@@ -374,8 +385,8 @@ struct CommandReceiver {
     inner: command_channel::Receiver,
     /// The ID of the Timely worker.
     worker_id: usize,
-    /// The nonce identifying the current cluster protocol incarnation.
-    nonce: Option<Uuid>,
+    /// The connection of the current cluster protocol incarnation.
+    connection: Option<Connection>,
     /// A stash to enable peeking the next command, used in `try_recv`.
     stashed_command: Option<ComputeCommand>,
 }
@@ -385,9 +396,14 @@ impl CommandReceiver {
         Self {
             inner,
             worker_id,
-            nonce: None,
+            connection: None,
             stashed_command: None,
         }
+    }
+
+    /// The connection whose commands this receiver returns, `None` before the first.
+    fn connection(&self) -> Option<Connection> {
+        self.connection
     }
 
     /// Receive the next pending command, if any.
@@ -402,8 +418,8 @@ impl CommandReceiver {
             return Ok(None);
         };
 
-        let (command, nonce) = match message {
-            UnifiedCommand::Compute(command, nonce) => (command, nonce),
+        let (command, connection) = match message {
+            UnifiedCommand::Compute(command, connection) => (command, connection),
             UnifiedCommand::Storage(command) => {
                 trace!(
                     worker = self.worker_id,
@@ -414,12 +430,16 @@ impl CommandReceiver {
             }
         };
 
+        let nonce = connection.nonce;
         trace!(worker = self.worker_id, %nonce, ?command, "received command");
 
-        if Some(nonce) == self.nonce {
+        if self
+            .connection
+            .is_some_and(|current| current.nonce == nonce)
+        {
             Ok(Some(WorkerCommand::Compute(command)))
         } else {
-            self.nonce = Some(nonce);
+            self.connection = Some(connection);
             self.stashed_command = Some(command);
             Err(NonceChange(nonce))
         }
@@ -641,7 +661,12 @@ impl ClusterSpec for Config {
         // reuse this channel between client connections, to avoid bugs where different workers end
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
-        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input);
+        // Only a runtime that shares a reconciliation barrier tags commands with positions.
+        let order = self
+            .role
+            .barrier_side()
+            .map(|_| sharing_registry.connection_order().clone());
+        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input, order);
         let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
@@ -1063,22 +1088,53 @@ impl<'w> Worker<'w> {
                 }
             }
 
-            // Keep serving the storage guest while blocked on compute
-            // commands, and avoid unbounded parks that would stall its periodic duties.
-            self.process_storage_guest();
-            let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
+            self.step_while_blocked();
+        }
+    }
 
-            let start = Instant::now();
-            if self.storage_guest_busy() {
-                self.timely_worker.step();
-            } else if let Some(cap) = park_cap {
-                self.timely_worker.step_or_park(Some(cap));
-            } else {
-                self.timely_worker.step_or_park(None);
-            }
-            self.metrics
-                .timely_step_duration_seconds
-                .observe(start.elapsed().as_secs_f64());
+    /// Steps the Timely worker once, parking it when it has nothing to do, while the worker waits
+    /// for something outside its dataflows.
+    fn step_while_blocked(&mut self) {
+        // Keep serving the storage guest while blocked on compute
+        // commands, and avoid unbounded parks that would stall its periodic duties.
+        self.process_storage_guest();
+        let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
+
+        let start = Instant::now();
+        if self.storage_guest_busy() {
+            self.timely_worker.step();
+        } else if let Some(cap) = park_cap {
+            self.timely_worker.step_or_park(Some(cap));
+        } else {
+            self.timely_worker.step_or_park(None);
+        }
+        self.metrics
+            .timely_step_duration_seconds
+            .observe(start.elapsed().as_secs_f64());
+    }
+
+    /// Waits until the process's other compute runtime finished the drops of its reconciliation
+    /// of the current connection or of a later one. See [`crate::reconcile_barrier`].
+    ///
+    /// Steps the worker meanwhile, so the workers of this runtime that already passed are not held
+    /// up, and reads no command, so every worker of this runtime still executes the same commands.
+    fn await_reconcile_barrier(&mut self) {
+        let Some(side) = self.role.barrier_side() else {
+            return;
+        };
+        // The position comes with the commands, from the sequencer, see `crate::reconcile_barrier`.
+        let position = self
+            .command_rx
+            .connection()
+            .expect("a worker reconciles only after its first connection")
+            .position
+            .expect("a runtime with a barrier side receives connection positions");
+        let barrier = self.sharing_registry.reconcile_barrier().clone();
+        barrier.arrive(side, position);
+        // `passable` registers this thread before it returns `false`, and the other side's arrival
+        // unparks it, which ends a park in `step_while_blocked`.
+        while !barrier.passable(side, position) {
+            self.step_while_blocked();
         }
     }
 
@@ -1115,6 +1171,10 @@ impl<'w> Worker<'w> {
         // These commands may include dropping existing dataflows, compacting existing dataflows,
         // and creating new dataflows, in addition to standard peek and compaction commands.
         // The result should be the same as if dropping all dataflows and running `new_commands`.
+        //
+        // The compactions and drops of existing dataflows run first, as `drop_commands`, then the
+        // reconciliation barrier, then `todo_commands`.
+        let mut drop_commands = Vec::new();
         let mut todo_commands = Vec::new();
         // We only have a compute history if we are in an initialized state
         // (i.e. after a `CreateInstance`).
@@ -1278,7 +1338,7 @@ impl<'w> Worker<'w> {
             }
             for (&id, frontier) in &old_compaction {
                 let frontier = frontier.clone();
-                todo_commands.insert(0, ComputeCommand::AllowCompaction { id, frontier });
+                drop_commands.insert(0, ComputeCommand::AllowCompaction { id, frontier });
             }
 
             // Clean up worker-local state.
@@ -1366,7 +1426,17 @@ impl<'w> Worker<'w> {
         }
 
         // Execute the commands to bring us to `new_commands`.
-        for command in todo_commands.into_iter() {
+        //
+        // NOTE: The drop phase must not wait on another worker, or a worker waiting at the barrier
+        // could hold up a peer that never arrives. It does not: an `AllowCompaction` moves this
+        // worker's trace holds or drops a collection, and `drop_collection` removes the dataflow
+        // from this worker alone, through `drop_dataflow`, which releases its capabilities and
+        // channels into worker-local state without exchanging anything.
+        for command in drop_commands {
+            self.handle_command(command);
+        }
+        self.await_reconcile_barrier();
+        for command in todo_commands {
             self.handle_command(command);
         }
 
@@ -1388,6 +1458,27 @@ impl<'w> Worker<'w> {
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
+    client_rx: mpsc::UnboundedReceiver<(
+        Uuid,
+        mpsc::UnboundedReceiver<ComputeCommand>,
+        mpsc::UnboundedSender<ComputeResponse>,
+    )>,
+    command_tx: command_channel::Sender,
+    response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    worker_id: usize,
+) {
+    mz_ore::task::spawn(
+        || format!("compute-channel-adapter-{worker_id}"),
+        channel_adapter(client_rx, command_tx, response_rx),
+    );
+}
+
+/// The task [`spawn_channel_adapter`] spawns.
+///
+/// Forwards every command of a connection except its `Peek` and `CancelPeek` commands after a
+/// response send to the connection failed, and takes the next connection only once the
+/// connection's command sender is dropped.
+async fn channel_adapter(
     mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
         mpsc::UnboundedReceiver<ComputeCommand>,
@@ -1395,61 +1486,71 @@ fn spawn_channel_adapter(
     )>,
     command_tx: command_channel::Sender,
     mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
-    worker_id: usize,
 ) {
-    mz_ore::task::spawn(
-        || format!("compute-channel-adapter-{worker_id}"),
-        async move {
-            // To make workers aware of the individual client connections, we tag forwarded
-            // commands with the client nonce. Additionally, we use the nonce to filter out
-            // responses with a different nonce, which are intended for different client
-            // connections.
-            //
-            // It's possible that we receive responses with nonces from the past but also from the
-            // future: Worker 0 might have received a new nonce before us and broadcasted it to our
-            // Timely cluster. When we receive a response with a future nonce, we need to wait with
-            // forwarding it until we have received the same nonce from a client connection.
-            //
-            // Nonces are not ordered so we don't know whether a response nonce is from the past or
-            // the future. We thus assume that every response with an unknown nonce might be from
-            // the future and stash them all. Every time we reconnect, we immediately send all
-            // stashed responses with a matching nonce. Every time we receive a new response with a
-            // nonce that matches our current one, we can discard the entire response stash as we
-            // know that all stashed responses must be from the past.
-            let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
+    // To make workers aware of the individual client connections, we tag forwarded
+    // commands with the client nonce. Additionally, we use the nonce to filter out
+    // responses with a different nonce, which are intended for different client
+    // connections.
+    //
+    // It's possible that we receive responses with nonces from the past but also from the
+    // future: Worker 0 might have received a new nonce before us and broadcasted it to our
+    // Timely cluster. When we receive a response with a future nonce, we need to wait with
+    // forwarding it until we have received the same nonce from a client connection.
+    //
+    // Nonces are not ordered so we don't know whether a response nonce is from the past or
+    // the future. We thus assume that every response with an unknown nonce might be from
+    // the future and stash them all. Every time we reconnect, we immediately send all
+    // stashed responses with a matching nonce. Every time we receive a new response with a
+    // nonce that matches our current one, we can discard the entire response stash as we
+    // know that all stashed responses must be from the past.
+    let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
-                // Send stashed responses for this client.
-                if let Some(resps) = stashed_responses.remove(&nonce) {
-                    for resp in resps {
-                        let _ = response_tx.send(resp);
-                    }
-                }
+    while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
+        // Whether the connection still receives responses.
+        let mut connected = true;
 
-                // Wait for a new response while forwarding received commands.
-                let mut serve_rx_channels = async || loop {
-                    tokio::select! {
-                        msg = command_rx.recv() => match msg {
-                            Some(cmd) => command_tx.send((cmd, nonce)),
-                            None => return Err(()),
-                        },
-                        msg = response_rx.recv() => {
-                            return Ok(msg.expect("worker connected"));
-                        }
-                    }
-                };
+        // Send stashed responses for this client.
+        if let Some(resps) = stashed_responses.remove(&nonce) {
+            for resp in resps {
+                connected &= response_tx.send(resp).is_ok();
+            }
+        }
 
-                // Serve this connection until we see any of the channels disconnect.
-                loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
-                        break;
-                    };
-
+        // Serve this connection until its command sender is dropped.
+        //
+        // A failed response send does not end the connection's commands. The multiplexer sends
+        // every command except peeks to both compute runtimes of a process, and each runtime's
+        // adapter runs into the failed send at its own moment, whenever its worker has a response
+        // pending. Stopping there would leave the runtimes with different tails of the connection,
+        // and they would reconcile the next connection from different histories. Forwarding the
+        // tail keeps them identical. The cost is that a dead connection's tail is applied, which
+        // is bounded by what the controller sent before the connection closed. A single runtime
+        // needs no identical tail, and the next connection's reconciliation corrects whatever the
+        // tail installed.
+        //
+        // The drain ends: the connection's command sender and the receiver of `response_tx` live
+        // in the same `LocalClient`, so a failed send means the sender is dropped, too, and
+        // `recv` returns `None` once the queued commands are forwarded. The transport drops a
+        // connection's client when it stops serving it, and a `Hello` on the same connection
+        // replaces it.
+        loop {
+            tokio::select! {
+                msg = command_rx.recv() => match msg {
+                    // Peeks never reach the next connection's history, because reconcile
+                    // discards them before deciding what to retain, and their responses would go
+                    // nowhere, so a dead connection's peeks are not computed.
+                    Some(ComputeCommand::Peek(_) | ComputeCommand::CancelPeek { .. })
+                        if !connected => {}
+                    Some(cmd) => command_tx.send((cmd, nonce)),
+                    None => break,
+                },
+                msg = response_rx.recv() => {
+                    let (resp, resp_nonce) = msg.expect("worker connected");
                     if resp_nonce == nonce {
                         // Response for the current connection; forward it.
                         stashed_responses.clear();
-                        if response_tx.send(resp).is_err() {
-                            break;
+                        if connected && response_tx.send(resp).is_err() {
+                            connected = false;
                         }
                     } else {
                         // Response for a past or future connection; stash it.
@@ -1458,6 +1559,9 @@ fn spawn_channel_adapter(
                     }
                 }
             }
-        },
-    );
+        }
+    }
 }
+
+#[cfg(test)]
+mod tests;

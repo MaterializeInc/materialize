@@ -21,6 +21,7 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
+use mz_compute::reconcile_barrier::ConnectionOrder;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute::sharing::ArrangementSharingRegistry;
 use mz_compute_client::multiplex::Multiplexer;
@@ -207,8 +208,9 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 enum ProcessComputeClient<C> {
     /// The process runs a single compute runtime.
     Solo(C),
-    /// The process runs a maintenance and an interactive runtime.
-    Multiplexed(Multiplexer<C, C>),
+    /// The process runs a maintenance and an interactive runtime. The order records each
+    /// connection for the runtimes' reconciliation barrier.
+    Multiplexed(Multiplexer<C, C>, ConnectionOrder),
 }
 
 impl<C> GenericClient<ComputeCommand, ComputeResponse> for ProcessComputeClient<C>
@@ -218,7 +220,16 @@ where
     async fn send(&mut self, command: ComputeCommand) -> Result<(), anyhow::Error> {
         match self {
             ProcessComputeClient::Solo(client) => client.send(command).await,
-            ProcessComputeClient::Multiplexed(client) => client.send(command).await,
+            ProcessComputeClient::Multiplexed(client, order) => {
+                // Recorded before either runtime receives a command of the connection, which
+                // `ConnectionOrder::record` requires. The transport serves one connection at a
+                // time, so connections are recorded in the order the process accepted them. Only
+                // process 0's order is read, and recording elsewhere costs an entry per connection.
+                if let ComputeCommand::Hello { nonce } = &command {
+                    order.record(*nonce);
+                }
+                client.send(command).await
+            }
         }
     }
 
@@ -228,21 +239,23 @@ where
     ) -> std::task::Poll<Result<Option<ComputeResponse>, anyhow::Error>> {
         match self {
             ProcessComputeClient::Solo(client) => client.poll_recv(cx),
-            ProcessComputeClient::Multiplexed(client) => client.poll_recv(cx),
+            ProcessComputeClient::Multiplexed(client, _) => client.poll_recv(cx),
         }
     }
 }
 
 /// Fronts each controller connection's client of the maintenance runtime with a [`Multiplexer`]
-/// over a client of the interactive runtime, if one runs.
+/// over a client of the interactive runtime, if one runs, recording the connections in `order`.
 fn multiplex_compute<C>(
     maintenance: impl Fn() -> C,
     interactive: Option<impl Fn() -> C>,
+    order: ConnectionOrder,
 ) -> impl Fn() -> ProcessComputeClient<C> {
     move || match &interactive {
-        Some(interactive) => {
-            ProcessComputeClient::Multiplexed(Multiplexer::new(maintenance(), interactive()))
-        }
+        Some(interactive) => ProcessComputeClient::Multiplexed(
+            Multiplexer::new(maintenance(), interactive()),
+            order.clone(),
+        ),
         None => ProcessComputeClient::Solo(maintenance()),
     }
 }
@@ -491,7 +504,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    let sharing_registries = ArrangementSharingRegistry::per_worker(compute_timely_config.workers);
+    let connection_order = ConnectionOrder::default();
+    let sharing_registries =
+        ArrangementSharingRegistry::per_worker(compute_timely_config.workers, &connection_order);
 
     // Both runtimes are the same process, so the interactive one takes the maintenance runtime's
     // process ordinal. Each local worker shares an arrangement sharing registry with the worker of
@@ -595,7 +610,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 BUILD_INFO.semver_version(),
                 grpc_host,
                 Duration::MAX,
-                multiplex_compute(compute_client_builder, interactive_compute_client_builder),
+                multiplex_compute(
+                    compute_client_builder,
+                    interactive_compute_client_builder,
+                    connection_order,
+                ),
                 cluster_server_metrics.for_server("compute"),
             )
             .instrument(info_span!("ctp", name = "compute")),
@@ -661,7 +680,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
             Duration::MAX,
-            multiplex_compute(compute_client_builder, interactive_compute_client_builder),
+            multiplex_compute(
+                compute_client_builder,
+                interactive_compute_client_builder,
+                connection_order,
+            ),
             cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
