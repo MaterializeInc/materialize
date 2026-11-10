@@ -11,6 +11,7 @@
 
 //! The public API of the storage layer.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
@@ -231,6 +232,28 @@ impl StatusUpdate {
     }
 }
 
+/// The maximum length in bytes of error text in a status row, in `error` and in
+/// each `details.namespaced` entry.
+///
+/// The status views on `mz_catalog_server` hold several copies of every history
+/// row, and an object in a restart loop writes another row every few seconds,
+/// so one large error can fill the catalog server's memory.
+const MAX_STATUS_ERROR_LEN: usize = 8 * 1024;
+
+/// Truncates error text to `MAX_STATUS_ERROR_LEN` bytes for a status row, noting
+/// the original length.
+fn truncate_status_error(error: &str) -> Cow<'_, str> {
+    if error.len() <= MAX_STATUS_ERROR_LEN {
+        return Cow::Borrowed(error);
+    }
+    let end = error.floor_char_boundary(MAX_STATUS_ERROR_LEN);
+    Cow::Owned(format!(
+        "{}... <truncated from {} bytes>",
+        &error[..end],
+        error.len()
+    ))
+}
+
 impl From<StatusUpdate> for Row {
     fn from(update: StatusUpdate) -> Self {
         use mz_repr::Datum;
@@ -239,13 +262,18 @@ impl From<StatusUpdate> for Row {
         let id = update.id.to_string();
         let id = Datum::String(&id);
         let status = Datum::String(update.status.to_str());
-        let error = update.error.as_deref().into();
+        let error = update.error.as_deref().map(truncate_status_error);
+        let namespaced_errors: Vec<_> = update
+            .namespaced_errors
+            .iter()
+            .map(|(namespace, error)| (namespace.as_str(), truncate_status_error(error)))
+            .collect();
 
         let mut row = Row::default();
         let mut packer = row.packer();
-        packer.extend([timestamp, id, status, error]);
+        packer.extend([timestamp, id, status, error.as_deref().into()]);
 
-        if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
+        if !update.hints.is_empty() || !namespaced_errors.is_empty() {
             packer.push_dict_with(|dict_packer| {
                 // `hint` and `namespaced` are ordered,
                 // as well as the BTree's they each contain.
@@ -253,13 +281,12 @@ impl From<StatusUpdate> for Row {
                     dict_packer.push(Datum::String("hints"));
                     dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
                 }
-                if !update.namespaced_errors.is_empty() {
+                if !namespaced_errors.is_empty() {
                     dict_packer.push(Datum::String("namespaced"));
                     dict_packer.push_dict(
-                        update
-                            .namespaced_errors
+                        namespaced_errors
                             .iter()
-                            .map(|(k, v)| (k.as_str(), Datum::String(v))),
+                            .map(|(namespace, error)| (*namespace, Datum::String(error))),
                     );
                 }
             });
@@ -614,5 +641,72 @@ mod tests {
     #[mz_ore::test]
     fn test_storage_response_size() {
         assert_eq!(std::mem::size_of::<StorageResponse>(), 120);
+    }
+
+    fn stalled_with(error: &str) -> StatusUpdate {
+        let mut update = StatusUpdate::new(
+            GlobalId::User(1),
+            chrono::DateTime::from_timestamp(0, 0).expect("valid timestamp"),
+            Status::Stalled,
+        );
+        update.error = Some(format!("iceberg: {error}"));
+        update
+            .namespaced_errors
+            .insert("iceberg".to_string(), error.to_string());
+        update
+    }
+
+    /// The `error` column and the `details.namespaced` entry of a status row.
+    fn row_errors(row: &Row) -> (String, String) {
+        let datums = row.unpack();
+        let (_, namespaced) = datums[4]
+            .unwrap_map()
+            .iter()
+            .find(|(key, _)| *key == "namespaced")
+            .expect("details has namespaced errors");
+        let (_, iceberg) = namespaced
+            .unwrap_map()
+            .iter()
+            .next()
+            .expect("one namespaced error");
+        (
+            datums[3].unwrap_str().to_string(),
+            iceberg.unwrap_str().to_string(),
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_status_row_truncates_long_errors() {
+        // Two bytes per char, offset by the "iceberg: " prefix in `error`, so a
+        // cut at exactly `MAX_STATUS_ERROR_LEN` would split a char in one field.
+        let long = "é".repeat(MAX_STATUS_ERROR_LEN);
+        let (error, namespaced) = row_errors(&Row::from(stalled_with(&long)));
+
+        for (field, text, original_len) in [
+            ("error", &error, long.len() + "iceberg: ".len()),
+            ("namespaced", &namespaced, long.len()),
+        ] {
+            let suffix = format!("... <truncated from {original_len} bytes>");
+            let kept = text
+                .strip_suffix(&suffix)
+                .unwrap_or_else(|| panic!("{field} should end with {suffix:?}"));
+            assert!(
+                kept.len() <= MAX_STATUS_ERROR_LEN,
+                "{field} kept {} bytes",
+                kept.len()
+            );
+            assert!(
+                kept.len() > MAX_STATUS_ERROR_LEN - "é".len(),
+                "{field} should keep as much as fits, kept {} bytes",
+                kept.len()
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_status_row_keeps_short_errors() {
+        let (error, namespaced) = row_errors(&Row::from(stalled_with("connection refused")));
+        assert_eq!(error, "iceberg: connection refused");
+        assert_eq!(namespaced, "connection refused");
     }
 }
