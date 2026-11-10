@@ -211,15 +211,8 @@ impl Coordinator {
             Err(error) => return ctx.retire(Err(error)),
         };
         let plan = mz_sql::plan::Plan::CreateConnection(compiled.plan);
-        ctx.tx_mut()
-            .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&plan),
-            ));
-        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
             return ctx.retire(Err(error));
-        }
-        if self.controller.read_only() {
-            return ctx.retire(Err(AdapterError::ReadOnly));
         }
         let id = match self.allocate_user_id().await {
             Ok(id) => id,
@@ -251,11 +244,7 @@ impl Coordinator {
             Ok(compiled) => compiled,
             Err(error) => return ctx.retire(Err(error)),
         };
-        ctx.tx_mut()
-            .set_allowed(crate::ExecuteResponse::generated_from(
-                &mz_sql::plan::PlanKind::from(&compiled.plan),
-            ));
-        if let Err(error) = self.prepare_plan_execution(&ctx, &compiled.plan) {
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &compiled.plan) {
             return ctx.retire(Err(error));
         }
         self.sequence_ddl_commit(PendingDdlCommit::statement(
