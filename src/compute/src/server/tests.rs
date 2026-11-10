@@ -15,6 +15,7 @@ use std::sync::mpsc as std_mpsc;
 use std::task::Waker;
 
 use differential_dataflow::trace::TraceReader;
+use itertools::Itertools;
 use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_expr::MirScalarExpr;
 use mz_repr::{GlobalId, Row, Timestamp};
@@ -22,10 +23,11 @@ use mz_storage_types::controller::CollectionMetadata;
 
 use super::*;
 use crate::compute_state::tests::{
-    LivePublisher, expect_peek_response, maintained_index_dataflow, make_peek, peek_row,
-    response_rows, row, test_compute_instance_context, test_persist_clients,
+    LivePublisher, constant_index_dataflow, expect_peek_response, maintained_index_dataflow,
+    make_peek, peek_row, response_rows, row, test_compute_instance_context, test_persist_clients,
 };
 use crate::reconcile_barrier::{BarrierSide, ConnectionOrder, ReconcileBarrier};
+use crate::sharing::CreationNumber;
 
 /// A worker of `role` on `timely_worker` with a compute state already created, as after a
 /// `CreateInstance`, and the senders of its commands and receiver of its responses.
@@ -211,7 +213,10 @@ fn the_interactive_runtime_creates_only_after_maintenance_dropped_the_old_incarn
             .expect("poisoned")
             .recv()
             .expect("maintenance worker alive");
-        worker.handle_command(ComputeCommand::Peek(Box::new(make_peek(Timestamp::new(1)))));
+        worker.handle_command(
+            ComputeCommand::Peek(Box::new(make_peek(Timestamp::new(1)))),
+            None,
+        );
         let mut active = worker.activate_compute().expect("compute state");
         active.process_peeks();
         let served = active.compute_state.queued_peeks.is_empty();
@@ -404,7 +409,10 @@ where
             .expect("the interactive runtime holds the index")
             .oks_mut()
             .read_upper(&mut upper);
-        worker.handle_command(ComputeCommand::Peek(Box::new(make_peek(Timestamp::new(3)))));
+        worker.handle_command(
+            ComputeCommand::Peek(Box::new(make_peek(Timestamp::new(3)))),
+            None,
+        );
         let mut active = worker.activate_compute().expect("compute state");
         active.process_peeks();
         let served = active.compute_state.queued_peeks.is_empty();
@@ -425,7 +433,7 @@ where
 fn serve_until_next_connection(worker: &mut Worker<'_>) -> Uuid {
     loop {
         match worker.recv_command() {
-            Ok((command, _number)) => worker.handle_command(command),
+            Ok((command, number)) => worker.handle_command(command, number),
             Err(NonceChange(nonce)) => {
                 worker.set_nonce(nonce);
                 assert!(
@@ -844,7 +852,7 @@ fn maintenance_progress_follows_commands_in_normal_operation() {
                     .as_mut()
                     .expect("compute state")
                     .peers
-                    .insert(id);
+                    .insert(id, 0);
                 cmd_tx.send((
                     ComputeCommand::AllowCompaction {
                         id,
@@ -904,4 +912,112 @@ fn maintenance_progress_follows_commands_in_normal_operation() {
     );
     assert!(passed, "maintenance progress passes the applied compaction");
     assert_eq!(frontier, Antichain::from_elem(2));
+}
+
+/// What one runtime records of the incarnations of two indexes after each reconciliation.
+type CreationsPerConnection = Vec<(Option<CreationNumber>, Option<CreationNumber>)>;
+
+/// Index `X` is created on the first connection and resent unchanged on every later one, so both
+/// runtimes retain it. Index `Y` is resent with another key on the second connection, which
+/// recreates it, and unchanged on the third, which retains the recreated incarnation. After every
+/// reconciliation, the maintenance runtime's collection and the interactive runtime's peer of
+/// each index must carry the number of the `CreateDataflow` that created its live incarnation.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn creation_numbers_agree_across_retaining_and_recreating_reconnects() {
+    let x = GlobalId::User(1);
+    let y = GlobalId::User(3);
+    let order = ConnectionOrder::default();
+    let nonces = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    for nonce in nonces {
+        order.record(nonce);
+    }
+    let registry = ArrangementSharingRegistry::per_worker(1, &order)
+        .pop()
+        .expect("one registry");
+    let (_rt, persist_clients) = test_persist_clients();
+
+    // Each connection sends `X`, `Y` and `InitializationComplete`, and the sequencer numbers
+    // compute commands across connections, so connection `c` numbers them `3c`, `3c + 1` and
+    // `3c + 2`.
+    let connections = move || {
+        let rows = [(1, 10), (2, 20)];
+        let create = |id, on_id, key| {
+            ComputeCommand::CreateDataflow(Box::new(constant_index_dataflow(
+                id,
+                on_id,
+                &rows,
+                Timestamp::MIN,
+                key,
+            )))
+        };
+        let x_create = || create(x, GlobalId::User(2), 0);
+        [0, 1, 1].map(|y_key| {
+            vec![
+                x_create(),
+                create(y, GlobalId::User(4), y_key),
+                ComputeCommand::InitializationComplete,
+            ]
+        })
+    };
+
+    let run = move |timely_worker: &mut TimelyWorker,
+                    role: ComputeRuntimeRole,
+                    registry: ArrangementSharingRegistry,
+                    persist_clients: Arc<PersistClientCache>|
+          -> CreationsPerConnection {
+        let (mut worker, cmd_tx, _resp_rx) =
+            test_worker(timely_worker, role, registry, persist_clients);
+        let mut creations = Vec::new();
+        for (nonce, commands) in nonces.into_iter().zip_eq(connections()) {
+            for command in commands {
+                cmd_tx.send((command, nonce));
+            }
+            assert_eq!(reconcile_next_connection(&mut worker), nonce);
+            let compute_state = worker.compute_state.as_ref().expect("compute state");
+            let creation = |id| match role {
+                ComputeRuntimeRole::Interactive => compute_state.peers.get(&id).copied(),
+                _ => compute_state.collections.get(&id).and_then(|c| c.creation),
+            };
+            creations.push((creation(x), creation(y)));
+        }
+        drop(worker);
+        drop(cmd_tx);
+        drop_dataflows(timely_worker);
+        creations
+    };
+
+    let maintenance = std::thread::spawn({
+        let registry = registry.clone();
+        let persist_clients = Arc::clone(&persist_clients);
+        move || {
+            timely::execute_directly(move |timely_worker| {
+                run(
+                    timely_worker,
+                    ComputeRuntimeRole::Maintenance,
+                    registry,
+                    persist_clients,
+                )
+            })
+        }
+    });
+    let interactive = timely::execute_directly(move |timely_worker| {
+        run(
+            timely_worker,
+            ComputeRuntimeRole::Interactive,
+            registry,
+            persist_clients,
+        )
+    });
+    let maintenance = maintenance.join().expect("maintenance worker panicked");
+
+    let expected = vec![(Some(0), Some(1)), (Some(0), Some(4)), (Some(0), Some(4))];
+    assert_eq!(
+        maintenance, expected,
+        "the maintenance runtime's collections carry the numbers of their live incarnations"
+    );
+    assert_eq!(
+        interactive, expected,
+        "the interactive runtime's peers carry the numbers of their live incarnations"
+    );
 }

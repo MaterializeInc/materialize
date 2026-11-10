@@ -50,6 +50,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
+use crate::sharing::CreationNumber;
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, ImportedErrEnter, ImportedRowRowEnter, RowRowAgent,
     RowRowChunkedBatcher, RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowSpine,
@@ -92,6 +93,9 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
+    /// The creation number of the incarnations of the dataflow's exports, `None` on a runtime that
+    /// does not derive creation numbers.
+    pub(crate) creation: Option<CreationNumber>,
 }
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -102,6 +106,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
         dataflow_expiration: Antichain<mz_repr::Timestamp>,
+        creation: Option<CreationNumber>,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
         let dataflow_id = *scope.addr().into_first();
@@ -133,6 +138,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
+            creation,
         }
     }
 }
@@ -208,6 +214,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
+            creation: self.creation,
         }
     }
 }

@@ -612,9 +612,12 @@ fn interactive_peek_on_peer_index_waits_for_publication() {
 
         {
             let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.handle_create_dataflow(maintained_index_dataflow(id, on_id, Timestamp::MIN));
+            active.handle_create_dataflow(
+                maintained_index_dataflow(id, on_id, Timestamp::MIN),
+                Some(0),
+            );
             assert!(
-                active.compute_state.peers.contains(&id),
+                active.compute_state.peers.contains_key(&id),
                 "a maintained dataflow's export must be recorded as a peer"
             );
             assert!(
@@ -666,7 +669,7 @@ fn interactive_peek_on_peer_index_waits_for_publication() {
         activate(worker, &mut compute_state, &mut response_tx)
             .handle_allow_compaction(id, Antichain::new());
         assert!(
-            compute_state.traces.get(&id).is_none() && !compute_state.peers.contains(&id),
+            compute_state.traces.get(&id).is_none() && !compute_state.peers.contains_key(&id),
             "compacting a peer to the empty frontier must release it"
         );
     });
@@ -685,8 +688,10 @@ fn interactive_peek_on_peer_index_waits_for_seal() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut response_tx = ResponseSender::for_test(tx);
 
-        activate(worker, &mut compute_state, &mut response_tx)
-            .handle_create_dataflow(maintained_index_dataflow(id, on_id, Timestamp::MIN));
+        activate(worker, &mut compute_state, &mut response_tx).handle_create_dataflow(
+            maintained_index_dataflow(id, on_id, Timestamp::MIN),
+            Some(0),
+        );
 
         // A row at time 0, sealed so the published upper is {1}.
         let mut publisher = LivePublisher::new(worker, &registry, id);
@@ -817,6 +822,39 @@ fn reduce_count_dataflow(
     to_render_dataflow(lowered)
 }
 
+/// A real maintained dataflow that builds `on_id` as the constant `(k, v)` rows `rows` and exports
+/// index `index_id` on it, keyed by column `key`, with `as_of`. Lowered from hand-written MIR like
+/// [`reduce_count_dataflow`], so the maintenance runtime can render it.
+pub(crate) fn constant_index_dataflow(
+    index_id: GlobalId,
+    on_id: GlobalId,
+    rows: &[(i64, i64)],
+    as_of: Timestamp,
+    key: usize,
+) -> RenderDataflowDescription<CollectionMetadata> {
+    let on_type = two_int64_type();
+    let rows = rows
+        .iter()
+        .map(|(k, v)| vec![Datum::Int64(*k), Datum::Int64(*v)])
+        .collect();
+    let constant = MirRelationExpr::constant(rows, on_type.clone());
+    let mut mir = MirDataflowDescription::new("test-constant-index".into());
+    mir.insert_plan(on_id, OptimizedMirRelationExpr::declare_optimized(constant));
+    mir.set_as_of(Antichain::from_elem(as_of));
+    mir.export_index(
+        index_id,
+        IndexDesc {
+            on_id,
+            key: vec![MirScalarExpr::column(key)],
+        },
+        on_type,
+    );
+    mir.class = DataflowClass::Maintained;
+    let lowered = LirRelationExpr::finalize_dataflow(mir, &OptimizerFeatures::default(), None)
+        .expect("lowering the constant index dataflow");
+    to_render_dataflow(lowered)
+}
+
 /// A peek over a single-column `int64` result, for reading a `count(*)` query output.
 fn make_count_peek(id: GlobalId, timestamp: Timestamp) -> Peek {
     let result_desc = RelationDesc::builder()
@@ -860,8 +898,9 @@ fn interactive_build_over_unpublished_peer_index_is_immediate() {
 
         {
             let mut active = activate(worker, &mut compute_state, &mut response_tx);
-            active.handle_create_dataflow(maintained_index_dataflow(index_id, on_id, as_of));
-            active.handle_create_dataflow(dataflow);
+            active
+                .handle_create_dataflow(maintained_index_dataflow(index_id, on_id, as_of), Some(0));
+            active.handle_create_dataflow(dataflow, Some(1));
             assert!(
                 active.compute_state.collections.contains_key(&out_index_id),
                 "the query output collection must be built on arrival"

@@ -174,6 +174,7 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::sharing::CreationNumber;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
@@ -206,6 +207,9 @@ impl<T> Drop for PressOnDrop<T> {
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
+///
+/// `creation` is the creation number of the incarnations of the dataflow's exports, `None` on a
+/// runtime that does not derive creation numbers.
 pub fn build_compute_dataflow(
     timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,
@@ -213,6 +217,7 @@ pub fn build_compute_dataflow(
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
+    creation: Option<CreationNumber>,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow
@@ -377,6 +382,7 @@ pub fn build_compute_dataflow(
                     compute_state,
                     until,
                     dataflow_expiration,
+                    creation,
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
@@ -477,6 +483,7 @@ pub fn build_compute_dataflow(
                     compute_state,
                     until,
                     dataflow_expiration,
+                    creation,
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
