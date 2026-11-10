@@ -8548,12 +8548,18 @@ def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> 
     target's since past the upper of a stalled downstream MV.
     """
 
-    def frontier(column: str, name: str) -> int | None:
-        rows = c.sql_query(f"""
-            SELECT f.{column}
-            FROM mz_internal.mz_frontiers f
-            JOIN mz_objects o ON o.id = f.object_id
+    def global_id(name: str) -> str:
+        [(gid,)] = c.sql_query(f"""
+            SELECT g.global_id
+            FROM mz_internal.mz_object_global_ids g
+            JOIN mz_objects o ON o.id = g.id
             WHERE o.name = '{name}'
+            """)
+        return gid
+
+    def frontier(column: str, gid: str) -> int | None:
+        rows = c.sql_query(f"""
+            SELECT {column} FROM mz_internal.mz_frontiers WHERE object_id = '{gid}'
             """)
         if not rows or rows[0][0] is None:
             return None
@@ -8572,12 +8578,18 @@ def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> 
     assert c.sql_query("SELECT * FROM mv2") == [(1,)]
     c.sql("ALTER CLUSTER down_cluster SET (REPLICATION FACTOR 0)")
 
+    t_gid = global_id("t")
+    mv2_gid = global_id("mv2")
+    # The collection of `mv` that `mv2` reads. Applying the replacement adds a
+    # second global ID for `mv`, which `mv2` does not depend on.
+    mv_gid = global_id("mv")
+
     # Wait for the since of `t` to pass the upper of `mv2`, so that the as-of
     # of the replacement lands beyond that upper.
     for _ in range(30):
         time.sleep(1)
-        t_since = frontier("read_frontier", "t")
-        mv2_upper = frontier("write_frontier", "mv2")
+        t_since = frontier("read_frontier", t_gid)
+        mv2_upper = frontier("write_frontier", mv2_gid)
         if t_since is not None and mv2_upper is not None and t_since > mv2_upper:
             break
     else:
@@ -8593,8 +8605,8 @@ def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> 
     c.kill("materialized")
     c.up("materialized")
 
-    mv_since = frontier("read_frontier", "mv")
-    mv2_upper = frontier("write_frontier", "mv2")
+    mv_since = frontier("read_frontier", mv_gid)
+    mv2_upper = frontier("write_frontier", mv2_gid)
     assert mv_since is not None and mv2_upper is not None
     assert (
         mv_since <= mv2_upper
