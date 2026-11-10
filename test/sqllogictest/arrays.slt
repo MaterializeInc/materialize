@@ -596,6 +596,39 @@ SELECT ARRAY[1] > ARRAY[NULL]::int[], ARRAY[1] >= ARRAY[NULL]::int[]
 ----
 false false
 
+# Arrays with equal elements and the same number of dimensions are ordered by
+# the length of each dimension, then by the lower bound of each dimension.
+
+query BBBB
+SELECT ARRAY[[1,2,3,4]] < ARRAY[[1],[2],[3],[4]], ARRAY[[1,2,3,4]] = ARRAY[[1],[2],[3],[4]], ARRAY[[1],[2],[3],[4]] > ARRAY[[1,2],[3,4]], ARRAY[[1,2],[3,4]] > ARRAY[[1,2,3,4]]
+----
+true  false  true  true
+
+query BBB
+SELECT array_fill(7, ARRAY[2], ARRAY[0]) < ARRAY[7,7], array_fill(7, ARRAY[2], ARRAY[0]) = ARRAY[7,7], array_fill(7, ARRAY[2], ARRAY[3]) > ARRAY[7,7]
+----
+true  false  true
+
+query T
+SELECT a FROM (VALUES (ARRAY[[1],[2],[3],[4]]), (ARRAY[[1,2,3,4]]), (ARRAY[[1,2],[3,4]]), (ARRAY[1,2,3,4])) t(a) ORDER BY a
+----
+{1,2,3,4}
+{{1,2,3,4}}
+{{1,2},{3,4}}
+{{1},{2},{3},{4}}
+
+query T
+SELECT a FROM (VALUES (array_fill(7, ARRAY[2], ARRAY[3])), (ARRAY[7,7]), (array_fill(7, ARRAY[2], ARRAY[0]))) t(a) ORDER BY a DESC
+----
+[3:4]={7,7}
+{7,7}
+[0:1]={7,7}
+
+query TT
+SELECT greatest(ARRAY[[1,2,3,4]], ARRAY[[1],[2],[3],[4]]), least(ARRAY[[1],[2],[3],[4]], ARRAY[[1,2,3,4]])
+----
+{{1},{2},{3},{4}}  {{1,2,3,4}}
+
 query error operator does not exist: integer\[\] = text\[\]
 SELECT ARRAY[1,2,3] = ARRAY['1','2','3']
 
@@ -1589,3 +1622,166 @@ query T
 SELECT ARRAY['null', 'NuLl', NULL, 'nullish']::text;
 ----
 {"null","NuLl",NULL,nullish}
+
+# min and max on arrays use the order of the array comparison operators.
+
+statement ok
+CREATE TABLE minmax_arr (g int, a int[])
+
+statement ok
+INSERT INTO minmax_arr VALUES
+  (1, '{1,2}'), (1, '{1,3}'), (1, '{1,NULL}'), (1, NULL), (1, '{1}'), (1, '{0,9,9}'),
+  (2, NULL),
+  (3, '{}'), (3, '{NULL}'),
+  (4, '{{1,2},{3,4}}'), (4, '{1,2,3,4}'), (4, '{1,2,3,5}'), (4, '{{1,2},{3,5}}'),
+  (5, '{NULL,1}'), (5, '{NULL,2}'), (5, '{NULL,NULL}'),
+  (6, '{{1,2,3,4}}'), (6, '{{1},{2},{3},{4}}'), (6, '{{1,2},{3,4}}')
+
+statement ok
+CREATE VIEW minmax_arr_v AS SELECT g, max(a) AS mx, min(a) AS mn FROM minmax_arr GROUP BY g
+
+statement ok
+CREATE INDEX minmax_arr_v_idx ON minmax_arr_v (g)
+
+statement ok
+CREATE VIEW minmax_arr_hinted AS
+  SELECT g, max(a) AS mx, min(a) AS mn FROM minmax_arr GROUP BY g OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
+
+statement ok
+CREATE INDEX minmax_arr_hinted_idx ON minmax_arr_hinted (g)
+
+query TT
+SELECT max(a), min(a) FROM (VALUES ('{1,2}'::int[]), ('{1,NULL}'), (NULL), ('{0,9,9}')) t(a)
+----
+{1,NULL}  {0,9,9}
+
+query ITT
+SELECT g, max(a), min(a) FROM minmax_arr GROUP BY g ORDER BY g
+----
+1  {1,NULL}  {0,9,9}
+2  NULL  NULL
+3  {NULL}  {}
+4  {{1,2},{3,5}}  {1,2,3,4}
+5  {NULL,NULL}  {NULL,1}
+6  {{1},{2},{3},{4}}  {{1,2,3,4}}
+
+query ITT
+SELECT * FROM minmax_arr_v ORDER BY g
+----
+1  {1,NULL}  {0,9,9}
+2  NULL  NULL
+3  {NULL}  {}
+4  {{1,2},{3,5}}  {1,2,3,4}
+5  {NULL,NULL}  {NULL,1}
+6  {{1},{2},{3},{4}}  {{1,2,3,4}}
+
+query ITT
+SELECT * FROM minmax_arr_hinted ORDER BY g
+----
+1  {1,NULL}  {0,9,9}
+2  NULL  NULL
+3  {NULL}  {}
+4  {{1,2},{3,5}}  {1,2,3,4}
+5  {NULL,NULL}  {NULL,1}
+6  {{1},{2},{3},{4}}  {{1,2,3,4}}
+
+statement ok
+DELETE FROM minmax_arr WHERE a IN ('{1,NULL}', '{0,9,9}', '{NULL}', '{{1,2},{3,5}}')
+
+query ITT
+SELECT * FROM minmax_arr_v ORDER BY g
+----
+1  {1,3}  {1}
+2  NULL  NULL
+3  {}  {}
+4  {1,2,3,5}  {1,2,3,4}
+5  {NULL,NULL}  {NULL,1}
+6  {{1},{2},{3},{4}}  {{1,2,3,4}}
+
+query ITT
+SELECT * FROM minmax_arr_hinted ORDER BY g
+----
+1  {1,3}  {1}
+2  NULL  NULL
+3  {}  {}
+4  {1,2,3,5}  {1,2,3,4}
+5  {NULL,NULL}  {NULL,1}
+6  {{1},{2},{3},{4}}  {{1,2,3,4}}
+
+query TT
+SELECT max(a), min(a) FROM minmax_arr
+----
+{NULL,NULL}  {}
+
+query TT
+SELECT max(a), min(a) FROM minmax_arr WHERE g = 2 OR false
+----
+NULL  NULL
+
+query TT
+SELECT max(DISTINCT a), min(a) FILTER (WHERE g = 4) FROM minmax_arr
+----
+{NULL,NULL}  {1,2,3,4}
+
+query ITT
+SELECT g, a, max(a) OVER (PARTITION BY g) FROM minmax_arr ORDER BY g, a
+----
+1  {1}  {1,3}
+1  {1,2}  {1,3}
+1  {1,3}  {1,3}
+1  NULL  {1,3}
+2  NULL  NULL
+3  {}  {}
+4  {1,2,3,4}  {1,2,3,5}
+4  {{1,2},{3,4}}  {1,2,3,5}
+4  {1,2,3,5}  {1,2,3,5}
+5  {NULL,1}  {NULL,NULL}
+5  {NULL,2}  {NULL,NULL}
+5  {NULL,NULL}  {NULL,NULL}
+6  {{1,2,3,4}}  {{1},{2},{3},{4}}
+6  {{1,2},{3,4}}  {{1},{2},{3},{4}}
+6  {{1},{2},{3},{4}}  {{1},{2},{3},{4}}
+
+query TT
+SELECT max(a), min(a) FROM (VALUES (ARRAY['a', 'b']), (ARRAY['a', 'B']), (ARRAY['ab']), (ARRAY['a']), (ARRAY['', 'z'])) t(a)
+----
+{ab}  {"",z}
+
+query TT
+SELECT max(a), min(a) FROM (VALUES (ARRAY['NaN'::float8]), (ARRAY['Infinity'::float8]), (ARRAY[2.5::float8]), (ARRAY['-Infinity'::float8, 1])) t(a)
+----
+{NaN}  {-Infinity,1}
+
+query TT
+SELECT max(a), min(a) FROM (VALUES (ARRAY[1.5, 2]), (ARRAY[1.25, 3]), (ARRAY[-0.5])) t(a)
+----
+{1.5,2}  {-0.5}
+
+query TTT
+SELECT pg_typeof(max(a)), pg_typeof(min(ARRAY['a'])), pg_typeof(max(ARRAY['a'::varchar])) FROM minmax_arr
+----
+integer[]  text[]  character␠varying[]
+
+# PostgreSQL returns int2vector here. Materialize coerces int2vector arguments
+# of anyarray parameters to smallint[].
+query TT
+SELECT max(v), pg_typeof(min(v)) FROM (VALUES ('1 2'::int2vector), ('1 3'::int2vector)) t(v)
+----
+{1,3}  smallint[]
+
+# Untyped arguments still resolve to text.
+
+query TT
+SELECT max(NULL), pg_typeof(max(NULL))
+----
+NULL  text
+
+query TT
+SELECT max('{2}'), pg_typeof(min('{2}'))
+----
+{2}  text
+
+query TT
+SELECT max(x), min(x) FROM (VALUES ('{2}'), ('{10}')) t(x)
+----
+{2}  {10}

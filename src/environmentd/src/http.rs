@@ -630,7 +630,15 @@ impl HttpServer {
                     CorsLayer::new()
                         .allow_methods(Method::POST)
                         .allow_origin(allowed_origin.clone())
-                        .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
+                        // The transport's own request headers, which a browser
+                        // client on an allowed origin must be able to send.
+                        .allow_headers([
+                            AUTHORIZATION,
+                            CONTENT_TYPE,
+                            HeaderName::from_static("mcp-protocol-version"),
+                            HeaderName::from_static("mcp-method"),
+                            HeaderName::from_static("mcp-name"),
+                        ]),
                 );
             // Trust `x-materialize-user` injected by an upstream proxy on
             // listeners without HTTP auth, matching `base_router` and

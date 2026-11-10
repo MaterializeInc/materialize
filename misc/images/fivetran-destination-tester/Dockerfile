@@ -11,4 +11,4 @@
 # and decouple ourselves from Fivetran's Dockerhub, in case Fivetran removes the image that we
 # depend on.
 
-FROM us-docker.pkg.dev/build-286712/public-docker-us/sdktesters-v2/sdk-tester:2.25.0228.002
+FROM us-docker.pkg.dev/build-286712/public-docker-us/sdktesters-v2/sdk-tester:2.26.1019.001@sha256:db255af0059f90b5617e075308f298ada774ce113fb0b929481e6c80a1278bc9

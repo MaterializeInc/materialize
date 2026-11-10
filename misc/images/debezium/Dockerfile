@@ -11,14 +11,20 @@
 # converter (which knows how to write schemas to the Confluent Schema Registry)
 # and Debezium connectors, so we have to build our own.
 
-FROM confluentinc/cp-kafka-connect-base:8.0.0
+MZFROM debian-base AS fetch
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest minor
 # version in the release series, and minor versions have been known to introduce
 # breakage.
 ARG DEBEZIUM_VERSION="3.3.1.Final"
 
-RUN : \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}/debezium-connector-mysql-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}/debezium-connector-sqlserver-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl \
+    && mkdir /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}/debezium-connector-mysql-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}/debezium-connector-sqlserver-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins
+
+FROM confluentinc/cp-kafka-connect-base:8.3.2@sha256:6ce23d4af58c228b13681fb7affa9cf746d0726f3b2b3d0cdc75e6d61c5e7fd1
+
+COPY --from=fetch /plugins/ /usr/share/java/

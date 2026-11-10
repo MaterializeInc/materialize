@@ -58,7 +58,6 @@ mz-ssh-util = { path = "../ssh-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 paste.workspace = true
-prometheus.workspace = true
 protobuf-native.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true

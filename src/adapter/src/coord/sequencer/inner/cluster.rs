@@ -31,12 +31,11 @@ use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
-use mz_sql::names::QualifiedItemName;
+use mz_sql::names::FullItemName;
 use mz_sql::plan::{
-    self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    PlanClusterOption,
+    self, AlterClusterPlanStrategy, AlterOptionParameter, AlterSetClusterPlan,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
@@ -268,6 +267,34 @@ impl Coordinator {
             Set(wc) => new_config.workload_class.clone_from(wc),
             Reset => new_config.workload_class = None,
             Unchanged => {}
+        }
+
+        // Validate a HYDRATION SIZE that this ALTER introduces before
+        // dispatching, so that every ALTER path checks it. An unchanged
+        // HYDRATION SIZE is not re-validated.
+        if let Managed(new_managed) = &new_config.variant {
+            if let Some(on_hydration) = new_managed
+                .auto_scaling_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.on_hydration.as_ref())
+            {
+                let old_hydration_size = match &config.variant {
+                    Managed(managed) => managed
+                        .auto_scaling_strategy
+                        .as_ref()
+                        .and_then(|strategy| strategy.on_hydration.as_ref())
+                        .map(|policy| &policy.hydration_size),
+                    Unmanaged => None,
+                };
+                if old_hydration_size != Some(&on_hydration.hydration_size) {
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        &on_hydration.hydration_size,
+                        false,
+                    )?;
+                }
+            }
         }
 
         let reconfiguration_in_flight = matches!(
@@ -526,13 +553,20 @@ impl Coordinator {
 
         // Validate the target up front, so a bad reshape errors at `ALTER` time
         // rather than silently parking an unconvergeable record.
+        // A size disabled after the cluster started using it stays valid for it.
+        let size_in_use = matches!(
+            &cluster.config.variant,
+            ClusterVariant::Managed(managed) if managed.size == target.size
+        ) || in_flight
+            .as_ref()
+            .is_some_and(|record| record.target.size == target.size);
         let role_id = session.role_metadata().current_role;
         self.catalog.ensure_valid_replica_size(
             &self
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &target.size,
-            false,
+            size_in_use,
         )?;
         self.ensure_valid_azs(target.availability_zones.iter())?;
 
@@ -1234,14 +1268,14 @@ impl Coordinator {
         &self,
         session: &Session,
         cluster: &Cluster,
-        creating_source: Option<&QualifiedItemName>,
+        creating_source: Option<&FullItemName>,
     ) {
         if self.notice_relevant_replica_count(cluster) <= 1 {
             return;
         }
         let mut sources = self.single_replica_source_names(cluster);
         if let Some(name) = creating_source {
-            let full_name = self.catalog().resolve_full_name(name, None).to_string();
+            let full_name = name.to_string();
             if !sources.contains(&full_name) {
                 sources.push(full_name);
             }
@@ -1480,26 +1514,17 @@ impl Coordinator {
         } = new_managed;
 
         let role_id = Some(session.role_metadata().current_role);
+        // A size disabled after the cluster started using it stays valid for it.
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
-            false,
+            new_size == size,
         )?;
-        // A newly set (or changed) AUTO SCALING STRATEGY gets its HYDRATION
-        // SIZE validated like SIZE itself: it must name a real replica size the
-        // session role may use. Only a changed strategy is checked, so an
-        // existing policy does not block unrelated ALTERs if the size
-        // allow-list later shrinks (matching how SIZE itself behaves).
         if new_auto_scaling_strategy != auto_scaling_strategy {
             if let Some(on_hydration) = new_auto_scaling_strategy
                 .as_ref()
                 .and_then(|strategy| strategy.on_hydration.as_ref())
             {
-                self.catalog.ensure_valid_replica_size(
-                    &self.catalog().get_role_allowed_cluster_sizes(&role_id),
-                    &on_hydration.hydration_size,
-                    false,
-                )?;
                 // The planner validated the hydration size against the
                 // *realized* SIZE only. An in-flight reconfiguration will cut
                 // the realized SIZE over to its target, so also reject equality
@@ -1673,7 +1698,14 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
+                AlterOptionParameter::Set(size) => {
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        size,
+                        false,
+                    )?;
+                }
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");
@@ -1788,89 +1820,6 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
         Ok(())
-    }
-
-    pub(crate) async fn sequence_alter_cluster_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = Op::RenameCluster {
-            id,
-            name,
-            to_name,
-            check_reserved_names: true,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(crate) async fn sequence_alter_cluster_swap(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        AlterClusterSwapPlan {
-            id_a,
-            id_b,
-            name_a,
-            name_b,
-            name_temp,
-        }: AlterClusterSwapPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op_a = Op::RenameCluster {
-            id: id_a,
-            name: name_a.clone(),
-            to_name: name_temp.clone(),
-            check_reserved_names: false,
-        };
-        let op_b = Op::RenameCluster {
-            id: id_b,
-            name: name_b.clone(),
-            to_name: name_a,
-            check_reserved_names: false,
-        };
-        let op_temp = Op::RenameCluster {
-            id: id_a,
-            name: name_temp,
-            to_name: name_b,
-            check_reserved_names: false,
-        };
-
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp], |_, _| {
-                Box::pin(async {})
-            })
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(crate) async fn sequence_alter_cluster_replica_rename(
-        &mut self,
-        session: &Session,
-        AlterClusterReplicaRenamePlan {
-            cluster_id,
-            replica_id,
-            name,
-            to_name,
-        }: AlterClusterReplicaRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::RenameClusterReplica {
-            cluster_id,
-            replica_id,
-            name,
-            to_name,
-        };
-        match self.catalog_transact(Some(session), vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::ClusterReplica)),
-            Err(err) => Err(err),
-        }
     }
 
     /// Convert a [`AlterSetClusterPlan`] to a sequence of catalog operators and adjust state.

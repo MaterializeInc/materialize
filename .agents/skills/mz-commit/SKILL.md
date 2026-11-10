@@ -18,6 +18,23 @@ Before committing, run these and fix any warnings:
 2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
 3. `cargo clippy --all-targets -- -D warnings`
 
+`bin/lint` and clippy do not run rustdoc. When the diff adds imports or edits
+doc comments, run the Doctests check on the changed crates (command in the
+mz-debug-ci skill). When a `metric!` definition changed, `bin/lint`
+regenerates `doc/user/data/metrics.yml`. Commit the result, or the "Lint and
+rustfmt" job fails on the diff.
+When a system parameter or dyncfg was added, removed, or changed (name,
+default, description, scope, constraint), run `bin/gen-system-parameter-catalog`
+and commit `src/sql/system-parameters.json`, or the
+`checked_in_catalog_is_current` test in `mz-system-parameter-catalog` fails.
+
+After rebasing onto upstream/main, run `cargo check --workspace --all-targets`
+even when the rebase had no conflicts. Upstream changes can still break the
+branch, for example a dependency your branch needs that upstream removed as
+unused (Nightly's `bin/unused-deps` reports those), a duplicate item, or a new
+enum variant your match does not cover. CI checks this in the
+"Merge skew cargo check" job.
+
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
@@ -142,6 +159,7 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
+* Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
 
 ## Splitting large branches
 

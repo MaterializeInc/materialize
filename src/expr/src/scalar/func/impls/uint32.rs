@@ -7,20 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "~",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::BitNotUint32)
+    inverse = super::BitNotUint32
 )]
 fn bit_not_uint32(a: u32) -> u32 {
     !a
@@ -29,7 +26,7 @@ fn bit_not_uint32(a: u32) -> u32 {
 #[sqlfunc(
     sqlname = "uint4_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToUint32),
+    inverse = super::CastFloat32ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_float32(a: u32) -> f32 {
@@ -43,7 +40,7 @@ fn cast_uint32_to_float32(a: u32) -> f32 {
 #[sqlfunc(
     sqlname = "uint4_to_double",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastFloat64ToUint32),
+    inverse = super::CastFloat64ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_float64(a: u32) -> f64 {
@@ -57,7 +54,7 @@ fn cast_uint32_to_float64(a: u32) -> f64 {
     // into an index lookup on `col`, skipping the cast and dropping its
     // out-of-range error.
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToUint32),
+    inverse = super::CastUint16ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
@@ -67,7 +64,7 @@ fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "uint4_to_uint8",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint64ToUint32),
+    inverse = super::CastUint64ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_uint64(a: u32) -> u64 {
@@ -78,7 +75,7 @@ fn cast_uint32_to_uint64(a: u32) -> u64 {
     sqlname = "uint4_to_smallint",
     // Partial: errors for `u32` values above `i16::MAX`. See `uint4_to_uint2`.
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToUint32),
+    inverse = super::CastInt16ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
@@ -89,7 +86,7 @@ fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
     sqlname = "uint4_to_integer",
     // Partial: errors for `u32` values above `i32::MAX`. See `uint4_to_uint2`.
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToUint32),
+    inverse = super::CastInt32ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
@@ -99,7 +96,7 @@ fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "uint4_to_bigint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt64ToUint32),
+    inverse = super::CastInt64ToUint32,
     is_monotone = true
 )]
 fn cast_uint32_to_int64(a: u32) -> i64 {
@@ -109,7 +106,7 @@ fn cast_uint32_to_int64(a: u32) -> i64 {
 #[sqlfunc(
     sqlname = "uint4_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToUint32)
+    inverse = super::CastStringToUint32
 )]
 fn cast_uint32_to_string(a: u32) -> String {
     let mut buf = String::new();
@@ -130,40 +127,22 @@ fn cast_uint32_to_string(a: u32) -> String {
 )]
 pub struct CastUint32ToNumeric(pub Option<NumericMaxScale>);
 
-impl EagerUnaryFunc for CastUint32ToNumeric {
-    type Input<'a> = u32;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
-        let mut a = Numeric::from(a);
-        if let Some(scale) = self.0 {
-            if numeric::rescale(&mut a, scale.into_u8()).is_err() {
-                return Err(EvalError::NumericFieldOverflow);
-            }
+#[sqlfunc(
+    CastUint32ToNumeric,
+    sqlname = "uint4_to_numeric",
+    could_error = self.0.is_some(),
+    inverse = super::CastNumericToUint32,
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_uint32_to_numeric(&self, a: u32) -> Result<Numeric, EvalError> {
+    let mut a = Numeric::from(a);
+    if let Some(scale) = self.0 {
+        if numeric::rescale(&mut a, scale.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
         }
-        // Besides `rescale`, cast is infallible.
-        Ok(a)
     }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn could_error(&self) -> bool {
-        self.0.is_some()
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastNumericToUint32)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastUint32ToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("uint4_to_numeric")
-    }
+    // Besides `rescale`, cast is infallible.
+    Ok(a)
 }

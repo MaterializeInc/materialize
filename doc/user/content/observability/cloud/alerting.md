@@ -33,7 +33,7 @@ Cluster status | - | On Change | Cluster replica status change in the last *1 mi
 Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
 
 {{<note>}}
-Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
+Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](https://materialize.com/support/) for questions.
 {{</note>}}
 
 ### Custom Thresholds

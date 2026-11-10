@@ -803,8 +803,17 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::ClusterReplica(key, value) => {
                         apply(&mut snapshot.cluster_replicas, key, value, diff);
                     }
+                    StateUpdateKind::ClusterReplicaSize(key, value) => {
+                        apply(&mut snapshot.cluster_replica_sizes, key, value, diff);
+                    }
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
+                    }
+                    StateUpdateKind::IndexColumns(key, value) => {
+                        apply(&mut snapshot.index_columns, key, value, diff);
+                    }
+                    StateUpdateKind::ItemColumns(key, value) => {
+                        apply(&mut snapshot.item_columns, key, value, diff);
                     }
                     StateUpdateKind::Config(key, value) => {
                         apply(&mut snapshot.configs, key, value, diff);
@@ -2111,7 +2120,16 @@ impl Trace {
                 StateUpdateKind::ClusterReplica(k, v) => {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
                 }
+                StateUpdateKind::ClusterReplicaSize(k, v) => {
+                    trace.cluster_replica_sizes.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
+                StateUpdateKind::IndexColumns(k, v) => {
+                    trace.index_columns.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ItemColumns(k, v) => {
+                    trace.item_columns.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Database(k, v) => trace.databases.values.push(((k, v), ts, diff)),
                 StateUpdateKind::DefaultPrivilege(k, v) => {

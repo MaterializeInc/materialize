@@ -58,7 +58,7 @@ the additions below.
 
 | Resource | Description |
 |----------|-------------|
-| Ory Kratos | Helm release in the `ory` namespace. Identity management: login, registration, recovery, account flows. |
+| Ory Kratos | Helm release in the `ory` namespace. Identity management: SSO sign-in, creating each identity on first sign-in. |
 | Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize Console trusts. Hydra Maester is enabled. |
 | Ory Selfservice UI | Helm release in the `ory` namespace. Renders the Kratos login, consent, and recovery pages. |
 | Ory Polis (optional) | Helm release in the `ory` namespace when `enable_polis = true`. SAML-to-OIDC bridge plus SCIM endpoint. |
@@ -215,9 +215,10 @@ Notes specific to Azure:
 - **AKS API server access**: `k8s_apiserver_authorized_networks` has no
   default. Production deployments should pin a tight allowlist instead of
   `0.0.0.0/0`.
-- **VM sizes**: Default node pool uses `Standard_D4ps_v6` (arm64). The
-  Materialize node pool uses `Standard_E*` instances. Adjust via
-  `materialize_nodepool` and the default pool size variables.
+- **VM sizes**: The default node pool and the `generic` Node Auto
+  Provisioning NodePool use `Standard_D4pds_v6` (arm64). The `materialize`
+  NodePool uses `Standard_E4pds_v6`. Adjust via the `generic_vm_sizes`
+  and `materialize_vm_sizes` locals and the default pool size variables.
 
 ## Cleanup
 

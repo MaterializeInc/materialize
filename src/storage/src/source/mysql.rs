@@ -55,18 +55,15 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::AsCollection;
 use itertools::Itertools;
+use mz_mysql_util::SchemaChangeError;
 use mz_mysql_util::quote_identifier;
-use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::containers::stack::FueledBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
@@ -86,7 +83,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{FuelSize, ResumeUppers, SourceRender, StackedCollection};
+use crate::source::types::{ResumeUppers, SharedFuel, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -182,24 +179,16 @@ impl SourceRender for MySqlSourceConnection {
             snapshot_err.clone().concat(repl_err.clone()),
         );
 
-        let updates = snapshot_updates.concat(repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    _,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(output);
-                    (output, (data, time, diff))
-                },
-            );
+        // Both operators produce one stream per export in output index order. `source_exports`
+        // iterates in the same order.
         let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
+        for ((id, snapshot_updates), repl_updates) in config
+            .source_exports
+            .keys()
+            .zip_eq(snapshot_updates)
+            .zip_eq(repl_updates)
+        {
+            data_collections.insert(*id, snapshot_updates.concat(repl_updates));
         }
 
         let export_ids = config.source_exports.keys().copied();
@@ -220,7 +209,11 @@ impl SourceRender for MySqlSourceConnection {
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
-                let update = HealthStatusUpdate::halting(err_string.clone(), None);
+                let hint = match &err {
+                    ReplicationError::Definite(err) => err.hint(),
+                    ReplicationError::Transient(_) => None,
+                };
+                let update = HealthStatusUpdate::halting(err_string.clone(), hint);
 
                 let namespace = match err {
                     ReplicationError::Transient(err)
@@ -297,8 +290,8 @@ pub enum DefiniteError {
     TableTruncated(String),
     #[error("table was dropped: {0}")]
     TableDropped(String),
-    #[error("incompatible schema change: {0}")]
-    IncompatibleSchema(String),
+    #[error(transparent)]
+    IncompatibleSchema(SchemaChangeError),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
@@ -311,11 +304,20 @@ pub enum DefiniteError {
     ServerConfigurationError(String),
 }
 
+impl DefiniteError {
+    fn hint(&self) -> Option<String> {
+        match self {
+            DefiniteError::IncompatibleSchema(err) => err.hint(),
+            _ => None,
+        }
+    }
+}
+
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
-            hint: None,
+            hint: err.hint().map(Into::into),
             error: match &err {
                 DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),
@@ -383,17 +385,17 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
-type StackedAsyncOutputHandle<T, D> =
-    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
+/// The data output ports of an operator, one per source export in output index order.
+type DataOutputs = SharedFuel<
+    GtidPartition,
+    CapacityContainerBuilder<Vec<(Result<SourceMessage, DataflowError>, GtidPartition, Diff)>>,
+>;
 
 async fn return_definite_error(
     err: DefiniteError,
     outputs: &[usize],
-    data_handle: &StackedAsyncOutputHandle<
-        GtidPartition,
-        (usize, Result<SourceMessage, DataflowError>),
-    >,
-    data_cap_set: &CapabilitySet<GtidPartition>,
+    data_outputs: &mut DataOutputs,
+    data_cap_sets: &[CapabilitySet<GtidPartition>],
     definite_error_handle: &AsyncOutputHandle<
         GtidPartition,
         CapacityContainerBuilder<Vec<ReplicationError>>,
@@ -401,15 +403,14 @@ async fn return_definite_error(
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
 ) {
     tracing::warn!("Returning definite error: {err}");
-    for output_index in outputs {
+    for &output_index in outputs {
         let update = (
-            (*output_index, Err(err.clone().into())),
+            Err(err.clone().into()),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             Diff::ONE,
         );
-        let size = update.fuel_size();
-        data_handle
-            .give_fueled(&data_cap_set[0], update, size)
+        data_outputs
+            .give(output_index, &data_cap_sets[output_index][0], update)
             .await;
     }
     definite_error_handle.give(

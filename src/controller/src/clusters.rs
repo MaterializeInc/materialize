@@ -511,7 +511,7 @@ impl Controller {
         )?;
 
         if let Some(task) = metrics_task {
-            self.metrics_tasks.insert(replica_id, task);
+            self.metrics_tasks.insert((cluster_id, replica_id), task);
         }
 
         Ok(())
@@ -528,7 +528,7 @@ impl Controller {
         // unmanaged. Deprovisioning is a no-op if the replica ID was never
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
-        self.metrics_tasks.remove(&replica_id);
+        self.metrics_tasks.remove(&(cluster_id, replica_id));
 
         // Remove HTTP addresses from the locator.
         self.replica_http_locator
@@ -598,8 +598,8 @@ impl Controller {
         } in actual
         {
             // We limit our attention here to replicas from the current deploy
-            // generation. Replicas from past generations are cleaned up during
-            // `Controller::allow_writes`.
+            // generation. A writable controller removes replicas from past
+            // generations in the background.
             if generation != self.deploy_generation {
                 continue;
             }
@@ -620,7 +620,8 @@ impl Controller {
                 // Abort to let the other process have full control.
                 halt!("found replica ID ({replica_id}) in orchestrator >= next ID ({next})");
             }
-            if !desired.contains(&replica_id) {
+            // Be careful to match both cluster and replica id.
+            if !desired.contains(&(cluster_id, replica_id)) {
                 self.deprovision_replica(cluster_id, replica_id, generation)?;
             }
         }

@@ -12,14 +12,19 @@ use std::time::Duration;
 
 use k8s_openapi::{
     ByteString,
+    api::{
+        apps::v1::Deployment,
+        policy::v1::{PodDisruptionBudget, PodDisruptionBudgetSpec},
+    },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::{
         CustomResourceColumnDefinition, CustomResourceConversion, ServiceReference,
         WebhookClientConfig, WebhookConversion,
     },
+    apimachinery::pkg::util::intstr::IntOrString,
 };
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams, PostParams},
+    api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams},
     core::Status,
     core::response::StatusSummary,
 };
@@ -28,7 +33,7 @@ use tracing::info;
 
 use mz_cloud_resources::crd::{self, VersionedCrd, register_versioned_crds};
 
-const FIELD_MANAGER: &str = "orchestratord.materialize.cloud";
+pub(crate) const FIELD_MANAGER: &str = "orchestratord.materialize.cloud";
 
 pub async fn get_resource<K>(api: &Api<K>, name: &str) -> Result<Option<K>, anyhow::Error>
 where
@@ -97,6 +102,24 @@ where
             Ok(())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+/// A PodDisruptionBudget letting at most one of `deployment`'s pods be evicted
+/// at a time. With a single replica it never blocks a drain.
+pub fn pod_disruption_budget(metadata: ObjectMeta, deployment: &Deployment) -> PodDisruptionBudget {
+    PodDisruptionBudget {
+        metadata,
+        spec: Some(PodDisruptionBudgetSpec {
+            max_unavailable: Some(IntOrString::Int(1)),
+            selector: deployment.spec.as_ref().map(|spec| spec.selector.clone()),
+            // The default, `IfHealthyBudget`, refuses to evict unready pods
+            // once none are healthy, so a crashlooping Deployment would block
+            // node drains.
+            unhealthy_pod_eviction_policy: Some("AlwaysAllow".into()),
+            ..Default::default()
+        }),
+        status: None,
     }
 }
 

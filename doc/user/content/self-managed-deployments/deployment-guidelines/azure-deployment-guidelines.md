@@ -86,6 +86,30 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 {{% include-headless "/headless/self-managed-deployments/general-rules-for-upgrades" %}}
 
+## Karpenter node expiry
+
+The [Materialize Terraform
+modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
+provision nodes with AKS [Node Auto
+Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning)
+(NAP), Azure's managed Karpenter.
+
+We recommend setting `expire_after` to `Never` on the Materialize NodePool
+since node expiry is not a voluntary disruption. With any other value,
+Karpenter removes nodes that reach their configured lifetime even if they run
+pods annotated with `karpenter.sh/do-not-disrupt`. This can cause downtime
+unless you gracefully roll the nodes first. The `nap-nodepool` module defaults
+`expire_after` to `Never`.
+
+## Karpenter termination grace period
+
+We recommend leaving `termination_grace_period` unset on NodePools that run
+Materialize workloads. When this value is set, Karpenter terminates nodes after
+the configured grace period following any change to the NodePool
+configuration, even if they run pods annotated with
+`karpenter.sh/do-not-disrupt`. The `nap-nodepool` module leaves
+`termination_grace_period` unset by default.
+
 ## Node pool resizing
 
 {{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}

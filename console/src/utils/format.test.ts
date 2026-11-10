@@ -10,6 +10,8 @@
 import parse from "postgres-interval";
 
 import {
+  formatDurationExact,
+  formatDurationForAxis,
   formatInterval,
   formatIntervalShort,
   fromSeconds,
@@ -146,5 +148,41 @@ describe("fromSeconds", () => {
 
   it("falls back to seconds when no unit divides evenly", () => {
     expect(fromSeconds(90)).toEqual({ amount: 90, unit: "seconds" });
+  });
+});
+
+describe("formatDurationExact", () => {
+  it("keeps sub-minute durations as they were", () => {
+    expect(formatDurationExact(450)).toBe("450ms");
+    expect(formatDurationExact(2_300)).toBe("2.3s");
+    expect(formatDurationExact(59_500)).toBe("59.5s");
+  });
+
+  it("separates durations that the axis formatter collapses", () => {
+    // All three read "2m" through formatDurationForAxis, so a column of them
+    // cannot be read or ranked.
+    expect(formatDurationForAxis(90_000)).toBe("2m");
+    expect(formatDurationForAxis(100_000)).toBe("2m");
+    expect(formatDurationForAxis(149_000)).toBe("2m");
+
+    expect(formatDurationExact(90_000)).toBe("1m 30s");
+    expect(formatDurationExact(100_000)).toBe("1m 40s");
+    expect(formatDurationExact(149_000)).toBe("2m 29s");
+  });
+
+  it("keeps a threshold distinct from a value that exceeds it", () => {
+    // A 90s threshold and an object at 100s both read "2m" on the axis
+    // formatter, so the page appeared to say 2m exceeded 2m.
+    expect(formatDurationExact(90_000)).not.toBe(formatDurationExact(100_000));
+  });
+
+  it("does not cap at 24 hours", () => {
+    expect(formatDurationForAxis(90_000_000)).toBe("24.0h");
+    expect(formatDurationExact(90_000_000)).toBe("25h");
+  });
+
+  it("drops an empty remainder", () => {
+    expect(formatDurationExact(60_000)).toBe("1m");
+    expect(formatDurationExact(3_600_000)).toBe("1h");
   });
 });

@@ -953,8 +953,7 @@ mod column_names {
     use super::Analysis;
     use mz_expr::{AggregateFunc, Columns, Id, MirRelationExpr, MirScalarExpr, TableFunc};
     use mz_repr::explain::ExprHumanizer;
-    use mz_repr::{GlobalId, UNKNOWN_COLUMN_NAME};
-    use mz_sql::ORDINALITY_COL_NAME;
+    use mz_repr::{GlobalId, ORDINALITY_COL_NAME, UNKNOWN_COLUMN_NAME};
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]

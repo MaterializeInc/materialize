@@ -1,0 +1,12 @@
+{{- /*
+  Returns whether links in this build's Markdown output must be absolute URLs,
+  which is when the Markdown is published on the website, at
+  <baseURL>/markdown-docs/. The website and preview builds pass a --baseURL
+  with a path. The other Markdown build, bin/gen-claude-skill, passes none, so
+  its base path is the root, and its root-relative links name directories
+  under the skill bundle's root.
+
+  Usage:
+    {{ if partial "markdown-links-absolute.html" . }}...{{ end }}
+*/ -}}
+{{- return ne (strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path) "" -}}

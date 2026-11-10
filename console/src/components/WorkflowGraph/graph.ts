@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import dagre from "@dagrejs/dagre";
-
+import type { DagreGraph } from "~/components/Graph/dagreGraphHelpers";
 import { assert } from "~/util";
 
 export type GraphlibRelations = (id: string) => string[] | undefined;
@@ -42,8 +41,8 @@ function walkGraph(startingId: string, walkFn: GraphlibRelations) {
   return Array.from(results.values());
 }
 
-export const getUpstreamNodes = (id: string, graph: dagre.graphlib.Graph) =>
-  walkGraph(id, graph.predecessors.bind(graph) as unknown as GraphlibRelations);
+export const getUpstreamNodes = (id: string, graph: DagreGraph) =>
+  walkGraph(id, graph.predecessors.bind(graph));
 
-export const getDownstreamNodes = (id: string, graph: dagre.graphlib.Graph) =>
-  walkGraph(id, graph.successors.bind(graph) as unknown as GraphlibRelations);
+export const getDownstreamNodes = (id: string, graph: DagreGraph) =>
+  walkGraph(id, graph.successors.bind(graph));

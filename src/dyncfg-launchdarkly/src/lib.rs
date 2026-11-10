@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use launchdarkly_sdk_transport::HttpTransport;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -54,15 +55,7 @@ where
         // documentation), or a healthy idle stream would trip the timeout and
         // reconnect spuriously. The same constant lives in the adapter's
         // `SystemParameterFrontend`.
-        //
-        // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
-        // `NO_PROXY` env vars and routes through a configured proxy. No
-        // exposure today (balancerd's cloud pods set no proxy vars), but worth
-        // knowing if proxy vars ever appear on a pod.
-        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(300))
-            .build_https()
+        let transport = https_transport(Duration::from_secs(10), Duration::from_secs(300))
             .expect("failed to create HTTPS transport");
 
         let mut data_source = ld::StreamingDataSourceBuilder::new();
@@ -117,6 +110,34 @@ where
         synced.sync_loop(config_sync_loop_interval),
     );
     Ok(())
+}
+
+/// Builds a LaunchDarkly [`HttpTransport`] whose TLS runs on the aws-lc-rs rustls provider,
+/// trusting the platform's native root certificates.
+///
+/// Use this instead of `HyperTransport::builder().build_https()`, which hardcodes the `ring`
+/// provider. Like `build_https`, the connector also accepts plain `http` URIs, which a relay
+/// proxy or test mock may use.
+///
+/// The transport ignores `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` and always connects directly.
+pub fn https_transport(
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<impl HttpTransport, std::io::Error> {
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())?
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+    // NOTE: without the transport crate's TLS features, its proxy layer sends HTTPS requests
+    // through a CONNECT tunnel in plaintext (SDK key included), because the injected connector
+    // only ever sees the proxy URI. Those features pull in `ring`, so proxies are disabled.
+    launchdarkly_sdk_transport::HyperTransport::builder()
+        .disable_proxy()
+        .connect_timeout(connect_timeout)
+        .read_timeout(read_timeout)
+        .build_with_connector(connector)
 }
 
 fn ld_ctx<F>(build_info: &'static BuildInfo, ctx_builder: F) -> Result<ld::Context, anyhow::Error>

@@ -98,7 +98,10 @@ impl Debug for StableTrace<'_> {
             default_privileges,
             id_allocator,
             items,
+            item_columns,
+            index_columns,
             network_policies,
+            cluster_replica_sizes,
             roles,
             role_auth,
             schemas,
@@ -144,7 +147,10 @@ impl Debug for StableTrace<'_> {
             .field("default_privileges", default_privileges)
             .field("id_allocator", id_allocator)
             .field("items", items)
+            .field("item_columns", item_columns)
+            .field("index_columns", index_columns)
             .field("network_policies", network_policies)
+            .field("cluster_replica_sizes", cluster_replica_sizes)
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("schemas", schemas)

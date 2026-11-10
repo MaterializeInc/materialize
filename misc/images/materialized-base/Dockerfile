@@ -14,16 +14,24 @@ MZFROM console AS console
 # Statically-linked `ssh` client, used by the SSH tunnel feature.
 MZFROM openssh-static AS openssh-static
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
+
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.
 # Pinned by rolling tag + multi-arch index digest, matching debian-base, so
-# dependabot refreshes the digest for security fixes.
-FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+# Renovate refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 ARG CI_SANITIZER=none
 
 ARG BUILD_PROFILE=optimize
 LABEL build.profile=$BUILD_PROFILE
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \

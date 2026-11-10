@@ -27,6 +27,8 @@ mode cockroach
 #
 # German collation chart: http://www.unicode.org/cldr/charts/30/collation/de.html
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a STRING COLLATE de,
@@ -49,14 +51,20 @@ INSERT INTO t VALUES
   ('ü' COLLATE de, 5, NULL),
   ('x' COLLATE de, 5, FALSE)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE UNIQUE INDEX ON t (a, b)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT a, b FROM t ORDER BY a, b
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT b, a FROM t ORDER BY b, a
 ----
@@ -90,11 +98,15 @@ onlyif cockroach
 statement ok
 UPDATE t SET a = (a :: STRING || a :: STRING) COLLATE de
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT a, b FROM t ORDER BY a, b
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT b, a FROM t ORDER BY b, a
 ----
@@ -107,11 +119,15 @@ onlyif cockroach
 statement ok
 DELETE FROM t WHERE a > ('a' COLLATE de) AND a < ('c' COLLATE de)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT a, b FROM t ORDER BY a, b
 ----
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT b, a FROM t ORDER BY b, a
 ----

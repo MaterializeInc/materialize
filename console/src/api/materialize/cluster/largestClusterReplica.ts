@@ -13,6 +13,10 @@ import { sql } from "kysely";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import { buildClusterReplicaHeapMetricsTable } from "~/api/materialize/expressionBuilders";
 
+// `heap_limit` is per process, but the object sizes divided by it cover every
+// process of the replica.
+const replicaHeapLimit = sql`(crhm.heap_limit * COALESCE(crs.processes, 1))`;
+
 export function buildLargestClusterReplicaQuery(clusterId: string) {
   return (
     queryBuilder
@@ -32,19 +36,27 @@ export function buildLargestClusterReplicaQuery(clusterId: string) {
           // System introspection indexes may never report hydrated.
           .on("ht.object_id", "not like", "s%"),
       )
+      .leftJoin("mz_cluster_replica_sizes as crs", "crs.size", "cr.size")
       .select([
+        "cr.id",
         "cr.name",
         "cr.size",
-        sql<string | null>`crhm.heap_limit::text`.as("heapLimit"),
+        sql<string | null>`${replicaHeapLimit}::text`.as("heapLimit"),
       ])
       .where("cr.cluster_id", "=", clusterId)
-      .groupBy(["cr.id", "cr.name", "cr.size", "crhm.heap_limit"])
+      .groupBy([
+        "cr.id",
+        "cr.name",
+        "cr.size",
+        "crhm.heap_limit",
+        "crs.processes",
+      ])
       // Prefer a replica whose compute objects are all hydrated, so its
       // reported sizes are stable. time_ns is NULL until an object hydrates. A
       // replica with no hydration rows, such as one just added, has bool_and
       // over an all-NULL row and so sorts last. Then order by heap limit.
       .orderBy(sql`bool_and(ht.time_ns IS NOT NULL) DESC`)
-      .orderBy(sql`crhm.heap_limit DESC NULLS LAST`)
+      .orderBy(sql`${replicaHeapLimit} DESC NULLS LAST`)
       .limit(1)
   );
 }

@@ -63,6 +63,7 @@ import SecretSelectionControl, {
   SecretOption,
 } from "~/components/SecretSelectionControl";
 import TextLink from "~/components/TextLink";
+import { SUPPORT_URL } from "~/externalUrls";
 import docUrls from "~/mz-doc-urls.json";
 import { MaterializeTheme } from "~/theme";
 
@@ -728,11 +729,7 @@ const NewWebhookSourceForm = ({
         Not sure how what all these options mean? Check out the docs for webhook
         sources for more in-depth explanations and examples.
       </FormAsideItem>
-      <FormAsideItem
-        title="Contact support"
-        href={docUrls["/docs/support/"]}
-        target="_blank"
-      >
+      <FormAsideItem title="Contact support" href={SUPPORT_URL} target="_blank">
         We’re here to help! Chat with us if you feel stuck or have any
         questions.
       </FormAsideItem>

@@ -112,6 +112,13 @@ class Object:
     def verify(self) -> str:
         raise NotImplementedError
 
+    def can_seal(self) -> bool:
+        """Whether this object's collection can become final for all times.
+
+        `CREATE REPLACEMENT MATERIALIZED VIEW` rejects a sealed target.
+        """
+        return False
+
 
 class UpsertSource(Object):
     def prepare(self) -> str:
@@ -458,18 +465,31 @@ class LoadGeneratorSource(Object):
         self.tick_interval = rng.choice(["1ms", "10ms", "100ms", "1s", "10s"])
 
     def create(self) -> str:
-        return f"> CREATE SOURCE {self.name} IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}')"
+        return dedent(f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}')
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source
+            > COMMIT""")
 
     def destroy(self) -> str:
-        return f"> DROP SOURCE {self.name} CASCADE"
+        return dedent(f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
             lambda: dedent(f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+"""),
+            lambda: dedent(f"""
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
-                > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
-                > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
+                > ALTER SOURCE {self.name}_source RENAME TO {self.name}_tmp_source
+                > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}_source
 """),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""
@@ -577,6 +597,11 @@ class TpchLoadGeneratorSource(Object):
 
     def verify(self) -> str:
         raise NotImplementedError
+
+    def can_seal(self) -> bool:
+        # Without a TICK INTERVAL, the TPCH load generator seals once it has
+        # emitted its snapshot.
+        return True
 
 
 class WebhookSource(Object):
@@ -760,6 +785,9 @@ class View(Object):
     def verify(self) -> str:
         raise NotImplementedError
 
+    def can_seal(self) -> bool:
+        return self.references.can_seal() if self.references else True
+
 
 class MaterializedView(Object):
     def create(self) -> str:
@@ -781,24 +809,25 @@ class MaterializedView(Object):
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
 """),
-            # TODO: Deal with 'The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.'
-            # lambda: dedent(
-            #     f"""
-            #     > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-            #     > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
-            #     > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
-            #     """
-            # ),
-            lambda: dedent(f"""
+        ]
+        if not self.can_seal():
+            manipulations.append(lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
-                """),
-        ]
+                """))
+            manipulations.append(lambda: dedent(f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
+                > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
+                """))
         return manipulations[kind % len(manipulations)]()
 
     def verify(self) -> str:
         raise NotImplementedError
+
+    def can_seal(self) -> bool:
+        return self.references.can_seal() if self.references else True
 
 
 class ReplicaTargetedMaterializedView(Object):
@@ -821,16 +850,20 @@ class ReplicaTargetedMaterializedView(Object):
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
 """),
-            lambda: dedent(f"""
+        ]
+        if not self.can_seal():
+            manipulations.append(lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
-                """),
-        ]
+                """))
         return manipulations[kind % len(manipulations)]()
 
     def verify(self) -> str:
         raise NotImplementedError
+
+    def can_seal(self) -> bool:
+        return self.references.can_seal() if self.references else True
 
 
 class DefaultIndex(Object):
@@ -1030,29 +1063,12 @@ class Scenario:
         self.c = c
         self.rng = rng
         self.num_objects = num_objects
-        # Set to True when a transient error was detected and the catalog
-        # may now be in an inconsistent state (e.g. a BEGIN/COMMIT transaction
-        # rolled back after testdrive's retry logic masked the COMMIT failure).
-        # The outer workflow loop must do a full reset before the next run.
-        self.needs_reset = False
 
     def _impl(self, num_executions: int) -> str:
         raise NotImplementedError
 
     def print(self) -> None:
         print(self._impl(1))
-
-    # Errors that are transient and safe to ignore in race-condition testing.
-    # When one of these is encountered the catalog is likely in an
-    # inconsistent state, so the scenario signals for a full reset.
-    ignorable_errors: list[str] = [
-        # TODO: https://linear.app/materializeinc/issue/DB-117
-        "another session modified the catalog while this DDL transaction was open",
-        # Downstream effect: a prior catalog-conflict rolled back a
-        # BEGIN/COMMIT transaction, so the object never existed by the time
-        # destroy() tried to drop it.
-        "unknown catalog item",
-    ]
 
     def run_fragment(self, text: str, tries: int = 1) -> None:
         if not text:
@@ -1062,18 +1078,6 @@ class Scenario:
                 self.c.testdrive(text, quiet=True)
                 return
             except Exception as e:
-                # FailedTestExecutionError's str() is just a summary ("At least
-                # one test failed"); the actual testdrive error text lives in
-                # e.errors[].{message,details}. Check all of them.
-                haystack = str(e)
-                for err in getattr(e, "errors", []) or []:
-                    haystack += f"\n{getattr(err, 'message', '')}\n{getattr(err, 'details', '')}"
-                if any(msg in haystack for msg in self.ignorable_errors):
-                    print(
-                        f"Transient error detected, will reset state before next scenario: {e}"
-                    )
-                    self.needs_reset = True
-                    return
                 print(e)
                 if i == tries - 1:
                     print("Failed to run fragment, giving up")
@@ -1193,11 +1197,7 @@ class SubsequentChain(Scenario):
 
 
 def setup(c: Composition) -> None:
-    """Bring services up and configure Materialize for the test.
-
-    Called at startup and again after a reset (down + up), so the operations
-    here must be safe to run against a fresh volume-destroyed environment.
-    """
+    """Bring services up and configure Materialize for the test."""
     c.up(
         *SERVICE_NAMES,
         Service("testdrive", idle=True),
@@ -1311,12 +1311,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         duration = time.time() - start
         max_scenario_duration = max(max_scenario_duration, duration)
         print(f"--- Scenario finished in {duration:.0f}s")
-
-        if scenario.needs_reset:
-            print("--- Resetting state after transient error")
-            c.down(destroy_volumes=True)
-            toxiproxy_start(c, args.jitter)
-            setup(c)
 
         seed = rng.randrange(1000000)
 

@@ -28,6 +28,7 @@ import {
   ClusterWithOwnership,
   Replica,
 } from "~/api/materialize/cluster/clusterList";
+import { DatabaseObject } from "~/api/materialize/objects";
 import { getStore } from "~/jotai";
 import { getQueryClient } from "~/queryClient";
 import { SentryRoutes } from "~/sentry";
@@ -207,10 +208,12 @@ export const createProviderWrapper = async ({
                   <SentryRoutes>
                     <Route index path="*" element={children} />
                   </SentryRoutes>
+                  {/* Inside the router to match the app's provider nesting,
+                      so toasts can render router Links. */}
+                  <ToastProvider />
                 </Router>
               </QueryClientProvider>
             </React.Suspense>
-            <ToastProvider />
           </EnvironmentProvider>
         </ThemeProvider>
       </JotaiProvider>
@@ -226,6 +229,25 @@ export const RouterWrapper = ({ children }: React.PropsWithChildren) => (
   <BrowserRouter>{children}</BrowserRouter>
 );
 
+/** A `useAllObjects` row: a materialized view on `quickstart`. */
+export function buildDatabaseObject(
+  overrides: Partial<DatabaseObject> & { id: string },
+): DatabaseObject {
+  return {
+    name: "orders_mv",
+    objectType: "materialized-view",
+    schemaId: "u1",
+    schemaName: "public",
+    databaseId: "u1",
+    databaseName: "materialize",
+    sourceType: null,
+    isWebhookTable: "false",
+    clusterId: "u1",
+    clusterName: "quickstart",
+    ...overrides,
+  } as DatabaseObject;
+}
+
 export function buildCluster(
   overrides: Partial<ClusterWithOwnership> = {},
   replicas: Array<Replica> = [],
@@ -235,6 +257,7 @@ export function buildCluster(
     name: "mz_system",
     size: "25cc",
     managed: true,
+    replicationFactor: 1,
     disk: true,
     isOwner: true,
     ownerId: "u1",

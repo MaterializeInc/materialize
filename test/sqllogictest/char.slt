@@ -101,3 +101,65 @@ SELECT COALESCE('a'::"char", 'a'::char);
 
 query error coalesce could not convert type varchar to "char"
 SELECT COALESCE('a'::"char", 'a'::varchar);
+
+# Casts from "char" to non-string types render the byte to text first, since
+# the "char" datum is a byte rather than a string. PostgreSQL 15 and later
+# reject these casts outright, because "char" moved from the string category
+# to the internal category and so lost the text fallback. The one registered
+# cast, "char" to int4, uses the byte value as in PostgreSQL, which is why
+# '7'::"char"::int4 is 55 while '7'::"char"::int8 is 7.
+
+query T
+SELECT '1'::"char"::int2vector;
+----
+[0:0]={1}
+
+query I
+SELECT '7'::"char"::int8;
+----
+7
+
+query I
+SELECT '7'::"char"::int4;
+----
+55
+
+query B
+SELECT 't'::"char"::bool;
+----
+true
+
+query error invalid input syntax for type int2vector
+SELECT 'a'::"char"::int2vector;
+
+query I
+SELECT ''::"char"::int4;
+----
+0
+
+statement ok
+CREATE TABLE pure_char (c "char" NOT NULL);
+
+statement ok
+INSERT INTO pure_char VALUES ('1'), ('2');
+
+query T rowsort
+SELECT c::int2vector FROM pure_char;
+----
+[0:0]={1}
+[0:0]={2}
+
+query I rowsort
+SELECT c::int8 FROM pure_char;
+----
+1
+2
+
+query I rowsort
+SELECT c::int4 FROM pure_char;
+----
+49
+50
+
+statement ok
+DROP TABLE pure_char;

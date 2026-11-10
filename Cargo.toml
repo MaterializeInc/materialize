@@ -100,6 +100,7 @@ members = [
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -113,6 +114,7 @@ members = [
     "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
+    "src/system-parameter-catalog",
     "src/testdrive",
     "src/timely-util",
     "src/timestamp-oracle",
@@ -230,6 +232,7 @@ default-members = [
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -243,6 +246,7 @@ default-members = [
     "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
+    "src/system-parameter-catalog",
     "src/testdrive",
     "src/timely-util",
     "src/timestamp-oracle",
@@ -284,8 +288,8 @@ annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "58", default-features = false }
-arrow-ipc = "58"
+arrow = { version = "58.4.1", default-features = false }
+arrow-ipc = "58.4.1"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
@@ -294,10 +298,10 @@ async-trait = "0.1.89"
 aws-config = { version = "1.12.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.3.0", features = ["hardcoded-credentials"] }
 aws-lc-rs = "1"
-aws-sdk-glue = { version = "1.171.0", default-features = false, features = ["rt-tokio"] }
-aws-sdk-kms = { version = "1.122.0", default-features = false, features = ["rt-tokio"] }
-aws-sdk-s3 = { version = "1.150.0", default-features = false, features = ["rt-tokio"] }
-aws-sdk-secretsmanager = { version = "1.119.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-glue = { version = "1.178.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-kms = { version = "1.124.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-s3 = { version = "1.153.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1.121.0", default-features = false, features = ["rt-tokio"] }
 aws-sdk-sts = { version = "1.118.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = "1.6.0"
 aws-smithy-http-client = { version = "1.4.2", default-features = false, features = ["rustls-aws-lc"] }
@@ -307,7 +311,7 @@ aws-smithy-types = { version = "1.8.1", features = ["byte-stream-poll-next"] }
 aws-types = "1.6.0"
 axum = { version = "0.8.9", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+axum-server = { version = "0.9.0", features = ["tls-rustls"] }
 azure_core = { version = "1.1.0", default-features = false, features = ["hmac_rust", "reqwest", "tokio"] }
 azure_identity = { version = "1.0.0", default-features = false, features = ["tokio"] }
 azure_storage_blob = { version = "1.1.0", default-features = false, features = ["tokio"] }
@@ -333,6 +337,7 @@ compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
 core_affinity = "0.8.3"
+crc32c = "0.6.8"
 crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
@@ -344,25 +349,26 @@ csv-core = "0.1.13"
 ctor = "1.0.10"
 custom-labels = "0.4.6"
 darling = "0.24.1"
+data-encoding = "2.3.2"
 datadriven = "0.9.0"
 deadpool = { version = "0.13.1", default-features = false, features = ["managed"] }
 deadpool-postgres = "0.14.2"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.25.0"
-differential-dogs3 = "0.25.0"
+differential-dataflow = "0.26.0"
+differential-dogs3 = "0.26.0"
 digest = "0.11.3"
 dirs = "7.0.0"
-duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
+duckdb = { version = "1.10506.1", default-features = false }
 dynfmt = { version = "0.2.0", features = ["curly"] }
 either = "1.18.0"
 encoding = "0.2.0"
 enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-fallible-iterator = "0.2.0"
-fancy-regex = "0.19.2"
+fancy-regex = "0.20.0"
 flate2 = "1.1.9"
+frontegg = { version = "0.9.0", default-features = false }
 futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"
@@ -370,6 +376,8 @@ futures-util = "0.3.32"
 gcp_auth = { version = "0.12.6", default-features = false, features = ["aws-lc-rs"] }
 glob = "0.3.3"
 globset = "0.4.18"
+google-cloud-gax = "1.4.0"
+google-cloud-storage = "1.20.0"
 governor = "0.10.1"
 half = "2"
 headers = "0.4.1"
@@ -384,6 +392,8 @@ httparse = "1.8.0"
 humantime = "2.4.0"
 hyper = { version = "1.11.1", features = ["http1", "server"] }
 hyper-openssl = { version = "0.10.2", features = ["client-legacy", "tokio"] }
+# Backs the LaunchDarkly HTTPS transport, see `mz_dyncfg_launchdarkly::https_transport`.
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "native-tokio", "http1", "http2", "tls12"] }
 hyper-tls = "0.6.0"
 hyper-util = "0.1.20"
 iceberg = "0.10.1"
@@ -396,25 +406,33 @@ indicatif = "0.18.4"
 insta = { version = "1.47.2", features = ["json", "serde"] }
 ipnet = "2.12.0"
 itertools = "0.15.0"
+jaq-core = "3.1.1"
+jaq-json = "2.0.3"
+jaq-std = "3.0.3"
 jemalloc_pprof = "0.9.0"
 jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
 junit-report = "0.9.1"
-k8s-controller = "0.13.0"
-k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_34"] }
-kube = { version = "3.1.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
-launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
-launchdarkly-sdk-transport = "0.1.4"
+k8s-controller = "0.15.0"
+k8s-openapi = { version = "0.29.0", features = ["schemars", "v1_34"] }
+kube = { version = "5.0.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
+# Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
+# would enable the transport crate's `hyper-rustls` dependency, which it
+# hardcodes to the `ring` provider.
+# `mz_dyncfg_launchdarkly::https_transport` injects an aws-lc-rs connector.
+launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
+launchdarkly-sdk-transport = { version = "0.1.4", default-features = false, features = ["hyper"] }
+# Held back: 0.7 replaces the file-backed mappings with anonymous memory, a
+# behavior change we decided not to adopt (#35507).
 lgalloc = "0.6.0"
 libc = "0.2.186"
-lru = "0.18.5"
+lru = "0.19.0"
 lz4_flex = { version = "0.14.0", default-features = false, features = ["frame", "std"] }
 maplit = "1.0.2"
 mappings = "0.7.2"
 md-5 = "0.11.0"
 mime = "0.3.16"
 murmur2 = "0.1.0"
-mysql_async = { version = "0.37.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "chrono", "minimal", "rustls-tls", "tls12", "tracing"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
@@ -436,7 +454,7 @@ opentelemetry_sdk = { version = "0.33.0", features = ["experimental_trace_batch_
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
-parquet = { version = "58", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+parquet = { version = "58.4.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "4.0.0"
 phf = { version = "0.14.0", features = ["uncased"] }
@@ -447,7 +465,7 @@ postgres-openssl = "0.5.2"
 postgres-protocol = "0.6.12"
 postgres-replication = "0.6.7"
 postgres-types = { version = "0.2.11", features = ["with-chrono-0_4", "with-uuid-1"] }
-postgres_array = "0.11.0"
+postgres_array = "0.11.1"
 pprof = "0.15.0"
 pprof_util = "0.8.2"
 predicates = "3.1.4"
@@ -457,7 +475,7 @@ proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 prometheus = { version = "0.14.0", default-features = false, features = ["protobuf"] }
 protobuf = { version = "3.7.2", default-features = false }
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
+proptest-derive = { version = "0.9.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = "0.14.3"
 prost-reflect = { version = "0.16.3", features = ["serde"] }
@@ -468,7 +486,7 @@ proxy-header = "0.1.2"
 qcell = "0.5"
 quote = "1.0.45"
 rand = "0.10.3"
-rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
+rand-8 = { package = "rand", version = "0.8.6", features = ["small_rng"] }
 rayon = "1.12.0"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -483,12 +501,13 @@ reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = fa
 reqwest-middleware = { version = "0.5.2", features = ["json"] }
 reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
-rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
+rocksdb = { version = "0.25.0", default-features = false, features = ["bindgen-runtime", "lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
-rustls = "0.23.38"
+rustls = "0.23.46"
+rustls-native-certs = "0.8.3"
 rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
@@ -502,12 +521,12 @@ sentry-tracing = "0.49.1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
 serde-reflection = "0.6.0"
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["serialize"] }
 serde_bytes = "0.11.19"
 serde_json = { version = "1.0.150", features = ["raw_value"] }
 serde_plain = "1.0.2"
 serde_repr = "0.1.20"
 serde_urlencoded = "0.7.1"
-serde_yaml = "0.9.34"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 shell-words = "1.1.1"
@@ -525,7 +544,7 @@ subtle = "2.6.1"
 supports-color = "3.0.2"
 syn = { version = "3.0.5", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
-sysinfo = "0.39.6"
+sysinfo = "0.40.0"
 tabled = "0.22.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
@@ -535,7 +554,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.31.0"
+timely = "0.32.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
@@ -550,10 +569,10 @@ tonic = { version = "0.14.6", features = ["gzip", "transport"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.7.1", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
 tower-sessions = "0.15.0"
-tower-sessions-memory-store = "0.14.0"
+tower-sessions-memory-store = "0.15.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
@@ -564,7 +583,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 # graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
 # 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
 # hashing stack.
-tungstenite = "0.30.0"
+tungstenite = "0.29.0"
 turmoil = "0.7.2"
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"
@@ -576,10 +595,10 @@ uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
 which = "8"
-x509-cert = { version = "0.2.5", default-features = false }
+x509-cert = { version = "0.3.0", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -651,26 +670,29 @@ debug-assertions = true
 # version of Materialize.
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes. To bump
 # tzdata, update the fork, then follow the bump ceremony documented in
 # src/environmentd/tests/testdata/timezones/regenerate.sh.
-chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "5999cdd1b971694f834ec3467d11ef9147fc297c" }
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "1463cc380e9a2d842b9ed12cbe5952f983dc2b4a" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
-serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
 
-# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "a52ca1e7f3c37530aabd3c4c521ea62410fba0be" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "a52ca1e7f3c37530aabd3c4c521ea62410fba0be" }
+
+# v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
+# and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch
+# once a release contains both.
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "934c3cf3885c129b7150fd5787e48ada3908397a" }
 
 # Need to upstream a few PRs related to test builders.
 #
@@ -690,13 +712,6 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-
-# Custom duckdb crate to support mz needs
-# All changes should go to the `mz_changes` branch.
-# The main change is allowing the TLS implementation to be selected via features.
-# Hopefully we can upstream these changes eventually.
-# Additionally we keep the apache crates updated to latest versions.
-duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
 
 
 # BEGIN LINT CONFIG

@@ -14,8 +14,6 @@ aliases:
 ---
 
 
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
-
 This guide walks you through the steps required to modify the definition of an existing materialized view, while preserving all downstream dependencies.
 
 Materialize is able to replace a materialized view in place, by calculating the *diff* between the original and the replacement. Once applied, the *diff* flows downstream to all dependent objects.
@@ -361,6 +359,9 @@ DROP MATERIALIZED VIEW auction_house.mv_winning_bids_v2;
 
 {{% include-from-yaml data="examples/alter_materialized_view"
 name="troubleshooting-lagging-original-view" %}}
+
+{{% include-from-yaml data="examples/alter_materialized_view"
+name="troubleshooting-sealed-view" %}}
 
 ## Related pages
 

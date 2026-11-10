@@ -52,12 +52,10 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
-mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-timely-util = { path = "../timely-util" }
-mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
@@ -66,6 +64,7 @@ rdkafka.workspace = true
 regex.workspace = true
 reqsign-core.workspace = true
 reqwest-0-12.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true

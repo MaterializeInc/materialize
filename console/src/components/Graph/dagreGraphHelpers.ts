@@ -7,12 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import dagre from "@dagrejs/dagre";
+import dagre, {
+  type Edge,
+  type EdgeLabel,
+  type Graph,
+  type GraphLabel,
+  type NodeLabel,
+  type Point,
+} from "@dagrejs/dagre";
 
 import { STROKE_WIDTH } from "~/components/Graph";
 import { clamp } from "~/util";
 
 export const MIN_EDGE_MARGIN = STROKE_WIDTH / 2;
+
+export type DagreLayoutNode = NodeLabel & { x: number; y: number };
+
+export type DagreLayoutEdge = EdgeLabel & { points: Point[] };
+
+/** A graph that `dagre.layout` has run on. */
+export type DagreGraph = Graph<GraphLabel, DagreLayoutNode, DagreLayoutEdge>;
 
 export interface DagreGraphNode {
   id: string;
@@ -41,8 +55,8 @@ export function createDagreGraph<TNode extends DagreGraphNode>(
   nodes: TNode[] | undefined,
   edges: DagreGraphEdge[] | undefined,
   ranksep: number,
-): dagre.graphlib.Graph {
-  const g = new dagre.graphlib.Graph();
+): DagreGraph {
+  const g = new dagre.graphlib.Graph<GraphLabel, NodeLabel, EdgeLabel>();
   g.setGraph({ ranksep });
   g.setDefaultEdgeLabel(() => ({}));
 
@@ -61,16 +75,18 @@ export function createDagreGraph<TNode extends DagreGraphNode>(
     }
   }
 
+  // `layout` mutates `g` in place, setting x/y on every node label and
+  // points on every edge label.
   dagre.layout(g);
 
-  return g;
+  return g as DagreGraph;
 }
 
 /**
  * Computes position map for all nodes in the graph
  */
 export function computeNodePositions<TNode extends DagreGraphNode>(
-  graph: dagre.graphlib.Graph | null,
+  graph: DagreGraph | null,
   nodes: TNode[] | undefined,
   getNodeBottom?: (
     node: TNode,
@@ -99,7 +115,7 @@ export function computeNodePositions<TNode extends DagreGraphNode>(
 /**
  * Gets graph dimensions (height and width)
  */
-export function getGraphDimensions(graph: dagre.graphlib.Graph | null): {
+export function getGraphDimensions(graph: DagreGraph | null): {
   height: number | undefined;
   width: number | undefined;
 } {
@@ -112,9 +128,9 @@ export function getGraphDimensions(graph: dagre.graphlib.Graph | null): {
  * Orders graph edges so edges adjacent to the selected node render on top
  */
 export function orderEdgesBySelection(
-  graph: dagre.graphlib.Graph | null,
+  graph: DagreGraph | null,
   selectedNodeId: string | undefined,
-): dagre.Edge[] {
+): Edge[] {
   const graphEdges = graph?.edges() ?? [];
 
   const edgesAdjacentToSelected = graphEdges.filter(

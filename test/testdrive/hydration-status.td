@@ -454,7 +454,10 @@ mv_const hydrated_test_3 true
 idx      hydrated_test_3 true
 mv       hydrated_test_3 true
 
+# mv reads from idx, so it is dropped first and recreated once idx is gone.
+> DROP MATERIALIZED VIEW mv;
 > DROP INDEX idx;
+> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
 > DROP MATERIALIZED VIEW mv_const;
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL

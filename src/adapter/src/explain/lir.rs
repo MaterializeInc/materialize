@@ -9,20 +9,19 @@
 
 //! `EXPLAIN` support for LIR structures.
 
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_repr::explain::{Explain, ExplainError};
 
 use crate::explain::Explainable;
 
-impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<LirRelationExpr>> {
-    type Context = <DataflowDescription<LirRelationExpr> as Explain<'a>>::Context;
+impl<'a> Explain<'a> for Explainable<'a, LirDataflowDescription> {
+    type Context = <LirDataflowDescription as Explain<'a>>::Context;
 
-    type Text = <DataflowDescription<LirRelationExpr> as Explain<'a>>::Text;
+    type Text = <LirDataflowDescription as Explain<'a>>::Text;
 
-    type Json = <DataflowDescription<LirRelationExpr> as Explain<'a>>::Json;
+    type Json = <LirDataflowDescription as Explain<'a>>::Json;
 
-    type Dot = <DataflowDescription<LirRelationExpr> as Explain<'a>>::Dot;
+    type Dot = <LirDataflowDescription as Explain<'a>>::Dot;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.0.explain_text(context)

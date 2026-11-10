@@ -553,6 +553,22 @@ def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
         ), f"unexpected error: {err}"
 
 
+def workflow_copy_from_http_error_status(c: Composition) -> None:
+    """Regression: COPY FROM must not ingest the body of a non-2xx response."""
+    c.up("materialized", "redirect-server")
+    c.sql("CREATE TABLE http_error_target (a text)")
+
+    try:
+        c.sql(
+            "COPY INTO http_error_target FROM "
+            "'http://redirect-server:8080/error-with-body' (FORMAT CSV)"
+        )
+    except Exception as e:
+        assert "HTTP 500" in str(e), f"unexpected error: {e}"
+    else:
+        raise AssertionError("COPY FROM succeeded on an HTTP 500 response")
+
+
 def workflow_copy_from_csv_header(c: Composition) -> None:
     """Regression test: CSV COPY FROM STDIN with HEADER must not drop rows
     at chunk boundaries when input exceeds 32MB.

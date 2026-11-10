@@ -24,6 +24,7 @@ export {
   type AuthActions,
   type AuthState,
   type User,
+  UserVerifiedOriginTypes,
 } from "~/external-library-wrappers/frontegg";
 export {
   type ISignUpCompletePayload,

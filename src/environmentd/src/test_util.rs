@@ -23,7 +23,7 @@ use anyhow::anyhow;
 use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
-use http::Uri;
+use http::{HeaderValue, Uri};
 use hyper::http::header::HeaderMap;
 use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
@@ -138,6 +138,7 @@ pub struct TestHarness {
     deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
+    cors_allowed_origins: Vec<HeaderValue>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
     force_builtin_schema_migration: Option<String>,
@@ -180,6 +181,7 @@ impl Default for TestHarness {
                             profiling: RouteGroup::Disabled,
                             mcp_agent: RouteGroup::Disabled,
                             mcp_developer: RouteGroup::Disabled,
+                            mcp: RouteGroup::Disabled,
                             console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                         },
                     },
@@ -195,6 +197,7 @@ impl Default for TestHarness {
                             profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                             mcp_agent: RouteGroup::Disabled,
                             mcp_developer: RouteGroup::Disabled,
+                            mcp: RouteGroup::Disabled,
                             console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         },
                     },
@@ -247,6 +250,7 @@ impl Default for TestHarness {
                 ),
             ]),
             internal_console_redirect_url: None,
+            cors_allowed_origins: Vec::new(),
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
@@ -286,7 +290,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new(&self).await?;
+        let listeners = Listeners::new(&self)?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -370,6 +374,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
@@ -385,6 +390,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -429,6 +435,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -444,6 +451,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -503,6 +511,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::Internal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -518,6 +527,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -551,6 +561,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -566,6 +577,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -658,6 +670,12 @@ impl TestHarness {
         self
     }
 
+    pub fn with_cors_allowed_origin(mut self, origin: &'static str) -> Self {
+        self.cors_allowed_origins
+            .push(HeaderValue::from_static(origin));
+        self
+    }
+
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
         self
@@ -722,8 +740,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
+    pub fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone())?;
         Ok(Listeners { inner })
     }
 
@@ -848,6 +866,7 @@ impl Listeners {
             config.orchestrator_tracing_cli_args,
         ));
         let tracing_handle = if config.enable_tracing {
+            #[allow(deprecated)]
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
@@ -924,11 +943,12 @@ impl Listeners {
                 frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
+                restarted_in_place: false,
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
-                cors_allowed_origin_list: Vec::new(),
+                cors_allowed_origin: AllowOrigin::list(config.cors_allowed_origins.clone()),
+                cors_allowed_origin_list: config.cors_allowed_origins.clone(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config

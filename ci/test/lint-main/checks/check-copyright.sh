@@ -23,7 +23,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
     -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
-    -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
+    -e '(^|/)\.github/CODEOWNERS$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)(Cargo|askama|config)\.toml$' \
@@ -32,6 +32,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)Cargo\.lock$' \
     -e '(^|/)types\.lock$' \
     -e '(^|/)\.mzprofile$' \
+    -e '(^|/)lean-toolchain$' \
     -e '^src/mz-deploy/src/cli/scaffold/gitignore$' \
     -e '^test/mz-deploy/projects/multi-profile/v1/models/app/core/ambiguous\.sql$' \
     -e '^about\.toml$' \
@@ -49,9 +50,6 @@ copyright_files=$(grep -vE \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
     -e '^misc/completions/.*' \
-    -e '^misc/mcp-materialize/uv.lock' \
-    -e '^misc/mcp-materialize-agents/uv.lock' \
-    -e '^misc/mcp-materialize-agents/mcp_materialize_agents/system_prompt.md' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
     -e '^src/pgtz/tznames/.*' \

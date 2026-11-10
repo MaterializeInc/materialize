@@ -95,6 +95,7 @@ use uuid::Uuid;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
+pub(crate) use crate::catalog::transact::{CommandExecutionError, CommandWork};
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -107,7 +108,9 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+pub(crate) mod command;
 pub(crate) mod consistency;
+mod limits;
 mod migrate;
 
 mod apply;
@@ -214,7 +217,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        plan: mz_compute_types::dataflows::LirDataflowDescription,
     ) {
         self.state.set_physical_plan(id, plan);
     }
@@ -234,7 +237,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_types::plan::LirRelationExpr>> {
+    ) -> Option<&mz_compute_types::dataflows::LirDataflowDescription> {
         let entry = self.state.try_get_entry_by_global_id(id)?;
         entry.item().physical_plan().map(AsRef::as_ref)
     }
@@ -295,6 +298,11 @@ impl ConnCatalog<'_> {
 
     pub fn state(&self) -> &CatalogState {
         &*self.state
+    }
+
+    /// Returns a system-role view of this catalog snapshot.
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
+        self.state.for_system_session()
     }
 
     /// Prevent planning from resolving item with the provided ID. Instead,
@@ -1223,11 +1231,10 @@ impl Catalog {
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {
+        // Disabled sizes are included; `ensure_valid_replica_size` decides
+        // whether those are allowed.
         if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
-            self.cluster_replica_sizes()
-                .enabled_allocations()
-                .map(|a| a.0.to_owned())
-                .collect::<Vec<_>>()
+            self.cluster_replica_sizes().0.keys().cloned().collect()
         } else {
             self.system_config().allowed_cluster_replica_sizes()
         }
@@ -1259,7 +1266,7 @@ impl Catalog {
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
-        &self.state.cluster_replica_sizes
+        self.state.cluster_replica_sizes()
     }
 
     /// Returns the privileges of an object by its ID.
@@ -1331,37 +1338,31 @@ impl Catalog {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.state.entry_by_id.values()
+        self.state.entries()
     }
 
     pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_connection() && entry.id().is_user())
+        self.state.user_connections()
     }
 
     pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_table() && entry.id().is_user())
+        self.state.user_tables()
     }
 
     pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_source() && entry.id().is_user())
+        self.state.user_sources()
     }
 
     pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_sink() && entry.id().is_user())
+        self.state.user_sinks()
     }
 
     pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+        self.state.user_materialized_views()
     }
 
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_secret() && entry.id().is_user())
+        self.state.user_secrets()
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
@@ -1373,7 +1374,7 @@ impl Catalog {
     }
 
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.state.clusters_by_id.values()
+        self.state.clusters()
     }
 
     pub fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1385,7 +1386,7 @@ impl Catalog {
     }
 
     pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.clusters().filter(|cluster| cluster.id.is_user())
+        self.state.user_clusters()
     }
 
     pub fn get_cluster_replica(
@@ -1405,27 +1406,19 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters()
-            .flat_map(|cluster| cluster.user_replicas())
+        self.state.user_cluster_replicas()
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
-        self.state.database_by_id.values()
+        self.state.databases()
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state
-            .roles_by_id
-            .values()
-            .filter(|role| role.is_user())
+        self.state.user_roles()
     }
 
     pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
-        self.state
-            .network_policies_by_id
-            .iter()
-            .filter(|(id, _)| id.is_user())
-            .map(|(_, policy)| policy)
+        self.state.user_network_policies()
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1577,7 +1570,7 @@ impl Catalog {
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
         mut global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-        mut physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        mut physical_plan: mz_compute_types::dataflows::LirDataflowDescription,
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
     ) -> BoxFuture<'static, ()> {
@@ -1611,6 +1604,26 @@ impl Catalog {
             },
         )];
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
+    }
+
+    /// Cache the local expression for the given `GlobalId` of an item being
+    /// created, which has no dataflow, such as a view. Otherwise the same as
+    /// [`Catalog::cache_expressions`].
+    pub(crate) fn cache_local_expression(
+        &self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) -> BoxFuture<'static, ()> {
+        let local_exprs = vec![(
+            id,
+            LocalExpressions {
+                local_mir,
+                optimizer_features,
+                item_version: RelationVersion::root(),
+            },
+        )];
+        self.update_expression_cache(local_exprs, Vec::new(), Default::default())
     }
 
     pub(crate) fn update_expression_cache<'a, 'b>(
@@ -2498,13 +2511,23 @@ impl SessionCatalog for ConnCatalog<'_> {
 }
 
 #[cfg(test)]
+mod source_preparation_tests;
+
+#[cfg(test)]
+mod try_cast_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{
+        CatalogItem, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+        ReconfigurationStatus, ReconfigurationTarget,
+    };
+    use mz_controller::clusters::ReplicaLogging;
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2532,8 +2555,9 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::{
-        CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig, PlanContext, QueryContext,
-        QueryLifetime, Scope, StatementContext,
+        AutoScalingStrategy, CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig,
+        OnHydration, OnTimeoutAction, PlanContext, QueryContext, QueryLifetime, Scope,
+        StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
@@ -2665,6 +2689,130 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_cluster_replica_size_sync() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let mut bootstrap_args = test_bootstrap_args();
+        // Builtin cluster replicas use the default size.
+        let in_use = bootstrap_args.default_cluster_replica_size.clone();
+        let unused = "scale=1,workers=2".to_string();
+        let changed = "scale=1,workers=4".to_string();
+        let cluster_only = "scale=1,workers=8".to_string();
+        let hydration = "scale=1,workers=16".to_string();
+        let timed_out_target = "scale=1,workers=32".to_string();
+
+        let mut catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        assert_eq!(
+            catalog.cluster_replica_sizes().0,
+            bootstrap_args.cluster_replica_size_map.0
+        );
+        // A managed cluster with no replicas still depends on its size and
+        // hydration size, but not on a settled reconfiguration's target.
+        let commit_ts = catalog.current_upper().await;
+        let cluster_id = catalog
+            .allocate_user_cluster_id(commit_ts)
+            .await
+            .expect("allocate cluster id");
+        let config = ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: cluster_only.clone(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 0,
+                optimizer_feature_overrides: Default::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: Some(AutoScalingStrategy {
+                    on_hydration: Some(OnHydration {
+                        hydration_size: hydration.clone(),
+                        linger_duration: None,
+                    }),
+                }),
+                reconfiguration: Some(ReconfigurationState {
+                    target: ReconfigurationTarget {
+                        size: timed_out_target.clone(),
+                        replication_factor: 1,
+                        availability_zones: Vec::new(),
+                        logging: ReplicaLogging {
+                            log_logging: false,
+                            interval: None,
+                        },
+                        arrangement_compression: false,
+                    },
+                    deadline: Timestamp::MIN,
+                    on_timeout: OnTimeoutAction::Rollback,
+                    status: ReconfigurationStatus::TimedOut,
+                }),
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateCluster {
+                    id: cluster_id,
+                    name: "no_replicas".into(),
+                    introspection_sources: Vec::new(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                    config,
+                }],
+            )
+            .await
+            .expect("create cluster");
+        catalog.expire().await;
+
+        let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
+        config_sizes.remove(&in_use);
+        config_sizes.remove(&unused);
+        config_sizes.remove(&cluster_only);
+        config_sizes.remove(&hydration);
+        config_sizes.remove(&timed_out_target);
+        config_sizes
+            .get_mut(&changed)
+            .expect("test size")
+            .cpu_exclusive = true;
+        let catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        let sizes = &catalog.cluster_replica_sizes().0;
+        assert!(sizes[&in_use].disabled);
+        assert!(sizes[&cluster_only].disabled);
+        assert!(sizes[&hydration].disabled);
+        assert!(!sizes.contains_key(&unused));
+        assert!(!sizes.contains_key(&timed_out_target));
+        assert_eq!(
+            sizes[&changed],
+            bootstrap_args.cluster_replica_size_map.0[&changed]
+        );
+        let durable_sizes = catalog.cluster_replica_sizes().clone();
+        catalog.expire().await;
+
+        // A read-only open with a different size config uses the durable sizes.
+        bootstrap_args
+            .cluster_replica_size_map
+            .0
+            .insert(unused.clone(), durable_sizes.0[&changed].clone());
+        let catalog =
+            Catalog::open_debug_read_only_catalog(persist_client, organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open read-only debug catalog");
+        assert_eq!(catalog.cluster_replica_sizes().0, durable_sizes.0);
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -3056,16 +3204,31 @@ mod tests {
             let conn_catalog = catalog.for_system_session();
 
             for builtin in BUILTINS::iter() {
-                let (schema, name, expected_desc) = match builtin {
-                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
-                    Builtin::View(v) => (&v.schema, &v.name, &v.desc),
-                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
-                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
+                let (schema, name, expected_desc, shard_backed) = match builtin {
+                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc, true),
+                    Builtin::View(v) => (&v.schema, &v.name, &v.desc, false),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc, true),
+                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc, true),
                     Builtin::Log(_)
                     | Builtin::Type(_)
                     | Builtin::Func(_)
                     | Builtin::Index(_)
                     | Builtin::Connection(_) => continue,
+                };
+                // A shard-backed builtin registers `desc` as its persist shard's
+                // schema, so a type change in `desc` needs a `MigrationStep`. Tables
+                // and sources carry `desc` into the catalog verbatim and cannot fail
+                // here. A materialized view is planned, and its fingerprint is its
+                // SQL, so nothing else detects a `desc` change at upgrade. See the
+                // `Fingerprint` impl for `BuiltinMaterializedView`.
+                let migration_hint = if shard_backed {
+                    format!(
+                        "; {schema}.{name} is backed by a persist shard, so after updating its \
+                         `desc` also add a `MigrationStep` for it to `MIGRATIONS` in \
+                         `src/adapter/src/catalog/open/builtin_schema_migration.rs`"
+                    )
+                } else {
+                    String::new()
                 };
                 let item = conn_catalog
                     .resolve_item(&PartialItemName {
@@ -3077,18 +3240,30 @@ mod tests {
                     .at_version(RelationVersionSelector::Latest);
 
                 let actual_desc = item.relation_desc().expect("invalid item type");
+                assert_eq!(
+                    actual_desc.arity(),
+                    expected_desc.arity(),
+                    "item {schema}.{name} column count did not match its expected column count{migration_hint}"
+                );
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
                     assert_eq!(
                         actual_name, expected_name,
-                        "item {schema}.{name} column {index} name did not match its expected name"
+                        "item {schema}.{name} column {index} name did not match its expected name{migration_hint}"
                     );
                     assert_eq!(
                         actual_typ, expected_typ,
-                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type"
+                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type{migration_hint}"
                     );
                 }
+                // Keys never reach the shard schema, so a key mismatch needs no
+                // migration, only a corrected `desc`.
+                assert_eq!(
+                    actual_desc.typ().keys,
+                    expected_desc.typ().keys,
+                    "item {schema}.{name} keys did not match its expected keys"
+                );
                 assert_eq!(
                     &*actual_desc, expected_desc,
                     "item {schema}.{name} did not match its expected RelationDesc"
@@ -3136,6 +3311,7 @@ mod tests {
                 input: u32,
                 receive: u32,
                 send: u32,
+                len: i16,
             }
 
             struct PgOper {
@@ -3175,7 +3351,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend, typlen FROM pg_type"
                 ),
                 &[],
             )
@@ -3192,6 +3368,7 @@ mod tests {
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
                         send: row.get("typsend"),
+                        len: row.get("typlen"),
                     };
                     (oid, pg_type)
                 })
@@ -3325,6 +3502,25 @@ mod tests {
                                 "type {} has typreceive OID {} that does not exist in pg_proc",
                                 ty.name,
                                 typreceive_oid,
+                            );
+                        }
+                        let id = conn_catalog
+                            .resolve_type(&PartialItemName {
+                                database: None,
+                                schema: Some(ty.schema.into()),
+                                item: ty.name.to_string(),
+                            })
+                            .expect("unable to resolve type")
+                            .id();
+                        // Types with no scalar type report an unknown typlen.
+                        if let Ok(scalar_type) =
+                            mz_sql::plan::scalar_type_from_catalog(&conn_catalog, id, &[])
+                        {
+                            let typlen = mz_pgrepr::Type::from(&scalar_type).typlen();
+                            assert_eq!(
+                                typlen, pg_ty.len,
+                                "type {} has typlen {} in mz but {} in pg",
+                                ty.name, typlen, pg_ty.len,
                             );
                         }
 

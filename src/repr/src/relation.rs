@@ -639,6 +639,9 @@ impl proptest::arbitrary::Arbitrary for ColumnName {
 /// Default name of a column (when no other information is known).
 pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
 
+/// The name of the column added by `WITH ORDINALITY`.
+pub static ORDINALITY_COL_NAME: &str = "ordinality";
+
 /// Stable index of a column in a [`RelationDesc`].
 #[derive(
     Clone,

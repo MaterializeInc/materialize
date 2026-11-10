@@ -35,7 +35,7 @@ export function useChartLegend({
 
   const toggleLegendItem = (
     key: string,
-    event: React.MouseEvent<HTMLDivElement>,
+    event: Pick<React.MouseEvent, "metaKey" | "ctrlKey">,
   ) => {
     const isModifierPressed = event.metaKey || event.ctrlKey;
 

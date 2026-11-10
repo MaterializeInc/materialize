@@ -66,6 +66,10 @@ export async function fetchClusterDeploymentLineage({
     queries: compiledQuery,
     queryKey: queryKey,
     requestOptions,
+    // Callers refetch lineage periodically, so a stale read only delays a
+    // blue-green cutover. Strict serializable would block the read until the
+    // lineage index catches up, which is slowest when mz_catalog_server is busy.
+    sessionVariables: { transaction_isolation: "serializable" },
   });
 
   for (const row of res.rows) {
@@ -105,4 +109,28 @@ export async function fetchClusterDeploymentLineage({
     pastDeploymentsByCurrentDeployment,
     currentDeploymentByPastDeployment,
   };
+}
+
+/**
+ * Expands each of `clusterIds` to every cluster in its blue-green lineage. The
+ * result is sorted and deduplicated, so equal lineages yield equal arrays
+ * regardless of row order.
+ */
+export function expandClusterLineage(
+  clusterIds: string[],
+  pastDeploymentsByCurrentDeployment: Map<string, DeploymentRow[]>,
+): string[] {
+  const expanded = new Set<string>();
+  for (const clusterId of clusterIds) {
+    const lineage = pastDeploymentsByCurrentDeployment.get(clusterId);
+    if (lineage) {
+      for (const deployment of lineage) {
+        expanded.add(deployment.clusterId);
+      }
+    } else {
+      // System clusters have no lineage rows, so keep the id itself.
+      expanded.add(clusterId);
+    }
+  }
+  return [...expanded].sort();
 }

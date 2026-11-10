@@ -20,7 +20,7 @@ SERVICES = [
     Service(
         name="js",
         config={
-            "image": "node:20.10.0",
+            "image": "node:24",
             "volumes": [
                 "../../../:/workdir",
             ],

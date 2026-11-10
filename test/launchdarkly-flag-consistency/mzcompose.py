@@ -62,8 +62,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
+import launchdarkly_api
+from launchdarkly_api.api import feature_flags_api
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -126,6 +126,7 @@ SESSION_VARIABLES = {
     "server_version_num",
     "sql_safe_updates",
     "real_time_recency",
+    "emit_execution_time_notice",
     "emit_plan_insights_notice",
     "emit_timestamp_notice",
     "emit_trace_id_notice",
@@ -206,6 +207,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_topology_spread_ignore_non_singular_scale
     cluster_topology_spread_max_skew
     cluster_topology_spread_soft
+    column_paged_batcher_spill_worker_fraction
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
@@ -235,7 +237,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
-    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
@@ -248,10 +249,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
-    enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
-    enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
     enable_date_bin_hopping
@@ -272,7 +271,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
-    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -312,7 +310,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     kafka_retry_backoff
     kafka_retry_backoff_max
     kafka_sink_batch_num_messages
-    kafka_sink_emit_sink_id_header
     kafka_socket_keepalive
     keep_n_privatelink_status_history_entries
     keep_n_sink_status_history_entries
@@ -362,7 +359,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_consensus_connection_pool_ttl_stagger
     persist_expression_cache_force_compaction_fuel
     persist_expression_cache_force_compaction_wait
-    persist_fast_path_order
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
@@ -547,16 +543,13 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # the compiled-in default was changed prematurely. Allowlisted for now to
     # keep the build green; revisit and either reconcile the default or move the
     # flag to a permanent category above.
-    "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
-    "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
-    "persist_rollup_use_active_rollup",
 }
 
 # Flags whose served default knowingly differs between LaunchDarkly environments
@@ -570,7 +563,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     column_paged_batcher_budget_fraction
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
-    compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
     enable_column_paged_batcher
     enable_column_paged_batcher_spill
@@ -600,9 +592,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
-    persist_enable_incremental_compaction
     persist_fetch_semaphore_permit_adjustment
-    persist_rollup_use_active_rollup
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
     statement_logging_max_data_credit
@@ -670,7 +660,7 @@ def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
     if env.get("on"):
         index = (env.get("fallthrough") or {}).get("variation")
     else:
-        index = env.get("off_variation")
+        index = env.get("offVariation")
     if index is None or not (0 <= index < len(variations)):
         return None
     return variations[index].get("value")
@@ -693,7 +683,7 @@ def launchdarkly_flag_tags(api: Any) -> dict[str, list[str]]:
         items = page.get("items") or []
         for flag in items:
             flags[flag["key"]] = list(flag.get("tags") or [])
-        total = page.get("total_count")
+        total = page.get("totalCount")
         offset += len(items)
         if not items or (total is not None and offset >= total):
             break

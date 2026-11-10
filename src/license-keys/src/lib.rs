@@ -7,22 +7,31 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "signing")]
 mod signing;
 #[cfg(feature = "signing")]
-pub use signing::{get_pubkey_pem, make_license_key};
+pub use signing::{get_pubkey_pem, make_intermediate_jwt, make_license_key};
 
 const ISSUER: &str = "Materialize, Inc.";
 // list of public keys which are allowed to validate license keys. this is a
 // list to allow for key rotation if necessary.
-const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
+const PUBLIC_KEYS: &[&str] = &[
+    include_str!("license_keys/production.pub"),
+    // Signs the intermediate JWTs whose keys sign BYOC license keys.
+    include_str!("license_keys/intermediate_root.pub"),
+];
 // keys which we have issued but need to be revoked before their expiration
-// (due to being accidentally exposed or similar).
+// (due to being accidentally exposed or similar). holds both license key and
+// intermediate JWT ids.
 const REVOKED_KEYS: &[&str] = &["eddaf004-dc1e-48cf-9cc1-41d1543d940a"];
+const INTERMEDIATE_TYP: &str = "mz-intermediate+jwt";
+// License key header field carrying the intermediate JWT that certifies the
+// key the license key was signed with.
+const INTERMEDIATE_HEADER: &str = "mz_intermediate";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -122,24 +131,127 @@ impl Default for ValidatedLicenseKey {
     }
 }
 
+/// Validates `license_key` against the root public keys, falling back to the
+/// intermediate JWT embedded in its header.
+///
+/// An intermediate JWT is signed by a root key and carries another public key
+/// (see `make_intermediate_jwt`). A license key signed by that public key is
+/// accepted while the intermediate JWT is not revoked. The result expires at
+/// the earlier of the license key's and the intermediate JWT's expiration.
 pub fn validate(license_key: &str) -> anyhow::Result<ValidatedLicenseKey> {
-    let mut err = None;
-    for pubkey in PUBLIC_KEYS {
+    validate_with_roots(license_key, PUBLIC_KEYS)
+}
+
+fn validate_with_roots(
+    license_key: &str,
+    root_pubkeys: &[&str],
+) -> anyhow::Result<ValidatedLicenseKey> {
+    let mut errs = Vec::new();
+    for (i, pubkey) in root_pubkeys.iter().enumerate() {
         match validate_with_pubkey(license_key, pubkey) {
-            Ok(key) => {
-                return Ok(key);
-            }
-            Err(e) => {
-                err = Some(e);
-            }
+            Ok(key) => return Ok(key),
+            Err(e) => errs.push(format!("root key {i}: {e:#}")),
         }
     }
 
-    if let Some(err) = err {
-        Err(err)
-    } else {
-        Err(anyhow!("no public key found"))
+    // The header is read before any signature is checked. That is safe
+    // because the intermediate JWT is verified against the root keys before
+    // its public key is used.
+    let intermediate = jsonwebtoken::decode_header(license_key)
+        .map_err(anyhow::Error::from)
+        .and_then(|header| Ok(header.extras.get::<String>(INTERMEDIATE_HEADER)?));
+    match intermediate {
+        Ok(Some(intermediate_jwt)) => {
+            let res = validate_intermediate(&intermediate_jwt, root_pubkeys)
+                .context("invalid intermediate JWT")
+                .and_then(|intermediate| {
+                    let mut key = validate_with_pubkey(license_key, &intermediate.public_key)?;
+                    // NOTE: An expired intermediate JWT does not fail
+                    // validation, so the license key's `expiration_behavior`
+                    // decides what happens. This means its expiration does not
+                    // bound a leaked intermediate private key, which can mint
+                    // `Warn` keys. Only `REVOKED_KEYS` stops that.
+                    key.expired |= intermediate.expired;
+                    key.expiration = key.expiration.min(intermediate.expiration);
+                    Ok(key)
+                });
+            match res {
+                Ok(key) => return Ok(key),
+                Err(e) => errs.push(format!("intermediate JWT: {e:#}")),
+            }
+        }
+        Ok(None) => {}
+        Err(e) => errs.push(format!("intermediate JWT: {e:#}")),
     }
+
+    if errs.is_empty() {
+        bail!("no public key found");
+    }
+    bail!("license key validation failed:\n  {}", errs.join("\n  "))
+}
+
+struct ValidatedIntermediate {
+    /// PEM of the public key that signs license keys.
+    public_key: String,
+    expiration: u64,
+    expired: bool,
+}
+
+/// Returns the claims of `intermediate_jwt` if a root key signed it.
+fn validate_intermediate(
+    intermediate_jwt: &str,
+    root_pubkeys: &[&str],
+) -> anyhow::Result<ValidatedIntermediate> {
+    let mut validation = Validation::new(Algorithm::PS256);
+    validation.set_required_spec_claims(&["exp", "nbf", "iss", "sub"]);
+    validation.set_issuer(&[ISSUER]);
+    validation.validate_exp = true;
+    validation.validate_nbf = true;
+
+    let mut err = None;
+    for root in root_pubkeys {
+        let key = DecodingKey::from_rsa_pem(root.as_bytes())?;
+        let res = match jsonwebtoken::decode::<IntermediatePayload>(
+            intermediate_jwt,
+            &key,
+            &validation,
+        ) {
+            Err(e) if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) => {
+                let mut validation = validation.clone();
+                validation.validate_exp = false;
+                jsonwebtoken::decode(intermediate_jwt, &key, &validation).map(|d| (d, true))
+            }
+            res => res.map(|d| (d, false)),
+        };
+        match res {
+            Ok((decoded, expired)) => {
+                // The typ check keeps a root-signed license key from being
+                // accepted as an intermediate JWT, and vice versa.
+                if decoded.header.typ.as_deref() != Some(INTERMEDIATE_TYP) {
+                    bail!("invalid intermediate JWT header type");
+                }
+                if decoded.claims.version != 1 {
+                    bail!("invalid intermediate JWT version");
+                }
+                if decoded.claims.iat < decoded.claims.nbf {
+                    bail!("intermediate JWT issued before it is valid");
+                }
+                if decoded.claims.iat > decoded.claims.exp {
+                    bail!("intermediate JWT issued after it expired");
+                }
+                if REVOKED_KEYS.contains(&decoded.claims.jti.as_str()) {
+                    bail!("revoked intermediate JWT");
+                }
+                return Ok(ValidatedIntermediate {
+                    public_key: decoded.claims.public_key,
+                    expiration: decoded.claims.exp,
+                    expired,
+                });
+            }
+            Err(e) => err = Some(e.into()),
+        }
+    }
+    Err(err.unwrap_or_else(|| anyhow!("no public key found")))
 }
 
 fn validate_with_pubkey(
@@ -193,6 +305,20 @@ struct Payload {
     // any entitlements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entitlements: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IntermediatePayload {
+    /// Human readable name of the intermediate key, e.g. the stack it serves.
+    sub: String,
+    exp: u64,
+    nbf: u64,
+    iss: String,
+    iat: u64,
+    jti: String,
+
+    version: u64,
+    public_key: String,
 }
 
 fn validate_with_pubkey_v1(
@@ -258,7 +384,168 @@ fn is_default<T: PartialEq + Eq + Default>(val: &T) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use aws_lc_rs::encoding::AsDer;
+    use aws_lc_rs::rsa::{KeyPair, KeySize};
+    use aws_lc_rs::signature::KeyPair as _;
+    use jsonwebtoken::{EncodingKey, Header};
+
     use super::*;
+
+    /// Returns `(private_pem, public_pem)`.
+    fn keypair() -> (String, String) {
+        let key = KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let private: aws_lc_rs::encoding::Pkcs8V1Der = key.as_der().unwrap();
+        let public: aws_lc_rs::encoding::PublicKeyX509Der = key.public_key().as_der().unwrap();
+        (
+            pem::Pem::new("PRIVATE KEY", private.as_ref()).to_string(),
+            pem::Pem::new("PUBLIC KEY", public.as_ref()).to_string(),
+        )
+    }
+
+    fn sign(
+        private_pem: &str,
+        typ: &str,
+        intermediate_jwt: Option<&str>,
+        claims: &impl Serialize,
+    ) -> String {
+        let mut header = Header::new(Algorithm::PS256);
+        header.typ = Some(typ.to_string());
+        if let Some(intermediate_jwt) = intermediate_jwt {
+            header.extras.insert(INTERMEDIATE_HEADER, intermediate_jwt);
+        }
+        let key = EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap();
+        jsonwebtoken::encode(&header, claims, &key).unwrap()
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn license_payload() -> Payload {
+        let now = now();
+        Payload {
+            exp: now + 3600,
+            nbf: now,
+            iat: now,
+            ..sample_payload(Vec::new())
+        }
+    }
+
+    fn intermediate_payload(public_key: String, exp: u64) -> IntermediatePayload {
+        let now = now();
+        IntermediatePayload {
+            sub: "test-stack".to_string(),
+            exp,
+            nbf: now - 7200,
+            iss: ISSUER.to_string(),
+            iat: now - 7200,
+            jti: "intermediate-1".to_string(),
+            version: 1,
+            public_key,
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn intermediate_validation() {
+        let (root_priv, root_pub) = keypair();
+        let (int_priv, int_pub) = keypair();
+        let (other_priv, _) = keypair();
+        let roots = &[root_pub.as_str()];
+        let int_key = |intermediate_jwt: &str| {
+            sign(&int_priv, "JWT", Some(intermediate_jwt), &license_payload())
+        };
+
+        let int_jwt = sign(
+            &root_priv,
+            INTERMEDIATE_TYP,
+            None,
+            &intermediate_payload(int_pub.clone(), now() + 3600),
+        );
+        let root_key = sign(&root_priv, "JWT", None, &license_payload());
+
+        let root_validated = validate_with_roots(&root_key, roots).unwrap();
+        assert_eq!(root_validated.id, "jti-1");
+        validate_with_roots(&int_key(&int_jwt), roots).unwrap();
+        assert!(
+            validate_with_roots(&sign(&int_priv, "JWT", None, &license_payload()), roots).is_err(),
+            "intermediate-signed key needs its intermediate JWT"
+        );
+
+        let untrusted_jwt = sign(
+            &other_priv,
+            INTERMEDIATE_TYP,
+            None,
+            &intermediate_payload(int_pub.clone(), now() + 3600),
+        );
+        assert!(
+            validate_with_roots(&int_key(&untrusted_jwt), roots).is_err(),
+            "intermediate JWT must be signed by a root key"
+        );
+
+        let mut revoked = license_payload();
+        revoked.jti = REVOKED_KEYS[0].to_string();
+        let revoked_key = sign(&root_priv, "JWT", Some(&int_jwt), &revoked);
+        let err = validate_with_roots(&revoked_key, roots)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("root key 0: revoked license key") && err.contains("intermediate JWT: "),
+            "error must report every attempt: {err}"
+        );
+
+        let expired_exp = now() - 3600;
+        let expired_jwt = sign(
+            &root_priv,
+            INTERMEDIATE_TYP,
+            None,
+            &intermediate_payload(int_pub.clone(), expired_exp),
+        );
+        let validated = validate_with_roots(&int_key(&expired_jwt), roots).unwrap();
+        assert!(
+            validated.expired,
+            "expired intermediate JWT must expire the key"
+        );
+        assert_eq!(validated.expiration, expired_exp);
+
+        let wrong_typ_jwt = sign(
+            &root_priv,
+            "JWT",
+            None,
+            &intermediate_payload(int_pub, now() + 3600),
+        );
+        assert!(
+            validate_with_roots(&int_key(&wrong_typ_jwt), roots).is_err(),
+            "intermediate JWT must have the intermediate typ"
+        );
+
+        assert!(
+            validate_with_roots(&int_key(&root_key), roots).is_err(),
+            "license key must not be usable as an intermediate JWT"
+        );
+        let self_embedded = sign(
+            &int_priv,
+            INTERMEDIATE_TYP,
+            Some(&int_jwt),
+            &intermediate_payload(String::new(), now() + 3600),
+        );
+        assert!(
+            validate_with_roots(&self_embedded, roots).is_err(),
+            "intermediate JWT must not be usable as a license key"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn public_keys_parse() {
+        for (i, pem) in PUBLIC_KEYS.iter().enumerate() {
+            DecodingKey::from_rsa_pem(pem.as_bytes())
+                .unwrap_or_else(|e| panic!("PUBLIC_KEYS[{i}] is not an RSA public key: {e}"));
+        }
+    }
 
     fn sample_payload(entitlements: Vec<String>) -> Payload {
         Payload {

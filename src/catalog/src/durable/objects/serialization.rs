@@ -11,19 +11,21 @@
 
 use mz_ore::cast::CastFrom;
 use mz_proto::TryFromProtoError;
+use mz_repr::ColumnName;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaSizeKey, ClusterReplicaSizeValue,
+    ClusterReplicaValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, IndexColumn, IndexColumnsKey, IndexColumnsValue,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemColumn,
+    ItemColumnsKey, ItemColumnsValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -196,7 +198,7 @@ impl RustType<proto::BurstState> for BurstState {
         proto::BurstState {
             burst_size: self.burst_size.clone(),
             linger_duration: self.linger_duration.into_proto(),
-            steady_hydrated_at: self.steady_hydrated_at.map(Into::into),
+            steady_ready_at: self.steady_ready_at.map(Into::into),
         }
     }
 
@@ -204,7 +206,7 @@ impl RustType<proto::BurstState> for BurstState {
         Ok(Self {
             burst_size: proto.burst_size,
             linger_duration: proto.linger_duration.into_rust()?,
-            steady_hydrated_at: proto.steady_hydrated_at.map(mz_repr::Timestamp::new),
+            steady_ready_at: proto.steady_ready_at.map(mz_repr::Timestamp::new),
         })
     }
 }
@@ -600,6 +602,100 @@ impl RustType<proto::ItemValue> for ItemValue {
     }
 }
 
+impl RustType<proto::ItemColumnsKey> for ItemColumnsKey {
+    fn into_proto(&self) -> proto::ItemColumnsKey {
+        proto::ItemColumnsKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumnsValue> for ItemColumnsValue {
+    fn into_proto(&self) -> proto::ItemColumnsValue {
+        proto::ItemColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumn> for ItemColumn {
+    fn into_proto(&self) -> proto::ItemColumn {
+        proto::ItemColumn {
+            name: self.name.to_string(),
+            nullable: self.nullable,
+            type_oid: self.type_oid,
+            type_mod: self.type_mod,
+            custom_type: self.custom_type.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumn) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumn {
+            name: ColumnName::from(proto.name),
+            nullable: proto.nullable,
+            type_oid: proto.type_oid,
+            type_mod: proto.type_mod,
+            custom_type: proto.custom_type.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnsKey> for IndexColumnsKey {
+    fn into_proto(&self) -> proto::IndexColumnsKey {
+        proto::IndexColumnsKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnsValue> for IndexColumnsValue {
+    fn into_proto(&self) -> proto::IndexColumnsValue {
+        proto::IndexColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumn> for IndexColumn {
+    fn into_proto(&self) -> proto::IndexColumn {
+        proto::IndexColumn {
+            column: self.column.map(u64::cast_from),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumn) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumn {
+            column: proto.column.map(usize::cast_from),
+            nullable: proto.nullable,
+        })
+    }
+}
+
 impl RustType<proto::CommentKey> for CommentKey {
     fn into_proto(&self) -> proto::CommentKey {
         let sub_component = match &self.sub_component {
@@ -740,6 +836,60 @@ impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeKey> for ClusterReplicaSizeKey {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeKey {
+        proto::ClusterReplicaSizeKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeValue {
+        proto::ClusterReplicaSizeValue {
+            name: self.name.clone(),
+            memory_limit: self.memory_limit,
+            cpu_limit: self.cpu_limit,
+            cpu_request: self.cpu_request,
+            disk_limit: self.disk_limit,
+            scale: self.scale,
+            workers: self.workers,
+            credits_per_hour: self.credits_per_hour.clone(),
+            cpu_exclusive: self.cpu_exclusive,
+            is_cc: self.is_cc,
+            family: self.family.clone(),
+            swap_enabled: self.swap_enabled,
+            disabled: self.disabled,
+            selectors: self.selectors.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeValue {
+            name: proto.name,
+            memory_limit: proto.memory_limit,
+            cpu_limit: proto.cpu_limit,
+            cpu_request: proto.cpu_request,
+            disk_limit: proto.disk_limit,
+            scale: proto.scale,
+            workers: proto.workers,
+            credits_per_hour: proto.credits_per_hour,
+            cpu_exclusive: proto.cpu_exclusive,
+            is_cc: proto.is_cc,
+            family: proto.family,
+            swap_enabled: proto.swap_enabled,
+            disabled: proto.disabled,
+            selectors: proto.selectors,
         })
     }
 }

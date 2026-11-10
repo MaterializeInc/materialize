@@ -41,11 +41,14 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
+use regex::Regex;
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
 use tracing::{Instrument, debug, info, info_span, warn};
 
-use crate::cfg::{SHARD_METRICS, ShardMetricsExport};
+use crate::cfg::{
+    PER_SHARD_METRICS_ENABLE_REGEX, SHARD_INFO_METRIC, SHARD_METRICS, ShardMetricsExport,
+};
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
@@ -154,6 +157,11 @@ impl Metrics {
             invalid_mode: registry.register(metric!(
                 name: "mz_persist_shard_metrics_mode_invalid",
                 help: "count of metrics scrapes that found persist_shard_metrics unrecognized and so exported the default",
+            )),
+            allow: (String::new(), None),
+            invalid_regex: registry.register(metric!(
+                name: "mz_persist_per_shard_metrics_regex_invalid",
+                help: "count of metrics scrapes that found persist_per_shard_metrics_enable_regex invalid and so kept no per-shard series",
             )),
         };
         registry.register_postprocessor(move |families| per_shard_filter.filter(families));
@@ -1053,6 +1061,9 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
+    /// Counted where `shard_source` reports a lost lease. Only observable where
+    /// the error handler survives it (storage); compute halts right after.
+    pub(crate) expired_live_read: IntCounter,
     pub(crate) dropped_part: IntCounter,
 }
 
@@ -1062,6 +1073,10 @@ impl LeaseMetrics {
             timeout_read: registry.register(metric!(
                 name: "mz_persist_lease_timeout_read",
                 help: "count of readers whose lease timed out",
+            )),
+            expired_live_read: registry.register(metric!(
+                name: "mz_persist_lease_expired_live_read",
+                help: "count of fetches that found their reader's lease had timed out",
             )),
             dropped_part: registry.register(metric!(
                 name: "mz_persist_lease_dropped_part",
@@ -1183,6 +1198,8 @@ pub struct StateMetrics {
     pub(crate) rollup_write_success: IntCounter,
     pub(crate) rollup_write_noop_latest: IntCounter,
     pub(crate) rollup_write_noop_truncated: IntCounter,
+    pub(crate) hollow_run_missing_on_delete: IntCounter,
+    pub(crate) finalized_rollup_assigned: IntCounter,
 }
 
 impl StateMetrics {
@@ -1234,6 +1251,10 @@ impl StateMetrics {
                 name: "mz_persist_state_update_state_slow_path",
                 help: "count of state update applications that hit the slow path",
             )),
+            finalized_rollup_assigned: registry.register(metric!(
+                name: "mz_persist_state_finalized_rollup_assigned",
+                help: "count of rollups assigned on finalized shards, normally two or three per shard (steady growth means a rollup loop)",
+            )),
             rollup_at_seqno_migration: registry.register(metric!(
                 name: "mz_persist_state_rollup_at_seqno_migration",
                 help: "count of fetch_rollup_at_seqno calls that only worked because of the migration",
@@ -1264,6 +1285,10 @@ impl StateMetrics {
             )),
             rollup_write_noop_latest: rollup_write_noop.with_label_values(&["latest"]),
             rollup_write_noop_truncated: rollup_write_noop.with_label_values(&["truncated"]),
+            hollow_run_missing_on_delete: registry.register(metric!(
+                name: "mz_persist_state_hollow_run_missing_on_delete",
+                help: "count of hollow run blobs found already missing while deleting the parts they reference",
+            )),
         }
     }
 }
@@ -1319,17 +1344,26 @@ pub struct ShardsMetrics {
     shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
 }
 
-/// Removes the per-shard families from gathered families if
-/// [`SHARD_METRICS`] says not to export them.
+/// Removes the per-shard series this process should not export from gathered
+/// families, as configured by [`SHARD_METRICS`] and
+/// [`PER_SHARD_METRICS_ENABLE_REGEX`].
 ///
 /// It matches the names in `PER_SHARD_FAMILIES`, not a name prefix, because
 /// `mz_persist_shard_count`, `mz_persist_stale_shard_count` and the
-/// `mz_persist_shard_*_percentile` / `_topk` aggregates share the prefix.
+/// `mz_persist_shard_*_percentile` / `_sum` / `_topk` aggregates and
+/// `mz_persist_shard_info` share the prefix.
+///
+/// NOTE: Postprocessors run after collection, so the `invalid_*` counters land
+/// in the scrape after the one that bumped them.
 struct PerShardMetricsFilter {
     configs: Arc<ConfigSet>,
     /// The last seen value of `SHARD_METRICS` and what it parsed to.
     mode: (String, ShardMetricsExport),
     invalid_mode: IntCounter,
+    /// The last seen value of `PER_SHARD_METRICS_ENABLE_REGEX`, and its
+    /// compiled form if it is non-empty and valid.
+    allow: (String, Option<Regex>),
+    invalid_regex: IntCounter,
 }
 
 impl PerShardMetricsFilter {
@@ -1337,7 +1371,50 @@ impl PerShardMetricsFilter {
         if self.mode().per_shard() {
             return;
         }
-        families.retain(|f| !PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()));
+        let allow = self.allow_regex();
+        families.retain_mut(|f| {
+            if !PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()) {
+                return true;
+            }
+            let Some(allow) = allow else {
+                return false;
+            };
+            f.mut_metric().retain(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| matches!(l.name(), "shard" | "name") && allow.is_match(l.value()))
+            });
+            !f.get_metric().is_empty()
+        });
+    }
+
+    /// Returns the regex of series to keep, or `None` to keep none.
+    ///
+    /// Recompiles only when the config value changes, so an invalid value is
+    /// logged once, but it is counted on every scrape. It fails closed: an
+    /// invalid regex keeps nothing rather than everything, which would bring
+    /// back the full per-shard cardinality.
+    fn allow_regex(&mut self) -> Option<&Regex> {
+        let value = PER_SHARD_METRICS_ENABLE_REGEX.get(&self.configs);
+        if value != self.allow.0 {
+            let compiled = if value.is_empty() {
+                None
+            } else {
+                Regex::new(&value)
+                    .inspect_err(|err| {
+                        warn!(
+                            "invalid {}, keeping no per-shard series: {err}",
+                            PER_SHARD_METRICS_ENABLE_REGEX.name()
+                        )
+                    })
+                    .ok()
+            };
+            self.allow = (value, compiled);
+        }
+        if !self.allow.0.is_empty() && self.allow.1.is_none() {
+            self.invalid_regex.inc();
+        }
+        self.allow.1.as_ref()
     }
 
     /// The export mode, or the default if the config value is unrecognized.
@@ -1359,8 +1436,6 @@ impl PerShardMetricsFilter {
             self.mode = (value, parsed);
         }
         if self.mode.1.as_str() != self.mode.0 {
-            // NOTE: Postprocessors run after collection, so this lands in the
-            // next scrape, not this one.
             self.invalid_mode.inc();
         }
         self.mode.1
@@ -1602,6 +1677,8 @@ struct ShardGauge {
     help: &'static str,
     /// How many of the largest shards `<name>_topk` names.
     top_k: usize,
+    /// Whether to emit `<name>_sum`. See [`AggregatedFamily::sum`].
+    sum: bool,
     get: fn(&ShardMetrics) -> u64,
 }
 
@@ -1616,6 +1693,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "total encoded rollup size by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.latest_rollup_size.get(),
         }),
     },
@@ -1630,6 +1708,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of hollow batches by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.hollow_batch_count.get(),
         }),
     },
@@ -1638,6 +1717,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of spine batches by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.spine_batch_count.get(),
         }),
     },
@@ -1646,6 +1726,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of batch parts by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.batch_part_count.get(),
         }),
     },
@@ -1658,6 +1739,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of updates by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.update_count.get(),
         }),
     },
@@ -1666,6 +1748,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of rollups by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.rollup_count.get(),
         }),
     },
@@ -1674,6 +1757,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "largest encoded batch size by shard",
             top_k: SHARD_TOP_K,
+            sum: false,
             get: |m| m.largest_batch_size.get(),
         }),
     },
@@ -1682,6 +1766,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "maximum count of gc-ineligible states by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.seqnos_held.get(),
         }),
     },
@@ -1690,6 +1775,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of seqnos since last rollup",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.seqnos_since_last_rollup.get(),
         }),
     },
@@ -1698,6 +1784,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of parts referenced by some live state but not the current state (ie. parts kept only to satisfy seqno holds) at GC time",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.gc_seqno_held_parts.get(),
         }),
     },
@@ -1706,6 +1793,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "the number of diffs (or, alternatively, the number of seqnos) present in consensus state at GC time",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.gc_live_diffs.get(),
         }),
     },
@@ -1732,6 +1820,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data in batches/parts referenced by current version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_current_state_batches_bytes.get(),
         }),
     },
@@ -1740,6 +1829,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data in rollups referenced by current version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_current_state_rollups_bytes.get(),
         }),
     },
@@ -1748,6 +1838,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data referenced only by a previous version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_referenced_not_current_state_bytes.get(),
         }),
     },
@@ -1756,6 +1847,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data written by an active writer but not referenced by any version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_not_leaked_not_referenced_bytes.get(),
         }),
     },
@@ -1764,6 +1856,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data reclaimable by a leaked blob detector",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_leaked_bytes.get(),
         }),
     },
@@ -1790,6 +1883,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of parts inline in shard metadata",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.inline_part_count.get(),
         }),
     },
@@ -1798,6 +1892,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of fully compact batches in the shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.compact_batches.get(),
         }),
     },
@@ -1806,6 +1901,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of batches in the shard with compactions in progress",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.compacting_batches.get(),
         }),
     },
@@ -1814,6 +1910,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of batches in the shard that aren't compact and have no ongoing compaction",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.noncompact_batches.get(),
         }),
     },
@@ -1829,6 +1926,7 @@ fn shard_gauges() -> impl Iterator<Item = (&'static str, &'static ShardGauge)> {
         })
 }
 
+const SHARD_INFO_NAME: &str = "mz_persist_shard_info";
 const BATCH_PART_VERSION_COUNT_NAME: &str = "mz_persist_batch_part_version_count";
 const BATCH_PART_VERSION_COUNT_HELP: &str = "count of batch parts by version, over all shards";
 
@@ -1846,10 +1944,12 @@ impl AggregationKey for ShardKey {
 }
 
 /// Process-level metrics derived from the shards map, collected in a single
-/// walk: the shard counts, percentiles and a top-K per per-shard gauge, and
-/// the per-version batch part count summed over shards.
+/// walk: the shard counts, percentiles, a top-K and (where meaningful) a sum
+/// per per-shard gauge, the per-version batch part count summed over shards,
+/// and, if [`SHARD_INFO_METRIC`] is set, `mz_persist_shard_info`.
 ///
-/// Their cardinality is independent of the number of shards.
+/// All but `mz_persist_shard_info` have a cardinality independent of the
+/// number of shards.
 #[derive(Debug)]
 struct ShardsAggregateMetrics {
     shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
@@ -1863,6 +1963,8 @@ struct ShardsAggregateMetrics {
     // Only used for `desc`. `collect` builds a fresh vec each scrape so that
     // versions no shard has anymore are not exported.
     batch_part_version_count: raw::UIntGaugeVec,
+    // Only used for `desc`, like `batch_part_version_count`.
+    shard_info: raw::UIntGaugeVec,
 }
 
 impl ShardsAggregateMetrics {
@@ -1874,6 +1976,7 @@ impl ShardsAggregateMetrics {
             .map(|(name, g)| AggregatedFamily {
                 name: name.to_string(),
                 help: g.help.to_string(),
+                sum: g.sum,
                 top_k: Some(g.top_k),
             })
             .collect();
@@ -1893,6 +1996,7 @@ impl ShardsAggregateMetrics {
             gauges: AggregatedFamilies::new(gauges),
             gauge_gets: shard_gauges().map(|(_, g)| g.get).collect(),
             batch_part_version_count: new_batch_part_version_count(),
+            shard_info: new_shard_info(),
         }
     }
 
@@ -1936,6 +2040,16 @@ impl ShardsAggregateMetrics {
     }
 }
 
+/// Lists the shards, which the `_topk` families name only the largest of. One
+/// series per shard, so unlike the summaries it grows with the shard count.
+fn new_shard_info() -> raw::UIntGaugeVec {
+    raw::UIntGaugeVec::new(
+        PrometheusOpts::new(SHARD_INFO_NAME, "1 for each active shard on this process"),
+        ShardKey::LABEL_NAMES,
+    )
+    .expect("valid gauge vec")
+}
+
 fn new_batch_part_version_count() -> raw::UIntGaugeVec {
     raw::UIntGaugeVec::new(
         PrometheusOpts::new(BATCH_PART_VERSION_COUNT_NAME, BATCH_PART_VERSION_COUNT_HELP),
@@ -1950,6 +2064,7 @@ impl Collector for ShardsAggregateMetrics {
         descs.extend(self.stale_count.desc());
         descs.extend(self.gauges.descs());
         descs.extend(self.batch_part_version_count.desc());
+        descs.extend(self.shard_info.desc());
         descs
     }
 
@@ -1966,11 +2081,19 @@ impl Collector for ShardsAggregateMetrics {
         self.count.set(count);
         self.stale_count.set(stale_count);
 
-        let mut families = if ShardMetricsExport::get(&self.configs).summary() {
-            self.summaries(live)
-        } else {
-            Vec::new()
-        };
+        let mut families = Vec::new();
+        if SHARD_INFO_METRIC.get(&self.configs) {
+            let shard_info = new_shard_info();
+            for m in &live {
+                shard_info
+                    .with_label_values(&[m.shard_id.to_string(), m.name.clone()])
+                    .set(1);
+            }
+            families.extend(shard_info.collect());
+        }
+        if ShardMetricsExport::get(&self.configs).summary() {
+            families.extend(self.summaries(live));
+        }
         families.extend(self.count.collect());
         families.extend(self.stale_count.collect());
         families
@@ -3703,8 +3826,10 @@ mod tests {
 
     #[mz_ore::test]
     fn per_shard_families_match_registrations() {
+        let cfg = PersistConfig::new_for_tests();
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let registry = MetricsRegistry::new();
-        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+        let metrics = Metrics::new(&cfg, &registry);
         let shard = metrics.shards.shard(&ShardId::new(), "s");
         shard.set_batch_part_versions(["v1"].into_iter());
         let gathered = registry.gather();
@@ -3740,17 +3865,19 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn every_shard_gauge_has_percentile_and_topk() {
+    fn every_shard_gauge_has_its_aggregates() {
         let registry = MetricsRegistry::new();
         let configs = Arc::clone(&PersistConfig::new_for_tests().configs);
         let shards = ShardsMetrics::new(&registry, Arc::clone(&configs));
         let agg = ShardsAggregateMetrics::new(Arc::clone(&shards.shards), configs);
         let declared: BTreeSet<_> = agg.desc().iter().map(|d| d.fq_name.clone()).collect();
-        for (gauge, _) in shard_gauges() {
+        for (gauge, g) in shard_gauges() {
             for suffix in ["_percentile", "_topk"] {
                 let name = format!("{gauge}{suffix}");
                 assert!(declared.contains(&name), "{name} not declared");
             }
+            let sum = format!("{gauge}_sum");
+            assert_eq!(declared.contains(&sum), g.sum, "{sum}");
         }
     }
 
@@ -3852,7 +3979,7 @@ mod tests {
     #[mz_ore::test]
     fn unknown_shard_metrics_mode_exports_the_default() {
         let (cfg, registry, _shards) = metrics_with_shards(3);
-        let both = family_names(&registry.gather());
+        let summary = family_names(&registry.gather());
         let invalid =
             |families: &[MetricFamily]| scalar(families, "mz_persist_shard_metrics_mode_invalid");
 
@@ -3860,16 +3987,15 @@ mod tests {
         updates.add(&SHARD_METRICS, "summry");
         cfg.apply_from(&updates);
 
-        // The default is `Both`, so a typo keeps exporting everything.
         let gathered = registry.gather();
-        assert_eq!(family_names(&gathered), both);
+        assert_eq!(family_names(&gathered), summary);
         // Counted on every scrape while it stays unrecognized, one scrape late.
         assert_eq!(invalid(&gathered), 0.0);
         assert_eq!(invalid(&registry.gather()), 1.0);
 
-        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let gathered = registry.gather();
-        assert!(family_names(&gathered).is_subset(&both));
+        assert!(summary.is_subset(&family_names(&gathered)));
         assert_eq!(invalid(&gathered), 2.0);
         assert_eq!(invalid(&registry.gather()), 2.0);
     }
@@ -3904,6 +4030,7 @@ mod tests {
     #[mz_ore::test]
     fn each_shard_metrics_mode_exports_its_families() {
         let (cfg, registry, _shards) = metrics_with_shards(3);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let both = family_names(&registry.gather());
         let per_shard: BTreeSet<_> = PER_SHARD_FAMILIES
             .iter()
@@ -3913,6 +4040,7 @@ mod tests {
             .iter()
             .filter(|n| {
                 n.ends_with("_percentile")
+                    || n.ends_with("_sum")
                     || n.ends_with("_topk")
                     || *n == "mz_persist_batch_part_version_count"
             })
@@ -3967,6 +4095,179 @@ mod tests {
             both_bytes > 100 * many_bytes,
             "{both_bytes} vs {many_bytes}"
         );
+    }
+
+    #[mz_ore::test]
+    fn shard_info_lists_live_shards_when_enabled() {
+        let (cfg, registry, mut shards) = metrics_with_shards(3);
+        let info =
+            |registry: &MetricsRegistry| gauge_set(&registry.gather(), SHARD_INFO_NAME, "name");
+        let mut updates = ConfigUpdates::default();
+        updates.add(&SHARD_INFO_METRIC, true);
+        cfg.apply_from(&updates);
+        // Independent of the mode, including the one that drops everything else.
+        for mode in ShardMetricsExport::ALL {
+            set_shard_metrics(&cfg, mode);
+            let expected = ["s1", "s2", "s3"].map(|n| (n.to_string(), 1)).into();
+            assert_eq!(info(&registry), expected, "{mode:?}");
+        }
+
+        shards.pop();
+        assert_eq!(info(&registry).len(), 2);
+    }
+
+    fn set_enable_regex(cfg: &PersistConfig, regex: &str) {
+        let mut updates = ConfigUpdates::default();
+        updates.add(&PER_SHARD_METRICS_ENABLE_REGEX, regex);
+        cfg.apply_from(&updates);
+    }
+
+    /// The per-shard series in `families`, keyed by family name and labels.
+    fn per_shard_series(
+        families: &[MetricFamily],
+    ) -> BTreeMap<(String, Vec<(String, String)>), prometheus::proto::Metric> {
+        families
+            .iter()
+            .filter(|f| PER_SHARD_FAMILIES.iter().any(|p| p.name == f.name()))
+            .flat_map(|f| {
+                f.get_metric().iter().map(|m| {
+                    let labels = m
+                        .get_label()
+                        .iter()
+                        .map(|l| (l.name().to_string(), l.value().to_string()))
+                        .collect();
+                    ((f.name().to_string(), labels), m.clone())
+                })
+            })
+            .collect()
+    }
+
+    /// The `name` labels of the shards with per-shard series in `families`.
+    fn exported_shard_names(families: &[MetricFamily]) -> BTreeSet<String> {
+        per_shard_series(families)
+            .into_keys()
+            .map(|(_, labels)| {
+                labels
+                    .into_iter()
+                    .find(|(k, _)| k == "name")
+                    .expect("per-shard series have a name label")
+                    .1
+            })
+            .collect()
+    }
+
+    #[mz_ore::test]
+    fn enable_regex_keeps_matching_shards_unchanged() {
+        let (cfg, registry, shards) = metrics_with_shards(5);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
+        let both = registry.gather();
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        let summary = registry.gather();
+        assert!(exported_shard_names(&summary).is_empty());
+
+        // By shard id: exactly that shard's series come back, byte for byte
+        // as they are in `both`, so dashboards need no change.
+        let shard_id = shards[2].shard_id.to_string();
+        set_enable_regex(&cfg, &shard_id);
+        let enabled = registry.gather();
+        let expected: BTreeMap<_, _> = per_shard_series(&both)
+            .into_iter()
+            .filter(|((_, labels), _)| labels.contains(&("shard".into(), shard_id.clone())))
+            .collect();
+        assert_eq!(expected.len(), PER_SHARD_FAMILIES.len());
+        assert_eq!(per_shard_series(&enabled), expected);
+        assert_eq!(family_names(&enabled), {
+            let mut names = family_names(&summary);
+            names.extend(PER_SHARD_FAMILIES.iter().map(|f| f.name.to_string()));
+            names
+        });
+
+        // By `name` label, and several at once.
+        set_enable_regex(&cfg, "^s2$");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["s2".to_string()])
+        );
+        set_enable_regex(&cfg, "^s(1|4)$");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["s1".to_string(), "s4".to_string()])
+        );
+
+        // Empty keeps none again.
+        set_enable_regex(&cfg, "");
+        assert_eq!(family_names(&registry.gather()), family_names(&summary));
+
+        // It applies in `none` too, and not while per-shard series are on.
+        set_enable_regex(&cfg, "^s2$");
+        set_shard_metrics(&cfg, ShardMetricsExport::None);
+        let gathered = registry.gather();
+        assert_eq!(
+            exported_shard_names(&gathered),
+            BTreeSet::from(["s2".to_string()])
+        );
+        assert!(gathered.iter().all(|f| !f.name().ends_with("_percentile")));
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
+        assert_eq!(exported_shard_names(&registry.gather()).len(), 5);
+    }
+
+    #[mz_ore::test]
+    fn unanchored_enable_regex_over_matches() {
+        let cfg = PersistConfig::new_for_tests();
+        let registry = MetricsRegistry::new();
+        let metrics = Metrics::new(&cfg, &registry);
+        let shard = |name: &str| metrics.shards.shard(&ShardId::new(), name);
+        // `r` is not a hex digit, so these names can't collide with the
+        // random shard ids the second half matches against.
+        let _named: Vec<_> = (1..=10).map(|i| shard(&format!("src{i}"))).collect();
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+
+        // Unanchored, so a pattern meant for one shard keeps every name it
+        // is a substring of.
+        set_enable_regex(&cfg, "src1");
+        assert_eq!(
+            exported_shard_names(&registry.gather()),
+            BTreeSet::from(["src1".to_string(), "src10".to_string()])
+        );
+
+        // It is tried against `shard` and `name`, so a pattern scoped to one
+        // shard's id also keeps any shard whose name contains that fragment.
+        // The naming here is contrived, but a pattern loose enough to hit
+        // both labels is what brings the shed cardinality back.
+        let target = shard("by-id");
+        let fragment = target.shard_id.to_string()[3..9].to_string();
+        let decoy = shard(&format!("t-{fragment}-t"));
+        assert!(!decoy.shard_id.to_string().contains(&fragment));
+        set_enable_regex(&cfg, &fragment);
+        let kept = exported_shard_names(&registry.gather());
+        assert!(kept.contains(&target.name), "{kept:?}");
+        assert!(kept.contains(&decoy.name), "{kept:?}");
+    }
+
+    #[mz_ore::test]
+    fn invalid_enable_regex_fails_closed() {
+        let (cfg, registry, _shards) = metrics_with_shards(3);
+        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        let summary = family_names(&registry.gather());
+        let invalid = |families: &[MetricFamily]| {
+            scalar(families, "mz_persist_per_shard_metrics_regex_invalid")
+        };
+
+        set_enable_regex(&cfg, "(");
+        let gathered = registry.gather();
+        assert_eq!(family_names(&gathered), summary);
+        // Counted on every scrape while it stays invalid, one scrape late.
+        assert_eq!(invalid(&gathered), 0.0);
+        assert_eq!(invalid(&registry.gather()), 1.0);
+
+        set_enable_regex(&cfg, "^s1$");
+        let gathered = registry.gather();
+        assert_eq!(
+            exported_shard_names(&gathered),
+            BTreeSet::from(["s1".to_string()])
+        );
+        assert_eq!(invalid(&gathered), 2.0);
+        assert_eq!(invalid(&registry.gather()), 2.0);
     }
 
     fn gauge_count(families: &[MetricFamily], name: &str) -> usize {
@@ -4048,8 +4349,10 @@ mod tests {
 
     #[mz_ore::test]
     fn process_counters_survive_shard_drop() {
+        let cfg = PersistConfig::new_for_tests();
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let registry = MetricsRegistry::new();
-        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+        let metrics = Metrics::new(&cfg, &registry);
         let a = metrics.shards.shard(&ShardId::new(), "a");
         let b = metrics.shards.shard(&ShardId::new(), "b");
         a.blob_gets.inc_by(5);

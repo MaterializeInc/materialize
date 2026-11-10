@@ -16,6 +16,5 @@
 pub mod boot;
 pub mod client;
 pub mod local;
-pub mod params;
 pub mod retry;
 pub mod transport;

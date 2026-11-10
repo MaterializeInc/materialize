@@ -20,8 +20,14 @@ import { ObjectJourneyBreadcrumb } from "./ObjectJourneyBreadcrumb";
 export const ObjectDetailDrawer = () => {
   const { objectId } = useParams<{ objectId: string }>();
   const navigate = useNavigate();
-  const { data, isLoading, lookbackMinutes, setLookbackMinutes } =
-    useOutletContext<MaintainedObjectsOutletContext>();
+  const {
+    data,
+    isLoading,
+    hydrationReady,
+    isError,
+    lookbackMinutes,
+    setLookbackMinutes,
+  } = useOutletContext<MaintainedObjectsOutletContext>();
 
   const item = data.find((o) => o.id === objectId) ?? null;
 
@@ -50,7 +56,11 @@ export const ObjectDetailDrawer = () => {
         />
       ) : (
         <Center py={10}>
-          {isLoading ? <Spinner data-testid="loading-spinner" /> : null}
+          {/* A source-fed table is only listed once the hydration snapshot
+              names its source. */}
+          {isLoading || (!hydrationReady && !isError) ? (
+            <Spinner data-testid="loading-spinner" />
+          ) : null}
         </Center>
       )}
     </SideDrawer>

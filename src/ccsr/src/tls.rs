@@ -184,21 +184,21 @@ fn common_name_matches(cert: &x509_cert::Certificate, server_name: &ServerName<'
     let ServerName::DnsName(name) = server_name else {
         return false;
     };
-    let tbs = &cert.tbs_certificate;
+    let tbs = cert.tbs_certificate();
     // An undecodable subjectAltName extension counts as present.
-    let has_san = tbs.filter::<SubjectAltName>().any(|san| match san {
-        Ok((_, SubjectAltName(names))) => names
-            .iter()
-            .any(|name| matches!(name, GeneralName::DnsName(_) | GeneralName::IpAddress(_))),
-        Err(_) => true,
-    });
+    let has_san = tbs
+        .filter_extensions::<SubjectAltName>()
+        .any(|san| match san {
+            Ok((_, SubjectAltName(names))) => names
+                .iter()
+                .any(|name| matches!(name, GeneralName::DnsName(_) | GeneralName::IpAddress(_))),
+            Err(_) => true,
+        });
     if has_san {
         return false;
     }
-    tbs.subject
-        .0
+    tbs.subject()
         .iter()
-        .flat_map(|rdn| rdn.0.iter())
         .filter(|atv| atv.oid == rfc4519::CN)
         .any(|cn| {
             let cn = match cn.value.tag() {
@@ -238,7 +238,7 @@ impl ServerCertVerifier for ExactRootMatch {
         {
             let cert = x509_cert::Certificate::from_der(end_entity)
                 .map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
-            let validity = &cert.tbs_certificate.validity;
+            let validity = cert.tbs_certificate().validity();
             let now = now.as_secs();
             if now < validity.not_before.to_unix_duration().as_secs() {
                 return Err(rustls::Error::InvalidCertificate(

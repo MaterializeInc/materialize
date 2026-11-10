@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS builder
 
 WORKDIR /app
 
@@ -38,9 +38,9 @@ ENV NODE_OPTIONS='--max_old_space_size=4096'
 # Build the app
 RUN yarn build
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
-FROM nginxinc/nginx-unprivileged:alpine@sha256:6a23acdfca2b9cfbcec61419e3f1426bcbedb91362f2f19306a8567423bb4612
+FROM nginxinc/nginx-unprivileged:alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
 
 # Add labels
 LABEL maintainer="support@materialize.com" \
@@ -52,8 +52,13 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY misc/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY misc/docker/metrics.js /etc/nginx/njs/metrics.js
+# The metrics need the njs module, and `load_module` only works in the main
+# context, ahead of the `http` block that includes the template.
+RUN sed -i '1i load_module modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf
 
 ENV MZ_NGINX_LISTENER_CONFIG="listen 8080;"
+ENV MZ_NGINX_METRICS_LISTENER_CONFIG="listen 8081;"
 # This value has to just be set in order for the entrpoint to auto-detect the local resolvers
 # and put them in NGINX_LOCAL_RESOLVERS
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS='true'

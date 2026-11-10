@@ -158,6 +158,7 @@ pub(crate) async fn migrate(
         ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
         ast_rewrite_small_commit_intervals(stmt)?;
         ast_rewrite_strip_builtin_version_pins(stmt)?;
+        ast_rewrite_strip_unsupported_column_collations(stmt)?;
         Ok(())
     })?;
 
@@ -1267,6 +1268,24 @@ fn ast_rewrite_small_commit_intervals(stmt: &mut Statement<Raw>) -> Result<(), a
     rewrite_interval_option_floor_1s(interval, "commit interval")
 }
 
+/// Planning rejects unsupported column collations, but `CREATE TABLE` used to
+/// accept and ignore them. Strip them so the table still plans after an
+/// upgrade. The planner never applied them, so the table's columns are
+/// unchanged.
+fn ast_rewrite_strip_unsupported_column_collations(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateTable(stmt) = stmt else {
+        return Ok(());
+    };
+    for column in &mut stmt.columns {
+        column
+            .collation
+            .take_if(|collation| !mz_sql::plan::is_supported_collation(collation));
+    }
+    Ok(())
+}
+
 /// Rewrites an interval option value to `'1s'` if it is below 1 second.
 fn rewrite_interval_option_floor_1s(
     value: &mut mz_sql::ast::WithOptionValue<Raw>,
@@ -1332,6 +1351,22 @@ mod tests {
         );
         assert!(!out.contains("VERSION"), "unexpected version: {out}");
         assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn strips_unsupported_column_collations() {
+        let mut stmt = mz_sql::parse::parse(
+            r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."text"] COLLATE "unicode", "b" [s21 AS "pg_catalog"."int4"] COLLATE "nonexistent", "c" [s20 AS "pg_catalog"."text"] COLLATE "pg_catalog"."default" NOT NULL)"#,
+        )
+        .expect("test sql parses")
+        .into_element()
+        .ast;
+        ast_rewrite_strip_unsupported_column_collations(&mut stmt).expect("rewrite succeeds");
+        assert_eq!(
+            stmt.to_ast_string_stable(),
+            r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."text"], "b" [s21 AS "pg_catalog"."int4"], "c" [s20 AS "pg_catalog"."text"] COLLATE "pg_catalog"."default" NOT NULL)"#,
+        );
     }
 
     fn add_doc_on_ids(

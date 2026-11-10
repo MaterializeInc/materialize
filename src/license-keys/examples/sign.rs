@@ -23,6 +23,10 @@ struct Opt {
     profile: String,
     #[clap(long)]
     key_id: String,
+    /// File containing the intermediate JWT for `key_id`, if it is an
+    /// intermediate key.
+    #[clap(long)]
+    intermediate_jwt_file: Option<String>,
     #[clap(long)]
     organization_id: String,
     #[clap(long, default_value_t = Uuid::new_v4().to_string())]
@@ -41,6 +45,10 @@ struct Opt {
 async fn main() {
     let opt = Opt::parse();
 
+    let intermediate_jwt = opt
+        .intermediate_jwt_file
+        .map(|path| std::fs::read_to_string(path).unwrap().trim().to_string());
+
     let config = mz_aws_util::defaults()
         .region(Region::new(opt.region))
         .profile_name(opt.profile)
@@ -51,6 +59,7 @@ async fn main() {
     let license_key = make_license_key(
         &client,
         &opt.key_id,
+        intermediate_jwt,
         Duration::from_secs(opt.validity_secs),
         opt.organization_id,
         opt.environment_id,

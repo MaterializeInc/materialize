@@ -17,17 +17,18 @@
 //! [`WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL`]). We call one such run a
 //! "tick", and the term is used throughout this module.
 //!
-//! Each tick the task asks the coordinator to classify the clusters, which
-//! needs controller state only the coordinator loop can reach. The task then
-//! applies the stability gate itself, because the replica queries it needs
-//! call back into the coordinator and would deadlock on its loop.
+//! Each tick the task reads the leader's Persist collections, then asks the
+//! coordinator to capture local state and issue hydration requests. The task
+//! awaits the replies, classifies the clusters and applies the stability gate.
+//! None of those waits run on the coordinator loop.
 //!
 //! A point-in-time caught-up check is not enough on its own: a crash- or
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
 //! over right then drops us straight into a crashing replica. On top of the
 //! per-tick caught-up classification we therefore run a stability gate. A
-//! caught-up cluster is ready only once every replica is `Online` and has had
-//! everything it hosts hydrated for a configurable period.
+//! caught-up cluster is ready only once every replica is `Online` and every
+//! non-exempt replica has had its non-ignored collections hydrated for a
+//! configurable period, capped for young replicas by [`observe_stability`].
 //!
 //! Each replica reports its hydration times in its
 //! `mz_compute_hydration_times_per_worker` introspection log. The log lives in
@@ -35,8 +36,8 @@
 //! environmentd reconciles with the same replica processes and they keep
 //! compatible dataflows, so a DDL-triggered restart does not restart the
 //! period. A dataflow that changed rehydrates and restarts it. The log dies
-//! with the process, so a restarted replica has to hydrate again and then wait
-//! out the full period, and a crash-looping replica never becomes ready.
+//! with the process, so a restarted replica must hydrate again and establish
+//! a new observation period, subject to the young-replica cap.
 //!
 //! Hydration times come from the replica's clock, while the period is measured
 //! against environmentd's. A replica clock that runs ahead only lengthens the
@@ -44,13 +45,14 @@
 //! hosts keeping their clocks in sync.
 //!
 //! A replica without introspection logging cannot report hydration times. It
-//! only has to be `Online`.
+//! only has to be `Online`. Leader-relative exemptions are defined by
+//! [`LeaderHydration::replica_has_unhydrated_collection`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use differential_dataflow::lattice::Lattice as _;
 use futures::{StreamExt, future};
 use itertools::Itertools;
@@ -59,9 +61,13 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
-use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::builtin::{
+    MZ_CATALOG_SERVER_CLUSTER, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY,
+    MZ_COMPUTE_HYDRATION_TIMES,
+};
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
+use mz_compute_client::controller::error::CollectionMissing;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
 use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -70,41 +76,45 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_repr::{GlobalId, Row, Timestamp};
+use mz_storage_client::storage_collections::StorageCollections;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::oneshot;
-use tokio::time::MissedTickBehavior;
 
 use crate::PeekClient;
+use crate::catalog::Catalog;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 
-/// How long a check waits for a replica to answer the hydration query.
+/// How long the stability gate waits for an internal query.
 ///
-/// A replica that does not answer in time counts as not hydrated for that
-/// check. Replicas are asked concurrently, so this also bounds how long a check
-/// waits for replicas.
-///
-/// The check drops a query that times out, with the leftovers documented at
-/// [`PeekClient::background_peek`]. We accept those: a stuck replica holds at
-/// most one peek per check, on a log index that barely changes, and an
-/// orphaned registration needs the coordinator to stall at exactly that point.
-const HYDRATION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout drops the query without canceling its peek. See
+/// [`PeekClient::background_peek`] for the lifetime of retained resources.
+const STABILITY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns a query for when a replica last finished hydrating an export.
 ///
-/// The one row it returns is NULL if some export, other than a transient one
-/// or one in `ignored`, is not hydrated on some worker. It returns no row if
-/// the replica has reported nothing yet.
+/// It returns no row if the replica has reported no non-transient export.
+/// Otherwise its one row says whether the export is in `ignored`, which holds
+/// only when every reported export is, and its hydration time: NULL if some
+/// export not in `ignored` is not hydrated on some worker, else the latest
+/// time one of them hydrated.
+///
+/// NOTE: This must stay a fast-path peek, an index scan plus a finishing, so
+/// that it does not install a dataflow on every replica on every tick.
+/// Aggregates would make it a slow-path peek.
 fn hydration_query(ignored: &BTreeSet<GlobalId>) -> String {
-    let mut query = "SELECT hydrated_at \
-        FROM mz_introspection.mz_compute_hydration_times_per_worker \
-        WHERE export_id NOT LIKE 't%'"
-        .to_string();
-    if !ignored.is_empty() {
+    let is_ignored = if ignored.is_empty() {
+        "false".to_string()
+    } else {
         let ids = ignored.iter().map(|id| format!("'{id}'")).join(", ");
-        write!(query, " AND export_id NOT IN ({ids})").expect("writing to a string");
-    }
-    query.push_str(" ORDER BY hydrated_at DESC NULLS FIRST LIMIT 1");
-    query
+        format!("export_id IN ({ids})")
+    };
+    format!(
+        "SELECT {is_ignored} AS ignored, hydrated_at \
+        FROM mz_introspection.mz_compute_hydration_times_per_worker \
+        WHERE export_id NOT LIKE 't%' \
+        ORDER BY ignored, hydrated_at DESC NULLS FIRST LIMIT 1"
+    )
 }
 
 /// Context needed to check whether clusters/collections are caught up.
@@ -120,17 +130,45 @@ pub struct CaughtUpCheckContext {
     pub exclude_collections: BTreeSet<GlobalId>,
 }
 
-/// A request from the caught-up check task for the coordinator's view of the
-/// clusters, answered by [`Coordinator::handle_caught_up_check_request`].
+/// Requests local controller state without waiting for external reads.
 #[derive(Debug)]
 pub struct CaughtUpCheckRequest {
     exclude_collections: Arc<BTreeSet<GlobalId>>,
-    tx: oneshot::Sender<CaughtUpSnapshot>,
+    tx: oneshot::Sender<CaughtUpCheck>,
 }
 
-/// The coordinator's view of the clusters at one check.
+/// Inputs owned by one background check.
 #[derive(Debug)]
-pub struct CaughtUpSnapshot {
+struct CaughtUpCheck {
+    catalog: Arc<Catalog>,
+    now: EpochMillis,
+    clusters: BTreeMap<ClusterId, Result<ClusterSnapshot, anyhow::Error>>,
+}
+
+struct LeaderSnapshot {
+    frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    hydration: LeaderHydration,
+    unhydrated_collections: BTreeSet<GlobalId>,
+    problematic_replicas: BTreeSet<ReplicaId>,
+}
+
+#[derive(Debug)]
+struct ClusterSnapshot {
+    replicas: BTreeMap<ReplicaId, ReplicaTarget>,
+    ignored_compute_collections: BTreeSet<GlobalId>,
+    collections: Vec<(GlobalId, Antichain<Timestamp>, CollectionType)>,
+    compute_hydration: oneshot::Receiver<BTreeMap<GlobalId, Result<bool, CollectionMissing>>>,
+}
+
+#[derive(Debug)]
+enum CollectionType {
+    Storage { hydrated: bool },
+    Compute,
+}
+
+/// The cluster classification and stability inputs for one tick.
+#[derive(Debug)]
+struct CaughtUpSnapshot {
     now: EpochMillis,
     /// Whether every cluster is caught up or ignored.
     all_caught_up: bool,
@@ -190,8 +228,7 @@ enum ReplicaHealth {
     NotHydrated,
     /// The replica has been healthy since this wall-clock time.
     HealthySince(EpochMillis),
-    /// The replica is `Online` but cannot report hydration times, so there is
-    /// nothing to wait on.
+    /// The replica is `Online` and exempt from the hydration stability check.
     Exempt,
 }
 
@@ -219,12 +256,11 @@ struct StabilityObservation {
 
 /// Folds the health of a cluster's replicas into the gate's verdict.
 ///
-/// A cluster is stable since the latest of its replicas' healthy-since times.
-/// These can come from replica clocks, which may run ahead of `now`, so they
-/// are clamped to `now`. A replica clock running behind shortens the period by
-/// its skew.
+/// Each replica waits for the configured period, capped at its creation age
+/// when it hydrated. Missing or invalid creation evidence retains the full
+/// period. Replica clocks running behind shorten the wait by their skew.
 fn observe_stability(
-    replicas: &[ReplicaHealth],
+    replicas: &[(ReplicaHealth, Option<EpochMillis>)],
     now: EpochMillis,
     period_ms: u64,
 ) -> StabilityObservation {
@@ -232,13 +268,29 @@ fn observe_stability(
         stable_for_ms: None,
         blocked_by: Some(blocker),
     };
-    if replicas.is_empty() || replicas.contains(&ReplicaHealth::NotOnline) {
+    if replicas.is_empty()
+        || replicas
+            .iter()
+            .any(|(health, _)| *health == ReplicaHealth::NotOnline)
+    {
         return blocked(StabilityBlocker::NotOnline);
     }
     let mut stable_since = EpochMillis::MIN;
-    for health in replicas {
+    let mut within_period = false;
+    for (health, created_at) in replicas {
         match health {
-            ReplicaHealth::HealthySince(since) => stable_since = stable_since.max(*since),
+            ReplicaHealth::HealthySince(since) => {
+                stable_since = stable_since.max(*since);
+                // Freeze the age at hydration. Using its current age makes
+                // the required period grow as quickly as the observed period.
+                let required = match created_at {
+                    Some(created) if created <= since && *since <= now => {
+                        period_ms.min(since - created)
+                    }
+                    _ => period_ms,
+                };
+                within_period |= now.saturating_sub(*since) < required;
+            }
             ReplicaHealth::Exempt => {}
             ReplicaHealth::NotOnline | ReplicaHealth::NotHydrated => {
                 return blocked(StabilityBlocker::NotHydrated);
@@ -248,7 +300,7 @@ fn observe_stability(
     let stable_for_ms = now.saturating_sub(stable_since.min(now));
     StabilityObservation {
         stable_for_ms: Some(stable_for_ms),
-        blocked_by: (stable_for_ms < period_ms).then_some(StabilityBlocker::WithinPeriod),
+        blocked_by: within_period.then_some(StabilityBlocker::WithinPeriod),
     }
 }
 
@@ -256,11 +308,12 @@ fn observe_stability(
 /// for their hydration times and applies the stability gate.
 struct StabilityGate {
     client: PeekClient,
+    replica_created_at: BTreeMap<ReplicaId, EpochMillis>,
 }
 
 impl StabilityGate {
     /// Returns whether `snapshot` shows every cluster ready for promotion.
-    async fn ready(&self, snapshot: CaughtUpSnapshot) -> bool {
+    async fn ready(&mut self, snapshot: CaughtUpSnapshot) -> bool {
         fail::fail_point!("0dt_caught_up_check", |_| false);
         let CaughtUpSnapshot {
             now,
@@ -278,6 +331,17 @@ impl StabilityGate {
             return all_caught_up;
         }
 
+        // Missing evidence keeps the full period. Retry until every queried
+        // user replica has a creation time, since catalog views may hydrate late.
+        if caught_up_clusters.values().any(|cluster| {
+            cluster.replicas.iter().any(|(id, target)| {
+                id.is_user()
+                    && *target == ReplicaTarget::Ask
+                    && !self.replica_created_at.contains_key(id)
+            })
+        }) {
+            self.load_replica_creation_times().await;
+        }
         let answers = self.ask_replicas(&caught_up_clusters).await;
 
         let mut all_ready = true;
@@ -298,7 +362,10 @@ impl StabilityGate {
                 })
                 .collect();
 
-            let replica_health = health.values().copied().collect_vec();
+            let replica_health = health
+                .iter()
+                .map(|(id, health)| (*health, self.replica_created_at.get(id).copied()))
+                .collect_vec();
             let observation = observe_stability(&replica_health, now, stability_period_ms);
             if let Some(reason) = observation.blocked_by {
                 all_ready = false;
@@ -315,6 +382,49 @@ impl StabilityGate {
 
         tracing::info!(%all_ready, "checked caught-up status of clusters");
         all_ready
+    }
+
+    async fn load_replica_creation_times(&mut self) {
+        let query = async {
+            let CatalogSnapshot { catalog } = self
+                .client
+                .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+                .await?;
+            let cluster = catalog.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+            let replica = cluster.replicas().next().ok_or_else(|| {
+                crate::AdapterError::Internal("catalog server has no replicas".into())
+            })?;
+            let (cluster_id, replica_id) = (cluster.id, replica.replica_id);
+            drop(catalog);
+            self.client.background_peek(
+                "SELECT replica_id, created_at FROM mz_internal.mz_cluster_replica_history WHERE dropped_at IS NULL",
+                cluster_id, replica_id,
+            ).await
+        };
+        match tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await {
+            Ok(Ok(rows)) => {
+                for row in rows {
+                    let mut values = row.iter();
+                    let id = values.next().expect("replica_id");
+                    let created = values.next().expect("created_at");
+                    if id.is_null() || created.is_null() {
+                        continue;
+                    }
+                    if let (Ok(id), Ok(created)) = (
+                        id.unwrap_str().parse::<ReplicaId>(),
+                        u64::try_from(created.unwrap_timestamptz().timestamp_millis()),
+                    ) {
+                        self.replica_created_at.insert(id, created);
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "replica creation query failed; retaining full stability period")
+            }
+            Err(_) => {
+                tracing::warn!("replica creation query timed out; retaining full stability period")
+            }
+        }
     }
 
     /// Asks every [`ReplicaTarget::Ask`] replica, concurrently, when it last
@@ -334,7 +444,7 @@ impl StabilityGate {
                     let sql = sql.clone();
                     async move {
                         let query = client.background_peek(&sql, cluster_id, replica_id);
-                        let answer = tokio::time::timeout(HYDRATION_QUERY_TIMEOUT, query).await;
+                        let answer = tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await;
                         let health = match answer {
                             Ok(Ok(rows)) => replica_health(&rows),
                             Ok(Err(error)) => {
@@ -359,9 +469,17 @@ impl StabilityGate {
 /// Interprets the rows of a [`hydration_query`].
 fn replica_health(rows: &[Row]) -> ReplicaHealth {
     let Some(row) = rows.first() else {
+        // The replica has not reported its exports yet.
         return ReplicaHealth::NotHydrated;
     };
-    let hydrated_at = row.unpack_first();
+    let mut datums = row.iter();
+    let ignored = datums.next().expect("ignored column");
+    let hydrated_at = datums.next().expect("hydrated_at column");
+    if ignored.unwrap_bool() {
+        // The classification ignored every export the replica hosts, so no
+        // hydration is left to wait for.
+        return ReplicaHealth::Exempt;
+    }
     if hydrated_at.is_null() {
         return ReplicaHealth::NotHydrated;
     }
@@ -389,15 +507,32 @@ impl Coordinator {
         let period = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL
             .get(self.catalog().system_config().dyncfgs());
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let gate = StabilityGate {
+        let mut catalog = self.owned_catalog();
+        let storage_collections = Arc::clone(&self.controller.storage_collections);
+        let mut gate = StabilityGate {
             client: self.background_peek_client(&self.owned_catalog()),
+            replica_created_at: BTreeMap::new(),
         };
 
         task::spawn(|| "caught_up_check", async move {
-            let mut interval = tokio::time::interval(period);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut delay = None;
             loop {
-                interval.tick().await;
+                // Leave a full idle period between attempts, including retries.
+                // An interval would immediately retry a check that outlasted its period.
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                delay = Some(period);
+                // Sample the leader before local frontiers and hydration. Slow
+                // Persist reads must not age local evidence or create artificial lag.
+                let leader = match LeaderSnapshot::read(&catalog, &*storage_collections).await {
+                    Ok(leader) => leader,
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot read leader caught-up state");
+                        continue;
+                    }
+                };
+                let leader_revision = catalog.transient_revision();
                 let (tx, rx) = oneshot::channel();
                 let request = CaughtUpCheckRequest {
                     exclude_collections: Arc::clone(&exclude_collections),
@@ -414,10 +549,18 @@ impl Coordinator {
                 {
                     return;
                 }
-                let Ok(snapshot) = rx.await else {
+                let Ok(check) = rx.await else {
                     return;
                 };
-                if gate.ready(snapshot).await {
+                catalog = Arc::clone(&check.catalog);
+                // Read-only mode rejects catalog transactions and handles leader DDL
+                // by restarting via `check_ddl_changes`. Both revision checks guard
+                // against stale evidence if catalog changes are ever applied in place.
+                if catalog.transient_revision() != leader_revision {
+                    continue;
+                }
+                let snapshot = check.run(leader).await;
+                if gate.ready(snapshot).await && catalog.transient_revision_is_current() {
                     trigger.fire();
                     return;
                 }
@@ -425,19 +568,109 @@ impl Coordinator {
         });
     }
 
-    /// Answers a [`CaughtUpCheckRequest`] with the classification of every
-    /// cluster and the replicas the stability gate has to hear from.
-    pub(crate) async fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
+    /// Captures local state and issues hydration requests without awaiting them.
+    pub(crate) fn handle_caught_up_check_request(&self, request: CaughtUpCheckRequest) {
         let CaughtUpCheckRequest {
             exclude_collections,
             tx,
         } = request;
+        let clusters = self
+            .catalog()
+            .clusters()
+            .filter(|cluster| cluster.replicas().next().is_some())
+            .map(|cluster| {
+                (
+                    cluster.id,
+                    self.caught_up_cluster_snapshot(cluster, &exclude_collections),
+                )
+            })
+            .collect();
+        let _ = tx.send(CaughtUpCheck {
+            catalog: self.owned_catalog(),
+            now: self.now(),
+            clusters,
+        });
+    }
 
-        let replica_frontier_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
-        let replica_frontier_gid = self
-            .catalog()
+    fn caught_up_cluster_snapshot(
+        &self,
+        cluster: &Cluster,
+        exclude_collections: &BTreeSet<GlobalId>,
+    ) -> Result<ClusterSnapshot, anyhow::Error> {
+        let has_hydration_log = cluster
+            .log_indexes
+            .contains_key(&LogVariant::Compute(ComputeLog::HydrationTime));
+        let replicas = cluster
+            .replicas()
+            .map(|replica| {
+                let online = self
+                    .cluster_replica_statuses
+                    .try_get_cluster_replica_statuses(cluster.id, replica.replica_id)
+                    .is_some_and(|processes| {
+                        !processes.is_empty()
+                            && ClusterReplicaStatuses::cluster_replica_status(processes)
+                                == ClusterStatus::Online
+                    });
+                let target = if !online {
+                    ReplicaTarget::NotOnline
+                } else if !has_hydration_log || !replica.config.compute.logging.enabled() {
+                    ReplicaTarget::Exempt
+                } else {
+                    ReplicaTarget::Ask
+                };
+                (replica.replica_id, target)
+            })
+            .collect();
+        let mut collections = Vec::new();
+        for id in self
+            .controller
+            .storage
+            .active_ingestion_exports(cluster.id)
+            .copied()
+            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+        {
+            let (_, frontier) = self.controller.storage.collection_frontiers(id)?;
+            let hydrated = self.controller.storage.collection_hydrated(id)?;
+            collections.push((id, frontier, CollectionType::Storage { hydrated }));
+        }
+        let mut ignored_compute_collections = BTreeSet::new();
+        let mut compute_ids = Vec::new();
+        for id in self.controller.compute.collection_ids(cluster.id)? {
+            if exclude_collections.contains(&id) {
+                ignored_compute_collections.insert(id);
+            } else if !id.is_transient() {
+                let frontier = self
+                    .controller
+                    .compute
+                    .collection_frontiers(id, Some(cluster.id))?
+                    .write_frontier
+                    .to_owned();
+                collections.push((id, frontier, CollectionType::Compute));
+                compute_ids.push(id);
+            }
+        }
+        let compute_hydration = self
+            .controller
+            .compute
+            .collections_hydrated(cluster.id, compute_ids)?;
+        Ok(ClusterSnapshot {
+            replicas,
+            ignored_compute_collections,
+            collections,
+            compute_hydration,
+        })
+    }
+}
+
+impl LeaderSnapshot {
+    async fn read(
+        catalog: &Catalog,
+        storage_collections: &(dyn StorageCollections + Send + Sync),
+    ) -> Result<Self, anyhow::Error> {
+        fail::fail_point!("0dt_caught_up_read");
+        let replica_frontier_item_id =
+            catalog.resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
+        let replica_frontier_gid = catalog
             .get_entry(&replica_frontier_item_id)
             .latest_global_id();
 
@@ -450,12 +683,10 @@ impl Coordinator {
         // reason, so a declared migration can't reach here. A test forcing replacement across all
         // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
         // below then compares this deployment against itself.
-        let live_frontiers = self
-            .controller
-            .storage_collections
+        let live_frontiers = storage_collections
             .snapshot_latest(replica_frontier_gid)
             .await
-            .expect("can't read mz_cluster_replica_frontiers");
+            .context("cannot read mz_cluster_replica_frontiers")?;
 
         let live_frontiers = live_frontiers
             .into_iter()
@@ -489,9 +720,20 @@ impl Coordinator {
             })
             .collect_vec();
 
-        // The classification only requires each collection to be hydrated on
-        // _some_ replica. The stability gate separately requires every replica
-        // to have hydrated everything it hosts.
+        let leader_hydration = {
+            let item_id = catalog.resolve_builtin_storage_collection(&MZ_COMPUTE_HYDRATION_TIMES);
+            let id = catalog.get_entry(&item_id).latest_global_id();
+            match storage_collections.snapshot_latest(id).await {
+                Ok(rows) => LeaderHydration::from_rows(rows),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot read leader hydration; requiring local hydration");
+                    LeaderHydration::default()
+                }
+            }
+        };
+        let leader_unhydrated_collections =
+            leader_hydration.collections_unhydrated_on_all_hosting_replicas(&live_frontiers);
+
         let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
             .into_iter()
             .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
@@ -506,36 +748,48 @@ impl Coordinator {
             .into_iter()
             .collect();
 
-        tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
+        let problematic_replicas = if ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK
+            .get(catalog.system_config().dyncfgs())
+        {
+            Self::analyze_replica_looping(catalog, storage_collections, (catalog.config().now)())
+                .await?
+        } else {
+            BTreeSet::new()
+        };
+        Ok(Self {
+            frontiers: live_collection_frontiers,
+            hydration: leader_hydration,
+            unhydrated_collections: leader_unhydrated_collections,
+            problematic_replicas,
+        })
+    }
+}
 
+impl CaughtUpCheck {
+    async fn run(mut self, leader: LeaderSnapshot) -> CaughtUpSnapshot {
+        let LeaderSnapshot {
+            frontiers,
+            hydration,
+            unhydrated_collections,
+            problematic_replicas,
+        } = leader;
+        tracing::debug!(?frontiers, "checking re-hydration status");
         let allowed_lag =
-            WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG.get(self.catalog().system_config().dyncfgs());
+            WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG.get(self.catalog.system_config().dyncfgs());
         let allowed_lag: u64 = allowed_lag
             .as_millis()
             .try_into()
             .expect("must fit into u64");
 
-        let cutoff = WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
+        let cutoff = WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog.system_config().dyncfgs());
         let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
 
-        let now = self.now();
-
-        // Something might go wrong with querying the status collection, so we
-        // have an emergency flag for disabling it.
-        let replica_status_check_enabled =
-            ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK.get(self.catalog().system_config().dyncfgs());
-
-        // Analyze replica statuses to detect crash-looping or OOM-looping replicas
-        let problematic_replicas = if replica_status_check_enabled {
-            self.analyze_replica_looping(now).await
-        } else {
-            BTreeSet::new()
-        };
+        let now = self.now;
 
         let stability_check_enabled =
-            ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK.get(self.catalog().system_config().dyncfgs());
+            ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK.get(self.catalog.system_config().dyncfgs());
         let stability_period =
-            WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD.get(self.catalog().system_config().dyncfgs());
+            WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD.get(self.catalog.system_config().dyncfgs());
         // Cap rather than panic on an absurdly large configured duration. A
         // period of u64::MAX milliseconds means "effectively never auto-ready",
         // which is the safe, conservative outcome: we won't cut over on our own,
@@ -547,8 +801,8 @@ impl Coordinator {
                 allowed_lag.into(),
                 cutoff.into(),
                 now.into(),
-                &live_collection_frontiers,
-                &exclude_collections,
+                &frontiers,
+                &unhydrated_collections,
                 &problematic_replicas,
             )
             .await;
@@ -565,8 +819,12 @@ impl Coordinator {
                     } => Some((
                         cluster_id,
                         CaughtUpCluster {
+                            replicas: self.replica_targets(
+                                cluster_id,
+                                &hydration,
+                                &ignored_compute_collections,
+                            ),
                             ignored_compute_collections,
-                            replicas: self.replica_targets(cluster_id),
                         },
                     )),
                     _ => None,
@@ -576,43 +834,37 @@ impl Coordinator {
             BTreeMap::new()
         };
 
-        // A dropped receiver means the task is gone, which leaves nothing to
-        // answer.
-        let _ = tx.send(CaughtUpSnapshot {
+        CaughtUpSnapshot {
             now,
             all_caught_up,
             stability_check_enabled,
             stability_period_ms,
             caught_up_clusters,
-        });
+        }
     }
 
     /// Classifies the replicas of a cluster for the stability gate.
-    fn replica_targets(&self, cluster_id: ClusterId) -> BTreeMap<ReplicaId, ReplicaTarget> {
-        let cluster = self.catalog().get_cluster(cluster_id);
-        let has_hydration_log = cluster
-            .log_indexes
-            .contains_key(&LogVariant::Compute(ComputeLog::HydrationTime));
+    fn replica_targets(
+        &self,
+        cluster_id: ClusterId,
+        leader: &LeaderHydration,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> BTreeMap<ReplicaId, ReplicaTarget> {
+        let cluster = self.clusters[&cluster_id]
+            .as_ref()
+            .expect("classified cluster");
         cluster
-            .replicas()
-            .map(|replica| {
-                let online = self
-                    .cluster_replica_statuses
-                    .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
-                    .is_some_and(|processes| {
-                        !processes.is_empty()
-                            && ClusterReplicaStatuses::cluster_replica_status(processes)
-                                == ClusterStatus::Online
-                    });
-                let logging = has_hydration_log && replica.config.compute.logging.enabled();
-                let target = if !online {
-                    ReplicaTarget::NotOnline
-                } else if !logging {
+            .replicas
+            .iter()
+            .map(|(&id, &target)| {
+                let target = if target == ReplicaTarget::Ask
+                    && leader.replica_has_unhydrated_collection(id, ignored)
+                {
                     ReplicaTarget::Exempt
                 } else {
-                    ReplicaTarget::Ask
+                    target
                 };
-                (replica.replica_id, target)
+                (id, target)
             })
             .collect()
     }
@@ -624,7 +876,9 @@ impl Coordinator {
     ///
     ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
     ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///  (2) A collection is caught-up when it is (a) hydrated (waived for compute collections
+    ///      returned by [`LeaderHydration::collections_unhydrated_on_all_hosting_replicas`]),
+    ///      and (b) its write frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
     ///      environment.
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
@@ -638,41 +892,46 @@ impl Coordinator {
     /// caller does not health-gate ignored clusters, so we keep ignoring clusters that are already
     /// unhealthy in the leader environment.
     async fn classify_clusters(
-        &self,
+        &mut self,
         allowed_lag: Timestamp,
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        exclude_collections: &BTreeSet<GlobalId>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
         let mut result = BTreeMap::new();
-        for cluster in self.catalog().clusters() {
-            let status = self
-                .collections_caught_up(
-                    cluster,
-                    allowed_lag.clone(),
-                    cutoff.clone(),
-                    now.clone(),
-                    live_frontiers,
-                    exclude_collections,
-                    problematic_replicas,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::error!(
-                        "unexpected error while checking if cluster {} caught up: {e:#}",
-                        cluster.id
-                    );
-                    ClusterCaughtUpStatus::NotCaughtUp
-                });
+        for (&cluster_id, cluster) in &mut self.clusters {
+            let status = match cluster {
+                Ok(cluster) => {
+                    Self::collections_caught_up(
+                        cluster_id,
+                        cluster,
+                        allowed_lag.clone(),
+                        cutoff.clone(),
+                        now.clone(),
+                        live_frontiers,
+                        leader_unhydrated_collections,
+                        problematic_replicas,
+                    )
+                    .await
+                }
+                Err(error) => Err(anyhow::anyhow!("{error:#}")),
+            }
+            .unwrap_or_else(|e| {
+                tracing::error!(
+                    "unexpected error while checking if cluster {} caught up: {e:#}",
+                    cluster_id
+                );
+                ClusterCaughtUpStatus::NotCaughtUp
+            });
 
             if status == ClusterCaughtUpStatus::NotCaughtUp {
                 // We log all non-caught-up clusters instead of breaking out early.
-                tracing::info!("cluster {} is not caught up", cluster.id);
+                tracing::info!("cluster {} is not caught up", cluster_id);
             }
 
-            result.insert(cluster.id, status);
+            result.insert(cluster_id, status);
         }
 
         result
@@ -680,69 +939,86 @@ impl Coordinator {
 
     /// Classifies the given cluster for the caught-up check.
     ///
-    /// See [`Coordinator::classify_clusters`] for details.
+    /// See [`Self::classify_clusters`] for details.
     async fn collections_caught_up(
-        &self,
-        cluster: &Cluster,
+        cluster_id: ClusterId,
+        cluster: &mut ClusterSnapshot,
         allowed_lag: Timestamp,
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        exclude_collections: &BTreeSet<GlobalId>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
-        if cluster.replicas().next().is_none() {
+        if cluster.replicas.is_empty() {
             return Ok(ClusterCaughtUpStatus::Ignored);
         }
 
         // Check if all replicas in this cluster are crash/OOM-looping. As long
         // as there is at least one healthy replica, the cluster is okay-ish.
         let cluster_has_only_problematic_replicas = cluster
-            .replicas()
-            .all(|replica| problematic_replicas.contains(&replica.replica_id));
-
-        enum CollectionType {
-            Storage,
-            Compute,
-        }
-
+            .replicas
+            .keys()
+            .all(|id| problematic_replicas.contains(id));
+        // A cluster whose collections all exceed the cutoff must not wait on
+        // its compute controller.
+        let mut hydration = None;
         let mut all_caught_up = true;
-        let mut ignored_compute_collections: BTreeSet<_> = self
-            .controller
-            .compute
-            .collection_ids(cluster.id)?
-            .filter(|id| exclude_collections.contains(id))
-            .collect();
+        let mut ignored_compute_collections = cluster.ignored_compute_collections.clone();
 
-        let storage_frontiers = self
-            .controller
-            .storage
-            .active_ingestion_exports(cluster.id)
-            .copied()
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
-            .map(|id| {
-                let (_read_frontier, write_frontier) =
-                    self.controller.storage.collection_frontiers(id)?;
-                Ok::<_, anyhow::Error>((id, write_frontier, CollectionType::Storage))
-            });
+        for (id, write_frontier, collection_type) in &cluster.collections {
+            let id = *id;
+            if let Some(live_write_frontier) = live_frontiers.get(&id) {
+                // We can't do comparisons and subtractions, so we bump up the live
+                // write frontier by the cutoff, and then compare that against
+                // `now`.
+                let live_write_frontier_plus_cutoff = live_write_frontier
+                    .iter()
+                    .map(|t| t.step_forward_by(&cutoff));
+                let live_write_frontier_plus_cutoff =
+                    Antichain::from_iter(live_write_frontier_plus_cutoff);
 
-        let compute_frontiers = self
-            .controller
-            .compute
-            .collection_ids(cluster.id)?
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
-            .map(|id| {
-                let write_frontier = self
-                    .controller
-                    .compute
-                    .collection_frontiers(id, Some(cluster.id))?
-                    .write_frontier
-                    .to_owned();
-                Ok((id, write_frontier, CollectionType::Compute))
-            });
+                let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
 
-        for res in itertools::chain(storage_frontiers, compute_frontiers) {
-            let (id, write_frontier, collection_type) = res?;
+                if beyond_all_hope && cluster_has_only_problematic_replicas {
+                    tracing::info!(
+                        ?live_write_frontier,
+                        ?cutoff,
+                        ?now,
+                        "live write frontier of collection {id} is too far behind 'now'"
+                    );
+                    tracing::info!(
+                        "ALL replicas of cluster {} are crash/OOM-looping and it has at least one \
+                     collection that is too far behind 'now'; ignoring cluster for caught-up \
+                     checks",
+                        cluster_id
+                    );
+                    return Ok(ClusterCaughtUpStatus::Ignored);
+                } else if beyond_all_hope {
+                    tracing::info!(
+                        ?live_write_frontier,
+                        ?cutoff,
+                        ?now,
+                        "live write frontier of collection {id} is too far behind 'now'; \
+                     ignoring for caught-up checks"
+                    );
+                    if matches!(collection_type, CollectionType::Compute) {
+                        ignored_compute_collections.insert(id);
+                    }
+                    continue;
+                }
+            }
+            let collection_hydrated = match collection_type {
+                CollectionType::Compute => {
+                    if hydration.is_none() {
+                        hydration = Some((&mut cluster.compute_hydration).await?);
+                    }
+                    *hydration.as_ref().expect("hydration received")[&id]
+                        .as_ref()
+                        .map_err(|_| CollectionMissing(id))?
+                }
+                CollectionType::Storage { hydrated } => *hydrated,
+            };
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
@@ -755,18 +1031,6 @@ impl Coordinator {
                     // Require hydration, not just a write frontier past the minimum. A fresh MV's
                     // sink reaches frontier 1 after one batch, which would otherwise look caught
                     // up mid-hydration and bring back the cut-over spike this gate prevents.
-                    let collection_hydrated = match collection_type {
-                        CollectionType::Compute => {
-                            self.controller
-                                .compute
-                                .collection_hydrated(cluster.id, id)
-                                .await?
-                        }
-                        CollectionType::Storage => {
-                            self.controller.storage.collection_hydrated(id)?
-                        }
-                    };
-
                     // Also require the frontier to be within the allowed lag, the bound the
                     // live-frontier path applies, with `now` standing in for the missing live
                     // frontier. Hydration is one-shot: a collection that hydrated and then stalled
@@ -777,7 +1041,7 @@ impl Coordinator {
                     // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
                     let readiness = CollectionReadiness::classify(
                         collection_hydrated,
-                        &write_frontier,
+                        write_frontier,
                         Some((&Antichain::from_elem(now), allowed_lag)),
                     );
 
@@ -797,70 +1061,19 @@ impl Coordinator {
                 }
             };
 
-            // We can't do comparisons and subtractions, so we bump up the live
-            // write frontier by the cutoff, and then compare that against
-            // `now`.
-            let live_write_frontier_plus_cutoff = live_write_frontier
-                .iter()
-                .map(|t| t.step_forward_by(&cutoff));
-            let live_write_frontier_plus_cutoff =
-                Antichain::from_iter(live_write_frontier_plus_cutoff);
-
-            let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
-
-            if beyond_all_hope && cluster_has_only_problematic_replicas {
-                tracing::info!(
-                    ?live_write_frontier,
-                    ?cutoff,
-                    ?now,
-                    "live write frontier of collection {id} is too far behind 'now'"
-                );
-                tracing::info!(
-                    "ALL replicas of cluster {} are crash/OOM-looping and it has at least one \
-                     collection that is too far behind 'now'; ignoring cluster for caught-up \
-                     checks",
-                    cluster.id
-                );
-                return Ok(ClusterCaughtUpStatus::Ignored);
-            } else if beyond_all_hope {
-                tracing::info!(
-                    ?live_write_frontier,
-                    ?cutoff,
-                    ?now,
-                    "live write frontier of collection {id} is too far behind 'now'; \
-                     ignoring for caught-up checks"
-                );
-                if matches!(collection_type, CollectionType::Compute) {
-                    ignored_compute_collections.insert(id);
-                }
-                continue;
-            }
-
-            // This call is on the expensive side, because we have to do a call
-            // across a task/channel boundary, and our work competes with other
-            // things the compute/instance controller might be doing. But it's
-            // okay because we only do these hydration checks when in read-only
-            // mode, and only rarely.
-            let collection_hydrated = match collection_type {
-                CollectionType::Compute => {
-                    self.controller
-                        .compute
-                        .collection_hydrated(cluster.id, id)
-                        .await?
-                }
-                CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
-            };
-
+            let unhydrated_on_leader = matches!(collection_type, CollectionType::Compute)
+                && leader_unhydrated_collections.contains(&id);
             let readiness = CollectionReadiness::classify(
-                collection_hydrated,
-                &write_frontier,
+                collection_hydrated || unhydrated_on_leader,
+                write_frontier,
                 Some((live_write_frontier, allowed_lag)),
             );
 
             // We don't expect collections to get hydrated, ingestions to be
             // started, etc. when they are already at the empty write frontier.
             if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
-                if readiness != CollectionReadiness::Ready
+                // Carry hydration waivers into the per-replica stability check.
+                if (readiness != CollectionReadiness::Ready || !collection_hydrated)
                     && matches!(collection_type, CollectionType::Compute)
                 {
                     ignored_compute_collections.insert(id);
@@ -875,7 +1088,7 @@ impl Coordinator {
                     ?write_frontier,
                     ?live_write_frontier,
                     ?allowed_lag,
-                    %cluster.id,
+                    %cluster_id,
                     "collection is caught up");
             } else {
                 // We are not within the allowed lag, or not hydrated!
@@ -888,7 +1101,7 @@ impl Coordinator {
                     ?write_frontier,
                     ?live_write_frontier,
                     ?allowed_lag,
-                    %cluster.id,
+                    %cluster_id,
                     "collection is not caught up"
                 );
                 all_caught_up = false;
@@ -903,13 +1116,19 @@ impl Coordinator {
             ClusterCaughtUpStatus::NotCaughtUp
         })
     }
+}
 
+impl LeaderSnapshot {
     /// Analyzes replica status history to detect replicas that are
     /// crash-looping or OOM-looping.
     ///
     /// A replica is considered problematic if it has multiple OOM kills in a
     /// short-ish window.
-    async fn analyze_replica_looping(&self, now: EpochMillis) -> BTreeSet<ReplicaId> {
+    async fn analyze_replica_looping(
+        catalog: &Catalog,
+        storage_collections: &(dyn StorageCollections + Send + Sync),
+        now: EpochMillis,
+    ) -> Result<BTreeSet<ReplicaId>, anyhow::Error> {
         // Look back 1 day for patterns.
         let lookback_window: u64 = Duration::from_secs(24 * 60 * 60)
             .as_millis()
@@ -919,26 +1138,20 @@ impl Coordinator {
         let min_timestamp_dt = mz_ore::now::to_datetime(min_timestamp);
 
         // Get the replica status collection GlobalId
-        let replica_status_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_STATUS_HISTORY);
-        let replica_status_gid = self
-            .catalog()
+        let replica_status_item_id =
+            catalog.resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_STATUS_HISTORY);
+        let replica_status_gid = catalog
             .get_entry(&replica_status_item_id)
             .latest_global_id();
 
         // Acquire a read hold to determine the as_of timestamp for snapshot_and_stream
-        let read_holds = self
-            .controller
-            .storage_collections
+        let read_holds = storage_collections
             .acquire_read_holds(vec![replica_status_gid])
-            .expect("can't acquire read hold for mz_cluster_replica_status_history");
+            .context("cannot acquire read hold for mz_cluster_replica_status_history")?;
         let read_hold = if let Some(read_hold) = read_holds.into_iter().next() {
             read_hold
         } else {
-            // Collection is not readable anymore, but we return an empty set
-            // instead of panicing.
-            return BTreeSet::new();
+            anyhow::bail!("mz_cluster_replica_status_history is not readable");
         };
 
         let as_of = read_hold
@@ -946,14 +1159,12 @@ impl Coordinator {
             .iter()
             .next()
             .cloned()
-            .expect("since should not be empty");
+            .context("mz_cluster_replica_status_history is closed")?;
 
-        let mut replica_statuses_stream = self
-            .controller
-            .storage_collections
+        let mut replica_statuses_stream = storage_collections
             .snapshot_and_stream(replica_status_gid, as_of)
             .await
-            .expect("can't read mz_cluster_replica_status_history");
+            .context("cannot read mz_cluster_replica_status_history")?;
 
         let mut replica_problem_counts: BTreeMap<ReplicaId, u32> = BTreeMap::new();
 
@@ -1032,7 +1243,7 @@ impl Coordinator {
         // Explicitly keep the read hold alive until this point.
         drop(read_hold);
 
-        result
+        Ok(result)
     }
 
     /// Determines if a replica status indicates a problematic state that could
@@ -1048,6 +1259,83 @@ impl Coordinator {
     }
 }
 
+/// The leader's hydration reports, read from its `mz_compute_hydration_times`.
+#[derive(Debug, Default)]
+struct LeaderHydration {
+    hydrated_on_any_replica: BTreeSet<GlobalId>,
+    /// (Collection ID, replica ID) pairs explicitly reported as unhydrated.
+    unhydrated_replica_collections: BTreeSet<(GlobalId, String)>,
+}
+
+impl LeaderHydration {
+    fn from_rows(rows: Vec<Row>) -> Self {
+        let mut leader = Self::default();
+        for row in rows {
+            let mut values = row.iter();
+            let replica = values
+                .next()
+                .expect("missing replica_id")
+                .unwrap_str()
+                .to_owned();
+            let id: GlobalId = values
+                .next()
+                .expect("missing object_id")
+                .unwrap_str()
+                .parse()
+                .expect("valid object ID");
+            if values.next().expect("missing time_ns").is_null() {
+                leader.unhydrated_replica_collections.insert((id, replica));
+            } else {
+                leader.hydrated_on_any_replica.insert(id);
+            }
+        }
+        leader
+    }
+
+    /// Returns the collections that every frontier-hosting leader replica
+    /// explicitly reports unhydrated.
+    ///
+    /// Missing reports or frontiers grant no waiver. A hydrated report from any
+    /// replica vetoes the waiver, even if that replica has no frontier report.
+    fn collections_unhydrated_on_all_hosting_replicas(
+        &self,
+        frontiers: &[(GlobalId, String, Antichain<Timestamp>)],
+    ) -> BTreeSet<GlobalId> {
+        let mut collections = BTreeMap::new();
+        for (id, replica, _) in frontiers {
+            let all_unhydrated = collections.entry(*id).or_insert(true);
+            *all_unhydrated &= !self.hydrated_on_any_replica.contains(id)
+                && self
+                    .unhydrated_replica_collections
+                    .contains(&(*id, replica.clone()));
+        }
+        collections
+            .into_iter()
+            .filter_map(|(id, unhydrated)| unhydrated.then_some(id))
+            .collect()
+    }
+
+    /// Returns whether leader replica `replica_id` explicitly reports at least
+    /// one collection outside `ignored` as unhydrated.
+    ///
+    /// The leader snapshot has per-collection reports, not a separate replica
+    /// hydration signal. The gate uses these as a proxy: a replica is fully
+    /// hydrated only when all its non-ignored collections are hydrated. One
+    /// unhydrated collection therefore waives the incoming replica's stability
+    /// wait, since the leader lacks a fully hydrated counterpart. Missing
+    /// reports grant no exemption.
+    fn replica_has_unhydrated_collection(
+        &self,
+        replica_id: ReplicaId,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> bool {
+        let replica_id = replica_id.to_string();
+        self.unhydrated_replica_collections
+            .iter()
+            .any(|(id, replica)| *replica == replica_id && !ignored.contains(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::Datum;
@@ -1057,10 +1345,190 @@ mod tests {
 
     use ReplicaHealth::{Exempt, HealthySince, NotHydrated, NotOnline};
 
+    #[mz_ore::test(tokio::test)]
+    async fn classification_waits_for_hydration_and_rejects_lost_responses() {
+        use futures::poll;
+        use std::task::Poll;
+
+        for response in [
+            Some(Ok(true)),
+            Some(Err(CollectionMissing(GlobalId::User(1)))),
+            None,
+        ] {
+            let id = GlobalId::User(1);
+            let (tx, rx) = oneshot::channel();
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(ReplicaId::User(1), ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(
+                    id,
+                    Antichain::from_elem(100.into()),
+                    CollectionType::Compute,
+                )],
+                compute_hydration: rx,
+            };
+            let frontiers = BTreeMap::from([(id, Antichain::from_elem(100.into()))]);
+            let empty = BTreeSet::new();
+            let problematic = BTreeSet::new();
+            let check = CaughtUpCheck::collections_caught_up(
+                ClusterId::User(1),
+                &mut cluster,
+                0.into(),
+                1000.into(),
+                100.into(),
+                &frontiers,
+                &empty,
+                &problematic,
+            );
+            tokio::pin!(check);
+            assert!(matches!(poll!(&mut check), Poll::Pending));
+            let success = matches!(response, Some(Ok(true)));
+            match response {
+                Some(response) => tx
+                    .send(BTreeMap::from([(id, response)]))
+                    .expect("classification still holds the receiver"),
+                None => drop(tx),
+            }
+            let result = check.await;
+            if success {
+                assert_eq!(
+                    result.expect("hydration reply succeeds"),
+                    ClusterCaughtUpStatus::CaughtUp {
+                        ignored_compute_collections: BTreeSet::new(),
+                    }
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "missing hydration evidence must not authorize promotion"
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn cutoff_exemptions_do_not_wait_for_hydration() {
+        use futures::FutureExt;
+
+        let id = GlobalId::User(1);
+        let replica = ReplicaId::User(1);
+        for problematic in [BTreeSet::new(), BTreeSet::from([replica])] {
+            let (_tx, rx) = oneshot::channel();
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(replica, ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(id, Antichain::from_elem(0.into()), CollectionType::Compute)],
+                compute_hydration: rx,
+            };
+            let status = CaughtUpCheck::collections_caught_up(
+                ClusterId::User(1),
+                &mut cluster,
+                0.into(),
+                100.into(),
+                100.into(),
+                &BTreeMap::from([(id, Antichain::from_elem(0.into()))]),
+                &BTreeSet::new(),
+                &problematic,
+            )
+            .now_or_never()
+            .expect("ignored collections must not wait for hydration")
+            .expect("ignored collections need no hydration evidence");
+            let expected = if problematic.is_empty() {
+                ClusterCaughtUpStatus::CaughtUp {
+                    ignored_compute_collections: BTreeSet::from([id]),
+                }
+            } else {
+                ClusterCaughtUpStatus::Ignored
+            };
+            assert_eq!(status, expected);
+        }
+    }
+
+    #[mz_ore::test]
+    fn collection_hydration_waiver_requires_complete_leader_reports() {
+        let frontier = |id, replica: &str| {
+            (
+                GlobalId::User(id),
+                replica.to_owned(),
+                Antichain::from_elem(Timestamp::from(100)),
+            )
+        };
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let frontiers = vec![
+            frontier(1, "u10"),
+            frontier(1, "u11"),
+            frontier(2, "u10"),
+            frontier(2, "u11"),
+            frontier(3, "u10"),
+            frontier(3, "u11"),
+            frontier(4, "u10"),
+            frontier(5, "u10"),
+        ];
+        let rows = vec![
+            row("u1", "u10", Datum::Null),
+            row("u1", "u11", Datum::Null),
+            row("u2", "u10", Datum::Null),
+            row("u2", "u11", Datum::UInt64(7)),
+            row("u3", "u10", Datum::Null), // u11 has not reported.
+            row("u4", "u10", Datum::Null),
+            row("u4", "u12", Datum::UInt64(9)),
+            // u5 has no hydration reports. u6 has no frontier.
+            row("u6", "u10", Datum::Null),
+        ];
+        assert_eq!(
+            LeaderHydration::from_rows(rows)
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers),
+            BTreeSet::from([GlobalId::User(1)])
+        );
+        assert!(
+            LeaderHydration::default()
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers)
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn replica_hydration_exemption_requires_an_unhydrated_collection_report() {
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let leader = LeaderHydration::from_rows(vec![
+            row("u1", "u10", Datum::UInt64(7)),
+            row("u2", "u10", Datum::UInt64(7)),
+            row("u1", "u11", Datum::UInt64(7)),
+            row("u2", "u11", Datum::Null),
+            row("u3", "u12", Datum::Null),
+        ]);
+        let none = BTreeSet::new();
+        let replica = ReplicaId::User;
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(10), &none),
+            "fully hydrated"
+        );
+        assert!(leader.replica_has_unhydrated_collection(replica(11), &none));
+        assert!(
+            !leader.replica_has_unhydrated_collection(
+                replica(12),
+                &BTreeSet::from([GlobalId::User(3)])
+            ),
+            "unhydrated only for an ignored collection"
+        );
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(13), &none),
+            "no reports"
+        );
+    }
+
     #[mz_ore::test]
     fn stable_since_latest_replica() {
         let period_ms = 1000;
-        let replicas = [HealthySince(100), HealthySince(500), Exempt];
+        let replicas = [
+            (HealthySince(100), None),
+            (HealthySince(500), None),
+            (Exempt, None),
+        ];
         let observation = observe_stability(&replicas, 1499, period_ms);
         assert_eq!(observation.stable_for_ms, Some(999));
         assert_eq!(observation.blocked_by, Some(StabilityBlocker::WithinPeriod));
@@ -1087,7 +1555,8 @@ mod tests {
             (vec![Exempt, NotHydrated], StabilityBlocker::NotHydrated),
         ] {
             // Even a zero period requires evidence from every replica.
-            let observation = observe_stability(&replicas, 10_000, 0);
+            let evidence = replicas.iter().map(|health| (*health, None)).collect_vec();
+            let observation = observe_stability(&evidence, 10_000, 0);
             assert_eq!(observation.blocked_by, Some(blocker), "{replicas:?}");
             assert_eq!(observation.stable_for_ms, None, "{replicas:?}");
         }
@@ -1095,24 +1564,87 @@ mod tests {
 
     #[mz_ore::test]
     fn replica_clock_ahead_is_clamped() {
-        let observation = observe_stability(&[HealthySince(2000)], 1000, 0);
+        let observation = observe_stability(&[(HealthySince(2000), None)], 1000, 0);
         assert_eq!(observation.stable_for_ms, Some(0));
         assert_eq!(observation.blocked_by, None);
     }
 
     #[mz_ore::test]
-    fn hydration_answer_fails_closed() {
-        let answer = |millis| {
-            let time = chrono::DateTime::from_timestamp_millis(millis).expect("valid time");
-            let time = CheckedTimestamp::from_timestamplike(time).expect("in range");
-            vec![Row::pack_slice(&[Datum::TimestampTz(time)])]
-        };
-        assert_eq!(replica_health(&answer(1000)), HealthySince(1000));
-        assert_eq!(replica_health(&answer(-1)), NotHydrated, "pre-epoch time");
+    fn young_replica_has_a_fixed_deadline_until_it_rehydrates() {
+        let evidence = [(HealthySince(1010), Some(1000))];
         assert_eq!(
-            replica_health(&[Row::pack_slice(&[Datum::Null])]),
-            NotHydrated
+            observe_stability(&evidence, 1019, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&evidence, 1020, 1000).blocked_by, None);
+
+        let restarted = [(HealthySince(1030), Some(1000))];
+        assert_eq!(
+            observe_stability(&restarted, 1059, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&restarted, 1060, 1000).blocked_by, None);
+    }
+
+    #[mz_ore::test]
+    fn age_cap_does_not_waive_other_replicas_or_missing_health() {
+        let young = (HealthySince(1010), Some(1000));
+        for other in [
+            (HealthySince(1000), Some(0)),
+            (HealthySince(1000), None),
+            (HealthySince(1000), Some(1001)),
+        ] {
+            let replicas = [young, other];
+            assert_eq!(
+                observe_stability(&replicas, 1999, 1000).blocked_by,
+                Some(StabilityBlocker::WithinPeriod)
+            );
+            assert_eq!(observe_stability(&replicas, 2000, 1000).blocked_by, None);
+        }
+        assert_eq!(
+            observe_stability(&[young, (NotOnline, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotOnline)
+        );
+        assert_eq!(
+            observe_stability(&[young, (NotHydrated, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotHydrated)
+        );
+        assert_eq!(
+            observe_stability(&[(HealthySince(3000), Some(3001))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+    }
+
+    #[mz_ore::test]
+    fn hydration_answer_fails_closed() {
+        assert_eq!(
+            replica_health(&answer(false, Some(1000))),
+            HealthySince(1000)
+        );
+        assert_eq!(
+            replica_health(&answer(false, Some(-1))),
+            NotHydrated,
+            "pre-epoch time"
+        );
+        assert_eq!(
+            replica_health(&answer(false, None)),
+            NotHydrated,
+            "an export is not hydrated on some worker"
         );
         assert_eq!(replica_health(&[]), NotHydrated, "nothing reported yet");
+    }
+
+    #[mz_ore::test]
+    fn replica_with_only_ignored_exports_is_exempt() {
+        assert_eq!(replica_health(&answer(true, Some(1000))), Exempt);
+        assert_eq!(replica_health(&answer(true, None)), Exempt);
+    }
+
+    fn answer(ignored: bool, hydrated_at: Option<i64>) -> Vec<Row> {
+        let hydrated_at = hydrated_at.map_or(Datum::Null, |millis| {
+            let time = chrono::DateTime::from_timestamp_millis(millis).expect("valid time");
+            Datum::TimestampTz(CheckedTimestamp::from_timestamplike(time).expect("in range"))
+        });
+        vec![Row::pack_slice(&[Datum::from(ignored), hydrated_at])]
     }
 }

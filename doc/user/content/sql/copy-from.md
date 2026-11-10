@@ -108,11 +108,11 @@ Supported PARQUET compression formats
 
 ### Limits
 
-You can copy up to 10 GiB of data at a time. If you need to copy more than that, please [contact support](/support/).
+You can copy up to 10 GiB of data at a time. If you need to copy more than that, please [contact support](https://materialize.com/support/).
 
 When importing parquet files, entire row groups are held in memory at once, so ensure that your
 Materialize instance has enough available memory to accomodate your parquet files. If you are
-encountering memory issues, and are unable to reduce the sizes of your row groups, please [contact support](/support/).
+encountering memory issues, and are unable to reduce the sizes of your row groups, please [contact support](https://materialize.com/support/).
 
 ### Atomicity
 
@@ -184,7 +184,8 @@ COPY INTO csv_table FROM '<s3 presigned URL>' (FORMAT CSV);
 Materialize does not follow HTTP redirects when fetching from a URL. If the
 server returns a `3xx` response, the `COPY FROM` will fail rather than follow
 the `Location` header. Use the final URL directly (for example, the resolved
-presigned URL) instead of one that redirects.
+presigned URL) instead of one that redirects. Any other non-`2xx` response
+also fails the `COPY FROM`.
 {{< /note >}}
 
 ## Privileges

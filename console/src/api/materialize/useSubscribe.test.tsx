@@ -159,6 +159,34 @@ describe("subscribeSession", () => {
     }
   });
 
+  it("marks a collection's held rows as refreshing once its session ends", async () => {
+    const store = setTwoRegions();
+    const target = createSubscribeCollection<Row>({
+      id: "session-test-destroy",
+      getKey: (row) => row.id,
+    });
+    const session = createCollectionSubscribeSession<Row, Row>({
+      store,
+      request,
+      upsertKey,
+      select: (row) => row.data,
+      target,
+    });
+    target.applySnapshot({
+      data: [{ id: "1" }],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    session.destroy();
+
+    await flush();
+    expect(target.collection.size).toBe(1);
+    expect(store.get(target.statusAtom)).toMatchObject({
+      snapshotComplete: true,
+      isRefreshing: true,
+    });
+  });
+
   it("clears an atom-fed collection when the region switches", async () => {
     const store = setTwoRegions();
     const sourceAtom = atom<SubscribeState<Row>>(loadingState);

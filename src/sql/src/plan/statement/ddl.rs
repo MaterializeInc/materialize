@@ -326,6 +326,12 @@ pub fn plan_create_table(
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
+        if c.collation
+            .as_ref()
+            .is_some_and(|collation| !query::is_supported_collation(collation))
+        {
+            bail_unsupported!("COLLATE");
+        }
         let aug_data_type = &c.data_type;
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
@@ -1752,6 +1758,7 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeConstraints, Vec::<String>, Default(vec![])),
     (ExcludeAllConstraints, bool, Default(false)),
+    (ExcludeAllNotNullConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1785,6 +1792,7 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         exclude_constraints: _,
         exclude_all_constraints: _,
+        exclude_all_not_null_constraints: _,
         retain_history,
         partition_by,
         details,
@@ -2831,8 +2839,7 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
-/// Rejects times that `mz_materialized_view_refresh_strategies` could not pack as a
-/// `timestamptz`, whose range is far smaller than `mz_timestamp`'s.
+/// Rejects times that are too large.
 fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     let renderable = i64::try_from(ts)
         .ok()
@@ -3433,7 +3440,11 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Persisted sinks (pcx is None) are re-planned against the keys
+                // the running optimizer derives, which can be fewer than when
+                // the sink was created. Rejecting the key there fails catalog
+                // boot, so only new statements enforce it.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),

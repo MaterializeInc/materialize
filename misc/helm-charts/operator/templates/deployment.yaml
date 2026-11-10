@@ -32,6 +32,9 @@ spec:
         runAsUser: 65532
         runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
+      {{- if .Values.operator.args.enableUserNamespaces }}
+      hostUsers: false
+      {{- end }}
       # On SIGTERM the operator releases its leadership lease, then keeps
       # serving the conversion webhook for a few seconds while Kubernetes
       # removes it from the webhook service's endpoints, then drains the
@@ -201,6 +204,15 @@ spec:
         {{- if .Values.environmentd.defaultResources }}
         - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
         {{- end }}
+        {{- if .Values.environmentd.defaultReadinessProbe }}
+        - '--environmentd-default-readiness-probe={{ toJson .Values.environmentd.defaultReadinessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultLivenessProbe }}
+        - '--environmentd-default-liveness-probe={{ toJson .Values.environmentd.defaultLivenessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultStartupProbe }}
+        - '--environmentd-default-startup-probe={{ toJson .Values.environmentd.defaultStartupProbe }}'
+        {{- end }}
         {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
@@ -233,6 +245,8 @@ spec:
         {{- if .Values.balancerd.defaultResources }}
         - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
         {{- end }}
+        - "--balancerd-readiness-probe-path={{ .Values.balancerd.readinessProbePath }}"
+        - "--balancerd-termination-grace-period-seconds={{ .Values.balancerd.terminationGracePeriodSeconds }}"
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"
@@ -291,6 +305,9 @@ spec:
         {{- end }}
         {{- end }}
         - "--enable-security-context"
+        {{- if .Values.operator.args.enableUserNamespaces }}
+        - "--enable-user-namespaces"
+        {{- end }}
         {{- if .Values.schedulerName }}
         - "--scheduler-name={{ .Values.schedulerName }}"
         {{- end }}

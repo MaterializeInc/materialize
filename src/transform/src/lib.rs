@@ -27,13 +27,13 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::{fmt, iter};
 
+use mz_compute_types::optimizer_metrics::OptimizerMetrics;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 
 use crate::canonicalize_mfp::CanonicalizeMfp;

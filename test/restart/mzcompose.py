@@ -380,6 +380,8 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
             input=dedent(f"""
                 > CREATE CLUSTER test REPLICAS (r1 (SIZE '{size}'))
 
+                > CREATE CLUSTER managed SIZE '{size}', REPLICATION FACTOR 0
+
                 > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
                 test r1 {size} true ""
                 """),
@@ -389,7 +391,8 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
     # Restart with that size disabled. Startup rebuilds each replica from its
     # durable size in apply_cluster_replica_update, so a disabled size must not
     # stop the environment from booting and the existing replica must survive.
-    # A new replica of the disabled size is still refused.
+    # A new replica of the disabled size is still refused, but a managed cluster
+    # already configured with it can still create replicas.
     disabled = copy.deepcopy(sizes)
     disabled[size]["disabled"] = True
     with c.override(Materialized(cluster_replica_size=disabled)):
@@ -401,9 +404,26 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
                 > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
                 test r1 {size} true ""
 
+                # The disabled size stays listed, so its replicas still join to it.
+                > SELECT r.name, s.disabled FROM mz_cluster_replicas r JOIN mz_cluster_replica_sizes s USING (size) JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'test'
+                r1 true
+
                 # Creating a new replica of the disabled size is rejected.
                 ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
                 contains:unknown cluster replica size {size}
+
+                # So is converting an empty unmanaged cluster to the disabled size.
+                > CREATE CLUSTER empty REPLICAS ()
+
+                ! ALTER CLUSTER empty SET (MANAGED, SIZE '{size}')
+                contains:unknown cluster replica size {size}
+
+                # A managed cluster configured with the disabled size can still
+                # create replicas of it.
+                > ALTER CLUSTER managed SET (REPLICATION FACTOR 1)
+
+                > SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'managed'
+                {size}
                 """),
         )
 
@@ -1196,12 +1216,15 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
         wait_for_full_sample(remaining)
 
         for round_num in range(5):
-            dropped, remaining = remaining[:2], remaining[2:]
+            # Newer indexes on stale_v read from older ones' arrangements, and
+            # `DROP INDEX` refuses an index that others read from, so drop from
+            # the newest end.
+            dropped, remaining = remaining[-2:], remaining[:-2]
 
             # Kill right after the drops: their retractions cannot reach the
             # storage collections before the process dies, so the retained
             # shard contents keep rows for the now-nonexistent indexes.
-            c.sql(";".join(f"DROP INDEX {name}" for name in dropped))
+            c.sql(f"DROP INDEX {', '.join(dropped)}")
             c.kill("materialized")
             c.up("materialized")
 

@@ -281,4 +281,4 @@ them near the present.
 - [Optimize cluster size](/clusters/sizing/)
 - [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [Memory spikes](/clusters/troubleshoot-clusters/memory-spike/)
-- [Freshness troubleshooting](/transform-data/freshness-troubleshooting/)
+- [Freshness troubleshooting](/transform-data/freshness/troubleshoot-freshness/)

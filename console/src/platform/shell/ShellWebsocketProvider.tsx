@@ -25,13 +25,20 @@ import { useFlags } from "~/hooks/useFlags";
 import { useSyncObjectToSearchParams } from "~/hooks/useSyncObjectToSearchParams";
 import { shellPath } from "~/platform/routeHelpers";
 import { regionIdToSlug } from "~/store/cloudRegions";
-import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
+import {
+  environmentMeetsVersion,
+  useCurrentEnvironmentHttpAddress,
+} from "~/store/environments";
 
 import { appendToCache } from "./commandCache";
 import {
   COMMAND_RESULT_MAX_SIZE_BYTES,
   JOTAI_DEBOUNCE_WAIT_MS,
 } from "./constants";
+import {
+  EXECUTION_TIME_MIN_VERSION,
+  EXECUTION_TIME_SESSION_VARIABLE,
+} from "./executionTime";
 import WebSocketFsm, {
   getLatestCommandOutputClone,
   isCommandProcessing,
@@ -357,15 +364,26 @@ export const ShellWebsocketProvider = ({
 
   useAutomaticallyConnectSocket({
     target: socketRef.current,
-    getSessionVariables: ({ hasEverConnected }) => {
+    getSessionVariables: ({ hasEverConnected, environment }) => {
+      // `useEnvironmentGate` would give the previous render's answer here, see
+      // its doc.
+      const executionTimeSupported =
+        environmentMeetsVersion(environment, EXECUTION_TIME_MIN_VERSION) ===
+        true;
+      const connectionVariables = {
+        ...sessionVariables,
+        ...(executionTimeSupported
+          ? { [EXECUTION_TIME_SESSION_VARIABLE]: "on" }
+          : {}),
+      };
       if (hasEverConnected) {
         return {
-          ...sessionVariables,
+          ...connectionVariables,
           welcome_message: "off",
           current_object_missing_warnings: "off",
         };
       }
-      return sessionVariables;
+      return connectionVariables;
     },
   });
 

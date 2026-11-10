@@ -115,6 +115,8 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_mcp_protocol_2026_07_28": "true",
+        "enable_mcp_unified": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -133,13 +135,13 @@ def get_minimal_system_parameters(
         ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
+        "enable_try_cast": "true",
         # Introspection goldens depend on the replica topology, so tests need
         # one consistent value rather than a varying one.
         "enable_unified_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
         ),
         "enable_compute_error_distinct": "true",
-        "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -175,11 +177,13 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
 
-    if version >= MzVersion.parse_mz("v26.41.0-dev"):
+    if version >= MzVersion.parse_mz("v26.45.0-dev"):
         # Exercise the source persist sink's grouping of a snapshotting export's
-        # updates while it defaults off in production. Several timestamp
-        # intervals, so the ceiling stays ahead of the data.
-        config["storage_persist_sink_description_lookahead"] = "5s"
+        # updates ahead of release to production. At least one default_timestamp_interval
+        # (1s by default). A Postgres or MySQL source's snapshot and first CDC
+        # rows become visible about this much later. The PgCdc and MySqlCdc
+        # feature benchmarks measure that delay.
+        config["storage_persist_sink_description_lookahead"] = "2s"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
@@ -200,6 +204,14 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
 
+    # Frontend peek sequencing's flag, which current versions no longer have
+    # because the frontend always sequences peeks. Older binaries that have it
+    # still read it, so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_frontend_peek_sequencing"] = (
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
+        )
+
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
     # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
@@ -207,6 +219,12 @@ def get_minimal_system_parameters(
     # against the old binary.
     if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
+
+    # Temporal bucketing is unconditional from v26.47 on. Older binaries still
+    # read this flag and default it off, so pin it on for them to keep benchmark
+    # baselines and mixed-version runs bucketing like current versions.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
 
     return config
 
@@ -266,6 +284,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_hedged_get_enabled", "true", ["true", "false"]
         ),
+        # 'on' because CI's S3 endpoint is not GCS, so 'gcs' would never use
+        # the pool.
+        VariableSystemParameter("persist_blob_http_pool", "on", ["off", "gcs", "on"]),
         # 10ms (vs the 2s production default) makes hedges actually fire in
         # every CI run; 0s makes every blob get hedge under randomized seeds.
         VariableSystemParameter(
@@ -306,6 +327,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the jq function, which is off in
+        # production while it earns trust.
+        VariableSystemParameter("enable_jq", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(
@@ -372,13 +396,14 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_password_auth",
-            "true",
-            ["true", "false"],
+            "compute_mv_sink_shared_batch_max_bytes",
+            "1048576",
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            ["0", "65536", "1048576", "134217728"],
         ),
         VariableSystemParameter(
-            "enable_frontend_peek_sequencing",
-            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
+            "enable_password_auth",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -429,7 +454,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
         ),
-        # On by default so CI exercises the sink id header path.
         VariableSystemParameter(
             "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
         ),
@@ -477,6 +501,15 @@ def get_variable_system_parameters(
             "persist_shard_metrics",
             "summary",
             ["none", "summary", "per_shard", "both"],
+        ),
+        VariableSystemParameter(
+            "persist_per_shard_metrics_enable_regex",
+            "",
+            ["", "^u1", ".*"],
+        ),
+        VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_gc_remove_finalized_rollups", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
@@ -574,6 +607,17 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
+        ),
+        # Empty decodes fetched parts whole, otherwise at most this many rows
+        # at once. 7 makes batch boundaries split small test parts.
+        *(
+            [
+                VariableSystemParameter(
+                    "persist_part_decode_batch_rows", "16384", ["", "7", "16384"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.46.0-dev")
+            else []
         ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
@@ -732,14 +776,15 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
-    "enable_compute_half_join2",
+    # Off by default so tests exercise the refusal to drop in-use indexes.
+    "enable_drop_in_use_index",
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
-    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
     "enable_lgalloc_eager_reclamation",
@@ -807,6 +852,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_read_timeout",
     "persist_blob_hedged_get_max_concurrent",
     "persist_blob_hedged_get_warm_interval",
+    "persist_blob_http_pool_max_in_flight_per_client",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
@@ -830,6 +876,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_sigterm_listen_wait",
     "balancerd_inject_proxy_protocol_header_http",
     "balancerd_max_connections",
+    "balancerd_connection_high_watermark",
+    "balancerd_connection_low_watermark",
     "balancerd_pre_resolved_timeout",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",
@@ -870,6 +918,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
+    "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",

@@ -13,17 +13,6 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
-/// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
-///
-/// `half_join2` avoids quadratic behavior in certain join patterns. This flag exists as an escape
-/// hatch to revert to the old implementation if issues arise.
-pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
-    "enable_compute_half_join2",
-    true,
-    "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
-    ParameterScope::Environment,
-);
-
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
 ///
 /// Error semantics depend only on whether an error is present, so its multiplicity carries no
@@ -96,21 +85,22 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
 /// The accumulable reduce keeps one accumulator per aggregate in the diff of its
 /// input arrangement. When `true`, that arrangement holds its diffs in a columnar
 /// container, which lays the accumulators out by variant so each pays only for its
-/// own fields. When `false` (the default), the diffs live in a columnation stack at
-/// the width of the largest variant. Read at operator construction time, so flips
-/// take effect on dataflows created after the change.
+/// own fields. When `false`, the diffs live in a columnation stack at the width of
+/// the largest variant. The default is `true`. Read at operator construction time,
+/// so flips take effect on dataflows created after the change.
 pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
     "enable_columnar_accumulable_diff",
-    false,
+    true,
     "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by \
      variant, instead of a columnation stack of fixed-width accumulator enums.",
     ParameterScope::Replica,
 );
 
 /// Allow chunk bodies to spill to the process buffer pool under memory
-/// pressure. Sets compute's leg of the process-wide chunk spill gate, which
-/// the arrange batchers read when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
-/// With the gate clear every chunk stays resident regardless of budget.
+/// pressure. Sets the compute chunk spill gate
+/// (`mz_timely_util::columnar::chunk::ComputeSpill`), which every compute
+/// chunk batcher reads. With the gate clear every compute chunk stays
+/// resident regardless of budget.
 ///
 /// This flag (or the storage-side `enable_upsert_paged_spill`, or
 /// [`ENABLE_CORRECTION_V2_SPILL`]) also gates installation of the process
@@ -178,17 +168,24 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Number of buffer-pool spill threads performing eviction I/O (lz4
-/// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
-/// that trip the budget. Zero evicts inline on the calling thread, which
-/// measurably convoys workers behind eviction I/O at hydration eviction
-/// rates. Thread spawning is once per process: raising the value later has
-/// no effect beyond re-enabling, and lowering it to zero falls back to
-/// inline eviction while spawned threads idle.
-pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
-    "column_paged_batcher_spill_worker_count",
-    2,
-    "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
+/// Buffer-pool spill threads performing eviction I/O (lz4 compression plus
+/// the synchronous-reclaim `MADV_PAGEOUT`) off the threads that trip the
+/// budget, as a fraction of the process's timely workers. The thread count is
+/// `ceil(workers * fraction)`, so any positive fraction spawns at least one
+/// thread. Zero evicts inline on the calling thread, which measurably convoys
+/// workers behind eviction I/O at hydration eviction rates.
+///
+/// The default of `0.125` comes from hydration sweeps on a 62-worker replica,
+/// where 2 and 4 threads convoyed all workers and the knee was at 8.
+///
+/// Thread spawning is once per process: raising the value later has no effect
+/// beyond re-enabling, and lowering it to zero falls back to inline eviction
+/// while spawned threads idle.
+pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_spill_worker_fraction",
+    0.125,
+    "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's \
+     timely workers, rounded up; 0 evicts inline on the caller.",
     ParameterScope::Replica,
 );
 
@@ -283,6 +280,17 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The size of a worker's updates for one batch interval below which the MV sink coalesces them
+/// with the other workers in its process into a single shared batch. Past it, the worker writes
+/// its own batch. Zero disables sharing.
+pub const MV_SINK_SHARED_BATCH_MAX_BYTES: Config<usize> = Config::new(
+    "compute_mv_sink_shared_batch_max_bytes",
+    1024 * 1024,
+    "The size of a worker's updates for one batch interval below which the MV sink coalesces \
+     them into a batch shared by the workers in one process. Zero disables sharing.",
+    ParameterScope::Environment,
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -322,14 +330,6 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     "Allow the MV sink correction V2 buffer's chunk bodies to spill to the process buffer pool \
      under memory pressure.",
     ParameterScope::Replica,
-);
-
-/// Whether to enable temporal bucketing in compute.
-pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
-    "enable_compute_temporal_bucketing",
-    false,
-    "Whether to enable temporal bucketing in compute.",
-    ParameterScope::Environment,
 );
 
 /// The summary to apply to the frontier in temporal bucketing in compute.
@@ -822,15 +822,14 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
+        .add(&MV_SINK_SHARED_BATCH_MAX_BYTES)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
-        .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
@@ -882,7 +881,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
-        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
+        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import run_dbt
+from dbt.tests.util import run_dbt, run_dbt_and_capture
 
 # Source materialization in dedicated schema (for non-strict tests)
 load_gen_source = """
@@ -174,6 +174,12 @@ view_model = """
 SELECT 1 AS id
 """
 
+view_model_on_quickstart = """
+{{ config(materialized='view', cluster='quickstart') }}
+
+SELECT 1 AS id
+"""
+
 materialized_view_model = """
 {{ config(materialized='materialized_view') }}
 
@@ -257,12 +263,13 @@ class TestStrictModeSourceTableBlocked:
         }
 
     def test_source_table_blocked_in_schema_with_view(self, project):
-        """With strict_mode, mixing source_table and view in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+        """With strict_mode, a source_table in a schema with a view fails during dbt run."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create source_table in schema" in output
 
 
-class TestStrictModeViewBlocked:
-    """Test that view is blocked when schema contains source_tables (strict_mode enabled)."""
+class TestStrictModeViewBesideSourceTable:
+    """Test that a view only warns in a schema with source_tables, while the source_table fails (strict_mode enabled)."""
 
     @pytest.fixture(scope="class")
     def project_config_update(self):
@@ -278,9 +285,17 @@ class TestStrictModeViewBlocked:
             "test_view.sql": view_model,
         }
 
-    def test_view_blocked_in_schema_with_source_table(self, project):
-        """With strict_mode, mixing view and source_table in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+    def test_run_fails_on_the_source_table(self, project):
+        """With strict_mode, the run fails on the source_table, not the view."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create source_table in schema" in output
+
+    def test_view_alone_warns_about_source_table_in_schema(self, project):
+        # The source_table's own check does not run when only the view is
+        # selected, so this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
+        assert "contains source_table objects" in output
 
 
 class TestStrictModeSourceTablesCanCoexist:
@@ -327,12 +342,13 @@ class TestStrictModeSinkBlocked:
         }
 
     def test_sink_blocked_in_schema_with_view(self, project):
-        """With strict_mode, mixing sink and view in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+        """With strict_mode, a sink in a schema with a view fails during dbt run."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create sink in schema" in output
 
 
-class TestStrictModeViewBlockedBySink:
-    """Test that view is blocked when schema contains sinks (strict_mode enabled)."""
+class TestStrictModeViewBesideSink:
+    """Test that a view only warns in a schema with sinks, while the sink fails (strict_mode enabled)."""
 
     @pytest.fixture(scope="class")
     def project_config_update(self):
@@ -346,12 +362,20 @@ class TestStrictModeViewBlockedBySink:
         return {
             "sink_source_mv.sql": sink_source_mv,
             "test_sink.sql": sink_model,
-            "test_view.sql": view_model,
+            "test_view.sql": view_model_on_quickstart,
         }
 
-    def test_view_blocked_in_schema_with_sink(self, project):
-        """With strict_mode, mixing view and sink in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+    def test_run_fails_on_the_sink(self, project):
+        """With strict_mode, the run fails on the sink, not the view."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create sink in schema" in output
+
+    def test_view_alone_warns_about_sink_in_schema(self, project):
+        # The sink's own check does not run when only the view is selected, so
+        # this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
+        assert "contains sink objects" in output
 
 
 class TestStrictModeSinksCanCoexist:
@@ -398,12 +422,13 @@ class TestStrictModeSourceBlocked:
         }
 
     def test_source_blocked_in_schema_with_view(self, project):
-        """With strict_mode, mixing source and view in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+        """With strict_mode, a source in a schema with a view fails during dbt run."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create source in schema" in output
 
 
-class TestStrictModeViewBlockedBySource:
-    """Test that view is blocked when schema contains sources (strict_mode enabled)."""
+class TestStrictModeViewBesideSource:
+    """Test that a view only warns in a schema with sources, while the source fails (strict_mode enabled)."""
 
     @pytest.fixture(scope="class")
     def project_config_update(self):
@@ -419,9 +444,17 @@ class TestStrictModeViewBlockedBySource:
             "test_view.sql": view_model,
         }
 
-    def test_view_blocked_in_schema_with_source(self, project):
-        """With strict_mode, mixing view and source in same schema fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+    def test_run_fails_on_the_source(self, project):
+        """With strict_mode, the run fails on the source, not the view."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create source in schema" in output
+
+    def test_view_alone_warns_about_source_in_schema(self, project):
+        # The source's own check does not run when only the view is selected,
+        # so this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "Model 'test_view' is in schema" in output
+        assert "contains source objects" in output
 
 
 class TestStrictModeSourcesCanCoexist:
@@ -465,8 +498,9 @@ class TestStrictModeSourceIndexBlocked:
         }
 
     def test_source_index_blocked_in_strict_mode(self, project):
-        """With strict_mode, creating indexes on sources fails at compile time."""
-        run_dbt(["run"], expect_pass=False)
+        """With strict_mode, creating indexes on sources fails during dbt run."""
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "Cannot create indexes on sources when strict_mode is enabled" in output
 
 
 # =============================================================================
@@ -493,7 +527,15 @@ class TestStrictModeSourceDedicatedCluster:
 
     def test_sources_cannot_share_cluster(self, project):
         """With strict_mode, two sources cannot share the same cluster."""
-        run_dbt(["run"], expect_pass=False)
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert (
+            "Source 'test_source_1' in cluster 'cluster_a' cannot share cluster"
+            in output
+        )
+        assert (
+            "Source 'test_source_2' in cluster 'cluster_a' cannot share cluster"
+            in output
+        )
 
 
 class TestStrictModeSourceCannotShareWithMV:
@@ -515,7 +557,13 @@ class TestStrictModeSourceCannotShareWithMV:
 
     def test_source_and_mv_cannot_share_cluster(self, project):
         """With strict_mode, source and MV cannot share the same cluster."""
-        run_dbt(["run"], expect_pass=False)
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert (
+            "Source 'test_source' in cluster 'cluster_a' cannot share cluster" in output
+        )
+        assert (
+            "Cluster contains source objects which require dedicated clusters" in output
+        )
 
 
 class TestStrictModeSinkCannotShareWithMV:
@@ -538,7 +586,12 @@ class TestStrictModeSinkCannotShareWithMV:
 
     def test_sink_and_mv_cannot_share_cluster(self, project):
         """With strict_mode, sink and MV cannot share the same cluster."""
-        run_dbt(["run"], expect_pass=False)
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "cannot share cluster with non-sink objects in strict_mode" in output
+        assert (
+            "Cluster contains sink objects which can only share with other sinks"
+            in output
+        )
 
 
 class TestStrictModeSinksCanShareCluster:

@@ -28,6 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_persist::s3::{BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT, BlobHttpPool};
 use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -316,6 +317,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
         .add(&SHARD_METRICS)
+        .add(&PER_SHARD_METRICS_ENABLE_REGEX)
+        .add(&SHARD_INFO_METRIC)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -337,6 +340,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPACTION_HEURISTIC_MIN_UPDATES)
         .add(&COMPACTION_MEMORY_BOUND_BYTES)
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
+        .add(&GC_REMOVE_FINALIZED_ROLLUPS)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
         .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
@@ -390,6 +394,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
+        .add(&crate::fetch::PART_DECODE_BATCH_ROWS)
         .add(&crate::write::COMBINE_INLINE_WRITES)
         .add(&crate::write::VALIDATE_PART_BOUNDS_ON_WRITE)
 }
@@ -404,7 +409,8 @@ impl PersistConfig {
 
 /// Sets the maximum size of the connection pool that is used by consensus.
 ///
-/// Requires a restart of the process to take effect.
+/// Applies to existing pools without a restart. Each pool picks up a changed
+/// value the next time a connection is requested from it.
 pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
@@ -611,6 +617,18 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Kill switch for GC removing a finalized shard's old rollups. When off, they
+/// stay in state and in blob, and new rollups don't record `finalized`.
+///
+/// NOTE: Off by default until no binary that predates `HollowRollup::finalized`
+/// can read state written with it set. See the note atop `state.proto`.
+pub const GC_REMOVE_FINALIZED_ROLLUPS: Config<bool> = Config::new(
+    "persist_gc_remove_finalized_rollups",
+    false,
+    "Whether GC removes a finalized shard's old rollups from state and blob.",
+    ParameterScope::Environment,
+);
+
 /// The # of diffs to initially scan when fetching the latest consensus state, to
 /// determine which requests go down the fast vs slow path. Should be large enough
 /// to fetch all live diffs in the steady-state, and small enough to query Consensus
@@ -752,7 +770,7 @@ pub const SHARD_METRICS: Config<&'static str> = Config::new(
     "persist_shard_metrics",
     ShardMetricsExport::default().as_str(),
     "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families \
-    with one series per shard), 'summary' (their bounded `_percentile`, `_topk` and \
+    with one series per shard), 'summary' (their bounded `_percentile`, `_sum`, `_topk` and \
     per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are \
     always exported.",
     ParameterScope::Environment,
@@ -770,10 +788,10 @@ pub enum ShardMetricsExport {
 impl ShardMetricsExport {
     pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
 
-    /// The value [`SHARD_METRICS`] defaults to, which exports everything this
-    /// setting can turn off.
+    /// The value [`SHARD_METRICS`] defaults to, whose series count is bounded
+    /// by the per-version aggregates rather than the shard count.
     pub const fn default() -> Self {
-        Self::Both
+        Self::Summary
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -814,6 +832,32 @@ impl ShardMetricsExport {
     }
 }
 
+/// Per-shard series to keep exporting while [`SHARD_METRICS`] leaves the
+/// per-shard families out.
+///
+/// A series is kept if its `shard` or `name` label matches this regex. The
+/// match is unanchored, so `s1` also matches `s10`: use `^...$` for an exact
+/// match. Empty keeps none, as does an invalid regex.
+pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
+    "persist_per_shard_metrics_enable_regex",
+    "",
+    "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series \
+    whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps \
+    none.",
+    ParameterScope::Environment,
+);
+
+/// Whether to export `mz_persist_shard_info`, one series per shard, so that
+/// dashboards can list the shards when [`SHARD_METRICS`] leaves the per-shard
+/// families out.
+pub const SHARD_INFO_METRIC: Config<bool> = Config::new(
+    "persist_shard_info_metric",
+    false,
+    "Whether to export `mz_persist_shard_info`, which lists this process's shards by `shard` \
+    and `name` with one series each.",
+    ParameterScope::Environment,
+);
+
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
         BLOB_OPERATION_TIMEOUT.get(self)
@@ -833,6 +877,14 @@ impl BlobKnobs for PersistConfig {
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
+    }
+
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::get(self)
+    }
+
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.get(self)
     }
 }
 

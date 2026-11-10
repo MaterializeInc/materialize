@@ -42,6 +42,7 @@ import SecretSelectionControl, {
   SecretOption,
 } from "~/components/SecretSelectionControl";
 import TextLink from "~/components/TextLink";
+import { SUPPORT_URL } from "~/externalUrls";
 import docUrls from "~/mz-doc-urls.json";
 import { AwsAuroraLogoIcon } from "~/svg/AwsAuroraLogoIcon";
 import AwsLogoIcon from "~/svg/AwsLogoIcon";
@@ -627,11 +628,7 @@ const NewPostgresConnectionForm = ({
           textProps={{ textStyle: "text-small" }}
         />
       </FormAsideItem>
-      <FormAsideItem
-        title="Contact support"
-        href={docUrls["/docs/support/"]}
-        target="_blank"
-      >
+      <FormAsideItem title="Contact support" href={SUPPORT_URL} target="_blank">
         We&apos;re here to help! Chat with us if you feel stuck or have any
         questions.
       </FormAsideItem>

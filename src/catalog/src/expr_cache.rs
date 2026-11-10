@@ -34,7 +34,7 @@ use mz_transform::notice::OptimizerNotice;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(
     Debug,
@@ -65,7 +65,7 @@ pub struct LocalExpressions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobalExpressions {
     pub global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-    pub physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+    pub physical_plan: mz_compute_types::dataflows::LirDataflowDescription,
     pub dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     pub optimizer_features: OptimizerFeatures,
     /// The owning item's latest version, see [`ExpressionCache::open`].
@@ -132,6 +132,16 @@ impl DurableCacheCodec for ExpressionCodec {
         let key = bincode::deserialize(key).expect("must deserialize");
         (key, val.clone())
     }
+}
+
+/// Counts of the entries [`ExpressionCache::open`] removed, by reason.
+#[derive(Debug, Default)]
+struct RemovedEntries {
+    unparsable_build_version: usize,
+    dropped_item: usize,
+    item_version_mismatch: usize,
+    dropped_index_import: usize,
+    prior_build_version: usize,
 }
 
 /// Configuration needed to initialize an [`ExpressionCache`].
@@ -239,12 +249,15 @@ impl ExpressionCache {
         let mut keys_to_remove = Vec::new();
         let mut local_expressions = BTreeMap::new();
         let mut global_expressions = BTreeMap::new();
+        let mut removed = RemovedEntries::default();
+        let mut unreadable = 0;
 
         for (key, expressions) in self.durable_cache.entries_local() {
             let build_version = match key.build_version.parse::<Version>() {
                 Ok(build_version) => build_version,
                 Err(err) => {
                     warn!("unable to parse build version: {key:?}: {err:?}");
+                    removed.unparsable_build_version += 1;
                     keys_to_remove.push((key.clone(), None));
                     continue;
                 }
@@ -260,15 +273,23 @@ impl ExpressionCache {
                                 soft_panic_or_log!(
                                     "unable to deserialize local expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
+                                unreadable += 1;
                                 continue;
                             }
                         };
-                        // A missing id means the item is gone, a different item version means the
-                        // entry was optimized for another definition of it.
-                        if current_items.get(&key.id) != Some(&expressions.item_version) {
-                            keys_to_remove.push((key.clone(), None));
-                        } else {
-                            local_expressions.insert(key.id, expressions);
+                        match current_items.get(&key.id) {
+                            None => {
+                                removed.dropped_item += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            // The entry was optimized for another definition of the item.
+                            Some(version) if *version != expressions.item_version => {
+                                removed.item_version_mismatch += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(_) => {
+                                local_expressions.insert(key.id, expressions);
+                            }
                         }
                     }
                     ExpressionType::Global => {
@@ -279,25 +300,37 @@ impl ExpressionCache {
                                 soft_panic_or_log!(
                                     "unable to deserialize global expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
+                                unreadable += 1;
                                 continue;
                             }
                         };
-                        // As above, plus expressions that import a dropped index: `DROP INDEX` is
-                        // allowed under a running consumer, whose plan then has to be re-optimized
-                        // at the next boot.
-                        if current_items.get(&key.id) != Some(&expressions.item_version)
-                            || !expressions
-                                .index_imports()
-                                .all(|id| current_items.contains_key(id))
-                        {
-                            keys_to_remove.push((key.clone(), None));
-                        } else {
-                            global_expressions.insert(key.id, expressions);
+                        match current_items.get(&key.id) {
+                            None => {
+                                removed.dropped_item += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(version) if *version != expressions.item_version => {
+                                removed.item_version_mismatch += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            // The plan reads an index that was dropped while the dataflow kept
+                            // running, so the consumer has to be re-optimized at the next boot.
+                            Some(_)
+                                if !expressions
+                                    .index_imports()
+                                    .all(|id| current_items.contains_key(id)) =>
+                            {
+                                removed.dropped_index_import += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(_) => {
+                                global_expressions.insert(key.id, expressions);
+                            }
                         }
                     }
                 }
             } else if remove_prior_versions {
-                // Remove expressions from previous build versions.
+                removed.prior_build_version += 1;
                 keys_to_remove.push((key.clone(), None));
             }
         }
@@ -306,6 +339,26 @@ impl ExpressionCache {
             .map(|(key, expressions)| (key, expressions.as_ref()))
             .collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
+        let RemovedEntries {
+            unparsable_build_version,
+            dropped_item,
+            item_version_mismatch,
+            dropped_index_import,
+            prior_build_version,
+        } = removed;
+        info!(
+            build_version = %self.build_version,
+            remove_prior_versions,
+            kept_local = local_expressions.len(),
+            kept_global = global_expressions.len(),
+            skipped_unreadable = unreadable,
+            removed_unparsable_build_version = unparsable_build_version,
+            removed_dropped_item = dropped_item,
+            removed_item_version_mismatch = item_version_mismatch,
+            removed_dropped_index_import = dropped_index_import,
+            removed_prior_build_version = prior_build_version,
+            "reconciled the expression cache"
+        );
 
         if remove_prior_versions {
             // We've purged old build versions from the cache. Upgrade the backing Persist version

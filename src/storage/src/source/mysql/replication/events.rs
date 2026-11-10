@@ -14,8 +14,7 @@ use sqlparser::parser::Parser;
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
-use mysql_async::binlog::events::OptionalMetaExtractor;
-use mysql_common::binlog::events::{QueryEvent, RowsEventData};
+use mysql_async::binlog::events::{OptionalMetaExtractor, QueryEvent, RowsEventData};
 use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Diff, Row};
@@ -25,7 +24,7 @@ use timely::progress::Timestamp;
 use tracing::trace;
 
 use crate::source::mysql::SourceOutputInfo;
-use crate::source::types::{FuelSize, SourceMessage};
+use crate::source::types::SourceMessage;
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
@@ -131,6 +130,16 @@ pub(super) async fn handle_query_event(
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} DDL change detected \
                        for {table:?}");
+                // The schema check below opens a connection to MySQL and waits on it. Timely
+                // only notices capability changes while we're waiting. That makes this a good
+                // spot to publish the progress we've recorded so far.
+                //
+                // It's safe because that progress only covers events we've already finished.
+                // The QUERY event's GTID isn't recorded until after we return. Any errors we send
+                // below go out at this GTID, and we still retain those capabilities.
+                // Rewinds aren't a worry either. Rows events send rewinds before they return,
+                // and none are left waiting by the time we get here.
+                ctx.downgrade_data_cap_sets();
                 let info = &ctx.table_info[&table];
                 let mut conn = ctx
                     .connection_config
@@ -145,15 +154,11 @@ pub(super) async fn handle_query_event(
                     tracing::warn!(%id, "timely-{worker_id} DDL change \
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
-                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    let update = (
-                        (err_output.output_index, Err(err.into())),
-                        new_gtid.clone(),
-                        Diff::ONE,
-                    );
-                    let size = update.fuel_size();
-                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
-                    ctx.errored_outputs.insert(err_output.output_index);
+                    let output_index = err_output.output_index;
+                    let gtid_cap = ctx.data_cap_sets[output_index].delayed(new_gtid);
+                    let update = (Err(err.into()), new_gtid.clone(), Diff::ONE);
+                    ctx.data_outputs.give(output_index, &gtid_cap, update).await;
+                    ctx.errored_outputs.insert(output_index);
                 }
             }
         }
@@ -186,15 +191,11 @@ pub(super) async fn handle_query_event(
                 tracing::info!(%id, "timely-{worker_id} DDL change dropped outputs: {outputs:?}");
                 for output in outputs {
                     let err = DefiniteError::TableDropped(table_name.to_string());
-                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    let update = (
-                        (output.output_index, Err(err.into())),
-                        new_gtid.clone(),
-                        Diff::ONE,
-                    );
-                    let size = std::mem::size_of_val(&update);
-                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
-                    ctx.errored_outputs.insert(output.output_index);
+                    let output_index = output.output_index;
+                    let gtid_cap = ctx.data_cap_sets[output_index].delayed(new_gtid);
+                    let update = (Err(err.into()), new_gtid.clone(), Diff::ONE);
+                    ctx.data_outputs.give(output_index, &gtid_cap, update).await;
+                    ctx.errored_outputs.insert(output_index);
                 }
             }
         }
@@ -217,21 +218,18 @@ pub(super) async fn handle_query_event(
                 trace!(%id, "timely-{worker_id} TRUNCATE detected \
                        for {table:?}");
                 if let Some(info) = ctx.table_info.get(&table) {
-                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     for output in info {
+                        let output_index = output.output_index;
+                        let gtid_cap = ctx.data_cap_sets[output_index].delayed(new_gtid);
                         let update = (
-                            (
-                                output.output_index,
-                                Err(DataflowError::from(DefiniteError::TableTruncated(
-                                    table.to_string(),
-                                ))),
-                            ),
+                            Err(DataflowError::from(DefiniteError::TableTruncated(
+                                table.to_string(),
+                            ))),
                             new_gtid.clone(),
                             Diff::ONE,
                         );
-                        let size = update.fuel_size();
-                        ctx.data_output.give_fueled(&gtid_cap, update, size).await;
-                        ctx.errored_outputs.insert(output.output_index);
+                        ctx.data_outputs.give(output_index, &gtid_cap, update).await;
+                        ctx.errored_outputs.insert(output_index);
                     }
                 }
             }
@@ -312,9 +310,8 @@ pub(super) async fn handle_rows_event(
     ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
-        (usize, Result<SourceMessage, DataflowError>),
-        GtidPartition,
-        mz_repr::Diff,
+        usize,
+        (Result<SourceMessage, DataflowError>, GtidPartition, Diff),
     )>,
 ) -> Result<(), TransientError> {
     let (id, worker_id) = (ctx.config.id, ctx.config.worker_id);
@@ -347,8 +344,11 @@ pub(super) async fn handle_rows_event(
 
     trace!(%id, "timely-{worker_id} handling RowsEvent for {table:?}");
 
-    // Capability for this event.
-    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+    // Capabilities for this event, one per output in `outputs`.
+    let gtid_caps: Vec<_> = outputs
+        .iter()
+        .map(|output| ctx.data_cap_sets[output.output_index].delayed(new_gtid))
+        .collect();
 
     // We can check here if the binlog has full row metadata by looking at the column name optional
     // metadata, which is only present if full metadata is enabled.
@@ -385,7 +385,8 @@ pub(super) async fn handle_rows_event(
         let gtid_str = format!("{new_gtid:?}");
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
-            for (output, row_val) in outputs.iter().repeat_clone(row) {
+            for ((output, row_val), gtid_cap) in outputs.iter().repeat_clone(row).zip_eq(&gtid_caps)
+            {
                 let event = if !has_full_metadata && output.binlog_full_metadata {
                     ctx.errored_outputs.insert(output.output_index);
                     Err(DataflowError::from(DefiniteError::ValueDecodeError(
@@ -415,14 +416,16 @@ pub(super) async fn handle_rows_event(
                     }
                 };
 
-                let data = (output.output_index, event);
+                let output_index = output.output_index;
 
                 // Rewind this update if it was already present in the snapshot
-                if let Some((_rewind_data_cap, rewind_req)) = ctx.rewinds.get(&output.output_index)
-                {
+                if let Some(rewind_req) = ctx.rewinds.get(&output_index) {
                     if !rewind_req.snapshot_upper.less_equal(new_gtid) {
                         rewind_count += 1;
-                        event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
+                        event_buffer.push((
+                            output_index,
+                            (event.clone(), GtidPartition::minimum(), -diff),
+                        ));
                     }
                 }
                 if diff.is_positive() {
@@ -430,9 +433,8 @@ pub(super) async fn handle_rows_event(
                 } else {
                     retractions += 1;
                 }
-                let update = (data, new_gtid.clone(), diff);
-                let size = update.fuel_size();
-                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
+                let update = (event, new_gtid.clone(), diff);
+                ctx.data_outputs.give(output_index, gtid_cap, update).await;
             }
         }
     }
@@ -443,12 +445,12 @@ pub(super) async fn handle_rows_event(
     //
     // Instead, we buffer rewind events into a reusable buffer, and emit all at once here at the end.
 
-    if !event_buffer.is_empty() {
-        for d in event_buffer.drain(..) {
-            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
-            let size = d.fuel_size();
-            ctx.data_output.give_fueled(rewind_data_cap, d, size).await;
-        }
+    // A port with a pending rewind holds only the minimum capability.
+    for (output_index, update) in event_buffer.drain(..) {
+        let rewind_cap = &ctx.data_cap_sets[output_index][0];
+        ctx.data_outputs
+            .give(output_index, rewind_cap, update)
+            .await;
     }
 
     trace!(

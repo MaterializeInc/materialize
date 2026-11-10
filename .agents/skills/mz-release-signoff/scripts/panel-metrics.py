@@ -53,7 +53,7 @@ def panels(doc):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("dump", help="JSON file written by get_dashboard_panel_queries")
     parser.add_argument(
         "--selectors", action="store_true", help="show label selectors too"

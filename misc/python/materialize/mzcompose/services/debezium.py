@@ -59,7 +59,14 @@ class Debezium(Service):
                 "environment": environment,
                 "depends_on": depends_on,
                 "healthcheck": {
-                    "test": ["CMD", "curl", "-f", "localhost:8083"],
+                    "test": [
+                        "CMD",
+                        "bash",
+                        "-c",
+                        "exec 3<>/dev/tcp/localhost/8083"
+                        " && printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3"
+                        " && head -n1 <&3 | grep -q ' 200 '",
+                    ],
                     "interval": "1s",
                     "start_period": "120s",
                 },

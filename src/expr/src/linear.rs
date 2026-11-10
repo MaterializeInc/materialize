@@ -873,7 +873,12 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     /// and then both apply a projection to the subject of the instance and
     /// `self.permute` this instance.
     pub fn demand(&self) -> BTreeSet<usize> {
-        let mut demanded = BTreeSet::new();
+        self.demand_with(BTreeSet::new())
+    }
+
+    /// Like [`Self::demand`], but also treats the columns in `demanded`, which
+    /// index the row of inputs followed by mapped values, as used.
+    fn demand_with(&self, mut demanded: BTreeSet<usize>) -> BTreeSet<usize> {
         for (_index, pred) in self.predicates.iter() {
             demanded.extend(pred.support());
         }
@@ -901,19 +906,12 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
         F: Fn(usize) -> usize,
     {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
-        let map_len = map.len();
-        let action = |col: &mut usize| {
-            if self.input_arity <= *col && *col < self.input_arity + map_len {
-                *col = new_input_arity + (*col - self.input_arity);
-            } else {
-                *col = remap(*col);
-            }
-        };
+        let action = self.permute_action(&remap, new_input_arity);
         for expr in map.iter_mut() {
-            expr.visit_columns(action);
+            expr.visit_columns(&action);
         }
         for pred in filter.iter_mut() {
-            pred.visit_columns(action);
+            pred.visit_columns(&action);
         }
         for proj in project.iter_mut() {
             action(proj);
@@ -923,6 +921,27 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
             .map(map)
             .filter(filter)
             .project(project)
+    }
+
+    /// The column renaming [`Self::permute_fn`] applies to every reference into
+    /// the row of inputs followed by mapped values.
+    fn permute_action<'a, F>(
+        &self,
+        remap: &'a F,
+        new_input_arity: usize,
+    ) -> impl Fn(&mut usize) + use<'a, F, E>
+    where
+        F: Fn(usize) -> usize,
+    {
+        let input_arity = self.input_arity;
+        let map_len = self.expressions.len();
+        move |col: &mut usize| {
+            if input_arity <= *col && *col < input_arity + map_len {
+                *col = new_input_arity + (*col - input_arity);
+            } else {
+                *col = remap(*col);
+            }
+        }
     }
 }
 
@@ -1575,6 +1594,7 @@ pub mod util {
 }
 
 pub mod plan {
+    use std::collections::BTreeSet;
     use std::iter;
 
     use mz_repr::{Datum, Diff, Row, RowArena};
@@ -1790,6 +1810,34 @@ pub mod plan {
             })
         }
 
+        /// Lists input columns whose values are used in outputs or temporal bounds.
+        ///
+        /// As with [`MapFilterProject::demand`], callers may project their input
+        /// to these columns and then [`Self::permute_fn`] the plan to match.
+        pub fn demand(&self) -> BTreeSet<usize> {
+            let bounds = self.lower_bounds.iter().chain(&self.upper_bounds);
+            self.mfp
+                .mfp
+                .demand_with(bounds.flat_map(|e| e.support()).collect())
+        }
+
+        /// Update input column references, due to an input projection or permutation.
+        ///
+        /// See [`MapFilterProject::permute_fn`] for the contract on `remap`.
+        pub fn permute_fn<F>(&mut self, remap: F, new_arity: usize)
+        where
+            F: Fn(usize) -> usize,
+        {
+            // Bounds index the same row of inputs followed by mapped values as
+            // the plan's own expressions, so they take the same renaming. It
+            // must be computed before the inner plan is permuted.
+            let action = self.mfp.mfp.permute_action(&remap, new_arity);
+            for bound in self.lower_bounds.iter_mut().chain(&mut self.upper_bounds) {
+                bound.visit_columns(&action);
+            }
+            self.mfp.permute_fn(&remap, new_arity);
+        }
+
         /// Indicates if the planned `MapFilterProject` emits exactly its inputs as outputs.
         pub fn is_identity(&self) -> bool {
             self.mfp.mfp.is_identity()
@@ -1923,24 +1971,107 @@ pub mod plan {
                     return None.into_iter().chain(None);
                 }
             }
+            evaluate_temporal(
+                &self.lower_bounds,
+                &self.upper_bounds,
+                &self.mfp.mfp.projection,
+                datums,
+                arena,
+                time,
+                diff,
+                valid_time,
+                row_builder,
+            )
+        }
 
-            // Lower and upper bounds.
-            let mut lower_bound = time;
-            let mut upper_bound = None;
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
+        }
+    }
 
-            // Track whether we have seen a null in either bound, as this should
-            // prevent the record from being produced at any time.
-            let mut null_eval = false;
+    /// Applies temporal bounds to a row whose non-temporal predicates passed,
+    /// and projects it.
+    ///
+    /// `datums` holds every column the bounds and `projection` refer to.
+    pub(crate) fn evaluate_temporal<
+        E: Eval,
+        Err: From<EvalError>,
+        V: Fn(&mz_repr::Timestamp) -> bool,
+    >(
+        lower_bounds: &[E],
+        upper_bounds: &[E],
+        projection: &[usize],
+        datums: &[Datum],
+        arena: &RowArena,
+        time: mz_repr::Timestamp,
+        diff: Diff,
+        valid_time: V,
+        row_builder: &mut Row,
+    ) -> iter::Chain<
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+    > {
+        // Lower and upper bounds.
+        let mut lower_bound = time;
+        let mut upper_bound = None;
 
-            // Advance our lower bound to be at least the result of any lower bound
-            // expressions.
-            for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
+        // Track whether we have seen a null in either bound, as this should
+        // prevent the record from being produced at any time.
+        let mut null_eval = false;
+
+        // Advance our lower bound to be at least the result of any lower bound
+        // expressions.
+        for l in lower_bounds.iter() {
+            match l.eval(datums, arena) {
+                Err(e) => {
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                }
+                Ok(Datum::MzTimestamp(d)) => {
+                    lower_bound = lower_bound.max(d);
+                }
+                Ok(Datum::Null) => {
+                    null_eval = true;
+                }
+                x => {
+                    panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
+                }
+            }
+        }
+
+        // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+        if !valid_time(&lower_bound) {
+            return None.into_iter().chain(None);
+        }
+
+        // If there are any upper bounds, determine the minimum upper bound.
+        for u in upper_bounds.iter() {
+            // We can cease as soon as the lower and upper bounds match,
+            // as the update will certainly not be produced in that case.
+            if upper_bound != Some(lower_bound) {
+                match u.eval(datums, arena) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                     }
                     Ok(Datum::MzTimestamp(d)) => {
-                        lower_bound = lower_bound.max(d);
+                        if let Some(upper) = upper_bound {
+                            upper_bound = Some(upper.min(d));
+                        } else {
+                            upper_bound = Some(d);
+                        };
+                        // Force the upper bound to be at least the lower
+                        // bound. The `is_some()` test should always be true
+                        // due to the above block, but maintain it here in
+                        // case that changes. It's hopefully optimized away.
+                        if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                            upper_bound = Some(lower_bound);
+                        }
                     }
                     Ok(Datum::Null) => {
                         null_eval = true;
@@ -1950,72 +2081,136 @@ pub mod plan {
                     }
                 }
             }
+        }
 
-            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
-            if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None);
-            }
-
-            // If there are any upper bounds, determine the minimum upper bound.
-            for u in self.upper_bounds.iter() {
-                // We can cease as soon as the lower and upper bounds match,
-                // as the update will certainly not be produced in that case.
-                if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                        }
-                        Ok(Datum::MzTimestamp(d)) => {
-                            if let Some(upper) = upper_bound {
-                                upper_bound = Some(upper.min(d));
-                            } else {
-                                upper_bound = Some(d);
-                            };
-                            // Force the upper bound to be at least the lower
-                            // bound. The `is_some()` test should always be true
-                            // due to the above block, but maintain it here in
-                            // case that changes. It's hopefully optimized away.
-                            if upper_bound.is_some() && upper_bound < Some(lower_bound) {
-                                upper_bound = Some(lower_bound);
-                            }
-                        }
-                        Ok(Datum::Null) => {
-                            null_eval = true;
-                        }
-                        x => {
-                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                        }
-                    }
-                }
-            }
-
-            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
-            if let Some(upper) = &mut upper_bound {
-                if !valid_time(upper) {
-                    upper_bound = None;
-                }
-            }
-
-            // Produce an output only if the upper bound exceeds the lower bound,
-            // and if we did not encounter a `null` in our evaluation.
-            if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let upper_opt =
-                    upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
-                let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt)
-            } else {
-                None.into_iter().chain(None)
+        // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+        if let Some(upper) = &mut upper_bound {
+            if !valid_time(upper) {
+                upper_bound = None;
             }
         }
 
-        /// Returns true if evaluation could introduce an error on non-error inputs.
-        pub fn could_error(&self) -> bool {
-            self.mfp.could_error()
-                || self.lower_bounds.iter().any(|e| e.could_error())
-                || self.upper_bounds.iter().any(|e| e.could_error())
+        // Produce an output only if the upper bound exceeds the lower bound,
+        // and if we did not encounter a `null` in our evaluation.
+        if Some(lower_bound) != upper_bound && !null_eval {
+            row_builder
+                .packer()
+                .extend(projection.iter().map(|c| datums[*c]));
+            let upper_opt =
+                upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
+            let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
+            lower.into_iter().chain(upper_opt)
+        } else {
+            None.into_iter().chain(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+
+    use crate::func;
+    use crate::{EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnmaterializableFunc};
+
+    fn ts(t: u64) -> Datum<'static> {
+        Datum::MzTimestamp(Timestamp::from(t))
+    }
+
+    /// Reads `ts | int | ts | int | ts | int`, maps `#6 = step_mz_timestamp(#4)`,
+    /// and keeps `(#3, #6)` while `#0 <= mz_now()`, `mz_now() < step_mz_timestamp(#2)`
+    /// and `mz_now() < #6`. Columns 0 and 2 are referenced only by bounds, the
+    /// map column by a bound and the projection, and columns 1 and 5 are unused.
+    fn temporal_plan() -> MfpPlan {
+        let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let step = |c| MirScalarExpr::column(c).call_unary(func::StepMzTimestamp);
+        let mfp = MapFilterProject::new(6)
+            .map([step(4)])
+            .filter([
+                mz_now
+                    .clone()
+                    .call_binary(MirScalarExpr::column(0), func::Gte),
+                mz_now.clone().call_binary(step(2), func::Lt),
+                mz_now.call_binary(MirScalarExpr::column(6), func::Lt),
+                MirScalarExpr::column(3).call_is_null().not(),
+            ])
+            .project([3, 6]);
+        let plan = MfpPlan::create_from(mfp).expect("plannable");
+        let (safe, lower, upper) = plan.as_parts();
+        assert_eq!(safe.expressions.len(), 1, "the map survives planning");
+        assert_eq!(lower, [MirScalarExpr::column(0)]);
+        assert!(upper.contains(&MirScalarExpr::column(6)), "{upper:?}");
+        plan
+    }
+
+    fn rows() -> Vec<Row> {
+        let int = |i| Datum::Int64(i);
+        vec![
+            Row::pack_slice(&[ts(3), int(10), ts(7), int(1), ts(9), int(20)]),
+            Row::pack_slice(&[ts(3), int(10), ts(9), int(1), ts(7), int(20)]),
+            Row::pack_slice(&[ts(0), int(11), ts(0), int(2), ts(4), int(21)]),
+            Row::pack_slice(&[ts(5), int(12), ts(2), int(3), ts(8), int(22)]),
+            Row::pack_slice(&[ts(1), int(13), ts(9), Datum::Null, ts(9), int(23)]),
+        ]
+    }
+
+    fn evaluate(
+        plan: &MfpPlan,
+        row: &[Datum],
+    ) -> Vec<Result<(Row, Timestamp, Diff), (EvalError, Timestamp, Diff)>> {
+        let arena = RowArena::new();
+        let mut datums = row.to_vec();
+        plan.evaluate(
+            &mut datums,
+            &arena,
+            Timestamp::from(0u64),
+            Diff::ONE,
+            |_| true,
+            &mut Row::default(),
+        )
+        .collect()
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_demand_includes_bounds() {
+        let plan = temporal_plan();
+        assert_eq!(plan.demand().into_iter().collect::<Vec<_>>(), [0, 2, 3, 4]);
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_permute_to_demanded_columns() {
+        let plan = temporal_plan();
+        let demand: Vec<usize> = plan.demand().into_iter().collect();
+        let mut permuted = plan.clone();
+        let position = |c: usize| demand.iter().position(|d| *d == c).expect("demanded");
+        permuted.permute_fn(position, demand.len());
+
+        for row in rows() {
+            let full: Vec<Datum> = row.iter().collect();
+            let narrow: Vec<Datum> = demand.iter().map(|c| full[*c]).collect();
+            assert_eq!(
+                evaluate(&permuted, &narrow),
+                evaluate(&plan, &full),
+                "{row:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_truncate_to_max_demand() {
+        let plan = temporal_plan();
+        let max_demand = plan.demand().last().map(|c| c + 1).unwrap_or(0);
+        assert_eq!(max_demand, 5);
+        let mut truncated = plan.clone();
+        truncated.permute_fn(|c| c, max_demand);
+
+        for row in rows() {
+            let full: Vec<Datum> = row.iter().collect();
+            assert_eq!(
+                evaluate(&truncated, &full[..max_demand]),
+                evaluate(&plan, &full),
+                "{row:?}"
+            );
         }
     }
 }

@@ -231,7 +231,6 @@ const MOCK_SELF_MANAGED_CONFIG = {
     {
       provider: "local",
       region: "flexible-deployment",
-      regionApiUrl: "",
     },
   ],
   environmentdConfig: {

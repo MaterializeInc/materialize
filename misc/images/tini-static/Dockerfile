@@ -18,14 +18,13 @@
 # target. We keep only the static one.
 #
 # Usage:
-#   docker build -t tini-static .
-#   docker create --name extract tini-static
+#   bin/mzimage acquire tini-static
+#   docker create --name extract "$(bin/mzimage spec tini-static)"
 #   docker cp extract:/output/tini ./tini
 #   docker rm extract
 
-# Pinned by rolling tag + multi-arch index digest, matching materialized-base,
-# so dependabot refreshes the digest for security fixes.
-FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS builder
+# debian-base fetches apt sources over HTTPS.
+MZFROM debian-base AS builder
 
 ARG TINI_VERSION=v0.19.0
 

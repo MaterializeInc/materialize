@@ -1692,3 +1692,60 @@ class KafkaTopicMetadataRefreshInterval(Check):
                 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'tmri_sink_ident'
                 running
                 """))
+
+
+@externally_idempotent(False)
+class KafkaSinkUpsertKeyLostOnUpgrade(Check):
+    """Upsert sink whose key a newer optimizer no longer derives.
+
+    Catalog bootstrap re-plans every sink's persisted `create_sql` against the
+    keys the running optimizer derives. Since v26.49 `time_to_text` no longer
+    preserves uniqueness, so the key `k` below is valid on older versions only.
+    We create the sink on the old base version and assert the environment
+    still boots and the sink survives the upgrade.
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # Only reproducible when the base version still accepts the key;
+        # otherwise the CREATE SINK in initialize() fails up-front.
+        return self.base_version < MzVersion.parse_mz("v26.49.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE sink_key_lost_table (t time)
+                > INSERT INTO sink_key_lost_table VALUES ('00:00:01')
+                > CREATE MATERIALIZED VIEW sink_key_lost_view AS
+                  SELECT t::text AS k FROM (SELECT DISTINCT t FROM sink_key_lost_table)
+                > CREATE SINK sink_key_lost_sink FROM sink_key_lost_view
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-key-lost-${testdrive.seed}')
+                  KEY (k)
+                  FORMAT JSON
+                  ENVELOPE UPSERT
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        # Only flow data. Later phases run on the new build, which rejects the
+        # key in a new CREATE SINK.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO sink_key_lost_table VALUES ('00:00:02')
+                """,
+                """
+                > INSERT INTO sink_key_lost_table VALUES ('00:00:03')
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        # Reaching validate() means bootstrap survived the upgrade.
+        return Testdrive(dedent("""
+                $ set-sql-timeout duration=120s
+                > SELECT count(*) FROM sink_key_lost_view
+                3
+                > SELECT count(*) FROM mz_sinks WHERE name = 'sink_key_lost_sink'
+                1
+                > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'sink_key_lost_sink'
+                running
+                """))

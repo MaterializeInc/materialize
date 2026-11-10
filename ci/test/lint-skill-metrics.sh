@@ -32,12 +32,14 @@ set -euo pipefail
 
 ci_uncollapsed_heading "Linting mz-release-signoff metric names"
 
-try python3 .agents/skills/mz-release-signoff/scripts/lint_metrics.py
+try bin/pyactivate .agents/skills/mz-release-signoff/scripts/lint_metrics.py
 
 try python3 -m doctest .agents/skills/mz-release-signoff/scripts/build-range-query.py
 
 # Every way this lint breaks is a silent pass, so the extractor is tested on
 # fixtures rather than trusted because the run above exited 0.
 try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/lint_metrics_test.py
+
+try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/catalog_diff_test.py
 
 try_status_report

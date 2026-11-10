@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use mz_service::params::GrpcClientParameters;
+use mz_cluster_client::params::GrpcClientParameters;
 use mz_ssh_util::tunnel::SshTimeoutConfig;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};

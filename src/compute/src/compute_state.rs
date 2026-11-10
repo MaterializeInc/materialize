@@ -25,12 +25,11 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
 };
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
@@ -48,6 +47,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -214,6 +214,9 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A process-global cache of shared persist batch writers. This allows
+    /// coalescing writes across local workers without explicit exchanges.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -306,6 +309,7 @@ impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
         persist_clients: Arc<PersistClientCache>,
+        persist_batches: SharedBatches,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -330,6 +334,7 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            persist_batches,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -520,17 +525,16 @@ impl ComputeState {
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
             let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
-            // Set compute's leg of the process-wide chunk spill gate. The
-            // gate ORs this leg with storage's, so chunks spill while either
-            // subsystem's flag is set. Storage's config application writes
-            // only its own leg, keeping the two flags from clobbering each
-            // other. The correction buffer has a gate of its own.
+            // Storage's config application sets the storage chunk gate.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
             mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
             if !(compute_spill || storage_spill || sink_spill) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
-                let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
+                let spill_fraction = COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION.get(config);
+                let spill_threads = usize::cast_lossy(
+                    (f64::cast_lossy(self.workers_per_process) * spill_fraction.max(0.0)).ceil(),
+                );
                 let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
 
                 // Budget derivation: fraction of physical RAM, with a 128 MiB
@@ -565,6 +569,7 @@ impl ComputeState {
                         fraction,
                         ram,
                         budget_bytes = total,
+                        spill_fraction,
                         spill_threads,
                         eager_backing,
                         rss_target_bytes = rss_target,
@@ -765,10 +770,7 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.apply_worker_config();
     }
 
-    fn handle_create_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
-    ) {
+    fn handle_create_dataflow(&mut self, dataflow: RenderDataflowDescription<CollectionMetadata>) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 

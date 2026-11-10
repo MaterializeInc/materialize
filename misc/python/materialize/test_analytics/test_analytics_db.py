@@ -30,6 +30,9 @@ from materialize.test_analytics.data.cluster_spec_sheet.cluster_spec_sheet_resul
     ClusterSpecSheetEnvironmentdResultStorage,
     ClusterSpecSheetResultStorage,
 )
+from materialize.test_analytics.data.console_scalability.console_scalability_result_storage import (
+    ConsoleScalabilityResultStorage,
+)
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
     FeatureBenchmarkResultStorage,
 )
@@ -88,6 +91,9 @@ class TestAnalyticsDb:
             ClusterSpecSheetEnvironmentdResultStorage(self.database_connector)
         )
         self.upgrade_downtime_results = UpgradeDowntimeResultStorage(
+            self.database_connector
+        )
+        self.console_scalability_results = ConsoleScalabilityResultStorage(
             self.database_connector
         )
 

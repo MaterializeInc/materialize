@@ -376,6 +376,10 @@ top of your webhook source that maps the individual fields to columns with the
 required data types. To avoid doing this tedious task manually, you can use
 [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
+To get `NULL` instead of an error for values that do not convert, use
+[`TRY_CAST`](/sql/functions/cast/#try_cast), for example
+`TRY_CAST(body->>'quantity' AS int)`.
+
 ### Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)

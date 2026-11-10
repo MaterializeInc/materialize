@@ -1084,6 +1084,8 @@ pub enum StorageErrorXKind {
     NoMatchingFiles,
     #[error("server returned HTTP {0}; Redirects are not supported, use the final URL directly.")]
     Redirect(u16),
+    #[error("server returned HTTP {0}")]
+    HttpStatus(u16),
     #[error("something went wrong: {0}")]
     Generic(String),
 }

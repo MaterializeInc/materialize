@@ -179,11 +179,12 @@ where
     pub async fn remove_rollups(
         &self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
+        remove_finalized: bool,
     ) -> (Vec<SeqNo>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, removed_rollup_seqnos, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, _, state| {
-                state.remove_rollups(remove_rollups)
+                state.remove_rollups(remove_rollups, remove_finalized)
             })
             .await;
         (removed_rollup_seqnos, maintenance)
@@ -1327,7 +1328,6 @@ pub mod datadriven {
         pub shard_id: ShardId,
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
-        pub gc: GarbageCollector<String, (), u64, i64>,
         pub batches: BTreeMap<String, IdHollowBatch<u64>>,
         pub next_id: usize,
         pub rollups: BTreeMap<String, EncodedRollup>,
@@ -1367,13 +1367,11 @@ pub mod datadriven {
             )
             .await
             .expect("codecs should match");
-            let gc = GarbageCollector::new(machine.clone(), Arc::clone(&client.isolated_runtime));
             MachineState {
                 shard_id,
                 client,
                 state_versions,
                 machine,
-                gc,
                 batches: BTreeMap::default(),
                 rollups: BTreeMap::default(),
                 listens: BTreeMap::default(),
@@ -1481,6 +1479,30 @@ pub mod datadriven {
             })
             .await?;
         Ok(s)
+    }
+
+    /// Lists the seqnos of rollups in blob, which can differ from those in
+    /// state.
+    pub async fn blob_scan_rollups(
+        datadriven: &MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id).to_string();
+
+        // Keys include a random id, so print only seqnos.
+        let mut seqnos = vec![];
+        let () = datadriven
+            .state_versions
+            .blob
+            .list_keys_and_metadata(&key_prefix, &mut |x| {
+                let (_, key) = BlobKey::parse_ids(x.key).expect("key should be valid");
+                if let PartialBlobKey::Rollup(seqno, _) = key {
+                    seqnos.push(seqno);
+                }
+            })
+            .await?;
+        seqnos.sort();
+        Ok(seqnos.iter().map(|seqno| format!("{seqno}\n")).collect())
     }
 
     #[allow(clippy::unused_async)]
@@ -2429,9 +2451,18 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let mut s = String::new();
         for maintenance in datadriven.routine.drain(..) {
-            let () = maintenance
-                .perform(&datadriven.machine, &datadriven.gc)
-                .await;
+            // One step at a time, rollup before GC, so the output doesn't
+            // depend on which wins a race.
+            let mut pending = vec![maintenance];
+            while let Some(m) = pending.pop() {
+                if m.write_rollup.is_some() {
+                    pending.push(datadriven.machine.add_rollup_for_current_seqno().await);
+                }
+                if let Some(req) = m.garbage_collection {
+                    let machine = &datadriven.machine;
+                    pending.push(GarbageCollector::gc_and_truncate(machine, req).await.0);
+                }
+            }
             let () = datadriven
                 .machine
                 .applier
@@ -2458,8 +2489,10 @@ pub mod tests {
 
     use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
-    use crate::internal::gc::{GarbageCollector, GcReq};
-    use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
+    use crate::cfg::GC_REMOVE_FINALIZED_ROLLUPS;
+    use crate::internal::gc::{GarbageCollector, GcReq, GcResults};
+    use crate::internal::machine::Machine;
+    use crate::internal::state::{GC_USE_ACTIVE_GC, HandleDebugState, ROLLUP_THRESHOLD};
     use crate::tests::{new_test_client, new_test_client_cache};
     use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -2741,5 +2774,155 @@ pub mod tests {
             .await
             .expect("invalid persist usage");
         assert!(is_finalized, "shard must still be finalized");
+    }
+
+    /// A machine with its own state cache, as after a restart.
+    async fn cold_machine(
+        client: &PersistClient,
+        shard_id: ShardId,
+    ) -> Machine<String, (), u64, i64> {
+        let mut client = client.clone();
+        client.shared_states = Arc::new(StateCache::new_no_metrics());
+        client
+            .make_machine(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("codecs match")
+    }
+
+    async fn gc(machine: &Machine<String, (), u64, i64>) -> GcResults {
+        let req = GcReq {
+            shard_id: machine.shard_id(),
+            new_seqno_since: machine.applier.seqno_since(),
+        };
+        GarbageCollector::gc_and_truncate(machine, req).await.1
+    }
+
+    /// GC removes a finalized shard's old rollups from state and blob, and a
+    /// later GC finishes one interrupted before or after its commit. GC from
+    /// stale state skips the shard.
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn finalized_gc_removes_old_rollups(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        // Only active GC fetches diffs through `seqno_since`, which the stale
+        // GC at the end needs.
+        client.cfg.set_config(&GC_USE_ACTIVE_GC, true);
+        let shard_id = ShardId::new();
+        let (mut write, mut read) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        read.downgrade_since(&Antichain::new()).await;
+        write.advance_upper(&Antichain::new()).await;
+        let machine = write.machine.clone();
+
+        // Finalize by hand. Expiring the last handle would write the final
+        // rollup from a background task that races the GCs below. GC requests
+        // are dropped, so the test runs each GC itself.
+        let mut maintenance = machine
+            .become_tombstone()
+            .await
+            .expect("since and upper are empty");
+        while maintenance.write_rollup.is_some() {
+            maintenance = machine.add_rollup_for_current_seqno().await;
+        }
+        assert!(machine.is_finalized());
+        let stale = cold_machine(&client, shard_id).await;
+
+        let mut rollups = machine
+            .applier
+            .rollups_lte_seqno(machine.applier.seqno_since());
+        let (kept_seqno, kept) = rollups.pop().expect("tombstone has a rollup");
+        assert!(!rollups.is_empty(), "need an old rollup to delete");
+        let old_keys: Vec<String> = rollups
+            .iter()
+            .map(|(_, key)| key.complete(&shard_id).to_string())
+            .collect();
+        let head_seqno = || async {
+            client
+                .consensus
+                .head(&shard_id.to_string())
+                .await
+                .expect("head")
+                .expect("shard is initialized")
+                .seqno
+        };
+        let listed_rollups = || async {
+            cold_machine(&client, shard_id)
+                .await
+                .applier
+                .rollups_lte_seqno(SeqNo::maximum())
+        };
+        let old_blobs = || async {
+            let mut n = 0;
+            for key in &old_keys {
+                n += usize::from(client.blob.get(key).await.expect("get").is_some());
+            }
+            n
+        };
+        let rollups_assigned = || client.metrics.state.finalized_rollup_assigned.get();
+        let assigned = rollups_assigned();
+
+        // Crash after truncation, before the commit: with the kill switch off,
+        // GC stops right there.
+        client.cfg.set_config(&GC_REMOVE_FINALIZED_ROLLUPS, false);
+        let seqno = head_seqno().await;
+        gc(&cold_machine(&client, shard_id).await).await;
+        client.cfg.set_config(&GC_REMOVE_FINALIZED_ROLLUPS, true);
+        let live_diffs = machine
+            .applier
+            .state_versions
+            .fetch_all_live_diffs(&shard_id)
+            .await;
+        assert_eq!(live_diffs.first().map(|x| x.seqno), Some(kept_seqno));
+        assert_eq!(
+            head_seqno().await,
+            seqno,
+            "kill switch off but gc committed"
+        );
+        assert_eq!(listed_rollups().await.len(), old_keys.len() + 1);
+        assert_eq!(old_blobs().await, old_keys.len());
+
+        // Crash after the commit, before the deletes: run only GC's commit.
+        let _ = cold_machine(&client, shard_id)
+            .await
+            .remove_rollups(&rollups, true)
+            .await;
+        let committed = head_seqno().await;
+        assert_eq!(committed, seqno.next(), "gc should commit one removal");
+        assert_eq!(listed_rollups().await, vec![(kept_seqno, kept.clone())]);
+        assert_eq!(old_blobs().await, old_keys.len());
+
+        // The removal asks for one more rollup, which lets a later GC truncate
+        // past it. That GC finishes the deletes without committing, and
+        // further GCs are no-ops.
+        let _ = cold_machine(&client, shard_id)
+            .await
+            .add_rollup_for_current_seqno()
+            .await;
+        let committed = head_seqno().await;
+        let kept = listed_rollups().await;
+        for i in 0..3 {
+            let results = gc(&cold_machine(&client, shard_id).await).await;
+            let expected_deleted = if i == 0 { old_keys.len() } else { 0 };
+            assert_eq!(results.rollups_deleted_from_blob, expected_deleted);
+            assert_eq!(old_blobs().await, 0, "old rollups still in blob");
+            assert_eq!(
+                head_seqno().await,
+                committed,
+                "gc at the fixed point committed"
+            );
+        }
+        assert_eq!(listed_rollups().await, kept);
+
+        // GC from state older than the truncation is a no-op.
+        let results = gc(&stale).await;
+        assert!(results.truncated_consensus_to.is_empty());
+        assert_eq!(results.rollups_deleted_from_blob, 0);
+        assert_eq!(
+            rollups_assigned(),
+            assigned + 1,
+            "rollup assigned after finalizing"
+        );
+
+        write.expire().await;
+        read.expire().await;
     }
 }

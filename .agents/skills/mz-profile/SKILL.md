@@ -21,6 +21,14 @@ Samply opens a browser tab with an interactive flame graph when recording finish
 
 On macOS, enable codesigning for Instruments support: `bin/environmentd --enable-mac-codesigning`
 
+### Continuous profiles in cloud environments
+
+Observed: Polar Signals offers on-CPU and in-use heap profiles only, no
+off-CPU profiles, so threads blocked on page faults or IO are invisible.
+Flame graph root totals are not additive across series. Take absolute load
+from cAdvisor's `container_cpu_usage_seconds_total` or rusage, and use the
+profiler only for proportions within it.
+
 ## Memory profiling
 
 Valgrind doesn't work on Materialize as it's too slow to yield results.

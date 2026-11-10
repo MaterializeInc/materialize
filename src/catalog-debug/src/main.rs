@@ -32,9 +32,10 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
-    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
-    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
+    ClusterReplicaCollection, ClusterReplicaSizeCollection, ClusterSystemConfigurationCollection,
+    Collection, CollectionTrace, CollectionType, CommentCollection, ConfigCollection,
+    DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection,
+    IndexColumnsCollection, ItemCollection, ItemColumnsCollection, NetworkPolicyCollection,
     ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
     SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
     SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
@@ -300,6 +301,11 @@ macro_rules! for_collection {
             }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
+            CollectionType::ItemColumns => $fn::<ItemColumnsCollection>($($arg),*).await?,
+            CollectionType::IndexColumns => $fn::<IndexColumnsCollection>($($arg),*).await?,
+            CollectionType::ClusterReplicaSize => {
+                $fn::<ClusterReplicaSizeCollection>($($arg),*).await?
+            }
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
             CollectionType::RoleAuth => $fn::<RoleAuthCollection>($($arg),*).await?,
@@ -456,12 +462,15 @@ async fn dump(
         clusters,
         introspection_sources,
         cluster_replicas,
+        cluster_replica_sizes,
         comments,
         configs,
         databases,
         default_privileges,
         id_allocator,
         items,
+        item_columns,
+        index_columns,
         network_policies,
         roles,
         role_auth,
@@ -500,6 +509,13 @@ async fn dump(
         stats_only,
         consolidate,
     );
+    dump_col(
+        &mut data,
+        cluster_replica_sizes,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(&mut data, comments, &ignore, stats_only, consolidate);
     dump_col(&mut data, configs, &ignore, stats_only, consolidate);
     dump_col(&mut data, databases, &ignore, stats_only, consolidate);
@@ -512,6 +528,8 @@ async fn dump(
     );
     dump_col(&mut data, id_allocator, &ignore, stats_only, consolidate);
     dump_col(&mut data, items, &ignore, stats_only, consolidate);
+    dump_col(&mut data, item_columns, &ignore, stats_only, consolidate);
+    dump_col(&mut data, index_columns, &ignore, stats_only, consolidate);
     dump_col(
         &mut data,
         network_policies,

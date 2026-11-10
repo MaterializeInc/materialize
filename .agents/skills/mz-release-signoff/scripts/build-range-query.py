@@ -91,7 +91,7 @@ def aggregate(kind, metric, selector, window, stack, namespaces):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("roster", help="roster file, or - for stdin")
     parser.add_argument("--stack", choices=("staging", "prod"), required=True)
     parser.add_argument(

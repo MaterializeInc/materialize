@@ -13,8 +13,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::Cluster;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::{DataflowDescription, LirDataflowDescription};
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
@@ -79,9 +78,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(filter()))
                 .with(PlanTrace::<MirRelationExpr>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
-                .with(PlanTrace::<DataflowDescription<LirRelationExpr>>::new(
-                    filter(),
-                ))
+                .with(PlanTrace::<LirDataflowDescription>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None))
@@ -106,9 +103,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(filter()))
                 .with(PlanTrace::<MirRelationExpr>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
-                .with(PlanTrace::<DataflowDescription<LirRelationExpr>>::new(
-                    filter(),
-                ))
+                .with(PlanTrace::<LirDataflowDescription>::new(filter()))
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None))
                 .with(tracing::level_filters::LevelFilter::TRACE);
@@ -393,10 +388,7 @@ impl OptimizerTrace {
                 &format,
                 &mut context,
             )?,
-            self.collect_explainable_entries::<DataflowDescription<LirRelationExpr>>(
-                &format,
-                &mut context
-            )?,
+            self.collect_explainable_entries::<LirDataflowDescription>(&format, &mut context)?,
             self.collect_explainable_entries::<FastPathPlan>(&format, &mut context)?,
         ));
 

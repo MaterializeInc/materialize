@@ -154,12 +154,12 @@ fn burst_record(record: &BurstState) -> BurstRecord {
     let BurstState {
         burst_size,
         linger_duration,
-        steady_hydrated_at,
+        steady_ready_at,
     } = record;
     BurstRecord {
         burst_size: burst_size.clone(),
         linger_duration: *linger_duration,
-        steady_hydrated_at: *steady_hydrated_at,
+        steady_ready_at: *steady_ready_at,
     }
 }
 

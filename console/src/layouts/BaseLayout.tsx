@@ -55,6 +55,14 @@ import { FIXED_TOP_BAR_Z_INDEX, MAIN_CONTENT_Z_INDEX } from "./zIndex";
 export interface BaseLayoutProps {
   children?: React.ReactNode;
   containerProps?: FlexProps;
+  /**
+   * Suppresses the welcome dialog that pops when a region first becomes
+   * healthy. Used by flows with their own region-ready affordances, so the
+   * dialog doesn't cover them.
+   */
+  hideWelcomeDialog?: boolean;
+  /** Renders only account-scoped navigation. See NavBarProps.accountOnly. */
+  accountOnlyNav?: boolean;
   navBarOverride?: React.FunctionComponent;
   sectionNav?: React.ReactNode;
 }
@@ -99,7 +107,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
       data-testid="page-layout"
       {...props.containerProps}
     >
-      <WelcomeDialog />
+      {!props.hideWelcomeDialog && <WelcomeDialog />}
       <MfaAlert />
       <LicenseExpiredBanner />
       <ImpersonationAlert />
@@ -108,7 +116,10 @@ export const BaseLayout = (props: BaseLayoutProps) => {
         flexGrow="1"
         minHeight="0"
       >
-        <NavigationBar isCollapsed={Boolean(props.sectionNav)} />
+        <NavigationBar
+          isCollapsed={Boolean(props.sectionNav)}
+          accountOnly={props.accountOnlyNav}
+        />
         <HStack
           alignItems="stretch"
           flexGrow="1"

@@ -70,6 +70,16 @@ const POLL_INTERVAL_MS: Record<string, number> = {
   // Cached name lookup, refetched only when the largest-queries set changes.
   "clusters.maintainedObjectNames": Infinity,
   "clusters.replicaOfflineEvents": 20_000,
+  "clusters.deploymentLineage": 300_000,
+  // Redesigned cluster page (UI preview clusterDetailsRedesign).
+  "clusters.unhydratedComputeObjects": 30_000,
+  "clusters.replicaHydrationEpisodes": 60_000,
+  // Fetched once. Status history refetches only when a replica's status
+  // changes, and heap limits only while a replica's metrics fetch fails.
+  "clusters.replicaStatusHistory": Infinity,
+  "clusters.replicaHeapLimits": Infinity,
+  "clusters.objectCreationTimes": Infinity,
+  "clusters.replicaSizeAllocations": Infinity,
   "roles.owners": 300_000,
   // No refetchInterval in the console: fetched on mount and window refocus
   // only, so replay them once per VU rather than at the 5s default.

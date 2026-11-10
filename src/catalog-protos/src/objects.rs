@@ -271,6 +271,91 @@ pub struct ItemVersion {
     pub version: Version,
 }
 
+/// Identifies the recorded columns of a relation item.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumnsKey {
+    pub id: CatalogItemId,
+}
+
+/// The columns of a relation item in position order, as planning resolved
+/// them: a column's 0-based position is its index in `columns`. Written with
+/// every change to the item's definition and refreshed at bootstrap, so that
+/// catalog views can report columns without the planner.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumnsValue {
+    pub columns: Vec<ItemColumn>,
+}
+
+/// A column of a relation item by the identity its type presents as: the OID
+/// and type modifier of its PostgreSQL-compatible type, and the `CREATE TYPE`
+/// item of a list, map or record type that one defines.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumn {
+    pub name: String,
+    pub nullable: bool,
+    pub type_oid: u32,
+    pub type_mod: i32,
+    pub custom_type: Option<CatalogItemId>,
+}
+
+/// Identifies the recorded keys of an index item.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumnsKey {
+    pub id: CatalogItemId,
+}
+
+/// The keys of an index in key order, as planning resolved them. Maintained
+/// like `ItemColumnsValue`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumnsValue {
+    pub columns: Vec<IndexColumn>,
+}
+
+/// A key of an index.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumn {
+    /// The 0-based position of the relation's column the index is on.
+    /// `None` when the key is an expression rather than a column reference.
+    pub column: Option<u64>,
+    pub nullable: bool,
+}
+
 #[derive(
     Clone,
     Copy,
@@ -344,6 +429,62 @@ pub struct NetworkPolicyValue {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub oid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSizeKey {
+    pub id: ClusterReplicaSizeId,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum ClusterReplicaSizeId {
+    System(u64),
+    User(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSizeValue {
+    /// The human-readable name of the size.
+    pub name: String,
+    /// The memory limit for each process, in bytes.
+    pub memory_limit: Option<u64>,
+    /// The CPU limit for each process, in nanocpus.
+    pub cpu_limit: Option<u64>,
+    /// The CPU request for each process, in nanocpus.
+    pub cpu_request: Option<u64>,
+    /// The disk limit for each process, in bytes.
+    pub disk_limit: Option<u64>,
+    /// The number of processes in the replica.
+    pub scale: u16,
+    /// The number of worker threads per process.
+    pub workers: u64,
+    /// The number of credits per hour that the replica consumes.
+    pub credits_per_hour: String,
+    /// Whether each process has exclusive access to its CPU cores.
+    pub cpu_exclusive: bool,
+    /// Whether this size represents a modern "cc" size rather than a legacy T-shirt size.
+    pub is_cc: bool,
+    /// The size family, e.g. `D` for `D.1-xsmall`.
+    pub family: Option<String>,
+    /// Whether instances of this type use swap as the spill-to-disk mechanism.
+    pub swap_enabled: bool,
+    /// Whether instances of this type can be created.
+    pub disabled: bool,
+    /// Additional node selectors.
+    pub selectors: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1049,9 +1190,9 @@ pub struct ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    /// When the steady-state replicas were first observed hydrated, as an
-    /// `mz_repr::Timestamp`. Absent until that observation.
-    pub steady_hydrated_at: Option<u64>,
+    /// Start of the current observed readiness period for the steady set, as an
+    /// `mz_repr::Timestamp`. Cleared after a failed readiness check.
+    pub steady_ready_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2000,6 +2141,7 @@ pub enum StateUpdateKind {
     Cluster(Cluster),
     ClusterIntrospectionSourceIndex(ClusterIntrospectionSourceIndex),
     ClusterReplica(ClusterReplica),
+    ClusterReplicaSize(ClusterReplicaSize),
     Comment(Comment),
     Config(Config),
     Database(Database),
@@ -2007,7 +2149,9 @@ pub enum StateUpdateKind {
     FenceToken(FenceToken),
     GidMapping(GidMapping),
     IdAlloc(IdAlloc),
+    IndexColumns(IndexColumns),
     Item(Item),
+    ItemColumns(ItemColumns),
     NetworkPolicy(NetworkPolicy),
     Role(Role),
     RoleAuth(RoleAuth),
@@ -2114,9 +2258,23 @@ pub struct ClusterIntrospectionSourceIndex {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumns {
+    pub key: IndexColumnsKey,
+    pub value: IndexColumnsValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Item {
     pub key: ItemKey,
     pub value: ItemValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumns {
+    pub key: ItemColumnsKey,
+    pub value: ItemColumnsValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2138,6 +2296,13 @@ pub struct RoleAuth {
 pub struct NetworkPolicy {
     pub key: NetworkPolicyKey,
     pub value: NetworkPolicyValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSize {
+    pub key: ClusterReplicaSizeKey,
+    pub value: ClusterReplicaSizeValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

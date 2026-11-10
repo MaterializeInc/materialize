@@ -9,13 +9,15 @@
 
 //! Types for describing dataflow sinks.
 
-use mz_expr::ColumnOrder;
+use mz_expr::{ColumnOrder, MfpPlan};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::sinks::S3UploadInfo;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+
+use crate::plan::scalar::LirScalarExpr;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -34,6 +36,15 @@ pub struct ComputeSinkDesc<S: 'static = ()> {
     pub non_null_assertions: Vec<usize>,
     /// TODO(database-issues#7533): Add documentation.
     pub refresh_schedule: Option<RefreshSchedule>,
+    /// The arrangement of `from` the renderer consumes, and how to read rows from it.
+    ///
+    /// `None` means consume the unarranged collection. `Some((key, mfp))` names an arrangement
+    /// of `from` by its key, and `mfp` reconstructs full rows of `from_desc` from the
+    /// arrangement's key and value.
+    ///
+    /// Chosen during LIR lowering, where the available arrangements of `from` are known. It is
+    /// `None` before lowering runs.
+    pub from_arrangement: Option<(Vec<LirScalarExpr>, MfpPlan<LirScalarExpr>)>,
 }
 
 /// TODO(database-issues#7533): Add documentation.

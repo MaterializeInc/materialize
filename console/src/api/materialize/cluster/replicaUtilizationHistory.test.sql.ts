@@ -377,6 +377,86 @@ describe("replicaUtilizationHistory", () => {
       await cleanup();
     }
   });
+
+  it("takes the memory split from each bucket's max-heap sample, as shares of one process's RAM", async () => {
+    const mockedSearchPath = "internal_test, " + SEARCH_PATH;
+    const client = await getMaterializeClient();
+    const processMemoryBytes = 4000;
+
+    await testdrive(`
+        > DROP CLUSTER IF EXISTS c CASCADE;
+        > CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=2,workers=1'));
+        > CREATE SCHEMA IF NOT EXISTS internal_test;
+        > SET schema = internal_test;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_metrics_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_status_history;
+        > DROP TABLE IF EXISTS internal_test.mz_cluster_replica_sizes;
+        > CREATE TABLE mz_cluster_replica_metrics_history (
+            occurred_at TIMESTAMP NOT NULL, replica_id TEXT NOT NULL, process_id uint8 NOT NULL,
+            cpu_nano_cores double, memory_bytes double, disk_bytes double, heap_bytes double,
+            heap_limit double, swap_bytes double);
+        > CREATE TABLE mz_cluster_replica_status_history (
+            replica_id TEXT NOT NULL, process_id uint8 NOT NULL, occurred_at TIMESTAMP NOT NULL,
+            status TEXT NOT NULL, reason TEXT);
+        > CREATE TABLE mz_cluster_replica_sizes (
+            size TEXT NOT NULL, processes uint8 NOT NULL, cpu_nano_cores uint8 NOT NULL,
+            memory_bytes uint8 NOT NULL, disk_bytes uint8);
+        > INSERT INTO internal_test.mz_cluster_replica_sizes VALUES
+            ('scale=2,workers=1', 2, ${size25cc.cpuNanoCores}, ${processMemoryBytes}, ${size25cc.diskBytes});
+    `);
+
+    await client.query(`SET search_path TO ${mockedSearchPath};`);
+
+    const {
+      rows: [replica],
+    } = await client.query(
+      `SELECT r.id, r.cluster_id AS "clusterId" FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'c'`,
+    );
+
+    // Two samples in one minute, with a row per process. The first has the
+    // highest heap. The second has more swap and a higher limit, which the
+    // split must not mix in.
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_metrics_history VALUES
+      (TIMESTAMP '2030-01-01T00:00:00Z', '${replica.id}', 0, 1, 1000, 0, 1100, 5000, 100),
+      (TIMESTAMP '2030-01-01T00:00:00Z', '${replica.id}', 1, 1, 3000, 0, 3400, 5000, 400),
+      (TIMESTAMP '2030-01-01T00:00:30Z', '${replica.id}', 0, 1, 500, 0, 500, 6000, 0),
+      (TIMESTAMP '2030-01-01T00:00:30Z', '${replica.id}', 1, 1, 600, 0, 1400, 6000, 800)`);
+
+    const params = {
+      startDate: "2030-01-01T00:00:00Z",
+      bucketSizeMs: 60_000,
+      clusterIds: [replica.clusterId],
+    };
+    const runQuery = async (includeMemoryBreakdown?: boolean) =>
+      (
+        await executeSqlHttp(
+          buildReplicaUtilizationHistoryQuery({
+            ...params,
+            includeMemoryBreakdown,
+          }).compile(),
+          {
+            sessionVariables: {
+              search_path: mockedSearchPath,
+              cluster: QUICKSTART_CLUSTER,
+            },
+          },
+        )
+      ).rows;
+
+    const [bucket] = await runQuery(true);
+    expect(bucket.maxHeapAt.toISOString()).toEqual("2030-01-01T00:00:00.000Z");
+    // Shares of one process's RAM from the worst process, where the memory
+    // percent is replica-wide.
+    expect(bucket.swapOfRamPercent).toEqual(400 / processMemoryBytes);
+    expect(bucket.heapLimitPercent).toEqual(5000 / processMemoryBytes);
+    expect(bucket.maxMemoryPercent).toEqual(
+      (1000 + 3000) / (processMemoryBytes * 2),
+    );
+
+    const [classicBucket] = await runQuery();
+    expect(classicBucket).not.toHaveProperty("swapOfRamPercent");
+    expect(classicBucket).not.toHaveProperty("heapLimitPercent");
+  });
 });
 
 // The indexed-view builders read the maintained `_overview*` views (point-lookup
@@ -393,14 +473,13 @@ describe("console cluster utilization indexed views", () => {
       },
     });
 
-  it("buildConsoleClusterUtilizationUnbinned3hQuery filters by cluster and optionally expands blue-green lineage", async () => {
+  it("buildConsoleClusterUtilizationUnbinned3hQuery filters by the given cluster ids", async () => {
     const client = await getMaterializeClient();
 
     await testdrive(`
         > CREATE SCHEMA IF NOT EXISTS internal_test;
         > SET schema = internal_test;
         > DROP TABLE IF EXISTS mz_console_cluster_utilization_overview_3h;
-        > DROP TABLE IF EXISTS mz_cluster_deployment_lineage;
         > CREATE TABLE mz_console_cluster_utilization_overview_3h (
             replica_id TEXT,
             cluster_id TEXT,
@@ -413,24 +492,14 @@ describe("console cluster utilization indexed views", () => {
             heap_percent DOUBLE,
             memory_and_disk_percent DOUBLE
           );
-        > CREATE TABLE mz_cluster_deployment_lineage (
-            cluster_id TEXT,
-            current_deployment_cluster_id TEXT,
-            cluster_name TEXT
-          );
         > INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
             ('u7', 'u3', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.5, 0.4, 0.3, 0.2, 0.6),
             ('u5', 'u2', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.1, 0.1, 0.1, 0.1, 0.1),
             ('u6', 'u4', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.9, 0.9, 0.9, 0.9, 0.9);
-        > INSERT INTO internal_test.mz_cluster_deployment_lineage VALUES
-            ('u2', 'u3', 'blue_green'),
-            ('u3', 'u3', 'blue_green'),
-            ('u4', 'u4', 'non_blue_green');
     `);
 
     await client.query(`SET search_path TO ${mockedSearchPath};`);
 
-    // Without lineage: only the requested cluster.
     const direct = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
         clusterIds: ["u3"],
@@ -444,17 +513,14 @@ describe("console cluster utilization indexed views", () => {
       memoryAndDiskPercent: 0.6,
     });
 
-    // With lineage: also the cluster's past blue-green deployment (u2).
-    const withLineage = await run(
+    // A lineage-expanded id list (u3 and its past deployment u2) reads every
+    // listed cluster and no other.
+    const expanded = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
-        clusterIds: ["u3"],
-        resolveLineage: true,
+        clusterIds: ["u2", "u3"],
       }).compile(),
     );
-    expect(withLineage.rows.map((r) => r.clusterId).sort()).toEqual([
-      "u2",
-      "u3",
-    ]);
+    expect(expanded.rows.map((r) => r.clusterId).sort()).toEqual(["u2", "u3"]);
   });
 
   it("buildConsoleClusterUtilizationOverviewQuery reads the 24h view, filters by cluster, and clips by startDate", async () => {
@@ -570,6 +636,9 @@ describe("console cluster utilization indexed views", () => {
       ('${replica.id}', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
     await client.query(`INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
       ('${replica.id}', '${cluster.id}', 'scale=1,workers=1', '${replica.name}', '${ts}', 0.1, 0.2, 0.3, 0.4, 0.5)`);
+    // An OOM on a replica outside the charted set.
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_status_history VALUES
+      ('u999', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
 
     // The ad-hoc path surfaces the OOM in SQL.
     const adHoc = (
@@ -601,11 +670,12 @@ describe("console cluster utilization indexed views", () => {
     const offlineEvents = (
       await run(
         buildReplicaOfflineEventsQuery({
-          clusterIds: [cluster.id],
+          replicaIds: [replica.id],
           startDate: startTime,
         }).compile(),
       )
     ).rows;
+    expect(offlineEvents.map((e) => e.replicaId)).toEqual([replica.id]);
     const rows = attachOfflineEvents(
       rebucketUtilizationSamples(
         samples,

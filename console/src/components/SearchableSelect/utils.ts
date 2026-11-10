@@ -27,6 +27,7 @@ export const buildSearchableSelectFilterStyles = <
     containerWidth,
     menuWidth,
     usePortal,
+    frameless,
   }: {
     colors: ThemeColors;
     shadows: ThemeShadows;
@@ -34,6 +35,7 @@ export const buildSearchableSelectFilterStyles = <
     containerWidth?: string;
     menuWidth?: string;
     usePortal?: boolean;
+    frameless?: boolean;
   },
   overrides: StylesConfig<Option, IsMulti, Group> = {},
 ): StylesConfig<Option, IsMulti, Group> =>
@@ -49,24 +51,34 @@ export const buildSearchableSelectFilterStyles = <
             boxShadow: "none",
           };
         },
-        container: (base, state) => ({
-          ...base,
-          boxSizing: "border-box",
-          width: containerWidth ?? base.width,
-          borderRadius: "8px",
-          borderWidth: "1px",
-          transition: "all 0.2s ease-in-out",
-          borderColor: isError
-            ? themeColors.accent.red
-            : state.isFocused
-              ? themeColors.accent.brightPurple
-              : themeColors.border.secondary,
-          boxShadow: isError
-            ? shadows.input.error
-            : state.isFocused
-              ? shadows.input.focus
-              : "0px 0px 0.5px rgba(0, 0, 0, 0.16), 0px 0.5px 2px rgba(0, 0, 0, 0.12);",
-        }),
+        container: (base, state) =>
+          frameless
+            ? {
+                ...base,
+                boxSizing: "border-box",
+                width: containerWidth ?? base.width,
+                borderWidth: 0,
+                borderRadius: 0,
+                boxShadow: "none",
+              }
+            : {
+                ...base,
+                boxSizing: "border-box",
+                width: containerWidth ?? base.width,
+                borderRadius: "8px",
+                borderWidth: "1px",
+                transition: "all 0.2s ease-in-out",
+                borderColor: isError
+                  ? themeColors.accent.red
+                  : state.isFocused
+                    ? themeColors.accent.brightPurple
+                    : themeColors.border.secondary,
+                boxShadow: isError
+                  ? shadows.input.error
+                  : state.isFocused
+                    ? shadows.input.focus
+                    : "0px 0px 0.5px rgba(0, 0, 0, 0.16), 0px 0.5px 2px rgba(0, 0, 0, 0.12);",
+              },
         menu: (base) => ({
           ...base,
           minWidth: menuWidth ?? base.minWidth,

@@ -18,7 +18,7 @@ prevent it recurring.
 
 For sustained CPU/memory pressure and OOM crash loops on an undersized
 cluster, see [Check cluster
-health](/transform-data/freshness-troubleshooting/#check-cluster-health). This
+health](/transform-data/freshness/troubleshoot-freshness/#check-cluster-health). This
 guide focuses on **spikes**: sudden increases against an otherwise healthy
 baseline.
 
@@ -107,7 +107,7 @@ ORDER BY occurred_at;
 ```
 
 See also [Check for DDL or deploy
-activity](/transform-data/freshness-troubleshooting/#check-for-ddl-or-deploy-activity).
+activity](/transform-data/freshness/troubleshoot-freshness/#check-for-ddl-or-deploy-activity).
 
 **Resolution**: Put new objects on their own cluster and cut over with a
 [blue/green deployment](/developer-tools/dbt/blue-green-deployments/) instead
@@ -185,6 +185,6 @@ to find which arrangement is largest.
 
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/)
-- [Freshness troubleshooting](/transform-data/freshness-troubleshooting/)
+- [Freshness troubleshooting](/transform-data/freshness/troubleshoot-freshness/)
 - [Replica resource usage](/observability/replica-resource-usage/)
 - [Operational guidelines](/clusters/operational-guidelines/)

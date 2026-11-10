@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { split } from "@chakra-ui/object-utils";
 import {
   chakra,
   forwardRef,
@@ -22,7 +21,7 @@ import {
   useMultiStyleConfig,
   useTheme,
 } from "@chakra-ui/react";
-import { dataAttr } from "@chakra-ui/utils";
+import { dataAttr, split } from "@chakra-ui/utils";
 import * as React from "react";
 
 import { MaterializeTheme } from "~/theme";
@@ -115,6 +114,10 @@ const LabeledSelect = forwardRef<LabeledSelectProps, "select">((props, ref) => {
           padding: "8px 12px",
           borderRight: `1px solid ${colors.border.secondary}`,
           backgroundColor: colors.background.secondary,
+          // The field takes the rest of the width, which would otherwise
+          // squeeze a multi-word label onto two lines.
+          flexShrink: 0,
+          whiteSpace: "nowrap",
         }}
       >
         {props.label}

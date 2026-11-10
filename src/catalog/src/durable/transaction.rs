@@ -17,6 +17,7 @@ use derivative::Derivative;
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_controller::clusters::ReplicaAllocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -27,6 +28,7 @@ use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster_replica_size_id::ClusterReplicaSizeId;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
@@ -51,25 +53,27 @@ use crate::durable::objects::serialization::{RustType, proto};
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
-    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    ClusterReplicaSize, ClusterReplicaSizeKey, ClusterReplicaSizeValue, ClusterReplicaValue,
+    ClusterSystemConfiguration, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey,
+    DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey,
+    GidMappingValue, IdAllocKey, IdAllocValue, IndexColumnsKey, IndexColumnsValue,
+    IntrospectionSourceIndex, Item, ItemColumnsKey, ItemColumnsValue, ItemKey, ItemMetadata,
+    ItemValue, NetworkPolicyKey, NetworkPolicyValue, ReplicaConfig, ReplicaSystemConfiguration,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY,
+    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration,
+    USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -89,6 +93,8 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    item_columns: TableTransaction<ItemColumnsKey, ItemColumnsValue>,
+    index_columns: TableTransaction<IndexColumnsKey, IndexColumnsValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
@@ -109,6 +115,7 @@ pub struct Transaction<'a> {
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
+    cluster_replica_sizes: TableTransaction<ClusterReplicaSizeKey, ClusterReplicaSizeValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
@@ -159,9 +166,12 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             items,
+            item_columns,
+            index_columns,
             comments,
             clusters,
             network_policies,
+            cluster_replica_sizes,
             cluster_replicas,
             introspection_sources,
             id_allocator,
@@ -190,6 +200,10 @@ impl<'a> Transaction<'a> {
         let cluster_unique_fn: fn(&ClusterValue, &ClusterValue) -> bool = |a, b| a.name == b.name;
         let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
             |a, b| a.name == b.name;
+        let cluster_replica_size_unique_fn: fn(
+            &ClusterReplicaSizeValue,
+            &ClusterReplicaSizeValue,
+        ) -> bool = |a, b| a.name == b.name;
         let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
             |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
 
@@ -232,6 +246,8 @@ impl<'a> Transaction<'a> {
                         && prev.item_type() == next.item_type()
                 },
             )?,
+            item_columns: TableTransaction::new(item_columns)?,
+            index_columns: TableTransaction::new(index_columns)?,
             comments: TableTransaction::new(comments)?,
             roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
             role_auth: TableTransaction::new(role_auth)?,
@@ -244,6 +260,11 @@ impl<'a> Transaction<'a> {
                 network_policies,
                 network_policy_unique_fn,
                 network_policy_unique_fn,
+            )?,
+            cluster_replica_sizes: TableTransaction::new_with_uniqueness_fn(
+                cluster_replica_sizes,
+                cluster_replica_size_unique_fn,
+                cluster_replica_size_unique_fn,
             )?,
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
@@ -802,10 +823,47 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Records `metadata` as the planner-resolved metadata of item `id`,
+    /// replacing whatever it had.
+    pub fn set_item_metadata(
+        &mut self,
+        id: CatalogItemId,
+        metadata: ItemMetadata,
+    ) -> Result<(), CatalogError> {
+        let ItemMetadata {
+            columns,
+            index_columns,
+        } = metadata;
+        // An item without columns or keys has no row, so a relation without
+        // columns and an item that is not a relation read the same.
+        let columns = (!columns.is_empty()).then_some(ItemColumnsValue { columns });
+        let key = ItemColumnsKey { id };
+        if self.item_columns.get(&key) != columns.as_ref() {
+            self.item_columns.set(key, columns, self.op_id)?;
+        }
+        let index_columns = (!index_columns.is_empty()).then_some(IndexColumnsValue {
+            columns: index_columns,
+        });
+        let key = IndexColumnsKey { id };
+        if self.index_columns.get(&key) != index_columns.as_ref() {
+            self.index_columns.set(key, index_columns, self.op_id)?;
+        }
+        Ok(())
+    }
+
+    /// Deletes the recorded columns and index keys of item `id`.
+    fn delete_item_metadata(&mut self, id: CatalogItemId) {
+        self.item_columns
+            .delete_by_key(ItemColumnsKey { id }, self.op_id);
+        self.index_columns
+            .delete_by_key(IndexColumnsKey { id }, self.op_id);
+    }
+
     /// Removes every item owned by an ephemeral session from the transaction,
     /// along with the durable state a graceful drop would have removed with
     /// it: storage collection metadata (moving the backing shards to the
-    /// finalization WAL), comments, and source references.
+    /// finalization WAL), recorded columns and index keys, comments, and
+    /// source references.
     ///
     /// Used to reclaim temporary items when the catalog is opened with write
     /// intent, at which point every session that could own one is dead.
@@ -830,6 +888,9 @@ impl<'a> Transaction<'a> {
             keys.push(key.clone());
         }
         self.items.delete_by_keys(keys, self.op_id);
+        for id in &item_ids {
+            self.delete_item_metadata(*id);
+        }
 
         // Move the items' storage mappings to the finalization WAL, like
         // `StorageCollections::prepare_state` does for a graceful drop. Every
@@ -1171,6 +1232,16 @@ impl<'a> Transaction<'a> {
             .map(|oids| oids.into_element())
     }
 
+    /// Creates a noncommittable fork of the current table contents, including pending writes.
+    ///
+    /// Changes to the fork are discarded. Pending audit events stay with the parent.
+    /// This copies the full catalog snapshot and borrows the parent's durable handle.
+    pub fn fork_dry_run(&mut self) -> Result<DryRunTransaction<'_>, CatalogError> {
+        let snapshot = self.current_snapshot();
+        let upper = self.upper;
+        Transaction::new(&mut *self.durable_catalog, snapshot, upper).map(DryRunTransaction::new)
+    }
+
     /// Exports the current state of this transaction as a [`Snapshot`].
     ///
     /// This merges each `TableTransaction`'s initial data with its pending
@@ -1185,9 +1256,12 @@ impl<'a> Transaction<'a> {
             roles: self.roles.current_items_proto(),
             role_auth: self.role_auth.current_items_proto(),
             items: self.items.current_items_proto(),
+            item_columns: self.item_columns.current_items_proto(),
+            index_columns: self.index_columns.current_items_proto(),
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
+            cluster_replica_sizes: self.cluster_replica_sizes.current_items_proto(),
             cluster_replicas: self.cluster_replicas.current_items_proto(),
             introspection_sources: self.introspection_sources.current_items_proto(),
             id_allocator: self.id_allocator.current_items_proto(),
@@ -1503,6 +1577,7 @@ impl<'a> Transaction<'a> {
     pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
+            self.delete_item_metadata(id);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1522,6 +1597,9 @@ impl<'a> Transaction<'a> {
 
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
+        for id in ids {
+            self.delete_item_metadata(*id);
+        }
         if n == ids.len() {
             Ok(())
         } else {
@@ -2434,6 +2512,59 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_cluster_replica_sizes(&self) -> impl Iterator<Item = ClusterReplicaSize> + use<'_> {
+        self.cluster_replica_sizes
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    pub fn insert_system_cluster_replica_size(
+        &mut self,
+        name: String,
+        allocation: ReplicaAllocation,
+    ) -> Result<ClusterReplicaSizeId, CatalogError> {
+        let id = self.get_and_increment_id(SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string())?;
+        let id = ClusterReplicaSizeId::System(id);
+        let (key, value) = ClusterReplicaSize {
+            id,
+            name,
+            allocation,
+        }
+        .into_key_value();
+        self.cluster_replica_sizes.insert(key, value, self.op_id)?;
+        Ok(id)
+    }
+
+    pub fn update_cluster_replica_size(
+        &mut self,
+        size: ClusterReplicaSize,
+    ) -> Result<(), CatalogError> {
+        let id = size.id;
+        let (key, value) = size.into_key_value();
+        if self
+            .cluster_replica_sizes
+            .update_by_key(key, value, self.op_id)?
+        {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownClusterReplicaSize(id.to_string()).into())
+        }
+    }
+
+    pub fn remove_cluster_replica_size(
+        &mut self,
+        id: ClusterReplicaSizeId,
+    ) -> Result<(), CatalogError> {
+        match self
+            .cluster_replica_sizes
+            .delete_by_key(ClusterReplicaSizeKey { id }, self.op_id)
+        {
+            Some(_) => Ok(()),
+            None => Err(SqlCatalogError::UnknownClusterReplicaSize(id.to_string()).into()),
+        }
+    }
+
     pub fn get_system_object_mappings(
         &self,
     ) -> impl Iterator<Item = SystemObjectMapping> + use<'_> {
@@ -2565,6 +2696,7 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             network_policies,
+            cluster_replica_sizes,
             cluster_replicas,
             introspection_sources,
             system_gid_mapping,
@@ -2582,6 +2714,9 @@ impl<'a> Transaction<'a> {
             configs: _,
             settings: _,
             txn_wal_shard: _,
+            // Not consumed by the in-memory catalog, which plans items itself.
+            item_columns: _,
+            index_columns: _,
             upper,
             op_id: _,
             commit_capability: _,
@@ -2644,6 +2779,11 @@ impl<'a> Transaction<'a> {
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
+                cluster_replica_sizes,
+                StateUpdateKind::ClusterReplicaSize,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
                 introspection_sources,
                 StateUpdateKind::IntrospectionSourceIndex,
                 self.op_id,
@@ -2702,6 +2842,10 @@ impl<'a> Transaction<'a> {
         self.durable_catalog.is_savepoint()
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.durable_catalog.is_read_only()
+    }
+
     fn commit_op(&mut self) {
         self.op_id += 1;
     }
@@ -2744,12 +2888,15 @@ impl<'a> Transaction<'a> {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
+            item_columns: self.item_columns.pending(),
+            index_columns: self.index_columns.pending(),
             comments: self.comments.pending(),
             roles: self.roles.pending(),
             role_auth: self.role_auth.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
             network_policies: self.network_policies.pending(),
+            cluster_replica_sizes: self.cluster_replica_sizes.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
@@ -2797,12 +2944,15 @@ impl<'a> Transaction<'a> {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
             clusters,
             cluster_replicas,
             network_policies,
+            cluster_replica_sizes,
             introspection_sources,
             id_allocator,
             configs,
@@ -2826,12 +2976,15 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(databases);
         differential_dataflow::consolidation::consolidate_updates(schemas);
         differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(item_columns);
+        differential_dataflow::consolidation::consolidate_updates(index_columns);
         differential_dataflow::consolidation::consolidate_updates(comments);
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(role_auth);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
+        differential_dataflow::consolidation::consolidate_updates(cluster_replica_sizes);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
@@ -3021,12 +3174,19 @@ pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
+    pub(crate) item_columns: Vec<(proto::ItemColumnsKey, proto::ItemColumnsValue, Diff)>,
+    pub(crate) index_columns: Vec<(proto::IndexColumnsKey, proto::IndexColumnsValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
+    pub(crate) cluster_replica_sizes: Vec<(
+        proto::ClusterReplicaSizeKey,
+        proto::ClusterReplicaSizeValue,
+        Diff,
+    )>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -3087,12 +3247,15 @@ impl TransactionBatch {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
             clusters,
             cluster_replicas,
             network_policies,
+            cluster_replica_sizes,
             introspection_sources,
             id_allocator,
             configs,
@@ -3114,12 +3277,15 @@ impl TransactionBatch {
         databases.is_empty()
             && schemas.is_empty()
             && items.is_empty()
+            && item_columns.is_empty()
+            && index_columns.is_empty()
             && comments.is_empty()
             && roles.is_empty()
             && role_auth.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
             && network_policies.is_empty()
+            && cluster_replica_sizes.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()
@@ -3184,6 +3350,7 @@ mod unique_name {
     }
 
     impl_unique_name! {
+        ClusterReplicaSizeValue,
         ClusterReplicaValue,
         ClusterValue,
         DatabaseValue,
@@ -3202,6 +3369,8 @@ mod unique_name {
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        IndexColumnsValue,
+        ItemColumnsValue,
         ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,

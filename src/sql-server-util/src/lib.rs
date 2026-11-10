@@ -906,6 +906,8 @@ pub enum SqlServerDecodeError {
     },
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("column '{column_name}' not found in CDC row")]
+    MissingColumn { column_name: String },
     #[error("can't decode {sql_server_type:?} as {mz_type:?}")]
     Unsupported {
         sql_server_type: SqlServerColumnDecodeType,

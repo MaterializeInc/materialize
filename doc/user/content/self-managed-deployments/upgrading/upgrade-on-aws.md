@@ -57,6 +57,12 @@ If your configuration includes additional modules (networking, storage,
 database, node pools, etc.) provided by Materialize, **update those to the same
 release tag as well**.
 
+When upgrading across a major version of the Materialize Terraform Modules,
+do not skip major versions. Upgrade to each major version in turn, following
+its [upgrade
+notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/README.md#upgrade-notes).
+Some need extra steps or several applies.
+
 {{< /important >}}
 
 ```hcl
@@ -264,6 +270,10 @@ profiles, and retention, see
 [Grafana](/observability/self-managed/grafana/). For what the stack stores and
 the backends it can forward to, see [How logs and metrics are
 stored](/observability/self-managed/storage/).
+
+Starting with v15.0.0 of the Materialize Terraform Modules, the `monitoring`
+module also configures where alerts go. Until you configure a receiver, no one
+is notified. See [Alerting](/observability/self-managed/alerting/).
 
 ## See also
 

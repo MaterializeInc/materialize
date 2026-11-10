@@ -34,10 +34,12 @@ dec.workspace = true
 derivative.workspace = true
 encoding.workspace = true
 enum-iterator.workspace = true
-fallible-iterator.workspace = true
 hex.workspace = true
 hmac.workspace = true
 itertools.workspace = true
+jaq-core.workspace = true
+jaq-json.workspace = true
+jaq-std.workspace = true
 md-5.workspace = true
 murmur2.workspace = true
 mz-catalog-decode = { path = "../catalog-decode" }

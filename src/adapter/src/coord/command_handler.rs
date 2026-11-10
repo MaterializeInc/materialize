@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -49,6 +48,7 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -74,14 +74,14 @@ use crate::command::{
 use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
-    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
-    PurifiedStatementReady, validate_ip_with_policy_rules,
+    ConnMeta, Coordinator, DeferredDdl, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+    validate_ip_with_policy_rules,
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -111,11 +111,9 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
 }
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a command in a size-bounded, heap-allocated future.
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
             }
@@ -194,8 +192,7 @@ impl Coordinator {
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .await;
+                    Box::pin(self.handle_execute(portal_name, session, tx, outer_ctx_extra)).await;
                 }
 
                 Command::StartCopyFromStdin {
@@ -663,8 +660,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(debug_span!("handle_command"))
-        .boxed_local()
+        .instrument(debug_span!("handle_command"));
+        crate::coord::box_dispatcher(future)
     }
 
     fn handle_role_can_login(
@@ -1264,6 +1261,12 @@ impl Coordinator {
             }
             _ => {}
         }
+        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
+        if let Some(labels) =
+            metrics::as_of_query_label_values(session_type, application_name, &stmt)
+        {
+            self.metrics.as_of_queries.with_label_values(&labels).inc();
+        }
 
         self.handle_execute_inner(stmt, params, ctx).await
     }
@@ -1321,6 +1324,12 @@ impl Coordinator {
         //    `clear_transaction` and a message sent to the Coordinator to execute the next queued
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
+
+        if StatementKind::from(&*stmt).is_explain() {
+            if let Err(error) = ctx.session_mut().transaction_mut().record_explain() {
+                return ctx.retire(Err(error));
+            }
+        }
 
         // For `Started`, this separates the first statement of an extended-protocol
         // pipeline from a later one that joins the ops staged before it.
@@ -1381,12 +1390,6 @@ impl Coordinator {
                     | Statement::Declare(_)
                     | Statement::Discard(_)
                     | Statement::Execute(_)
-                    | Statement::ExplainPlan(_)
-                    | Statement::ExplainPushdown(_)
-                    | Statement::ExplainAnalyzeObject(_)
-                    | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainTimestamp(_)
-                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -1397,7 +1400,13 @@ impl Coordinator {
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Subscribe(_)
-                    | Statement::Raise(_) => {
+                    | Statement::Raise(_)
+                    | Statement::ExplainPlan(_)
+                    | Statement::ExplainPushdown(_)
+                    | Statement::ExplainAnalyzeObject(_)
+                    | Statement::ExplainAnalyzeCluster(_)
+                    | Statement::ExplainSinkSchema(_)
+                    | Statement::ExplainTimestamp(_) => {
                         // Always safe.
                     }
 
@@ -1413,20 +1422,21 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        if !ctx.session().transaction().is_ddl() {
+                            // Preparation can yield before the first dry run. Capture both
+                            // baselines now so unrelated commits cannot mix their contents.
+                            let (state, snapshot) = self.catalog().ddl_transaction_snapshot().await;
 
-                        // Initialize our transaction with a set of empty ops, or return an error
-                        // if we can't run a DDL transaction
-                        let txn_status = ctx.session_mut().transaction_mut();
-                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                            ops: vec![],
-                            state,
-                            revision,
-                            side_effects: vec![],
-                            snapshot: None,
-                        }) {
-                            return ctx.retire(Err(err));
+                            // Initialize our transaction with a set of empty ops, or return an error
+                            // if we can't run a DDL transaction
+                            let txn_status = ctx.session_mut().transaction_mut();
+                            if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                                commands: vec![],
+                                state,
+                                snapshot,
+                            }) {
+                                return ctx.retire(Err(err));
+                            }
                         }
                     }
 
@@ -1559,12 +1569,34 @@ impl Coordinator {
                     )));
                     return;
                 }
-                self.serialized_ddl.push_back(DeferredPlanStatement {
-                    ctx,
-                    ps: PlanStatement::Statement { stmt, params },
-                });
+                self.serialized_ddl
+                    .push_back(DeferredDdl::Statement { ctx, stmt, params });
                 return;
             }
+        }
+
+        if catalog::command::CatalogResultCommand::supports_statement(&stmt) {
+            self.sequence_catalog_result_command(ctx, stmt, params);
+            return;
+        }
+        if matches!(
+            &*stmt,
+            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
+        ) {
+            self.sequence_rename_command(ctx, stmt, params).await;
+            return;
+        }
+
+        if matches!(
+            &*stmt,
+            Statement::CreateSource(_) | Statement::CreateTableFromSource(_)
+        ) || matches!(&*stmt, Statement::AlterSource(stmt)
+            if matches!(stmt.action,
+                mz_sql::ast::AlterSourceAction::AddSubsources { .. }
+                | mz_sql::ast::AlterSourceAction::RefreshReferences))
+        {
+            self.sequence_source_statement(ctx, stmt, params).await;
+            return;
         }
 
         let catalog = self.catalog();
@@ -1765,9 +1797,9 @@ impl Coordinator {
         if !StatementClassification::from(&*stmt).is_ddl() {
             return false;
         }
-        // Off-thread, pre-planning purification can perform arbitrarily slow network calls so must
-        // not be serialized. These all use PlanValidity for their checking, and we must ensure
-        // those checks are sufficient.
+        // External preparation can perform arbitrarily slow network calls, so it must not
+        // hold the DDL lock. Source commands re-execute against the current catalog at commit.
+        // CREATE SINK and the remaining purified ALTER SOURCE forms use PlanValidity.
         if Self::must_spawn_purification(stmt) {
             return false;
         }
@@ -1994,6 +2026,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
+        // A COMMIT waiting for group commit or for its read to be linearized.
+        let mut maybe_commit_ctx = None;
 
         // Cancel all pending writes for this connection:
         // - At most one session-bound write (`UserWriteResponder::Session`),
@@ -2021,7 +2055,7 @@ impl Coordinator {
                     responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                     ..
                 } => {
-                    maybe_ctx = Some(ctx);
+                    maybe_commit_ctx = Some(ctx);
                 }
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Internal { result, .. },
@@ -2042,22 +2076,45 @@ impl Coordinator {
         let deferred_ddl_idx = self
             .serialized_ddl
             .iter()
-            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id);
+            .position(|deferred| *deferred.conn_id() == conn_id);
         if let Some(idx) = deferred_ddl_idx {
             let deferred = self
                 .serialized_ddl
                 .remove(idx)
                 .expect("known to exist from call to `position` above");
-            maybe_ctx = Some(deferred.ctx);
+            match deferred {
+                DeferredDdl::Statement {
+                    ctx,
+                    stmt: _,
+                    params: _,
+                } => maybe_ctx = Some(ctx),
+                DeferredDdl::Commit(pending) => {
+                    self.finish_ddl_commit(pending, Err(AdapterError::Canceled));
+                }
+            }
         }
 
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-            let ctx = pending_read_txn.take_context();
-            maybe_ctx = Some(ctx);
+            maybe_commit_ctx = Some(pending_read_txn.take_context());
         }
 
+        if let Some(ctx) = maybe_commit_ctx {
+            // The COMMIT already cleared the session's transaction status, so the transaction's
+            // `SET LOCAL` and staged variable values are the only transaction state left. Without
+            // ending them here they apply to the session's next transaction.
+            //
+            // NOTE: The error response cannot carry the changed parameters, so a reverted
+            // parameter in the notify set is not announced to the client.
+            let (ctx, result) = CompletedClientTransmitter::new(
+                ctx,
+                Err(AdapterError::Canceled),
+                EndTransactionAction::Rollback,
+            )
+            .finalize();
+            ctx.retire(result);
+        }
         if let Some(ctx) = maybe_ctx {
             ctx.retire(Err(AdapterError::Canceled));
         }
@@ -2115,16 +2172,17 @@ impl Coordinator {
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
-        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
-        // this to prevent blocking the Coordinator in the case that a lot of connections are
-        // closed at once, which occurs regularly in some workflows.
+        // Queue the retraction for the next group commit without waiting for it, so closing many
+        // connections at once doesn't block the Coordinator. Forcing a commit here (`defer`)
+        // would hand every `mz_catalog_server` dataflow a new timestamp per closed session,
+        // making connection churn cost catalog server CPU per connection.
         let update = self
             .catalog()
             .state()
             .pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+        let _builtin_update_notify = self.builtin_table_update().background(vec![update]);
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send
@@ -2271,7 +2329,7 @@ impl Coordinator {
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
                 let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e),
                 ));
                 return;
             }

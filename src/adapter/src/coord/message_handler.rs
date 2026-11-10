@@ -29,7 +29,6 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
@@ -47,7 +46,7 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{AdapterNotice, TimestampContext};
+use crate::{AdapterError, AdapterNotice};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -86,6 +85,20 @@ impl Coordinator {
                 {
                     self.message_controller(m).boxed_local().await
                 }
+            }
+            Message::SourceStatementReady {
+                pending,
+                response,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_source_statement_ready(pending, Some(response))
+                    .boxed_local()
+                    .await;
+            }
+            Message::DdlCommandsReady { pending, otel_ctx } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_ddl_commit(pending).boxed_local().await;
             }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
@@ -166,18 +179,19 @@ impl Coordinator {
                 self.storage_usage_prune(expired).boxed_local().await;
             }
             Message::ArrangementSizesSchedule => {
-                self.schedule_arrangement_sizes_collection()
-                    .boxed_local()
-                    .await;
+                self.schedule_arrangement_sizes_collection();
             }
             Message::ArrangementSizesSnapshot => {
-                self.arrangement_sizes_snapshot().boxed_local().await;
+                self.arrangement_sizes_snapshot();
             }
-            Message::ArrangementSizesWrite(records) => {
-                self.arrangement_sizes_write(records).boxed_local().await;
+            Message::ArrangementSizesWrite {
+                records,
+                collection_ts,
+            } => {
+                self.arrangement_sizes_write(records, collection_ts);
             }
             Message::ArrangementSizesPrune(expired) => {
-                self.arrangement_sizes_prune(expired).boxed_local().await;
+                self.arrangement_sizes_prune(expired);
             }
             Message::HydrationHistorySchedule => {
                 self.schedule_hydration_history_collection();
@@ -186,7 +200,7 @@ impl Coordinator {
                 self.run_hydration_history_collection();
             }
             Message::CaughtUpCheck(request) => {
-                self.handle_caught_up_check_request(request).await;
+                self.handle_caught_up_check_request(request);
             }
             Message::RetireExecute {
                 otel_ctx,
@@ -206,9 +220,6 @@ impl Coordinator {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
                     .boxed_local()
                     .await;
-            }
-            Message::PeekStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::CreateIndexStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
@@ -428,7 +439,7 @@ impl Coordinator {
     /// synchronize across environments. Sleeps are capped at `MAX_SLEEP`,
     /// so dyncfg changes (interval edits or the `0s` disable sentinel) take
     /// effect within one cap rather than after the full interval.
-    pub async fn schedule_arrangement_sizes_collection(&self) {
+    pub fn schedule_arrangement_sizes_collection(&self) {
         const MAX_SLEEP: Duration = Duration::from_secs(60);
 
         let interval_duration =
@@ -466,27 +477,31 @@ impl Coordinator {
         // `rand::random_range` panics on an empty range.
         let interval_ms = interval_ms.max(1);
         let offset = rngs::SmallRng::from_seed(seed).random_range(0..interval_ms);
-        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
-        let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
-        let next_collection_ts = if previous_collection_ts > now_ts {
-            previous_collection_ts
-        } else {
-            previous_collection_ts + interval_ms
-        };
-        let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
-
-        // Within one cap of the next fire we sleep the remainder and snapshot;
-        // further out we sleep the cap and re-enter so a dyncfg change is
-        // picked up before committing to a long sleep.
-        let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
-            (sleep_for, true)
-        } else {
-            (MAX_SLEEP, false)
-        };
-
+        // The oracle peek is a network round trip with unbounded tail latency,
+        // so it must not run on the coordinator loop.
+        let oracle = self.get_local_timestamp_oracle();
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "arrangement_sizes_collection", async move {
+            let now_ts: EpochMillis = oracle.peek_write_ts().await.into();
+
+            let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
+            let next_collection_ts = if previous_collection_ts > now_ts {
+                previous_collection_ts
+            } else {
+                previous_collection_ts + interval_ms
+            };
+            let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
+
+            // Within one cap of the next fire we sleep the remainder and
+            // snapshot; further out we sleep the cap and re-enter so a dyncfg
+            // change is picked up before committing to a long sleep.
+            let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
+                (sleep_for, true)
+            } else {
+                (MAX_SLEEP, false)
+            };
+
             tokio::time::sleep(capped_sleep).await;
             let msg = if fire_snapshot {
                 Message::ArrangementSizesSnapshot
@@ -501,24 +516,25 @@ impl Coordinator {
     /// Kicks off a snapshot of `mz_object_arrangement_sizes` for appending to
     /// `mz_object_arrangement_size_history`.
     ///
-    /// The persist reads and row preparation are too slow for the coordinator
-    /// main loop, so they run on a spawned task. The prepared records come
-    /// back as [`Message::ArrangementSizesWrite`] and are appended by
-    /// [`Coordinator::arrangement_sizes_write`], which also reschedules the
-    /// next collection. An empty or failed snapshot reschedules directly.
+    /// The oracle read, persist reads, and row preparation are too slow for
+    /// the coordinator main loop, so they run on a spawned task. The prepared
+    /// records come back as [`Message::ArrangementSizesWrite`] and are
+    /// appended by [`Coordinator::arrangement_sizes_write`], which also
+    /// reschedules the next collection. An empty or failed snapshot
+    /// reschedules directly.
     ///
     /// Rows from replicas without fresh introspection data are excluded, so
     /// sizes predating an environmentd or replica restart are not recorded.
     /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_snapshot(&self) {
+    fn arrangement_sizes_snapshot(&self) {
         // Builtin collections are not writable in read-only mode. Skip the
         // cycle but keep rescheduling, mirroring `storage_usage_fetch`, so
         // collection stays alive regardless of how the coordinator leaves
         // read-only mode. The transition is one-way, so
         // `arrangement_sizes_write` needs no check of its own.
         if self.controller.read_only() {
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
@@ -533,7 +549,7 @@ impl Coordinator {
         if fresh_size_replicas.is_empty() {
             // No replica has reported sizes in this process yet, so the live
             // collection contains only stale rows (or none). Skip the cycle.
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
@@ -600,18 +616,31 @@ impl Coordinator {
             let msg = if records.is_empty() {
                 Message::ArrangementSizesSchedule
             } else {
-                Message::ArrangementSizesWrite(records)
+                // `collection_ts` is the snapshot's read timestamp, the state
+                // the rows describe. Stamps strictly increase within a process,
+                // because the next snapshot is only scheduled after this append
+                // applies, and across restarts via the oracle. This assumes a
+                // single writer, which fencing ensures.
+                Message::ArrangementSizesWrite {
+                    records,
+                    collection_ts: read_ts.into(),
+                }
             };
             // It is not an error for this task to outlive `internal_cmd_rx`.
             let _ = internal_cmd_tx.send(msg);
         });
     }
 
-    /// Stamps prepared snapshot records with a shared `collection_timestamp`
-    /// and appends them to `mz_object_arrangement_size_history`. Reschedules
-    /// the next collection once the append completes.
+    /// Appends prepared snapshot records to
+    /// `mz_object_arrangement_size_history`, stamped with the snapshot's
+    /// `collection_ts`. Reschedules the next collection once the append
+    /// completes.
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_write(&mut self, records: Vec<ArrangementSizeRecord>) {
+    fn arrangement_sizes_write(
+        &mut self,
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    ) {
         // Freshness may have been invalidated while the snapshot task ran,
         // e.g. by a cluster event reporting a replica offline. Revalidate so
         // records prepared from a now-untrusted replica's data are dropped.
@@ -624,15 +653,10 @@ impl Coordinator {
             .filter(|record| fresh_size_replicas.contains(&record.replica_id))
             .collect();
         if records.is_empty() {
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
-        // `collection_ts` is stamped after the snapshot so it's always >= the
-        // state the rows describe, and monotone across restarts. The snapshot
-        // read and this stamp aren't atomic, but the resulting skew is bounded
-        // by snapshot latency and negligible at this cadence.
-        let collection_ts: EpochMillis = self.get_local_write_ts().await.timestamp.into();
         let collection_datum = Datum::TimestampTz(
             mz_ore::now::to_datetime(collection_ts)
                 .try_into()
@@ -683,7 +707,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+    fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
         let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;
@@ -835,60 +859,24 @@ impl Coordinator {
         };
 
         let plan = match purified_statement {
-            PurifiedStatement::PurifiedCreateSource {
-                create_progress_subsource_stmt,
-                create_source_stmt,
-                subsources,
-                available_source_references,
-            } => self
-                .plan_purified_create_source(
-                    &ctx,
-                    params,
-                    create_progress_subsource_stmt,
-                    create_source_stmt,
-                    subsources,
-                    available_source_references,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                source_name,
-                options,
-                subsources,
-            } => self
-                .plan_purified_alter_source_add_subsource(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    options,
-                    subsources,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
-                source_name,
-                available_source_references,
-            } => self
-                .plan_purified_alter_source_refresh_references(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    available_source_references,
-                )
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
+            PurifiedStatement::PurifiedCreateSource { .. }
+            | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. }
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. } => {
+                let msg = "source preparation must execute as a catalog command";
+                soft_panic_or_log!("{msg}");
+                Err(AdapterError::Internal(msg.into()))
+            }
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)
-            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
+            | PurifiedStatement::PurifiedCreateSink(..)) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
                     }
-                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
-                        Statement::CreateTableFromSource(stmt)
-                    }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
+                    | PurifiedStatement::PurifiedCreateTableFromSource { .. }
                     | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
                     | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
@@ -1143,28 +1131,7 @@ impl Coordinator {
         let mut cached_oracle_ts = BTreeMap::new();
 
         for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
-            if let TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts,
-                oracle_ts,
-            } = read_txn.timestamp_context()
-            {
-                let oracle_ts = match oracle_ts {
-                    Some(oracle_ts) => oracle_ts,
-                    None => {
-                        // There was no oracle timestamp, so no need to delay.
-                        ready_txns.push(read_txn);
-                        continue;
-                    }
-                };
-
-                if chosen_ts <= oracle_ts {
-                    // Chosen ts was already <= the oracle ts, so we're good
-                    // to go!
-                    ready_txns.push(read_txn);
-                    continue;
-                }
-
+            if let Some((timeline, chosen_ts)) = read_txn.timestamp_to_linearize() {
                 // See what the oracle timestamp is now and delay when needed.
                 let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
                 let current_oracle_ts = match current_oracle_ts {
@@ -1202,21 +1169,7 @@ impl Coordinator {
 
             let now = Instant::now();
             for ready_txn in ready_txns {
-                let span = tracing::debug_span!("retire_read_results");
-                ready_txn.otel_ctx.attach_as_parent_to(&span);
-                let _entered = span.enter();
-                self.metrics
-                    .linearize_message_seconds
-                    .with_label_values(&[
-                        "read",
-                        if ready_txn.num_requeues == 0 {
-                            "true"
-                        } else {
-                            "false"
-                        },
-                    ])
-                    .observe((now - ready_txn.created).as_secs_f64());
-                ready_txn.finish();
+                ready_txn.finish_with_metrics(&self.metrics, now);
             }
         }
 

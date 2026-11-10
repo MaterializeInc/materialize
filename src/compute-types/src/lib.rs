@@ -15,6 +15,7 @@ pub mod config;
 pub mod dataflows;
 pub mod dyncfgs;
 pub mod explain;
+pub mod optimizer_metrics;
 pub mod plan;
 pub mod sinks;
 pub mod sources;

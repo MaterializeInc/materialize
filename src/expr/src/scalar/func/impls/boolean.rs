@@ -13,7 +13,7 @@ use mz_repr::strconv;
 #[sqlfunc(
     sqlname = "NOT",
     preserves_uniqueness = true,
-    inverse = to_unary!(Not),
+    inverse = Not,
     is_monotone = true
 )]
 fn not(a: bool) -> bool {
@@ -23,7 +23,7 @@ fn not(a: bool) -> bool {
 #[sqlfunc(
     sqlname = "boolean_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToBool),
+    inverse = super::CastStringToBool,
     is_monotone = true
 )]
 fn cast_bool_to_string<'a>(a: bool) -> &'a str {
@@ -36,7 +36,7 @@ fn cast_bool_to_string<'a>(a: bool) -> &'a str {
 #[sqlfunc(
     sqlname = "boolean_to_nonstandard_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToBool),
+    inverse = super::CastStringToBool,
     is_monotone = true
 )]
 fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
@@ -50,7 +50,7 @@ fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
 #[sqlfunc(
     sqlname = "boolean_to_integer",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt32ToBool),
+    inverse = super::CastInt32ToBool,
     is_monotone = true
 )]
 fn cast_bool_to_int32(a: bool) -> i32 {
@@ -63,7 +63,7 @@ fn cast_bool_to_int32(a: bool) -> i32 {
 #[sqlfunc(
     sqlname = "boolean_to_bigint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt64ToBool),
+    inverse = super::CastInt64ToBool,
     is_monotone = true
 )]
 fn cast_bool_to_int64(a: bool) -> i64 {

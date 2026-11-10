@@ -14,13 +14,11 @@ import { User } from "~/external-library-wrappers/frontegg";
 import { SentryRoutes } from "~/sentry";
 
 import AppPasswordsPage from "./AppPasswordsPage";
-import MzCliAppPasswordPage from "./MzCliAppPasswordPage";
 
 export const AppPasswordRoutes = ({ user }: { user: User }) => {
   return (
     <SentryRoutes>
       <Route path="/" element={<AppPasswordsPage user={user} />} />
-      <Route path="cli" element={<MzCliAppPasswordPage user={user} />} />
     </SentryRoutes>
   );
 };

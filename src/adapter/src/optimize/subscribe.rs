@@ -64,8 +64,8 @@ pub struct Optimizer {
     duration: Duration,
 }
 
-// A bogey `Debug` implementation that hides fields. This is needed to make the
-// `event!` call in `sequence_peek_stage` not emit a lot of data.
+// A bogey `Debug` implementation that hides fields, so that debug-formatting an
+// optimizer (e.g. in a tracing event) does not emit a lot of data.
 //
 // For now, we skip almost all fields, but we might revisit that bit if it turns
 // out that we really need those for debugging purposes.
@@ -196,6 +196,8 @@ impl Optimizer {
             non_null_assertions: vec![],
             // No `REFRESH` for subscribes
             refresh_schedule: None,
+            // Populated during LIR lowering.
+            from_arrangement: None,
         };
         df_desc.export_sink(self.sink_id, sink_description);
 

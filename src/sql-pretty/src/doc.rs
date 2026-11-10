@@ -1254,13 +1254,26 @@ impl Pretty {
                 let doc = intersperse_line_nest(docs);
                 bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::Error,
+            } => {
                 let doc = self.doc_expr(expr);
                 RcDoc::concat([
                     doc,
                     RcDoc::text(format!("::{}", data_type.to_ast_string_simple())),
                 ])
             }
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::NullFallback,
+            } => bracket(
+                "TRY_CAST(",
+                self.doc_expr(expr),
+                format!(" AS {})", data_type.to_ast_string_simple()),
+            ),
             Expr::Nested(ast) => bracket("(", self.doc_expr(ast), ")"),
             Expr::Function(fun) => self.doc_function(fun),
             Expr::Subquery(ast) => bracket("(", self.doc_query(ast), ")"),
