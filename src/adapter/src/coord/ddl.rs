@@ -130,6 +130,18 @@ impl DdlCommitContext {
     }
 }
 
+/// Waits while a test configures the named failpoint with a `return` action.
+async fn catalog_preparation_test_pause(name: &'static str) {
+    let paused = || {
+        fail::fail_point!(name, |_| true);
+        false
+    };
+    // Clearing the failpoint requires coordinator and runtime progress.
+    while paused() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 impl Coordinator {
     /// Sets allowed responses and checks read-only and execution-cluster restrictions.
     fn prepare_command_execution(
@@ -230,11 +242,17 @@ impl Coordinator {
                     pending.statement.record_ids(keys, ids);
                 }
                 Ok(SourceResolution::Prepare(request)) => {
+                    let conn_id = pending.ctx.session().conn_id().clone();
                     let config = self.controller.storage.config().clone();
                     let tx = self.internal_cmd_tx.clone();
                     let otel_ctx = OpenTelemetryContext::obtain();
                     task::spawn(|| "ddl_statement_preparation", async move {
                         let response = request.execute(&config).await;
+                        tracing::debug!(
+                            target: "mz_adapter::catalog_preparation",
+                            %conn_id, kind = "purification", "catalog preparation complete"
+                        );
+                        catalog_preparation_test_pause("catalog_purification_ready").await;
                         if let Err(error) = tx.send(Message::SourceStatementReady {
                             pending, response, otel_ctx,
                         }) {
@@ -658,11 +676,17 @@ impl Coordinator {
                     }
                     catalog::CommandWork::Prepare(request) => {
                         self.release_ddl_lock(guard);
+                        let conn_id = pending.context.context_mut().session().conn_id().clone();
                         let config = self.controller.storage.config().clone();
                         let tx = self.internal_cmd_tx.clone();
                         let otel_ctx = OpenTelemetryContext::obtain();
                         task::spawn(|| "ddl_command_preparation", async move {
                             let response = request.execute(&config).await;
+                            tracing::debug!(
+                                target: "mz_adapter::catalog_preparation",
+                                %conn_id, kind = "purification", "catalog preparation complete"
+                            );
+                            catalog_preparation_test_pause("catalog_purification_ready").await;
                             pending.responses.insert(index, response);
                             if let Err(error) =
                                 tx.send(Message::DdlCommandsReady { pending, otel_ctx })

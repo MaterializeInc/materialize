@@ -71,7 +71,9 @@ impl Staged for CreateMaterializedViewStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateMaterializedViewStage::Optimize(stage) => {
-                coord.create_materialized_view_optimize(stage).await
+                coord
+                    .create_materialized_view_optimize(ctx.session().conn_id().clone(), stage)
+                    .await
             }
             CreateMaterializedViewStage::Finish(stage) => {
                 coord.create_materialized_view_finish(ctx, stage).await
@@ -420,6 +422,7 @@ impl Coordinator {
     #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
         CreateMaterializedViewOptimize {
             validity,
             plan,
@@ -553,6 +556,11 @@ impl Coordinator {
                         }
                     };
 
+                    tracing::debug!(
+                        target: "mz_adapter::catalog_preparation",
+                        %conn_id, kind = "materialized_view", "catalog preparation complete"
+                    );
+                    fail::fail_point!("catalog_materialized_view_ready");
                     Ok(Box::new(stage))
                 })
             },
