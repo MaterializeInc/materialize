@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Code, CodeProps, useTheme } from "@chakra-ui/react";
+import { Code, CodeProps, useLatestRef, useTheme } from "@chakra-ui/react";
 import {
   EditorView,
   lineNumbers as codeMirrorLineNumbers,
@@ -139,14 +139,17 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
   ) => {
     const currentView = useView();
     const containerRef = useContainerRef();
+    // Re-registering the listener dispatches a transaction, so keep it
+    // registered once per view and read the latest `onChange` through a ref.
+    const onChangeRef = useLatestRef(onChange);
     const addChangeListener = useCallback(
       (view: EditorView) =>
         addUpdateListener(view, (update) => {
-          if (onChange && update.docChanged) {
-            onChange(update.state.doc.toString());
+          if (onChangeRef.current && update.docChanged) {
+            onChangeRef.current(update.state.doc.toString());
           }
         }),
-      [onChange],
+      [onChangeRef],
     );
     useViewEffect(addChangeListener);
     useInitializePromptOnMount();
