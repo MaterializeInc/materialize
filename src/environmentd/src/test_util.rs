@@ -856,6 +856,7 @@ impl Listeners {
             config.orchestrator_tracing_cli_args,
         ));
         let tracing_handle = if config.enable_tracing {
+            #[allow(deprecated)]
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
