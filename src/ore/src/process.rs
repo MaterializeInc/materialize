@@ -18,6 +18,19 @@
 /// The exit code of [`halt!`](crate::halt).
 pub const HALT_EXIT_CODE: i32 = 166;
 
+#[cfg(all(feature = "antithesis", target_os = "linux"))]
+#[path = "halt_evidence.rs"]
+mod halt_evidence;
+
+/// Records bounded halt evidence in Antithesis builds.
+#[doc(hidden)]
+pub fn record_halt(code: i32, location: &str, message: &str) {
+    #[cfg(all(feature = "antithesis", target_os = "linux"))]
+    halt_evidence::record(code, location, message);
+    #[cfg(not(all(feature = "antithesis", target_os = "linux")))]
+    let _ = (code, location, message);
+}
+
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
 ///
 /// This is `EX_TEMPFAIL` from `sysexits.h`. Shells, tini and Kubernetes report
@@ -51,7 +64,21 @@ pub const RESTART_IN_PLACE_EXIT_CODE: i32 = 75;
 #[macro_export]
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
-        $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
+        let message = format!($($arg),*);
+        $crate::__private::tracing::warn!("halting process: {}", message);
+        $crate::antithesis_reachable!(
+            ::std::concat!("process halted at ", ::std::file!(), ":", ::std::line!()),
+            &message
+        );
+        $crate::antithesis::halted(
+            ::std::concat!(::std::file!(), ":", ::std::line!()),
+            &message,
+        );
+        $crate::process::record_halt(
+            $crate::process::HALT_EXIT_CODE,
+            ::std::concat!(::std::file!(), ":", ::std::line!()),
+            &message,
+        );
         $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
     }}
 }

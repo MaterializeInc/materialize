@@ -97,7 +97,12 @@ pub fn soft_assertions_enabled() -> bool {
 #[macro_export]
 macro_rules! report_error {
     ($($arg:tt)+) => {{
-        ::tracing::error!($($arg)+);
+        let message = ::std::format!($($arg)+);
+        ::tracing::error!("{message}");
+        $crate::antithesis_unreachable!(
+            ::std::concat!("soft assertion failed at ", ::std::file!(), ":", ::std::line!()),
+            &message
+        );
     }};
 }
 
@@ -107,7 +112,12 @@ macro_rules! report_error {
 #[deprecated(note = "Enable the `tracing` feature to use this macro.")]
 macro_rules! report_error {
     ($($arg:tt)+) => {{
-        eprintln!($($arg)+);
+        let message = ::std::format!($($arg)+);
+        eprintln!("{message}");
+        $crate::antithesis_unreachable!(
+            ::std::concat!("soft assertion failed at ", ::std::file!(), ":", ::std::line!()),
+            &message
+        );
     }};
 }
 
@@ -116,7 +126,12 @@ macro_rules! report_error {
 #[macro_export]
 macro_rules! report_error {
     ($($arg:tt)+) => {{
-        eprintln!($($arg)+);
+        let message = ::std::format!($($arg)+);
+        eprintln!("{message}");
+        $crate::antithesis_unreachable!(
+            ::std::concat!("soft assertion failed at ", ::std::file!(), ":", ::std::line!()),
+            &message
+        );
     }};
 }
 

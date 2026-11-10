@@ -22,6 +22,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
+pub mod antithesis;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
 #[cfg(feature = "assert-no-tracing")]
 pub mod assert;
