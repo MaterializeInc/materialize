@@ -45,7 +45,8 @@ use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{
-    RowRowAgent, RowRowChunkedBatcher, RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowEnter,
+    ImportedRowRowEnter, RowRowAgent, RowRowChunkedBatcher, RowRowColumnarBatcher,
+    RowRowColumnationBatcher,
 };
 use mz_row_spine::RowRowSpine;
 
@@ -273,7 +274,7 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
+    Trace(Arranged<'scope, ImportedRowRowEnter<T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -449,7 +450,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, ImportedRowRowEnter<_>>(
                             local, oks, closure, terminal,
                         );
 
@@ -461,7 +462,7 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<ImportedRowRowEnter<_>, RowRowAgent<_, _>>(
                             trace, oks, closure, terminal,
                         );
 
@@ -471,7 +472,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<ImportedRowRowEnter<_>, ImportedRowRowEnter<_>>(
                             trace, oks, closure, terminal,
                         );
 
