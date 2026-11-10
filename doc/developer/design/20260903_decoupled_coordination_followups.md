@@ -51,6 +51,21 @@ leaf temporary view instead, retaining nested dependency cleanup, table-version
 and privilege-update checks. A rename-rewriter repair needs separate scope.
 Evidence: `~/.local/share/aj/m3-evidence/native-only/native-temporary-runtime-alter-enabled.log`.
 
+## Kafka sink metric ownership
+
+Each worker creates `KafkaSinkMetrics` with only a sink-ID label. Non-producing
+workers then return and drop their handles. Independently created
+`DeleteOnDropMetric` handles do not share cleanup ownership, so one worker can
+unregister a producing worker's series. Absence of that series is not evidence
+that the producer stopped. Current raw status removal also precedes execution
+teardown, so it cannot fill this observation gap alone.
+
+Allocating metrics only on the selected producing worker is a proposed narrow
+repair. Approval is pending. The full distinct-version sink-handover test must
+not claim withdrawal from the current metric's disappearance. See
+`native-compatible/verification.md` under the local evidence root and
+`src/storage/src/sink/kafka.rs`, `src/ore/src/metrics/delete_on_drop.rs`.
+
 ## Singleton CDC-reader ownership across deployments
 
 The full native DDL fixture proves that two admitted deployments repeatedly steal
@@ -68,7 +83,10 @@ without requiring independent candidate upstream-reader progress. Temporary over
 is acceptable. Existing takeover/recovery must converge so superseded readers stop
 reconnecting. No stop acknowledgement, lease or new coordination protocol is needed.
 Verify continued ingestion and eventual cessation of contention, not uninterrupted
-connections. Implementation and runtime verification remain outstanding.
+connections. The ownership repair is implemented. Selected native PostgreSQL,
+MySQL and SQL Server handover runs passed, as recorded in
+`~/.local/share/aj/m3-evidence/native-only/native-cdc-runtime-verification.md`.
+Broader workloads and distinct-version CDC acceptance remain separate checks.
 
 Evidence: `~/.local/share/aj/m3-evidence/native-only/native-cdc-reader-ownership.md`
 and the matched actor logs in `aj-native-ddl-6f303bf0/`.

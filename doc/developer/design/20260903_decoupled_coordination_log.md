@@ -9,11 +9,20 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Run a fresh distinct-compatible-version lifecycle on format 97. Both versions
-must serve SQL, DDL and table writes before and after promotion. Then explicitly
-retire one deployment and verify surviving sessions, warmed replicas and singleton
-external-sink authority. Earlier distinct-version evidence predates this cleanup.
-Do not attempt conversion from pre-native or earlier experimental catalog formats.
+Finish distinct-version sink handover verification on fresh format 97. The compiled
+26.46/26.47 prototype pair passes the existing promotion/retirement stability
+workflow. Both versions serve DDL and writes after promotion, the incumbent session
+survives, and candidate process/index identities and the relay remain stable.
+This pair shares implementation and plan encoding, not arbitrary release compatibility.
+See `native-compatible/verification.md` and `aj-native-compatible-f8dd06d6/` beneath it.
+
+The full DDL extension is uncommitted and unverified. Independent review found that
+inactive workers can unregister the producing worker's Kafka sink metrics, so
+metric disappearance cannot establish producer withdrawal. Approval was requested
+for a small storage-side metrics ownership repair. Do not apply it without agreement.
+The separate cross-version temporary-object lifecycle also passed in
+`native-compatible/aj-native-compatible-a99c9dde/`. No conversion from pre-native
+or earlier experimental catalog formats is supported.
 
 Temporary execution ownership and reclamation are implemented and verified.
 The existing maintenance turn follows incremental ownership state and commits
@@ -23,8 +32,12 @@ controls and independent production review also passed. Evidence and limits:
 `native-temporary-owner-verification.md`, with runtime receipts in
 `aj-native-temporary-0d28dffc/`.
 
-All owned runtime fixtures are stopped and removed. Builds/tests remain sequential
-and resource-guarded. No Persist or production publication defaults changed.
+All owned runtime fixtures are stopped and removed. The unused legacy storage
+constructor and re-export are removed. Storage, compute and clusterd all-target
+checks passed after correcting a missed nontemporary catalog-test argument.
+The pinned version pair predates that API cleanup. Preserve its source receipts
+and rebuild for further production changes. Builds/tests remain sequential and
+resource-guarded. No Persist or production publication defaults changed.
 
 ## Verified outcome
 
@@ -44,7 +57,7 @@ continued publishing. Temporary objects retain session visibility and execution
 ownership through ALTER, rename, privileges and promotion. Disconnect, confirmed
 replacement and explicit retirement reclaim their metadata while preserving
 survivors. Format 97 requires fresh experimental state, with no ownership backfill.
-These are selected local outcomes, not broad CI or fresh distinct-version acceptance.
+These are selected local outcomes, not broad CI or complete distinct-version sink acceptance.
 
 ## Live blockers and decisions
 
@@ -59,8 +72,8 @@ These are selected local outcomes, not broad CI or fresh distinct-version accept
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
 - Current-source preservation, upsert/data-ingest/parallel stress,
   randomized zippy/restore and bumped-version platform runtimes remain unverified.
-  A fresh distinct-compatible-version demonstration and external-sink handover
-  remain outstanding. Earlier version proof predates this cleanup.
+  Full distinct-compatible-version DDL and external-sink handover remain outstanding.
+  The fresh prototype stability run covers serving, promotion and retirement only.
 - An earlier index-publication stall and a 673-second source-status query remain
   unexplained. Passing retries do not resolve them. Startup activation,
   birth-ordering concerns and the original four-adapter workload after the
@@ -107,7 +120,7 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` remain the performance baseline, not a cleanup
   performance claim. Further history is in the [archive](20260903_decoupled_coordination_log_archive.md).
 
-All owned runtime fixtures were removed. Unused images and first-party build caches
+Completed runtime fixtures were removed. Unused images and first-party build caches
 were reclaimed. Keep measuring available space. Keep heavy work sequential,
 enforce 30 GiB disk and 2 GiB available-memory
 reserves, and use one low-priority Cargo job. Scratch SSO was expired on the last
