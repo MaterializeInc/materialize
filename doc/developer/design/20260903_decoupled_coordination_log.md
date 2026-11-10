@@ -34,6 +34,11 @@ explicit retirement, preserving creation/check scripts. Helper tests pass. That
 composition's container run remains unverified. Evidence:
 `native-current-source-verification.md`.
 
+The pooled-ID DDL workflow now checks candidate visibility without adapter
+restart before promotion, then checks the same contents after explicit retirement.
+Its real same-build debug run passed. Evidence: `native-id-pool-verification.md`.
+The temporary-item workflow remains unchanged pending its ownership decision.
+
 Next convert the remaining 0dt sites, preserving stopped/in-place predecessors,
 full-writer behavior and the compatible-image lane. `native-lifecycle-harness-seams.md`
 maps callers and contracts. The old promotion cleanup parameter remains until
@@ -130,7 +135,7 @@ Current cleanup evidence: `~/.local/share/aj/m3-evidence/native-only/`.
   `pg-upgrade-boundary.md`, `platform-boundary-followup.md` and
   `exclusive-cleanup-review.md` preserve harness, reporting and ownership evidence.
 
-All owned verification services are stopped. Readiness, lifecycle, source-failpoint,
+All owned verification services are stopped. Pooled-ID, readiness, lifecycle, source-failpoint,
 Rust-test and Kafka fixtures, including the retired-generation restart, were
 removed. About 45 GiB is free. Current
 services, baseline artifacts and measurement reports remain. Superseded build

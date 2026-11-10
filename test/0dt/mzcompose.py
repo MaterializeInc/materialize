@@ -3786,12 +3786,11 @@ def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
 
 
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
-    """Verify that DDL detection works correctly with batch-allocated user IDs.
+    """Verify a candidate follows peer DDL with batch-allocated user IDs.
 
-    When IdPool batch-allocates IDs, the allocator counter jumps ahead by
-    the batch size, but items are created with IDs from the pool that are
-    far below the counter. DDL detection must use the max existing item ID,
-    not the allocator counter, to correctly detect new objects.
+    IDs below the allocator counter must not hide new committed objects.
+    They become queryable without an adapter restart, before promotion, and
+    remain queryable after promotion and explicit predecessor retirement.
     """
     c.down(destroy_volumes=True)
     c.up(
@@ -3821,16 +3820,14 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
         service="mz_old",
     )
 
-    # Start mz_new in read-only mode (deploy_generation=1).
+    # Establish the candidate's initial catalog before the peer changes it.
     c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    adapter_pids = _pids(c, "mz_new", "adapterd")
+    assert adapter_pids, "mz_new has no adapterd process before peer DDL"
 
-    # Wait briefly for mz_new to boot and take its initial snapshot of IDs.
-    time.sleep(5)
-
-    # Create MORE objects on mz_old from the pool. These IDs will be below
-    # the allocator counter. Without the fix, mz_new would miss these objects
-    # because their IDs are below the initial_next_user_item_id derived from
-    # the allocator counter.
+    # The allocator counter is not a catalog-change watermark. New objects can
+    # use IDs from a range the peer reserved before the candidate started.
     c.sql(
         """
         CREATE TABLE pool_t3 (a INT);
@@ -3842,16 +3839,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
         service="mz_old",
     )
 
-    # mz_new should detect the DDL changes (new tables/view created after it
-    # booted) and restart in read-only mode, eventually reaching READY_TO_PROMOTE.
-    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-
-    # Promote mz_new to leader.
-    c.promote_mz("mz_new", retire_mz_service="mz_old")
-    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
-
-    # Verify ALL objects are visible on mz_new, including those created
-    # after mz_new initially booted.
+    # Check the same contents before promotion and after retirement.
     with c.override(
         Testdrive(
             materialize_url="postgres://materialize@mz_new:6875",
@@ -3864,7 +3852,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
         )
     ):
         c.up(Service("testdrive", idle=True))
-        c.testdrive(dedent("""
+        checks = dedent("""
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM pool_t1;
             1
@@ -3876,7 +3864,17 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             4
             > SELECT * FROM pool_mv;
             1
-            """))
+            """)
+        c.testdrive(checks)
+        assert (
+            _pids(c, "mz_new", "adapterd") == adapter_pids
+        ), "mz_new restarted to incorporate peer DDL"
+
+        c.promote_mz("mz_new", retire_mz_service=None)
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        c.kill_fenced_mz("mz_old")
+        c.testdrive(checks)
 
 
 def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
