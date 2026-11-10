@@ -21,6 +21,7 @@ use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
 use crate::instance::{Instance, ReplicaConfig};
+use crate::restart_loops::RestartLoops;
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use derivative::Derivative;
@@ -103,6 +104,7 @@ mod collection_mgmt;
 mod history;
 mod instance;
 mod persist_handles;
+mod restart_loops;
 mod rtr;
 mod statistics;
 
@@ -229,6 +231,8 @@ pub struct Controller {
     storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     /// Migrated storage collections that can be written even in read only mode.
     migrated_storage_collections: BTreeSet<GlobalId>,
+    /// Statuses held back from sources and sinks that may be in a restart loop.
+    restart_loops: RestartLoops,
 
     /// Ticker for scheduling periodic maintenance work.
     maintenance_ticker: tokio::time::Interval,
@@ -2747,6 +2751,7 @@ impl StorageController for Controller {
             wallclock_lag_last_recorded,
             storage_collections: _,
             migrated_storage_collections,
+            restart_loops: _,
             maintenance_ticker: _,
             maintenance_scheduled,
             instance_response_tx: _,
@@ -2954,6 +2959,7 @@ where
             wallclock_lag_last_recorded: now_dt,
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
+            restart_loops: RestartLoops::default(),
             maintenance_ticker,
             maintenance_scheduled: false,
             instance_response_rx,
@@ -3465,6 +3471,19 @@ where
             return;
         }
 
+        let now = (self.now)();
+        let mut written = Vec::with_capacity(updates.len());
+        for update in updates {
+            let group = self.restart_group(update.id);
+            written.extend(self.restart_loops.observe(group, update, now));
+        }
+        written.extend(self.restart_loops.release_expired(now));
+        self.append_status_updates(written);
+    }
+
+    /// Writes status updates of sources and sinks that still exist to their
+    /// status histories.
+    fn append_status_updates(&mut self, updates: Vec<StatusUpdate>) {
         let mut sink_status_updates = vec![];
         let mut source_status_updates = vec![];
 
@@ -3485,6 +3504,15 @@ where
             IntrospectionType::SinkStatusHistory,
             sink_status_updates,
         );
+    }
+
+    /// The object whose restarts also restart `id`: its ingestion if `id` is an
+    /// ingestion export, otherwise `id` itself.
+    fn restart_group(&self, id: GlobalId) -> GlobalId {
+        match self.collections.get(&id).map(|c| &c.data_source) {
+            Some(DataSource::IngestionExport { ingestion_id, .. }) => *ingestion_id,
+            _ => id,
+        }
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState, StorageError> {
@@ -3875,6 +3903,14 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
+
+        if !self.read_only {
+            let collections = &self.collections;
+            self.restart_loops
+                .retain_groups(|id| collections.contains_key(&id));
+            let released = self.restart_loops.release_expired((self.now)());
+            self.append_status_updates(released);
+        }
 
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
