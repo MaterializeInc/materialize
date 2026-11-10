@@ -148,6 +148,12 @@
     },
     {
       "matchManagers": ["dockerfile"],
+      "matchFileNames": ["misc/dbt-materialize/Dockerfile"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.15"
+    },
+    {
+      "matchManagers": ["dockerfile"],
       "additionalBranchPrefix": "docker-"
     },
     {
