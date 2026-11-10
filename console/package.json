@@ -31,7 +31,7 @@
     "@chakra-ui/icons": "^2.2.4",
     "@chakra-ui/react": "^2.10.10",
     "@codemirror-toolkit/extensions": "^0.6.3",
-    "@codemirror-toolkit/react": "^0.6.0",
+    "@codemirror-toolkit/react": "^0.7.0",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-sql": "^6.10.0",
