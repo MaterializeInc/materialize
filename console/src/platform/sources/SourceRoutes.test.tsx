@@ -120,9 +120,11 @@ describe("SourceRoutes", () => {
         initializeState: ({ set }) =>
           setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
       });
-      expect(
-        await screen.findByText(SOURCES_FETCH_ERROR_MESSAGE),
-      ).toBeVisible();
+      // NOTE: AppErrorBoundary remounts its fallback when it re-renders, so a
+      // node returned by findByText can be detached before it is checked.
+      await waitFor(() =>
+        expect(screen.getByText(SOURCES_FETCH_ERROR_MESSAGE)).toBeVisible(),
+      );
     });
 
     it("shows the empty state when there are no results", async () => {
