@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.13 - 2026-11-10
+
 * Quote names in the hints `deploy_init` prints when the deploying role lacks
   a permission, so each hint can be run as is for names that need quoting. The
   ownership hints now quote the cluster or schema name, and the CREATECLUSTER
