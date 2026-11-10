@@ -9,39 +9,15 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish distinct-version sink handover verification on fresh format 97. The compiled
-26.46/26.47 prototype pair passes the existing promotion/retirement stability
-workflow. Both versions serve DDL and writes after promotion, the incumbent session
-survives, and candidate process/index identities and the relay remain stable.
-This pair shares implementation and plan encoding, not arbitrary release compatibility.
-See `native-compatible/verification.md` and `aj-native-compatible-f8dd06d6/` beneath it.
+Audit the remaining read-only/fencing and forced-migration workflow expectations
+against native compatible writers, then run the applicable current-source
+workloads. Preserve predecessor workloads and explicit retirement checks.
+Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
+final-preflight coverage still need the scope decisions below.
 
-The full DDL extension is uncommitted and unverified. Independent review found that
-inactive workers can unregister the producing worker's Kafka sink metrics, so
-metric disappearance cannot establish producer withdrawal. Approval was requested
-for a small storage-side metrics ownership repair. Do not apply it without agreement.
-The separate cross-version temporary-object lifecycle also passed in
-`native-compatible/aj-native-compatible-a99c9dde/`. No conversion from pre-native
-or earlier experimental catalog formats is supported.
-
-Temporary execution ownership and reclamation are implemented and verified.
-The existing maintenance turn follows incremental ownership state and commits
-catalog-validated whole-owner cleanup. The full same-build debug SQL lifecycle
-passes at the unchanged publication cadence. Rust boundary checks, negative
-controls and independent production review also passed. Evidence and limits:
-`native-temporary-owner-verification.md`, with runtime receipts in
-`aj-native-temporary-0d28dffc/`.
-
-All owned runtime fixtures are stopped and removed. The unused legacy storage
-constructor and re-export are removed. Storage, compute and clusterd all-target
-checks passed after correcting a missed nontemporary catalog-test argument.
-The catalog follower now requires native compute ingress. Its observation-only
-fallback and constant ownership toggle are removed. Native execution, metadata
-and compaction tests and independent review passed. Evidence:
-`native-follower-only-verification.md`.
-The pinned version pair predates these API cleanups. Preserve its source receipts
-and rebuild for further production changes. Builds/tests remain sequential and
-resource-guarded. No Persist or production publication defaults changed.
+The current-source distinct-version full DDL and sink-handover demonstration
+passed. Its receipts and limits are in `native-compatible-current/verification.md`.
+No production Kafka metrics change was needed. All runtime fixtures are removed.
 
 ## Verified outcome
 
@@ -61,7 +37,17 @@ continued publishing. Temporary objects retain session visibility and execution
 ownership through ALTER, rename, privileges and promotion. Disconnect, confirmed
 replacement and explicit retirement reclaim their metadata while preserving
 survivors. Format 97 requires fresh experimental state, with no ownership backfill.
-These are selected local outcomes, not broad CI or complete distinct-version sink acceptance.
+The current-source 26.46/26.47 prototype pair also passes full DDL, source and
+external-sink handover. Both versions write and create indexed objects after
+promotion. Warmed replica identities and the incumbent session survive. Worker
+statistics establish old sink operator withdrawal, and new-owner commit increments
+plus Kafka markers establish production through both SQL writers. Explicit
+retirement rejects the old writer while the survivor continues.
+
+The pair shares implementation and plan encoding, not arbitrary release
+compatibility. These are selected local outcomes, not rebuilt-image or broad CI
+acceptance. The native-only follower cleanup also passes all clusterd unit tests,
+scoped all-target checks and independent review.
 
 ## Live blockers and decisions
 
@@ -76,8 +62,8 @@ These are selected local outcomes, not broad CI or complete distinct-version sin
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
 - Current-source preservation, upsert/data-ingest/parallel stress,
   randomized zippy/restore and bumped-version platform runtimes remain unverified.
-  Full distinct-compatible-version DDL and external-sink handover remain outstanding.
-  The fresh prototype stability run covers serving, promotion and retirement only.
+  Distinct-version DDL and sink handover are verified for the same-implementation
+  prototype pair, not arbitrary release combinations.
 - An earlier index-publication stall and a 673-second source-status query remain
   unexplained. Passing retries do not resolve them. Startup activation,
   birth-ordering concerns and the original four-adapter workload after the
@@ -94,6 +80,14 @@ formatting and scoped all-target Rust checks pass. The PR stays draft.
 ## Essential evidence and local state
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
+
+- Current-source compatible lifecycle: `native-compatible-current/verification.md`.
+  Binary/source manifests pin both versions. The full DDL run is
+  `native-compatible-current/aj-native-compatible-18207d30/`.
+- Native follower cleanup: `native-follower-only-verification.md`.
+  Earlier compatible stability and temporary-object runs remain in
+  `native-compatible/verification.md`. Their superseded binaries were removed
+  for disk headroom. Source hashes and runtime receipts remain.
 
 - Temporary ownership: `native-temporary-owner-verification.md`, including the
   ordinary alias/protection path, restart replay, conflicting-prefix rejection,

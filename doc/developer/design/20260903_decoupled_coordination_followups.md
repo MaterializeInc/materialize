@@ -61,8 +61,9 @@ that the producer stopped. Current raw status removal also precedes execution
 teardown, so it cannot fill this observation gap alone.
 
 Allocating metrics only on the selected producing worker is a proposed narrow
-repair. Approval is pending. The full distinct-version sink-handover test must
-not claim withdrawal from the current metric's disappearance. See
+repair. Approval is pending. The distinct-version sink-handover test instead uses
+worker-scoped sink statistics, whose owners follow the producing operator's
+lifetime. It must not claim withdrawal from rdkafka metric disappearance. See
 `native-compatible/verification.md` under the local evidence root and
 `src/storage/src/sink/kafka.rs`, `src/ore/src/metrics/delete_on_drop.rs`.
 

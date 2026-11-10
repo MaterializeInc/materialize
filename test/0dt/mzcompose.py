@@ -13,6 +13,7 @@ Deployments use the same version unless a workflow selects a compatible image.
 """
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -3106,6 +3107,219 @@ def workflow_upsert_sources(c: Composition) -> None:
 
 def workflow_ddl(c: Composition) -> None:
     """Keep both deployments writable through DDL and promotion, then retire one."""
+
+    def assert_shared_index(index: str, expected: list[tuple[int, int]]) -> None:
+        for service in ("mz_old", "mz_new"):
+            with c.sql_connection(service=service) as conn:
+                conn.execute("SET cluster = cluster")
+                plan = conn.execute(
+                    "EXPLAIN PHYSICAL PLAN FOR SELECT * FROM t"
+                ).fetchone()
+                assert plan and index in plan[0], (service, plan)
+                assert conn.execute("SELECT * FROM t ORDER BY a").fetchall() == expected
+
+    def warmed_indexes(services: Sequence[str]) -> dict[str, Any]:
+        observed = {}
+        for service in services:
+            processes = c.exec(
+                service, "ps", "-C", "clusterd", "-o", "pid=,lstart=", capture=True
+            ).stdout.strip()
+            assert processes, (service, "no warmed replicas")
+            dataflows = {}
+            with c.sql_connection(service=service, port=6877, user="mz_system") as conn:
+                replicas = conn.execute("""
+                    SELECT r.name FROM mz_catalog.mz_cluster_replicas r
+                    JOIN mz_catalog.mz_clusters c ON c.id = r.cluster_id
+                    WHERE c.name = 'cluster' ORDER BY r.name
+                """).fetchall()
+                assert replicas
+                conn.execute("SET auto_route_catalog_queries = false")
+                conn.execute("SET cluster = cluster")
+                conn.execute("SET statement_timeout = '30s'")
+                for (replica,) in replicas:
+                    conn.execute(
+                        SQL("SET cluster_replica = {}").format(Identifier(replica))
+                    )
+                    # Installation logs alone do not establish hydration. Make
+                    # this replica serve the indexed relation before recording
+                    # the execution identity that must survive promotion.
+                    plan = conn.execute(
+                        "EXPLAIN PHYSICAL PLAN FOR SELECT * FROM t"
+                    ).fetchone()
+                    assert plan and "t_idx_peer" in plan[0], (service, replica, plan)
+                    assert conn.execute("SELECT * FROM t").fetchall()
+                    deadline = time.monotonic() + 60
+                    while True:
+                        rows = conn.execute("""
+                            SELECT e.export_id, e.worker_id, e.dataflow_id
+                            FROM mz_introspection.mz_compute_exports_per_worker e
+                            JOIN mz_internal.mz_object_global_ids g ON g.global_id = e.export_id
+                            JOIN mz_catalog.mz_indexes i ON i.id = g.id
+                            WHERE i.name = 't_idx_peer'
+                            ORDER BY e.export_id, e.worker_id, e.dataflow_id
+                        """).fetchall()
+                        # setup() uses two processes with four workers each.
+                        if {int(row[1]) for row in rows} == set(range(8)):
+                            dataflows[replica] = rows
+                            break
+                        assert time.monotonic() < deadline, (service, replica, rows)
+                        time.sleep(1)
+            observed[service] = (processes, dataflows)
+        return observed
+
+    sink_incarnations: dict[tuple[int, str], str] = {}
+
+    def await_sink_owner(
+        generation: int,
+        services: Sequence[str],
+        after: dict[tuple[int, str, str, int], float] | None = None,
+    ) -> dict[tuple[int, str, str, int], float]:
+        sink_id = c.sql_query(
+            """SELECT g.global_id FROM mz_internal.mz_object_global_ids g
+               JOIN mz_catalog.mz_sinks s ON s.id = g.id WHERE s.name = 'kafka_sink'""",
+            service="mz_new",
+            port=6877,
+            user="mz_system",
+            reuse_connection=False,
+        )[0][0]
+        deadline = time.monotonic() + 300
+        while True:
+            committed = {}
+            expected_replicas = set()
+            selected = None
+            selected_addresses = []
+            for service in services:
+                inventory = json.loads(
+                    c.exec(
+                        service,
+                        "curl",
+                        "--fail",
+                        "--silent",
+                        "--max-time",
+                        "10",
+                        "http://localhost:6882/api/inventory",
+                        capture=True,
+                    ).stdout
+                )
+                replicas = [
+                    r for r in inventory["replicas"] if r["cluster_name"] == "cluster"
+                ]
+                assert replicas, inventory
+                if int(replicas[0]["generation"]) == generation:
+                    selected = min(replicas, key=lambda r: int(r["replica_id"][1:]))[
+                        "replica_id"
+                    ]
+                for replica in replicas:
+                    identity = (int(replica["generation"]), replica["replica_id"])
+                    expected_replicas.add(identity)
+                    addresses = replica["endpoints"]["internal-http"]
+                    assert len(addresses) == 2, replica
+                    if identity == (generation, selected):
+                        selected_addresses = addresses
+                    for address in addresses:
+                        transport = (
+                            ["--unix-socket", address, "http://localhost/metrics"]
+                            if address.startswith("/")
+                            else [f"http://{address}/metrics"]
+                        )
+                        metrics = c.exec(
+                            service,
+                            "curl",
+                            "--fail",
+                            "--silent",
+                            "--max-time",
+                            "10",
+                            *transport,
+                            capture=True,
+                        ).stdout
+                        for line in metrics.splitlines():
+                            if (
+                                line.startswith("mz_sink_messages_committed{")
+                                and f'sink_id="{sink_id}"' in line
+                            ):
+                                worker = re.search(r'worker_id="(\d+)"', line)
+                                assert worker, line
+                                key = (*identity, address, int(worker[1]))
+                                assert key not in committed, (key, line)
+                                committed[key] = float(line.rsplit(" ", 1)[1])
+            incarnations = c.sql_query(
+                """SELECT COALESCE((data->'value'->>'deployment_generation')::bigint, 0),
+                          mz_internal.parse_catalog_id(data->'value'->'realization'->'Replica'),
+                          data->'key'->>'id'
+                   FROM mz_internal.mz_catalog_shared
+                   WHERE data->>'kind' = 'ClientIncarnation'
+                     AND data->'value'->'realization'->'Replica' IS NOT NULL""",
+                service="mz_new",
+                port=6877,
+                user="mz_system",
+                reuse_connection=False,
+            )
+            current = {
+                (gen, replica): incarnation
+                for gen, replica, incarnation in incarnations
+                if (gen, replica) in expected_replicas
+            }
+            assert set(current) == expected_replicas, (current, expected_replicas)
+            for identity, incarnation in current.items():
+                assert (
+                    sink_incarnations.setdefault(identity, incarnation) == incarnation
+                ), (identity, sink_incarnations, current)
+            rows = c.sql_query(
+                SQL("""SELECT deployment_generation::bigint, replica_id, status
+                       FROM mz_internal.mz_storage_statuses_raw WHERE id = {}
+                       ORDER BY deployment_generation, replica_id, status""")
+                .format(Literal(sink_id))
+                .as_string(),
+                service="mz_new",
+                port=6877,
+                user="mz_system",
+                reuse_connection=False,
+            )
+            authority = c.sql_query(
+                "SELECT active_deployment_generation::bigint FROM mz_internal.mz_catalog_deployment_authority",
+                service="mz_new",
+                port=6877,
+                user="mz_system",
+                reuse_connection=False,
+            )
+            expected = (generation, selected)
+            # This sink is never altered/recreated and replicas retain their
+            # incarnations. Worker statistics share ownership with the producing
+            # future, including across restarts. Their absence on every old
+            # process proves that future stopped, not merely that status was
+            # hidden or Kafka fenced it. Already-approved blocking Kafka calls
+            # may finish later, as allowed by the handover contract.
+            if (
+                authority == [(generation,)]
+                and rows == [(generation, selected, "running")]
+                and len(committed) == 8
+                and {key[:2] for key in committed} == {expected}
+                and {key[3] for key in committed} == set(range(8))
+                and all(
+                    sum(key[2] == address for key in committed) == 4
+                    for address in selected_addresses
+                )
+                and sum(value > 0 for value in committed.values()) <= 1
+                and (
+                    after is None
+                    or (
+                        committed.keys() == after.keys()
+                        and all(committed[key] >= after[key] for key in after)
+                        and any(committed[key] > after[key] for key in after)
+                    )
+                )
+            ):
+                print(f"sink owner: {expected}, worker commits: {committed}")
+                return committed
+            assert time.monotonic() < deadline, (
+                authority,
+                rows,
+                committed,
+                expected,
+                after,
+            )
+            time.sleep(1)
+
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -3358,6 +3572,8 @@ def workflow_ddl(c: Composition) -> None:
             <TIMESTAMP> 1 2 a
             """))
 
+    assert_shared_index("t_idx2", [(1, 2), (3, 4), (5, 6)])
+
     # Verify the candidate sees committed peer DDL as well as its own writes.
     c.up(Service("testdrive", idle=True))
     c.testdrive(dedent(f"""
@@ -3532,6 +3748,10 @@ def workflow_ddl(c: Composition) -> None:
             """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        assert_shared_index("t_idx_peer", [(n, n + 1) for n in range(1, 12, 2)])
+        warm = warmed_indexes(("mz_old", "mz_new"))
+        initial_commits = await_sink_owner(0, ("mz_old", "mz_new"))
+        assert sum(value > 0 for value in initial_commits.values()) == 1
         with c.sql_connection(service="mz_old") as old_conn:
             assert old_conn.execute("SELECT 1").fetchall() == [(1,)]
             c.promote_mz("mz_new", retire_mz_service=None)
@@ -3551,8 +3771,52 @@ def workflow_ddl(c: Composition) -> None:
             else:
                 raise RuntimeError("mz_new didn't come up within 10 seconds")
 
+            assert warmed_indexes(("mz_old", "mz_new")) == warm
+            promoted_commits = await_sink_owner(1, ("mz_old", "mz_new"))
             old_conn.execute("INSERT INTO t VALUES (13, 14)")
             old_conn.execute("CREATE TABLE promoted_peer (a int)")
+            old_conn.execute("CREATE INDEX promoted_peer_idx ON promoted_peer (a)")
+            with c.sql_connection(service="mz_new") as new_conn:
+                new_conn.execute("CREATE TABLE promoted_candidate (a int)")
+                new_conn.execute(
+                    "CREATE INDEX promoted_candidate_idx ON promoted_candidate (a)"
+                )
+                new_conn.execute("INSERT INTO promoted_peer VALUES (42)")
+                old_conn.execute("INSERT INTO promoted_candidate VALUES (43)")
+                # Distinct sink markers from both writers while the older
+                # deployment remains admitted. Zero preserves the existing sum
+                # checkpoints, but must appear in the unfiltered sink envelope.
+                new_conn.execute("INSERT INTO t VALUES (0, 0)")
+                for conn in (old_conn, new_conn):
+                    for table, value in (
+                        ("promoted_peer", 42),
+                        ("promoted_candidate", 43),
+                    ):
+                        plan = conn.execute(
+                            SQL("EXPLAIN PHYSICAL PLAN FOR SELECT * FROM {}").format(
+                                Identifier(table)
+                            )
+                        ).fetchone()
+                        assert plan and f"{table}_idx" in plan[0], plan
+                        assert conn.execute(
+                            SQL("SELECT * FROM {}").format(Identifier(table))
+                        ).fetchall() == [(value,)]
+            assert_shared_index(
+                "t_idx_peer", [(0, 0), *[(n, n + 1) for n in range(1, 14, 2)]]
+            )
+            c.testdrive(dedent("""
+                > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+                <null> <null> 0 0
+                <null> <null> 1 2
+                <null> <null> 3 4
+                <null> <null> 5 6
+                <null> <null> 7 8
+                <null> <null> 9 10
+                <null> <null> 11 12
+                <null> <null> 13 14
+            """))
+            await_sink_owner(1, ("mz_old", "mz_new"), after=promoted_commits)
+            assert warmed_indexes(("mz_old", "mz_new")) == warm
 
             c.retire_mz_deployment(
                 "mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID
@@ -3572,7 +3836,7 @@ def workflow_ddl(c: Composition) -> None:
             $ webhook-append database=materialize schema=public name=webhook_source
             EEE
             > SELECT count(*) FROM promoted_peer;
-            0
+            1
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
@@ -3649,6 +3913,7 @@ def workflow_ddl(c: Composition) -> None:
             C 2
             D 3
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+            <null> <null> 0 0
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
@@ -3669,6 +3934,7 @@ def workflow_ddl(c: Composition) -> None:
             > BEGIN
             > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
             > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 0
             <TIMESTAMP> 1 1
             <TIMESTAMP> 1 3
             <TIMESTAMP> 1 5
@@ -3679,6 +3945,9 @@ def workflow_ddl(c: Composition) -> None:
             <TIMESTAMP> 1 15
             > COMMIT
             """))
+
+        await_sink_owner(1, ("mz_new",))
+        assert warmed_indexes(("mz_new",)) == {"mz_new": warm["mz_new"]}
 
 
 def workflow_stuck_collection(c: Composition) -> None:
