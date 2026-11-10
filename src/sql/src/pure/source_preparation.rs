@@ -284,7 +284,7 @@ impl<'a> Cursor<'a> {
                 Ok(finish_table_from_source(catalog, statement, export)?)
             }
             _ => Err(internal_err!(
-                "source preparation requires CREATE SOURCE or CREATE TABLE FROM SOURCE"
+                "source preparation requires CREATE SOURCE, CREATE TABLE FROM SOURCE, or ALTER SOURCE"
             )
             .into()),
         }

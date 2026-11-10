@@ -1799,9 +1799,9 @@ impl Coordinator {
         if !StatementClassification::from(&*stmt).is_ddl() {
             return false;
         }
-        // Off-thread, pre-planning purification can perform arbitrarily slow network calls so must
-        // not be serialized. These all use PlanValidity for their checking, and we must ensure
-        // those checks are sufficient.
+        // External preparation can perform arbitrarily slow network calls, so it must not
+        // hold the DDL lock. Source commands re-execute against the current catalog at commit.
+        // CREATE SINK and the remaining purified ALTER SOURCE forms use PlanValidity.
         if Self::must_spawn_purification(stmt) {
             return false;
         }

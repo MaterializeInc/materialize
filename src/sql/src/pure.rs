@@ -1447,8 +1447,8 @@ async fn execute_create_source_preparation(
     })
 }
 
-/// On success, returns the details on new subsources and updated
-/// 'options' that sequencing expects for handling `ALTER SOURCE` statements.
+/// Catalog-derived inputs of upstream reads for `ALTER SOURCE ... ADD SUBSOURCES`
+/// and `REFRESH REFERENCES`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AlterSourcePreparation {
     AddSubsources {
@@ -1563,7 +1563,6 @@ async fn execute_alter_source_preparation(
 }
 
 // TODO(database-issues#8620): Remove once subsources are removed
-/// Prepares upstream reads for `ALTER SOURCE`.
 async fn purify_alter_source_add_subsources(
     external_references: Vec<ExternalReferenceExport>,
     mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,

@@ -820,6 +820,11 @@ impl Catalog {
         })
     }
 
+    /// Executes commands in order against the current catalog and commits them atomically.
+    ///
+    /// `Pending { index, work }` returns without committing. The caller performs
+    /// `work`, stores a preparation response under `index` in `responses` or records
+    /// allocated IDs in that command, then retries with the same `commands`.
     pub(crate) async fn transact_commands(
         &mut self,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
