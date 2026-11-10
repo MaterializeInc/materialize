@@ -9,7 +9,13 @@ separate. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Continue native lifecycle-harness conversion. Remaining 0dt work includes
+Next convert zippy's launch/lifecycle path. `native-zippy-external-boundary.md`
+identifies the existing native standalone-replica helper, required override lifetime,
+managed/external storage distinction and backup/restore considerations. Preserve
+source-action capabilities and balancerd rerouting. No zippy edits or verification
+have been made. Data-ingest relay/retirement wiring is committed with helper checks.
+
+Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
 Preserve the source/sink workloads, in-place predecessors and compatible-image
 lane. Then convert remaining platform/stress callers. Keep the old promotion
