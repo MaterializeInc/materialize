@@ -35,7 +35,11 @@ controls and independent production review also passed. Evidence and limits:
 All owned runtime fixtures are stopped and removed. The unused legacy storage
 constructor and re-export are removed. Storage, compute and clusterd all-target
 checks passed after correcting a missed nontemporary catalog-test argument.
-The pinned version pair predates that API cleanup. Preserve its source receipts
+The catalog follower now requires native compute ingress. Its observation-only
+fallback and constant ownership toggle are removed. Native execution, metadata
+and compaction tests and independent review passed. Evidence:
+`native-follower-only-verification.md`.
+The pinned version pair predates these API cleanups. Preserve its source receipts
 and rebuild for further production changes. Builds/tests remain sequential and
 resource-guarded. No Persist or production publication defaults changed.
 

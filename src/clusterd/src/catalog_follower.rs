@@ -9,8 +9,8 @@
 
 //! Replica-local following and enactment through the shared committed catalog.
 //!
-//! Runtime ownership is supplied at startup. Without a native endpoint this
-//! follower only observes selections and cannot install maintained work.
+//! Runtime ownership is supplied at startup. The follower owns maintained
+//! execution until its caller handles shutdown or fencing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -63,11 +63,11 @@ pub(crate) struct NativeOwner {
 
 impl NativeOwner {
     pub(crate) fn new(
-        compute: Option<ReplicaCompute>,
+        compute: ReplicaCompute,
         storage: Option<mz_storage::server::ReplicaStorage>,
     ) -> Self {
         Self {
-            compute,
+            compute: Some(compute),
             storage,
             execution: None,
         }
@@ -322,119 +322,117 @@ pub(crate) async fn run(
     let build = namespace;
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
-    if owner.compute.is_some() {
-        let mut expected = None;
-        let incarnation = loop {
-            let updates = catalog.sync_to_current_updates().await?;
-            absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-            // Capture absence as well as identity. A conflicting startup cannot
-            // refresh its expectation and supersede the execution that won.
-            let predecessor = *expected.get_or_insert_with(|| {
-                catalog
-                    .state()
-                    .client_incarnations()
-                    .iter()
-                    .find_map(|(id, client)| {
-                        (client.deployment_generation == config.deploy_generation
-                            && client.realization
-                                == mz_catalog::durable::objects::ClientRealization::Replica(
-                                    config.replica_id,
-                                ))
-                        .then_some(*id)
-                    })
-            });
-            let ts = catalog
-                .observed_position()
-                .expect("synchronized native catalog")
-                .upper;
-            match catalog
-                .transact(
-                    None,
-                    None,
-                    ts,
-                    None,
-                    vec![Op::CreateClientIncarnation {
-                        realization: mz_catalog::durable::objects::ClientRealization::Replica(
-                            config.replica_id,
-                        ),
-                        expected: predecessor,
-                    }],
-                )
-                .await
-            {
-                Ok(result) => {
-                    absorb_updates(
-                        &mut effects,
-                        &catalog,
-                        config.cluster_id,
-                        &build,
-                        result.catalog_updates,
-                    );
-                    break *result
-                        .created_client_incarnations
-                        .first()
-                        .context("created replica incarnation")?;
-                }
-                Err(mz_catalog::catalog::CatalogError::Catalog(error))
-                    if matches!(
-                        error.kind,
-                        mz_catalog::memory::error::ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                        )
-                    ) =>
-                {
-                    tokio::time::sleep(execution::conflict_delay()).await;
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        };
-        anyhow::ensure!(
-            catalog
-                .try_get_cluster_replica(config.cluster_id, config.replica_id)
-                .is_some(),
-            ReplicaRemoved
-        );
-        let instance = mz_catalog::compute_config::replica_instance_config(
-            &catalog,
-            config.cluster_id,
-            config.replica_id,
-            config.persist_location.clone(),
-            persist_clients.cfg().state_version_target(),
-        );
-        owner.execution = Some(execution::ReplicaEnactment::new(
-            owner.compute.take().expect("native compute endpoint"),
-            instance,
-            incarnation,
+    let mut expected = None;
+    let incarnation = loop {
+        let updates = catalog.sync_to_current_updates().await?;
+        absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
+        // Capture absence as well as identity. A conflicting startup cannot
+        // refresh its expectation and supersede the execution that won.
+        let predecessor = *expected.get_or_insert_with(|| {
             catalog
                 .state()
-                .client_read_requirements()
+                .client_incarnations()
                 .iter()
-                .filter_map(|((owner, id), frontier)| {
-                    (*owner == incarnation).then_some((*id, *frontier))
+                .find_map(|(id, client)| {
+                    (client.deployment_generation == config.deploy_generation
+                        && client.realization
+                            == mz_catalog::durable::objects::ClientRealization::Replica(
+                                config.replica_id,
+                            ))
+                    .then_some(*id)
                 })
-                .collect(),
-            config.cluster_id,
-            config.replica_id,
-            &registry,
-            owner.storage.take(),
-        ));
-    }
-    if let Some(execution) = &mut owner.execution {
-        execution.configure_status_history(&catalog, persist.clone(), config.deploy_generation)?;
-        execution.configure_frontier_publication(
-            &catalog,
-            persist.clone(),
-            config.deploy_generation,
-        )?;
-    }
-    let execution = &mut owner.execution;
+        });
+        let ts = catalog
+            .observed_position()
+            .expect("synchronized native catalog")
+            .upper;
+        match catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation {
+                    realization: mz_catalog::durable::objects::ClientRealization::Replica(
+                        config.replica_id,
+                    ),
+                    expected: predecessor,
+                }],
+            )
+            .await
+        {
+            Ok(result) => {
+                absorb_updates(
+                    &mut effects,
+                    &catalog,
+                    config.cluster_id,
+                    &build,
+                    result.catalog_updates,
+                );
+                break *result
+                    .created_client_incarnations
+                    .first()
+                    .context("created replica incarnation")?;
+            }
+            Err(mz_catalog::catalog::CatalogError::Catalog(error))
+                if matches!(
+                    error.kind,
+                    mz_catalog::memory::error::ErrorKind::Durable(
+                        mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                    )
+                ) =>
+            {
+                tokio::time::sleep(execution::conflict_delay()).await;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    anyhow::ensure!(
+        catalog
+            .try_get_cluster_replica(config.cluster_id, config.replica_id)
+            .is_some(),
+        ReplicaRemoved
+    );
+    let instance = mz_catalog::compute_config::replica_instance_config(
+        &catalog,
+        config.cluster_id,
+        config.replica_id,
+        config.persist_location.clone(),
+        persist_clients.cfg().state_version_target(),
+    );
+    owner.execution = Some(execution::ReplicaEnactment::new(
+        owner.compute.take().expect("native compute endpoint"),
+        instance,
+        incarnation,
+        catalog
+            .state()
+            .client_read_requirements()
+            .iter()
+            .filter_map(|((owner, id), frontier)| {
+                (*owner == incarnation).then_some((*id, *frontier))
+            })
+            .collect(),
+        config.cluster_id,
+        config.replica_id,
+        &registry,
+        owner.storage.take(),
+    ));
+    let execution = owner
+        .execution
+        .as_mut()
+        .expect("initialized native execution");
+    execution.configure_status_history(&catalog, persist.clone(), config.deploy_generation)?;
+    execution.configure_frontier_publication(
+        &catalog,
+        persist.clone(),
+        config.deploy_generation,
+    )?;
     // None forces initial configuration in both lanes, even without catalog effects.
     let mut configured_persist_state_version = None;
     let mut last_report = tokio::time::Instant::now();
     let mut last_error = None;
     let mut delay = Duration::from_secs(1);
-    let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
     let mut storage_progress = storage_metadata::Progress::default();
     let progress = catalog.upper_frontiers().await?;
@@ -450,104 +448,97 @@ pub(crate) async fn run(
         );
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let requested = execution
-            .as_mut()
-            .and_then(|execution| execution.io.take_catalog_catchup_upper());
-        let updates = wait(&mut *execution, async {
-            let mut updates = catalog.sync_to_observed_updates().await?;
-            // A request can prove newer catalog progress before notification
-            // delivery. Preserve prompt request-time catch-up, not idle polling.
-            if requested.is_some_and(|upper| {
-                catalog
-                    .observed_position()
-                    .is_none_or(|position| position.upper < upper)
-            }) {
-                updates.extend(catalog.sync_to_current_updates().await?);
-            }
-            Ok::<_, mz_catalog::durable::CatalogError>(updates)
-        })
-        .await?;
+        let requested = execution.io.take_catalog_catchup_upper();
+        let updates = execution
+            .io
+            .wait(async {
+                let mut updates = catalog.sync_to_observed_updates().await?;
+                // A request can prove newer catalog progress before notification
+                // delivery. Preserve prompt request-time catch-up, not idle polling.
+                if requested.is_some_and(|upper| {
+                    catalog
+                        .observed_position()
+                        .is_none_or(|position| position.upper < upper)
+                }) {
+                    updates.extend(catalog.sync_to_current_updates().await?);
+                }
+                Ok::<_, mz_catalog::durable::CatalogError>(updates)
+            })
+            .await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-        if let Some(execution) = &mut *execution {
-            let interval = catalog
-                .system_config()
-                .catalog_read_protection_publish_interval();
-            execution.configure_publication(interval);
-            execution.ensure_live(&catalog)?;
-            execution.apply_progress(&catalog);
-            execution.apply_storage_progress();
-            if let Err(error) = execution
-                .admit_kafka_preopens(&mut catalog, &mut effects, config.cluster_id, &build)
-                .await
-            {
-                failures["installation"].inc();
-                tracing::warn!(%error, "Kafka pre-open admission denied");
-            }
-            execution.ensure_live(&catalog)?;
-            // Advancing permission waits for current selections and import holds.
-            // Retired definitions cannot be imported by current own-build selections:
-            // their removing transaction also repairs those written plans.
-            execution.apply_catalog(
-                &catalog,
-                &build,
-                &storage_metadata::Resolution::default(),
-                false,
-            );
-            // Catalog admission updates the shared PersistConfig even when there are
-            // no system or replica configuration effects. Previously authorized targets
-            // remain valid while this ordered configuration delivery catches up.
-            let persist_state_version = persist_clients.cfg().state_version_target();
-            if effects.configuration_changed
-                || configured_persist_state_version.as_ref() != Some(&persist_state_version)
-            {
-                anyhow::ensure!(
-                    catalog
-                        .try_get_cluster_replica(config.cluster_id, config.replica_id)
-                        .is_some(),
-                    ReplicaRemoved
-                );
-                execution.configure_storage(mz_catalog::storage_config::replica_storage_config(
-                    &catalog,
-                    config.cluster_id,
-                    config.replica_id,
-                    persist_state_version.clone(),
-                ));
-                execution.configure(mz_catalog::compute_config::replica_compute_config(
-                    &catalog,
-                    config.cluster_id,
-                    config.replica_id,
-                    persist_state_version.clone(),
-                ));
-                configured_persist_state_version = Some(persist_state_version);
-                effects.configuration_changed = false;
-            }
-            execution.retire_storage(&catalog, config.cluster_id, config.replica_id);
-            // Capture this projection's applied prefix now. Installation and
-            // protection publication below can absorb later catalog changes
-            // whose configuration effects belong to the next iteration.
-            execution.io.apply_catalog_position(
+        let interval = catalog
+            .system_config()
+            .catalog_read_protection_publish_interval();
+        execution.configure_publication(interval);
+        execution.ensure_live(&catalog)?;
+        execution.apply_progress(&catalog);
+        execution.apply_storage_progress();
+        if let Err(error) = execution
+            .admit_kafka_preopens(&mut catalog, &mut effects, config.cluster_id, &build)
+            .await
+        {
+            failures["installation"].inc();
+            tracing::warn!(%error, "Kafka pre-open admission denied");
+        }
+        execution.ensure_live(&catalog)?;
+        // Advancing permission waits for current selections and import holds.
+        // Retired definitions cannot be imported by current own-build selections:
+        // their removing transaction also repairs those written plans.
+        execution.apply_catalog(
+            &catalog,
+            &build,
+            &storage_metadata::Resolution::default(),
+            false,
+        );
+        // Catalog admission updates the shared PersistConfig even when there are
+        // no system or replica configuration effects. Previously authorized targets
+        // remain valid while this ordered configuration delivery catches up.
+        let persist_state_version = persist_clients.cfg().state_version_target();
+        if effects.configuration_changed
+            || configured_persist_state_version.as_ref() != Some(&persist_state_version)
+        {
+            anyhow::ensure!(
                 catalog
-                    .observed_position()
-                    .expect("committed follower position"),
+                    .try_get_cluster_replica(config.cluster_id, config.replica_id)
+                    .is_some(),
+                ReplicaRemoved
             );
+            execution.configure_storage(mz_catalog::storage_config::replica_storage_config(
+                &catalog,
+                config.cluster_id,
+                config.replica_id,
+                persist_state_version.clone(),
+            ));
+            execution.configure(mz_catalog::compute_config::replica_compute_config(
+                &catalog,
+                config.cluster_id,
+                config.replica_id,
+                persist_state_version.clone(),
+            ));
+            configured_persist_state_version = Some(persist_state_version);
+            effects.configuration_changed = false;
         }
-        if execution.is_none() && !changed && effects.pending.is_empty() && !pending_metadata {
-            tokio::time::sleep(delay).await;
-            continue;
-        }
+        execution.retire_storage(&catalog, config.cluster_id, config.replica_id);
+        // Capture this projection's applied prefix now. Installation and
+        // protection publication below can absorb later catalog changes
+        // whose configuration effects belong to the next iteration.
+        execution.io.apply_catalog_position(
+            catalog
+                .observed_position()
+                .expect("committed follower position"),
+        );
         let result: anyhow::Result<_> = async {
-            wait(
-                &mut *execution,
-                effects.observe_plans(
+            execution
+                .io
+                .wait(effects.observe_plans(
                     &catalog,
                     config.cluster_id,
                     config.replica_id,
                     &store,
                     &build,
-                ),
-            )
-            .await?;
+                ))
+                .await?;
             let mut wanted: BTreeSet<_> = effects
                 .selected
                 .values()
@@ -557,16 +548,10 @@ pub(crate) async fn run(
                         .chain(plan.physical_plan.persist_sink_ids())
                 })
                 .collect();
-            if let Some(execution) = &*execution {
-                wanted.extend(execution.storage_wanted(
-                    &catalog,
-                    config.cluster_id,
-                    config.replica_id,
-                ));
-            }
-            let metadata = wait(
-                &mut *execution,
-                storage_metadata::resolve(
+            wanted.extend(execution.storage_wanted(&catalog, config.cluster_id, config.replica_id));
+            let metadata = execution
+                .io
+                .wait(storage_metadata::resolve(
                     &catalog,
                     &wanted,
                     &store,
@@ -575,119 +560,111 @@ pub(crate) async fn run(
                     &config.persist_location,
                     txns_shard,
                     &mut storage_progress,
-                ),
-            )
-            .await?;
+                ))
+                .await?;
             Ok((catalog.transient_revision(), metadata))
         }
         .await;
         match result {
             Ok((metadata_revision, metadata)) => {
-                pending_metadata = !metadata.pending.is_empty();
+                let pending_metadata = !metadata.pending.is_empty();
                 let mut pending = !effects.pending.is_empty() || pending_metadata;
-                if let Some(execution) = &mut *execution {
-                    match execution
-                        .install_sources(
-                            &mut catalog,
-                            &mut effects,
-                            config.cluster_id,
-                            config.replica_id,
-                            &build,
-                            &metadata,
-                        )
-                        .await
-                    {
-                        Ok(source_pending) => pending |= source_pending,
-                        Err(error) => {
-                            failures["installation"].inc();
-                            pending = true;
-                            tracing::warn!(%error, "source installation pending");
-                        }
-                    }
-                    match execution
-                        .install_sinks(
-                            &mut catalog,
-                            &mut effects,
-                            config.cluster_id,
-                            &build,
-                            &metadata,
-                        )
-                        .await
-                    {
-                        Ok(sink_pending) => pending |= sink_pending,
-                        Err(error) => {
-                            failures["installation"].inc();
-                            pending = true;
-                            tracing::warn!(%error, "sink installation pending");
-                        }
-                    }
-                    let result = execution
-                        .install(
-                            &mut catalog,
-                            &mut effects,
-                            config.cluster_id,
-                            &build,
-                            &store,
-                            &persist,
-                            &metadata,
-                        )
-                        .await;
-                    if let Err(error) = result {
-                        failures["installation"].inc();
-                        pending = true;
-                        tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
-                            %error, "execution installation pending");
-                    }
-                    // Acquisition can absorb DDL after storage inventory was checked.
-                    // Keep inherited protection until every lane has installed against
-                    // the same catalog revision, including newly desired storage work.
-                    pending |= catalog.transient_revision() != metadata_revision;
-                    pending |= execution.pending_installations(&effects) > 0;
-                    execution.ensure_live(&catalog)?;
-                    execution.apply_progress(&catalog);
-                    execution.apply_catalog(
-                        &catalog,
+                match execution
+                    .install_sources(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        config.replica_id,
                         &build,
                         &metadata,
-                        effects.pending.is_empty(),
-                    );
-                    match execution
-                        .publish(
-                            &mut catalog,
-                            &mut effects,
-                            config.cluster_id,
-                            &build,
-                            pending,
-                            Some(&metadata),
-                        )
-                        .await
-                    {
-                        Err(error) => {
-                            failures["publication"].inc();
-                            tracing::warn!(%error, "replica protection publication pending");
-                        }
-                        Ok(_) => (),
+                    )
+                    .await
+                {
+                    Ok(source_pending) => pending |= source_pending,
+                    Err(error) => {
+                        failures["installation"].inc();
+                        pending = true;
+                        tracing::warn!(%error, "source installation pending");
                     }
-                    let wanted = metadata.metadata.keys().copied().collect();
-                    if let Err(error) = execution
-                        .io
-                        .wait(compaction.reconcile(
-                            &persist,
-                            catalog.state().storage_metadata(),
-                            &wanted,
-                        ))
-                        .await
-                    {
-                        failures["compaction"].inc();
-                        tracing::warn!(%error, "committed storage compaction pending");
-                    }
-                    pending_installs.set(
-                        execution
-                            .pending_installations(&effects)
-                            .try_into()
-                            .expect("fits u64"),
-                    );
                 }
+                match execution
+                    .install_sinks(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        &build,
+                        &metadata,
+                    )
+                    .await
+                {
+                    Ok(sink_pending) => pending |= sink_pending,
+                    Err(error) => {
+                        failures["installation"].inc();
+                        pending = true;
+                        tracing::warn!(%error, "sink installation pending");
+                    }
+                }
+                let result = execution
+                    .install(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        &build,
+                        &store,
+                        &persist,
+                        &metadata,
+                    )
+                    .await;
+                if let Err(error) = result {
+                    failures["installation"].inc();
+                    pending = true;
+                    tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
+                        %error, "execution installation pending");
+                }
+                // Acquisition can absorb DDL after storage inventory was checked.
+                // Keep inherited protection until every lane has installed against
+                // the same catalog revision, including newly desired storage work.
+                pending |= catalog.transient_revision() != metadata_revision;
+                pending |= execution.pending_installations(&effects) > 0;
+                execution.ensure_live(&catalog)?;
+                execution.apply_progress(&catalog);
+                execution.apply_catalog(&catalog, &build, &metadata, effects.pending.is_empty());
+                match execution
+                    .publish(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        &build,
+                        pending,
+                        Some(&metadata),
+                    )
+                    .await
+                {
+                    Err(error) => {
+                        failures["publication"].inc();
+                        tracing::warn!(%error, "replica protection publication pending");
+                    }
+                    Ok(_) => (),
+                }
+                let wanted = metadata.metadata.keys().copied().collect();
+                if let Err(error) = execution
+                    .io
+                    .wait(compaction.reconcile(
+                        &persist,
+                        catalog.state().storage_metadata(),
+                        &wanted,
+                    ))
+                    .await
+                {
+                    failures["compaction"].inc();
+                    tracing::warn!(%error, "committed storage compaction pending");
+                }
+                pending_installs.set(
+                    execution
+                        .pending_installations(&effects)
+                        .try_into()
+                        .expect("fits u64"),
+                );
                 if changed
                     || last_error.is_some()
                     || (pending && last_report.elapsed() >= Duration::from_secs(60))
@@ -698,7 +675,6 @@ pub(crate) async fn run(
                         pending_metadata = ?metadata.pending,
                         storage_inputs = metadata.metadata.len(),
                         observed_uppers = metadata.uppers.len(),
-                        replica_owned = execution.is_some(),
                         "catalog follower effects processed"
                     );
                     last_report = tokio::time::Instant::now();
@@ -712,53 +688,35 @@ pub(crate) async fn run(
             }
             Err(error) => {
                 failures["observation"].inc();
-                pending_metadata = true;
-                if let Some(execution) = &mut *execution {
-                    // Missing metadata need not block publication of changed aggregates.
-                    if let Err(error) = execution
-                        .publish(
-                            &mut catalog,
-                            &mut effects,
-                            config.cluster_id,
-                            &build,
-                            true,
-                            None,
-                        )
-                        .await
-                    {
-                        failures["publication"].inc();
-                        tracing::warn!(%error, "replica protection publication pending");
-                    }
+                // Missing metadata need not block publication of changed aggregates.
+                if let Err(error) = execution
+                    .publish(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        &build,
+                        true,
+                        None,
+                    )
+                    .await
+                {
+                    failures["publication"].inc();
+                    tracing::warn!(%error, "replica protection publication pending");
                 }
                 let error = format!("{error:#}");
                 if last_error.as_ref() != Some(&error)
                     || last_report.elapsed() >= Duration::from_secs(60)
                 {
                     tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
-                        %error, replica_owned = execution.is_some(), "catalog follower stalled");
+                        %error, "catalog follower stalled");
                     last_report = tokio::time::Instant::now();
                 }
                 last_error = Some(error);
                 delay = (delay * 2).min(Duration::from_secs(10));
             }
         }
-        match &mut *execution {
-            Some(execution) => {
-                execution.ensure_live(&catalog)?;
-                let delay = execution.wake_delay(delay);
-                execution.io.idle(delay).await;
-            }
-            None => tokio::time::sleep(delay).await,
-        }
-    }
-}
-
-async fn wait<F: std::future::Future>(
-    execution: &mut Option<execution::ReplicaEnactment>,
-    future: F,
-) -> F::Output {
-    match execution {
-        Some(execution) => execution.io.wait(future).await,
-        None => future.await,
+        execution.ensure_live(&catalog)?;
+        let delay = execution.wake_delay(delay);
+        execution.io.idle(delay).await;
     }
 }

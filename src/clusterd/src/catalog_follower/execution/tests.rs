@@ -79,7 +79,12 @@ async fn startup_rejects_mismatched_plan_versions() {
             timestamp_oracle: config.timestamp_oracle.clone(),
             build_info: config.build_info,
         };
-        let mut owner = follower::NativeOwner::new(None, None);
+        // Startup must reject incompatible plans before it needs runtime ingress.
+        let mut owner = follower::NativeOwner {
+            compute: None,
+            storage: None,
+            execution: None,
+        };
         let error = timeout(
             Duration::from_secs(5),
             follower::run(
@@ -623,7 +628,7 @@ pub(super) async fn start_runtime(
     drop(server);
     // A returned follower, including an error, is always a failure in this test.
     mz_ore::task::spawn(|| "native follower test", async move {
-        let mut owner = follower::NativeOwner::new(Some(endpoint), None);
+        let mut owner = follower::NativeOwner::new(endpoint, None);
         let result = follower::run(config, clients, registry, &mut owner).await;
         panic!("native follower stopped: {result:?}");
     });

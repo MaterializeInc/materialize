@@ -531,8 +531,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    let replica_owned =
-        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
+    let replica_owned = args.catalog_cluster_id.is_some();
     let (mut compute_server, storage_endpoint, storage_client_builder): (
         _,
         _,
@@ -612,33 +611,29 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     if let Some(config) = follower_config {
-        let endpoint = compute_server.take_replica();
-        let replica_owned = endpoint.is_some();
+        let endpoint = compute_server
+            .take_replica()
+            .expect("catalog follower requires native compute ingress");
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {
             let mut owner = catalog_follower::NativeOwner::new(endpoint, storage_endpoint);
             if let Err(error) =
                 catalog_follower::run(config, persist_clients, registry, &mut owner).await
             {
-                if replica_owned {
-                    if error.is::<catalog_follower::ReplicaRemoved>() {
-                        // Catalog deletion must stop execution immediately, but
-                        // it is not an operational fault. Keep the halt exit code
-                        // so supervisor behavior is independent of log severity.
-                        info!("replica removed from catalog, stopping native execution");
-                        mz_ore::process::exit_thread_safe(166);
-                    }
-                    if is_deployment_fence(&error) {
-                        info!(%error, "deployment superseded, stopping native execution");
-                        mz_ore::process::exit_thread_safe(166);
-                    }
-                    mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
+                if error.is::<catalog_follower::ReplicaRemoved>() {
+                    // Catalog deletion must stop execution immediately, but
+                    // it is not an operational fault. Keep the halt exit code
+                    // so supervisor behavior is independent of log severity.
+                    info!("replica removed from catalog, stopping native execution");
+                    mz_ore::process::exit_thread_safe(166);
                 }
-                error!(%error, "catalog follower stopped");
+                if is_deployment_fence(&error) {
+                    info!(%error, "deployment superseded, stopping native execution");
+                    mz_ore::process::exit_thread_safe(166);
+                }
+                mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
             }
-            if replica_owned {
-                mz_ore::halt!("execution-critical catalog follower returned unexpectedly");
-            }
+            mz_ore::halt!("execution-critical catalog follower returned unexpectedly");
         });
     }
     let compute_client_builder = compute_server.client_builder();
