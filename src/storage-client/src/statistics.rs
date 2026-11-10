@@ -18,7 +18,7 @@
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
@@ -140,7 +140,9 @@ pub trait StorageMetric {
         Self: Sized + 'a;
 
     /// Incorporate this value with another.
-    fn incorporate(&mut self, other: Self, field_name: &'static str);
+    ///
+    /// `id` and `field_name` identify the metric in regression logs.
+    fn incorporate(&mut self, other: Self, id: GlobalId, field_name: &'static str);
 }
 
 /// A counter that never resets.
@@ -157,7 +159,7 @@ impl StorageMetric for Counter {
         Self(values.into_iter().map(|c| c.0).sum())
     }
 
-    fn incorporate(&mut self, other: Self, _field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, _id: GlobalId, _field_name: &'static str) {
         // Always add the new value to the existing one.
         self.0 += other.0
     }
@@ -198,7 +200,7 @@ impl StorageMetric for ResettingLatency {
         Self(Some(max))
     }
 
-    fn incorporate(&mut self, other: Self, _field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, _id: GlobalId, _field_name: &'static str) {
         // Reset to the new value.
         self.0 = other.0;
     }
@@ -233,7 +235,7 @@ impl StorageMetric for ResettingNullableTotal {
         Self(Some(sum))
     }
 
-    fn incorporate(&mut self, other: Self, _field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, _id: GlobalId, _field_name: &'static str) {
         match (&mut self.0, other.0) {
             (None, other) => {
                 self.0 = other;
@@ -273,7 +275,7 @@ impl StorageMetric for ResettingTotal {
         Self(values.into_iter().map(|c| c.0).sum())
     }
 
-    fn incorporate(&mut self, other: Self, _field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, _id: GlobalId, _field_name: &'static str) {
         // Reset the pre-existing value.
         self.0 = other.0;
     }
@@ -291,9 +293,43 @@ impl ResettingTotal {
     }
 }
 
+/// Throttles the `error!` log for gauge regressions.
+///
+/// A regressed gauge keeps regressing on every statistics update, every few
+/// seconds, until the source restarts. Only the first regression in each
+/// interval is logged at `error!`, which reaches Sentry, the rest at `warn!`.
+#[derive(Clone, Debug, Default)]
+struct RegressionLog {
+    last_error: Option<Instant>,
+}
+
+impl RegressionLog {
+    const ERROR_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+    fn log(&mut self, message: std::fmt::Arguments<'_>) {
+        let now = Instant::now();
+        match self.last_error {
+            Some(last) if now.duration_since(last) < Self::ERROR_INTERVAL => {
+                tracing::warn!("{message}")
+            }
+            _ => {
+                self.last_error = Some(now);
+                tracing::error!("{message}")
+            }
+        }
+    }
+}
+
+// The throttle state is bookkeeping, not part of the gauge's value.
+impl PartialEq for RegressionLog {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// A boolean gauge that is never reset.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct Boolean(bool);
+pub struct Boolean(bool, #[serde(skip)] RegressionLog);
 
 impl StorageMetric for Boolean {
     fn summarize<'a, I>(values: I) -> Self
@@ -302,18 +338,21 @@ impl StorageMetric for Boolean {
         Self: Sized + 'a,
     {
         // All workers must be true for this gauge to be true.
-        Self(values.into_iter().fold(true, |base, new| base & new.0))
+        Self(
+            values.into_iter().fold(true, |base, new| base & new.0),
+            RegressionLog::default(),
+        )
     }
 
-    fn incorporate(&mut self, other: Self, field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, id: GlobalId, field_name: &'static str) {
         // A boolean regressing to `false` is a bug.
         //
         // Clippy's suggestion here is not good!
         #[allow(clippy::bool_comparison)]
         if other.0 < self.0 {
-            tracing::error!(
-                "boolean gauge for field {field_name} erroneously regressed from true to false",
-            );
+            self.1.log(format_args!(
+                "boolean gauge for field {field_name} of {id} erroneously regressed from true to false",
+            ));
             return;
         }
         self.0 = other.0;
@@ -322,7 +361,7 @@ impl StorageMetric for Boolean {
 
 impl From<bool> for Boolean {
     fn from(f: bool) -> Self {
-        Boolean(f)
+        Boolean(f, RegressionLog::default())
     }
 }
 
@@ -336,6 +375,8 @@ pub struct Total {
     #[serde(skip)]
     regressions:
         Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
+    #[serde(skip)]
+    regression_log: RegressionLog,
 }
 
 impl From<Option<u64>> for Total {
@@ -343,6 +384,7 @@ impl From<Option<u64>> for Total {
         Total {
             total: f,
             regressions: None,
+            regression_log: RegressionLog::default(),
         }
     }
 }
@@ -352,6 +394,7 @@ impl Clone for Total {
         Self {
             total: self.total,
             regressions: None,
+            regression_log: self.regression_log.clone(),
         }
     }
 }
@@ -392,10 +435,11 @@ impl StorageMetric for Total {
         Self {
             total: (!any_none).then_some(inner),
             regressions: None,
+            regression_log: RegressionLog::default(),
         }
     }
 
-    fn incorporate(&mut self, other: Self, field_name: &'static str) {
+    fn incorporate(&mut self, other: Self, id: GlobalId, field_name: &'static str) {
         match (&mut self.total, other.total) {
             (_, None) => {}
             (None, Some(other)) => self.total = Some(other),
@@ -404,11 +448,10 @@ impl StorageMetric for Total {
                     if let Some(metric) = &self.regressions {
                         metric.inc()
                     } else {
-                        tracing::error!(
-                            "total gauge {field_name} erroneously regressed from {} to {}",
-                            this,
-                            other
-                        );
+                        self.regression_log.log(format_args!(
+                            "total gauge {field_name} of {id} erroneously regressed from {} to {}",
+                            this, other
+                        ));
                     }
                     return;
                 }
@@ -441,8 +484,8 @@ impl<T: StorageMetric> StorageMetric for Gauge<T> {
         Gauge(T::summarize(values.into_iter().map(|i| &i.0)))
     }
 
-    fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        self.0.incorporate(other.0, field_name)
+    fn incorporate(&mut self, other: Self, id: GlobalId, field_name: &'static str) {
+        self.0.incorporate(other.0, id, field_name)
     }
 }
 
@@ -600,6 +643,7 @@ impl SourceStatisticsUpdate {
 
     pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
         let SourceStatisticsUpdate {
+            id,
             messages_received,
             bytes_received,
             updates_staged,
@@ -615,24 +659,36 @@ impl SourceStatisticsUpdate {
             ..
         } = self;
 
-        messages_received.incorporate(other.messages_received, "messages_received");
-        bytes_received.incorporate(other.bytes_received, "bytes_received");
-        updates_staged.incorporate(other.updates_staged, "updates_staged");
-        updates_committed.incorporate(other.updates_committed, "updates_committed");
-        records_indexed.incorporate(other.records_indexed, "records_indexed");
-        bytes_indexed.incorporate(other.bytes_indexed, "bytes_indexed");
-        rehydration_latency_ms.incorporate(other.rehydration_latency_ms, "rehydration_latency_ms");
-        snapshot_records_known.incorporate(other.snapshot_records_known, "snapshot_records_known");
-        snapshot_records_staged
-            .incorporate(other.snapshot_records_staged, "snapshot_records_staged");
-        snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
-        offset_known.incorporate(other.offset_known, "offset_known");
-        offset_committed.incorporate(other.offset_committed, "offset_committed");
+        messages_received.incorporate(other.messages_received, *id, "messages_received");
+        bytes_received.incorporate(other.bytes_received, *id, "bytes_received");
+        updates_staged.incorporate(other.updates_staged, *id, "updates_staged");
+        updates_committed.incorporate(other.updates_committed, *id, "updates_committed");
+        records_indexed.incorporate(other.records_indexed, *id, "records_indexed");
+        bytes_indexed.incorporate(other.bytes_indexed, *id, "bytes_indexed");
+        rehydration_latency_ms.incorporate(
+            other.rehydration_latency_ms,
+            *id,
+            "rehydration_latency_ms",
+        );
+        snapshot_records_known.incorporate(
+            other.snapshot_records_known,
+            *id,
+            "snapshot_records_known",
+        );
+        snapshot_records_staged.incorporate(
+            other.snapshot_records_staged,
+            *id,
+            "snapshot_records_staged",
+        );
+        snapshot_committed.incorporate(other.snapshot_committed, *id, "snapshot_committed");
+        offset_known.incorporate(other.offset_known, *id, "offset_known");
+        offset_committed.incorporate(other.offset_committed, *id, "offset_committed");
     }
 
     /// Incorporate only the counters of the given update, ignoring gauge values.
     pub fn incorporate_counters(&mut self, other: SourceStatisticsUpdate) {
         let SourceStatisticsUpdate {
+            id,
             messages_received,
             bytes_received,
             updates_staged,
@@ -640,10 +696,10 @@ impl SourceStatisticsUpdate {
             ..
         } = self;
 
-        messages_received.incorporate(other.messages_received, "messages_received");
-        bytes_received.incorporate(other.bytes_received, "bytes_received");
-        updates_staged.incorporate(other.updates_staged, "updates_staged");
-        updates_committed.incorporate(other.updates_committed, "updates_committed");
+        messages_received.incorporate(other.messages_received, *id, "messages_received");
+        bytes_received.incorporate(other.bytes_received, *id, "bytes_received");
+        updates_staged.incorporate(other.updates_staged, *id, "updates_staged");
+        updates_committed.incorporate(other.updates_committed, *id, "updates_committed");
     }
 
     /// Enrich statistics that use prometheus metrics.
@@ -786,7 +842,7 @@ impl ControllerSourceStatistics {
     /// ourselves
     pub fn incorporate(&mut self, update: SourceStatisticsUpdate) {
         let ControllerSourceStatistics {
-            id: _,
+            id,
             replica_id: _,
             messages_received,
             bytes_received,
@@ -804,19 +860,30 @@ impl ControllerSourceStatistics {
             needs_zero_initialization: _,
         } = self;
 
-        messages_received.incorporate(update.messages_received, "messages_received");
-        bytes_received.incorporate(update.bytes_received, "bytes_received");
-        updates_staged.incorporate(update.updates_staged, "updates_staged");
-        updates_committed.incorporate(update.updates_committed, "updates_committed");
-        records_indexed.incorporate(update.records_indexed, "records_indexed");
-        bytes_indexed.incorporate(update.bytes_indexed, "bytes_indexed");
-        rehydration_latency_ms.incorporate(update.rehydration_latency_ms, "rehydration_latency_ms");
-        snapshot_records_known.incorporate(update.snapshot_records_known, "snapshot_records_known");
-        snapshot_records_staged
-            .incorporate(update.snapshot_records_staged, "snapshot_records_staged");
-        snapshot_committed.incorporate(update.snapshot_committed, "snapshot_committed");
-        offset_known.incorporate(update.offset_known, "offset_known");
-        offset_committed.incorporate(update.offset_committed, "offset_committed");
+        messages_received.incorporate(update.messages_received, *id, "messages_received");
+        bytes_received.incorporate(update.bytes_received, *id, "bytes_received");
+        updates_staged.incorporate(update.updates_staged, *id, "updates_staged");
+        updates_committed.incorporate(update.updates_committed, *id, "updates_committed");
+        records_indexed.incorporate(update.records_indexed, *id, "records_indexed");
+        bytes_indexed.incorporate(update.bytes_indexed, *id, "bytes_indexed");
+        rehydration_latency_ms.incorporate(
+            update.rehydration_latency_ms,
+            *id,
+            "rehydration_latency_ms",
+        );
+        snapshot_records_known.incorporate(
+            update.snapshot_records_known,
+            *id,
+            "snapshot_records_known",
+        );
+        snapshot_records_staged.incorporate(
+            update.snapshot_records_staged,
+            *id,
+            "snapshot_records_staged",
+        );
+        snapshot_committed.incorporate(update.snapshot_committed, *id, "snapshot_committed");
+        offset_known.incorporate(update.offset_known, *id, "offset_known");
+        offset_committed.incorporate(update.offset_committed, *id, "offset_committed");
 
         *last_updated = Instant::now();
     }
@@ -970,7 +1037,7 @@ impl ControllerSinkStatistics {
     /// Incorporate updates from the given [SinkStatisticsUpdate] into ourselves
     pub fn incorporate(&mut self, update: SinkStatisticsUpdate) {
         let ControllerSinkStatistics {
-            id: _,
+            id,
             replica_id: _,
             messages_staged,
             messages_committed,
@@ -980,10 +1047,10 @@ impl ControllerSinkStatistics {
             needs_zero_initialization: _,
         } = self;
 
-        messages_staged.incorporate(update.messages_staged, "messages_staged");
-        bytes_staged.incorporate(update.bytes_staged, "bytes_staged");
-        messages_committed.incorporate(update.messages_committed, "messages_committed");
-        bytes_committed.incorporate(update.bytes_committed, "bytes_committed");
+        messages_staged.incorporate(update.messages_staged, *id, "messages_staged");
+        bytes_staged.incorporate(update.bytes_staged, *id, "bytes_staged");
+        messages_committed.incorporate(update.messages_committed, *id, "messages_committed");
+        bytes_committed.incorporate(update.bytes_committed, *id, "bytes_committed");
 
         *last_updated = Instant::now();
     }
@@ -1067,6 +1134,7 @@ impl SinkStatisticsUpdate {
 
     pub fn incorporate(&mut self, other: SinkStatisticsUpdate) {
         let SinkStatisticsUpdate {
+            id,
             messages_staged,
             messages_committed,
             bytes_staged,
@@ -1074,15 +1142,16 @@ impl SinkStatisticsUpdate {
             ..
         } = self;
 
-        messages_staged.incorporate(other.messages_staged, "messages_staged");
-        messages_committed.incorporate(other.messages_committed, "messages_committed");
-        bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
-        bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+        messages_staged.incorporate(other.messages_staged, *id, "messages_staged");
+        messages_committed.incorporate(other.messages_committed, *id, "messages_committed");
+        bytes_staged.incorporate(other.bytes_staged, *id, "bytes_staged");
+        bytes_committed.incorporate(other.bytes_committed, *id, "bytes_committed");
     }
 
     /// Incorporate only the counters of the given update, ignoring gauge values.
     pub fn incorporate_counters(&mut self, other: SinkStatisticsUpdate) {
         let SinkStatisticsUpdate {
+            id,
             messages_staged,
             messages_committed,
             bytes_staged,
@@ -1090,10 +1159,10 @@ impl SinkStatisticsUpdate {
             ..
         } = self;
 
-        messages_staged.incorporate(other.messages_staged, "messages_staged");
-        messages_committed.incorporate(other.messages_committed, "messages_committed");
-        bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
-        bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+        messages_staged.incorporate(other.messages_staged, *id, "messages_staged");
+        messages_committed.incorporate(other.messages_committed, *id, "messages_committed");
+        bytes_staged.incorporate(other.bytes_staged, *id, "bytes_staged");
+        bytes_committed.incorporate(other.bytes_committed, *id, "bytes_committed");
     }
 
     pub fn summarize<'a, I, F>(values: F) -> Self
@@ -1181,5 +1250,23 @@ impl WebhookStatistics {
             offset_known: Gauge::gauge(None::<u64>),
             offset_committed: Gauge::gauge(None::<u64>),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn regression_log_errors_once_per_interval() {
+        let mut log = RegressionLog::default();
+        log.log(format_args!("first"));
+        let first = log.last_error.expect("first regression logs an error");
+        log.log(format_args!("second"));
+        assert_eq!(
+            log.last_error,
+            Some(first),
+            "second regression within the interval only warns"
+        );
     }
 }
