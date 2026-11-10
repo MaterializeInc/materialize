@@ -4521,6 +4521,8 @@ def workflow_statement_logging_throttled_count(
             """
             ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
             ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_target_data_rate = '';
+            ALTER SYSTEM SET statement_logging_max_data_credit = '';
             """,
             port=6877,
             user="mz_system",
@@ -4552,8 +4554,8 @@ def workflow_statement_logging_throttled_count(
         # throttled ones.
         c.sql(
             """
-            ALTER SYSTEM RESET statement_logging_target_data_rate;
-            ALTER SYSTEM RESET statement_logging_max_data_credit;
+            ALTER SYSTEM SET statement_logging_target_data_rate = '';
+            ALTER SYSTEM SET statement_logging_max_data_credit = '';
             """,
             port=6877,
             user="mz_system",
