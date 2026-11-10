@@ -48,6 +48,7 @@ import {
 import ShellRoutes from "~/platform/shell/ShellRoutes";
 import { ShellWebsocketProvider } from "~/platform/shell/ShellWebsocketProvider";
 import SourceRoutes from "~/platform/sources/SourceRoutes";
+import SupportPage from "~/platform/support/SupportPage";
 import { SentryRoutes } from "~/sentry";
 import { regionIdToSlug, useRegionSlugToId } from "~/store/cloudRegions";
 import {
@@ -88,6 +89,26 @@ const UsageRoutesWrapper = () => {
           </BaseLayout>
         );
       }}
+      selfManagedConfigElement={<RedirectToHome />}
+    />
+  );
+};
+
+const SupportPageWrapper = () => {
+  return (
+    <AppConfigSwitch
+      // Impersonation sends every global API request as a GET, so opening a
+      // ticket would fetch the list and look like it worked. Tickets belong
+      // to the signed-in user anyway.
+      cloudConfigElement={({ runtimeConfig }) =>
+        runtimeConfig.isImpersonating ? (
+          <RedirectToHome />
+        ) : (
+          <BaseLayout>
+            <SupportPage />
+          </BaseLayout>
+        )
+      }
       selfManagedConfigElement={<RedirectToHome />}
     />
   );
@@ -186,6 +207,9 @@ export const AuthenticatedRoutes = () => {
         <Route path="usage">
           <Route index path="*" element={<UsageRoutesWrapper />} />
         </Route>
+        {flags["support-page-cns-147"] && (
+          <Route path="support/*" element={<SupportPageWrapper />} />
+        )}
         {flags["internal-apps"] && (
           <Route path="internal">
             <Route index path="*" element={<InternalRoutes />} />
