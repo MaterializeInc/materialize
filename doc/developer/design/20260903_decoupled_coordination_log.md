@@ -29,6 +29,11 @@ Two earlier fixed-sleep runs failed before hydration was established. Independen
 review and source investigation found no production repair necessary. Evidence
 and coverage limits: `native-readiness-verification.md`.
 
+The supported `legacy-upgrade/current_source` path also uses the shared relay and
+explicit retirement, preserving creation/check scripts. Helper tests pass. That
+composition's container run remains unverified. Evidence:
+`native-current-source-verification.md`.
+
 Next convert the remaining 0dt sites, preserving stopped/in-place predecessors,
 full-writer behavior and the compatible-image lane. `native-lifecycle-harness-seams.md`
 maps callers and contracts. The old promotion cleanup parameter remains until

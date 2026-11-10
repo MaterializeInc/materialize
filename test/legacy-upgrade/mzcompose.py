@@ -17,13 +17,17 @@ from unittest import SkipTest
 
 from materialize import buildkite
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
+    get_default_system_parameters,
+)
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -33,6 +37,7 @@ from materialize.version_list import (
 )
 
 SERVICES = [
+    Pubsub(),
     TestCerts(),
     Kafka(),
     SchemaRegistry(),
@@ -127,6 +132,12 @@ def test_upgrade_from_version(
     )
     mz_from = Materialized(
         name=mz_service,
+        deploy_generation=deploy_generation,
+        depends_on=["pubsub"],
+        options=[
+            "--persist-pubsub-external",
+            "--persist-pubsub-url=http://pubsub:6879",
+        ],
         volumes_extra=["secrets:/share/secrets"],
         external_metadata_store=True,
         system_parameter_defaults=system_parameter_defaults,
@@ -159,6 +170,11 @@ def test_upgrade_from_version(
     system_parameter_defaults = get_default_system_parameters()
     mz_to = Materialized(
         name=mz_service,
+        depends_on=["pubsub"],
+        options=[
+            "--persist-pubsub-external",
+            "--persist-pubsub-url=http://pubsub:6879",
+        ],
         volumes_extra=["secrets:/share/secrets"],
         external_metadata_store=True,
         system_parameter_defaults=system_parameter_defaults,
@@ -170,10 +186,14 @@ def test_upgrade_from_version(
     with c.override(mz_to):
         c.up(mz_service)
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
-        c.promote_mz(
+        c.promote_mz(mz_service, retire_mz_service=None)
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+        c.retire_mz_deployment(
             mz_service,
-            retire_mz_service="materialized",
+            deploy_generation - 1,
+            environment_id=DEFAULT_MZ_ENVIRONMENT_ID,
         )
+        c.kill_fenced_mz("materialized")
 
     with c.override(
         Testdrive(

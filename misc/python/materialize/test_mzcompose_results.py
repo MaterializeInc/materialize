@@ -16,7 +16,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import cast
 from unittest import SkipTest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 import yaml
@@ -328,6 +328,64 @@ def test_current_source_preserves_creation_and_validation_scripts(legacy_upgrade
     assert [
         arg for arg in create.args if arg.startswith(("--seed=", "--temp-dir="))
     ] == [arg for arg in check.args if arg.startswith(("--seed=", "--temp-dir="))]
+
+
+@pytest.mark.parametrize("retirement_fails", [False, True])
+def test_current_source_native_lifecycle(legacy_upgrade, retirement_fails):
+    c = MagicMock(spec=Composition)
+    if retirement_fails:
+        c.retire_mz_deployment.side_effect = UIError("retirement failed")
+        with pytest.raises(UIError, match="retirement failed"):
+            legacy_upgrade.test_upgrade_from_version(c, "current_source", "selected")
+    else:
+        legacy_upgrade.test_upgrade_from_version(c, "current_source", "selected")
+
+    deployments = [
+        invocation.args[0]
+        for invocation in c.override.call_args_list
+        if isinstance(invocation.args[0], legacy_upgrade.Materialized)
+    ]
+    assert [deployment.name for deployment in deployments] == [
+        "materialized",
+        "materialized2",
+    ]
+    for generation, deployment in enumerate(deployments):
+        assert "pubsub" in deployment.config["depends_on"]
+        assert "--persist-pubsub-external" in deployment.config["command"]
+        assert "--persist-pubsub-url=http://pubsub:6879" in deployment.config["command"]
+        assert (
+            f"--environment-id={legacy_upgrade.DEFAULT_MZ_ENVIRONMENT_ID}"
+            in deployment.config["command"]
+        )
+        assert f"--deploy-generation={generation}" in deployment.config["command"]
+
+    lifecycle = [
+        invocation
+        for invocation in c.method_calls
+        if invocation[0]
+        in {
+            "await_mz_deployment_status",
+            "promote_mz",
+            "retire_mz_deployment",
+            "kill_fenced_mz",
+        }
+    ]
+    expected = [
+        call.await_mz_deployment_status(
+            legacy_upgrade.DeploymentStatus.READY_TO_PROMOTE, "materialized2"
+        ),
+        call.promote_mz("materialized2", retire_mz_service=None),
+        call.await_mz_deployment_status(
+            legacy_upgrade.DeploymentStatus.IS_LEADER, "materialized2"
+        ),
+        call.retire_mz_deployment(
+            "materialized2", 0, environment_id=legacy_upgrade.DEFAULT_MZ_ENVIRONMENT_ID
+        ),
+    ]
+    if not retirement_fails:
+        expected.append(call.kill_fenced_mz("materialized"))
+    assert lifecycle == expected
+    assert c.run_testdrive_files.call_count == (1 if retirement_fails else 2)
 
 
 @pytest.fixture
