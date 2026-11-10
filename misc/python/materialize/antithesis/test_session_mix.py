@@ -99,3 +99,21 @@ def test_failed_upstream_write_does_not_report_successful_recency_read() -> None
     ):
         s.run_op("rtr_read")
     assert reached.call_args.args[2] is False
+
+
+@pytest.mark.parametrize("family,violates", [("rtr_read", False), ("peek", True)])
+def test_upstream_transport_error_is_designed_only_for_recency_reads(
+    family: str, violates: bool
+) -> None:
+    s = session()
+    s.conn = MagicMock(closed=False)
+    error = psycopg.errors.InternalError_(
+        "storage error: error communicating with the server"
+    )
+    with (
+        patch.object(session_mix, "ClientDeadline"),
+        patch.object(s, family, side_effect=error),
+        patch.object(session_mix, "unreachable") as violation,
+    ):
+        s.run_op(family)
+    assert violation.called is violates

@@ -21,6 +21,9 @@ RUN mkdir -p /symbols && ln -s /usr/local/bin/persistcli /symbols/persistcli
 ENV MZ_ROOT=/usr/local/share/materialize
 ENV PYTHONPATH=/usr/local/share/materialize/misc/python
 ENV PYTHONUNBUFFERED=1
+# A native crash (SIGSEGV, SIGABRT) prints every thread's Python stack before
+# the process dies, which Antithesis otherwise reports as only a signal number.
+ENV PYTHONFAULTHANDLER=1
 ENV MZ_ANTITHESIS_COVERAGE_CATALOG=/opt/antithesis/coverage-catalog.json
 
 COPY misc/python /usr/local/share/materialize/misc/python

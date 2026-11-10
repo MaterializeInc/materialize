@@ -1632,3 +1632,23 @@ def test_p7_never_targets_an_upsert_recovery_fixture() -> None:
         ("materialize", "kafka", "t"),
     ]
     assert canaries._p7(conn) == {"table": '"materialize"."kafka"."t"'}
+
+
+@pytest.mark.parametrize("probe,violates", [("P7", False), ("P1", True)])
+def test_upstream_transport_error_is_designed_only_for_the_recency_probe(
+    monkeypatch: pytest.MonkeyPatch, probe: str, violates: bool
+) -> None:
+    def fail(conn: object) -> dict[str, object]:
+        raise canaries.psycopg.errors.InternalError_(
+            "storage error: error communicating with the server"
+        )
+
+    monkeypatch.setitem(canaries.PROBE_FNS, probe, fail)
+    monkeypatch.setattr(canaries.sql, "connect", Mock())
+    violation = Mock()
+    monkeypatch.setattr(canaries, "_report_violation", violation)
+    result = canaries.ProbeResult(probe, "unanswered", False, 0.0)
+    now = canaries.time.monotonic()
+    canaries._attempt("host", probe, now, now + 60, result)
+    assert result.status == "error"
+    assert violation.called is violates

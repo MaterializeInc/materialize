@@ -130,9 +130,12 @@ def log(message: str) -> None:
     print(f"session-mix: {message}", flush=True)
 
 
-def classify_read(error: BaseException) -> sql.Classified:
-    """`sql.classify`, with `DESIGNED_READ_REJECTIONS` downgraded to rejections."""
-    c = sql.classify(error)
+def classify_read(error: BaseException, rtr: bool = False) -> sql.Classified:
+    """`sql.classify`, with `DESIGNED_READ_REJECTIONS` downgraded to rejections.
+
+    `rtr` marks a read with `real_time_recency` on (`sql.classify_rtr_read`).
+    """
+    c = sql.classify_rtr_read(error) if rtr else sql.classify(error)
     if c.outcome is sql.Outcome.VIOLATION and c.sqlstate is not None:
         if any(p.search(c.template) for p in DESIGNED_READ_REJECTIONS):
             return sql.Classified(sql.Outcome.REJECTED, c.sqlstate, c.template)
@@ -536,7 +539,7 @@ class Session:
             with ClientDeadline(conn, CLIENT_DEADLINE_S):
                 info = fn(conn)
         except Exception as e:
-            error = classify_read(e)
+            error = classify_read(e, rtr=family == "rtr_read")
             if error.outcome is sql.Outcome.INDETERMINATE and conn.closed:
                 self.close()
         end = time.monotonic()

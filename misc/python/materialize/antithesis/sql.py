@@ -242,6 +242,29 @@ def classify_as_of_read(error: BaseException) -> Classified:
     return c
 
 
+# `StorageError::Generic` around a tokio-postgres transport error, whose Display
+# drops the cause. Observed: "error communicating with the server". The others
+# are the remaining transport kinds of the same client.
+_RTR_UPSTREAM_TEMPLATE = re.compile(
+    r"^storage error: (error communicating with the server|error connecting to server"
+    r"|connection closed|timeout waiting for server)$"
+)
+
+
+def classify_rtr_read(error: BaseException) -> Classified:
+    """`classify` for a read with `real_time_recency` on.
+
+    Such a read first fetches the upstream Postgres frontier from environmentd
+    (`PostgresSourceConnection::fetch_write_frontier`), and one failed connect
+    or query fails the read, without a retry within the RTR timeout. No other
+    read contacts the upstream, so for them the same error is a violation.
+    """
+    c = classify(error)
+    if c.sqlstate == "XX000" and _RTR_UPSTREAM_TEMPLATE.search(c.template):
+        return Classified(Outcome.REJECTED, c.sqlstate, c.template)
+    return c
+
+
 def connect(
     host: str,
     *,
