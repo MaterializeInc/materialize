@@ -76,9 +76,9 @@ pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{
     TimestampContext, TimestampExplanation, TimestampProvider,
 };
-pub use crate::coord::{Config, load_remote_system_parameters, serve};
+pub use crate::coord::{Config, RemoteSystemParameters, load_remote_system_parameters, serve};
 pub use crate::error::{AdapterError, AuthenticationError};
-pub use crate::notice::AdapterNotice;
+pub use crate::notice::{AdapterNotice, ExecutionTime};
 pub use crate::util::{ResultExt, verify_datum_desc};
 pub use crate::webhook::{
     AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, WebhookAppenderCache,

@@ -1581,22 +1581,48 @@ impl MirRelationExpr {
     where
         Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
     {
+        let (get, id) = self.let_get(id_gen);
+        let body = body(id_gen, get)?;
+        Ok(self.let_bind(id, body))
+    }
+
+    /// Returns a `Get` that stands for `self`, and the local id that `Get` refers to. A plan may
+    /// contain the `Get` only inside a `Let` that binds that id to `self`, which
+    /// [`MirRelationExpr::let_bind`] builds. If `self` is already a `Get`, returns a copy of
+    /// `self` and `None`, and no `Let` is needed.
+    ///
+    /// The type of a new `Get` has no unique keys. (Keys carried in the `Get` would compound in
+    /// the types of nested filters with equality predicates over such `Get`s, exponentially in the
+    /// nesting depth, and `NormalizeLets` derives them from the `Let`'s value anyway.)
+    ///
+    /// Usually used together with `let_bind` through [`MirRelationExpr::let_in`].
+    pub fn let_get(&self, id_gen: &mut IdGen) -> (MirRelationExpr, Option<LocalId>) {
         if let MirRelationExpr::Get { .. } = self {
-            // already done
-            body(id_gen, self)
+            (self.clone(), None)
         } else {
             let id = LocalId::new(id_gen.allocate_id());
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
-                typ: self.typ(),
+                // TODO(SQL-427): Once key inference no longer enumerates key variants, this can
+                // carry `self.typ()` with its keys.
+                typ: ReprRelationType::new(self.typ().column_types),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             };
-            let body = (body)(id_gen, get)?;
-            Ok(MirRelationExpr::Let {
+            (get, Some(id))
+        }
+    }
+
+    /// Wraps `body` in a `Let` that binds `self` to `id`, where `id` is what
+    /// [`MirRelationExpr::let_get`] returned for `self`, and `self` has not changed since. For
+    /// `None`, returns `body`.
+    pub fn let_bind(self, id: Option<LocalId>, body: MirRelationExpr) -> MirRelationExpr {
+        match id {
+            None => body,
+            Some(id) => MirRelationExpr::Let {
                 id,
                 value: Box::new(self),
                 body: Box::new(body),
-            })
+            },
         }
     }
 
@@ -2509,6 +2535,8 @@ impl AggregateExpr {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2526,6 +2554,8 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy => self.expr.is_literal(),
@@ -3040,6 +3070,8 @@ impl AggregateExpr {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -3057,6 +3089,8 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric

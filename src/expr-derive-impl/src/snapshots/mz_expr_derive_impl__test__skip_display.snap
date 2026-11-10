@@ -1,0 +1,49 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(ExtractThing, skip_display = true, test = true)]\nfn extract_thing<'a>(&self, a: i64) -> i64 {\n    a + self.offset\n}\n"
+---
+impl ExtractThing {
+    fn extract_thing<'a>(&self, a: i64) -> i64 {
+        a + self.offset
+    }
+}
+impl crate::func::EagerUnaryFunc for ExtractThing {
+    type Input<'a> = i64;
+    type Output<'a> = i64;
+    fn call<'a>(
+        &self,
+        a: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        self.extract_thing(a)
+    }
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl crate::func::FuncName for ExtractThing {
+    const NAME: &'static str = stringify!(extract_thing);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(ExtractThing, skip_display = true, test = true)] fn extract_thing<'a>(&self, a: i64) -> i64",
+        signature: "fn(i64) -> i64",
+        body_fingerprint: 12939012847358732198u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<i64>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}

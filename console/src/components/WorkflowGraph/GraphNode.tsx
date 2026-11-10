@@ -17,11 +17,11 @@ import {
   TextProps,
   useTheme,
 } from "@chakra-ui/react";
-import dagre from "@dagrejs/dagre";
 import React from "react";
 
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
 import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
+import type { DagreGraph } from "~/components/Graph/dagreGraphHelpers";
 import { WORKFLOW_GRAPH_NODE_Z_INDEX } from "~/layouts/zIndex";
 import {
   formatLagInfoSimple,
@@ -91,7 +91,7 @@ export const GraphNode = ({
   isSelected,
   ...flexProps
 }: {
-  graph: dagre.graphlib.Graph;
+  graph: DagreGraph;
   node: WorkflowGraphNode | undefined;
   nodeLagInfo: LagInfo | undefined;
   isSelected: boolean;

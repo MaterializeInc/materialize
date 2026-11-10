@@ -107,6 +107,8 @@ datadriven.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
+mz-repr = { path = "../repr", features = ["proptest"] }
+proptest.workspace = true
 turmoil.workspace = true
 
 [[bench]]

@@ -214,6 +214,9 @@ mod tests {
                                 "blob-scan-batches" => {
                                     machine_dd::blob_scan_batches(&state, args).await
                                 }
+                                "blob-scan-rollups" => {
+                                    machine_dd::blob_scan_rollups(&state, args).await
+                                }
                                 "clear-blob" => machine_dd::clear_blob(&state, args).await,
                                 "compact" => machine_dd::compact(&mut state, args).await,
                                 "compare-and-append" => {

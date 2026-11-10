@@ -9,7 +9,15 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:18.4
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
+
+FROM postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 ENV POSTGRES_PASSWORD=postgres
 ENV PGDATA=/var/lib/postgresql/data

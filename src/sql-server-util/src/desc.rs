@@ -62,6 +62,11 @@ pub struct SqlServerTableDesc {
     /// Columns for the table.
     pub columns: Box<[SqlServerColumnDesc]>,
     /// Constraints for the table.
+    ///
+    /// For new instances, it only holds the constraint backing the capture
+    /// instance's index. SQL Server rejects dropping that index while
+    /// the capture instance is the table's newest one, so we have some
+    /// protection against a dropped constraint.
     pub constraints: Vec<SqlServerTableConstraint>,
 }
 
@@ -70,6 +75,10 @@ impl SqlServerTableDesc {
     ///
     /// Note: Not all columns from SQL Server can be ingested into Materialize. To determine if a
     /// column is supported see [`SqlServerColumnDesc::decode_type`].
+    ///
+    /// Of `raw_constraints`, only the one backing the capture instance's index
+    /// is kept, see [`SqlServerTableDesc::constraints`]. A PRIMARY KEY or
+    /// UNIQUE constraint and the index enforcing it share a name.
     pub fn new(
         raw: SqlServerTableRaw,
         raw_constraints: Vec<SqlServerTableConstraintRaw>,
@@ -79,8 +88,10 @@ impl SqlServerTableDesc {
             .into_iter()
             .map(SqlServerColumnDesc::new)
             .collect();
+        let index_name = raw.capture_instance.index_name.as_deref();
         let constraints = raw_constraints
             .into_iter()
+            .filter(|constraint| Some(constraint.constraint_name.as_str()) == index_name)
             .map(SqlServerTableConstraint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SqlServerTableDesc {
@@ -284,6 +295,10 @@ pub struct SqlServerCaptureInstanceRaw {
     pub name: Arc<str>,
     /// The creation date of the capture instance.
     pub create_date: Arc<NaiveDateTime>,
+    /// Name of the unique index SQL Server uses to identify rows in the
+    /// change table (`cdc.change_tables.index_name`). `None` when the source
+    /// table had no primary key when CDC was enabled and no index was given.
+    pub index_name: Option<Arc<str>>,
 }
 
 /// Description of a column from a table in Microsoft SQL Server.
@@ -504,7 +519,7 @@ fn parse_data_type(
             //
             // If the `max text repl size` changes, it does not affect events already written to
             // the CDC table, nor does it change the behavior of what CDC captures for updates
-            // to non-LOD columns (based on testing).
+            // to non-LOB columns (based on testing).
             let max_length = if raw.max_length != -1 {
                 let length =
                     VarCharMaxLength::try_from(i64::from(raw.max_length)).map_err(|e| {
@@ -549,7 +564,7 @@ fn parse_data_type(
         }
         "binary" | "varbinary" => {
             // [`SqlScalarType`] does not support tracking max_length for binary data. To ensure
-            // columns of type varbinary(max) (Large Object Data) are decoded properly, it is
+            // columns of type varbinary(max) (Large Object) are decoded properly, it is
             // necessary to know that the length is `max`. `varchar` and `nvarchar` track this
             // using [`SqlScalarType::VarChar`] max_length field.
             if raw.max_length == -1 {
@@ -1131,7 +1146,8 @@ impl UpdateMask {
 /// path of decoding rows we do the minimal amount of work.
 #[derive(Debug)]
 pub struct SqlServerRowDecoder {
-    decoders: Vec<(Arc<str>, SqlColumnType, SqlServerColumnDecodeType)>,
+    decoders: Vec<(Arc<str>, SqlColumnType, SqlServerColumnDecodeType, bool)>,
+    needs_update_mask: bool,
 }
 
 impl SqlServerRowDecoder {
@@ -1142,6 +1158,7 @@ impl SqlServerRowDecoder {
         table: &SqlServerTableDesc,
         desc: &RelationDesc,
     ) -> Result<Self, SqlServerError> {
+        let mut needs_update_mask = false;
         let decoders = desc
             .iter()
             .map(|(col_name, col_type)| {
@@ -1189,18 +1206,27 @@ impl SqlServerRowDecoder {
                 // See: <https://github.com/MaterializeInc/database-issues/issues/3179>.
                 let col_typ = sql_server_col_typ.clone();
 
-                Ok::<_, SqlServerError>((name, col_typ, decoder))
+                // determine whether this is a large object (LOB) column. There's a global
+                // used to skip parsing the update mask per row and a per-column boolean that
+                // avoids having the type matching in multiple places.
+                let is_lob = is_lob_column(&col_typ.scalar_type);
+                needs_update_mask |= is_lob;
+
+                Ok::<_, SqlServerError>((name, col_typ, decoder, is_lob))
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(SqlServerRowDecoder { decoders })
+        Ok(SqlServerRowDecoder {
+            decoders,
+            needs_update_mask,
+        })
     }
 
     /// Decode data from the provided [`tiberius::Row`] into the provided [`Row`].
     ///
-    /// For updates, the new row data is provided in the event the data contains Large Object Data
+    /// For updates, the new row data is provided in the event the data contains Large Object
     /// (e.g. varchar(max)). [`SqlServerRowDecoder::decode()`] will decode the [`UpdateMask`] from
-    /// the new row and retrieve LOD values from the new row for any LOD column that was not updated
+    /// the new row and retrieve LOB values from the new row for any LOB column that was not updated
     /// in the old row.
     pub fn decode(
         &self,
@@ -1211,33 +1237,23 @@ impl SqlServerRowDecoder {
     ) -> Result<(), SqlServerDecodeError> {
         let mut packer = row.packer();
 
-        for (col_name, col_type, decoder) in &self.decoders {
-            let datum = decoder.decode(data, col_name, col_type, arena)?;
-
-            let datum = if let Some(new_data) = new_data
-                && matches!(
-                    col_type.scalar_type,
-                    SqlScalarType::VarChar { max_length: None }
-                )
-                && matches!(datum, Datum::Null)
+        // decode update mask only when the row has a lob column
+        let update_mask = new_data
+            .filter(|_| self.needs_update_mask)
+            .map(UpdateMask::try_from)
+            .transpose()?;
+        for (col_name, col_type, decoder, is_lob) in &self.decoders {
+            let datum = if let Some((new_data, mask)) = new_data.zip(update_mask.as_ref())
+                && *is_lob
+                && !data_col_updated(new_data, mask, col_name)?
             {
-                let update_mask = UpdateMask::try_from(new_data)?;
-                let col_index = new_data
-                    .columns()
-                    .iter()
-                    .position(|c| c.name() == col_name.as_ref())
-                    .expect("column exists");
-                // The only time it is valid to pull the LOD column value from the new row
-                // is if the LOD column was *not* updated. The mask check is necessary to
-                // differentiate between updating a non-LOD column (the LOD column in old row
-                // is NULL) and updating a LOD column where the old value is NULL.
-                if !update_mask.data_col_updated(col_index) {
-                    decoder.decode(new_data, col_name, col_type, arena)?
-                } else {
-                    datum
-                }
+                // The only time it is valid to pull the LOB column value from the new row
+                // is if the LOB column was *not* updated. The mask check is necessary to
+                // differentiate between updating a non-LOB column (the LOB column in old row
+                // is NULL) and updating a LOB column where the old value is NULL.
+                decoder.decode(new_data, col_name, col_type, arena)?
             } else {
-                datum
+                decoder.decode(data, col_name, col_type, arena)?
             };
 
             packer.push(datum);
@@ -1251,6 +1267,27 @@ impl SqlServerRowDecoder {
             .map(|decoder| Arc::clone(&decoder.0))
             .collect()
     }
+}
+
+// Returns true if the Row's update_mask indicates the column was updated, false otherwise.
+// Returns SqlServerDecodeError::MissingColumn if the column cannot be found by name.
+fn data_col_updated(
+    row: &tiberius::Row,
+    update_mask: &UpdateMask,
+    col_name: &str,
+) -> Result<bool, SqlServerDecodeError> {
+    row.columns()
+        .iter()
+        .position(|c| c.name() == col_name)
+        .map(|idx| update_mask.data_col_updated(idx))
+        .ok_or_else(|| SqlServerDecodeError::MissingColumn {
+            column_name: col_name.to_owned(),
+        })
+}
+
+// for now, there is only a single large object type supported.
+fn is_lob_column(col_type: &SqlScalarType) -> bool {
+    matches!(col_type, SqlScalarType::VarChar { max_length: None })
 }
 
 #[cfg(test)]
@@ -1270,7 +1307,8 @@ mod tests {
 
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
-        SqlServerTableDesc, SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
+        SqlServerTableConstraintRaw, SqlServerTableConstraintType, SqlServerTableDesc,
+        SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
     };
 
     use super::SqlServerColumnRaw;
@@ -1360,6 +1398,58 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn only_capture_instance_index_constraint_is_kept() {
+        fn table_desc(index_name: Option<&str>) -> SqlServerTableDesc {
+            let raw = SqlServerTableRaw {
+                schema_name: "dbo".into(),
+                name: "t".into(),
+                capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                    name: "dbo_t".into(),
+                    create_date: NaiveDateTime::default().into(),
+                    index_name: index_name.map(Into::into),
+                }),
+                columns: [
+                    SqlServerColumnRaw::new("id", "int"),
+                    SqlServerColumnRaw::new("code", "int"),
+                ]
+                .into(),
+            };
+            let constraints = vec![
+                SqlServerTableConstraintRaw {
+                    constraint_name: "pk_t".into(),
+                    constraint_type: "PRIMARY KEY".into(),
+                    columns: vec!["id".into()],
+                },
+                SqlServerTableConstraintRaw {
+                    constraint_name: "uq_t".into(),
+                    constraint_type: "UNIQUE".into(),
+                    columns: vec!["code".into()],
+                },
+            ];
+            SqlServerTableDesc::new(raw, constraints).unwrap()
+        }
+
+        let desc = table_desc(Some("pk_t"));
+        let constraint = desc.constraints.into_element();
+        assert_eq!(constraint.constraint_name, "pk_t");
+        assert_eq!(
+            constraint.constraint_type,
+            SqlServerTableConstraintType::PrimaryKey
+        );
+
+        let desc = table_desc(Some("uq_t"));
+        let constraint = desc.constraints.into_element();
+        assert_eq!(constraint.constraint_name, "uq_t");
+        assert_eq!(
+            constraint.constraint_type,
+            SqlServerTableConstraintType::Unique
+        );
+
+        assert!(table_desc(None).constraints.is_empty());
+        assert!(table_desc(Some("ix_t")).constraints.is_empty());
+    }
+
+    #[mz_ore::test]
     fn smoketest_decoder() {
         let sql_server_columns = [
             SqlServerColumnRaw::new("a", "varchar").max_length(16),
@@ -1377,6 +1467,7 @@ mod tests {
                 )
                 .unwrap()
                 .into(),
+                index_name: None,
             }),
             columns: sql_server_columns.into(),
         };
@@ -1439,6 +1530,129 @@ mod tests {
             &rnd_row,
             &Row::pack_slice(&[Datum::String("foo bar"), Datum::False, Datum::Null])
         );
+    }
+
+    #[mz_ore::test]
+    fn decode_update_lob_before_image() {
+        let sql_server_columns = [
+            SqlServerColumnRaw::new("k", "int"),
+            SqlServerColumnRaw::new("v", "varchar").max_length(-1),
+            SqlServerColumnRaw::new("n", "varchar")
+                .max_length(-1)
+                .nullable(true),
+        ];
+        let sql_server_desc = SqlServerTableRaw {
+            schema_name: "my_schema".into(),
+            name: "my_table".into(),
+            capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                name: "my_table_CT".into(),
+                create_date: NaiveDateTime::parse_from_str(
+                    "2024-01-01 00:00:00",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+                .unwrap()
+                .into(),
+                index_name: None,
+            }),
+            columns: sql_server_columns.into(),
+        };
+        let sql_server_desc = SqlServerTableDesc::new(sql_server_desc, vec![]).unwrap();
+        let relation_desc = RelationDesc::builder()
+            .with_column("k", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "v",
+                SqlScalarType::VarChar { max_length: None }.nullable(false),
+            )
+            .with_column(
+                "n",
+                SqlScalarType::VarChar { max_length: None }.nullable(true),
+            )
+            .finish();
+        let decoder = sql_server_desc
+            .decoder(&relation_desc)
+            .expect("known valid");
+
+        // Shaped like a `cdc.fn_cdc_get_all_changes_<capture_instance>` row. The update mask
+        // bits are, from least significant, `k`, `v`, `n`.
+        let cdc_row =
+            |op: i32, mask: u8, k: i32, v: Option<&'static str>, n: Option<&'static str>| {
+                use tiberius::{Column, ColumnData, ColumnType};
+                let lsn = || ColumnData::Binary(Some(vec![0; 10].into()));
+                tiberius::Row::build([
+                    (
+                        Column::new("__$start_lsn".into(), ColumnType::BigVarBin),
+                        lsn(),
+                    ),
+                    (
+                        Column::new("__$seqval".into(), ColumnType::BigVarBin),
+                        lsn(),
+                    ),
+                    (
+                        Column::new("__$operation".into(), ColumnType::Int4),
+                        ColumnData::I32(Some(op)),
+                    ),
+                    (
+                        Column::new("__$update_mask".into(), ColumnType::BigVarBin),
+                        ColumnData::Binary(Some(vec![mask].into())),
+                    ),
+                    (
+                        Column::new("k".into(), ColumnType::Int4),
+                        ColumnData::I32(Some(k)),
+                    ),
+                    (
+                        Column::new("v".into(), ColumnType::BigVarChar),
+                        ColumnData::String(v.map(Into::into)),
+                    ),
+                    (
+                        Column::new("n".into(), ColumnType::BigVarChar),
+                        ColumnData::String(n.map(Into::into)),
+                    ),
+                ])
+            };
+        let arena = RowArena::new();
+        let mut mz_row = Row::default();
+
+        // Only `k` updated, so SQL Server leaves both LOBs NULL in the before-image.
+        let after = cdc_row(4, 0b001, 2, Some("v"), Some("n"));
+        decoder
+            .decode(
+                &cdc_row(3, 0b001, 1, None, None),
+                &mut mz_row,
+                &arena,
+                Some(&after),
+            )
+            .unwrap();
+        assert_eq!(
+            mz_row,
+            Row::pack_slice(&[Datum::Int32(1), Datum::String("v"), Datum::String("n")])
+        );
+
+        // Both LOBs updated, so the before-image carries their prior values, including NULL.
+        let after = cdc_row(4, 0b110, 1, Some("new"), Some("n"));
+        decoder
+            .decode(
+                &cdc_row(3, 0b110, 1, Some("old"), None),
+                &mut mz_row,
+                &arena,
+                Some(&after),
+            )
+            .unwrap();
+        assert_eq!(
+            mz_row,
+            Row::pack_slice(&[Datum::Int32(1), Datum::String("old"), Datum::Null])
+        );
+
+        // A NULL before-image for an updated NOT NULL LOB cannot be recovered.
+        let after = cdc_row(4, 0b010, 1, Some("new"), None);
+        let err = decoder
+            .decode(
+                &cdc_row(3, 0b010, 1, None, None),
+                &mut mz_row,
+                &arena,
+                Some(&after),
+            )
+            .unwrap_err();
+        assert_contains!(err.to_string(), "found Null in non-nullable column");
     }
 
     #[mz_ore::test]
@@ -1516,6 +1730,7 @@ mod tests {
                     )
                     .unwrap()
                     .into(),
+                    index_name: None,
                 }),
                 columns: columns.into(),
             };

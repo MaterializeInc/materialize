@@ -111,15 +111,14 @@ use mz_compute_client::controller::error::{
     CollectionLookupError, CollectionMissing, DataflowCreationError, InstanceMissing,
 };
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
-use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
@@ -203,10 +202,9 @@ use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedM
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
-use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -247,6 +245,23 @@ mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// Boxes a coordinator dispatcher while bounding its inline state.
+fn box_dispatcher<'a, F>(future: F) -> LocalBoxFuture<'a, ()>
+where
+    F: std::future::Future<Output = ()> + 'a,
+{
+    // Every command pays for the largest branch's future, even when that branch
+    // is not taken. Box large, infrequent callees separately to stay within this
+    // budget. Leave room for differences between build profiles and platforms.
+    const {
+        assert!(
+            size_of::<F>() <= 24 * 1024,
+            "coordinator dispatcher future exceeds 24 KiB: box large awaited callees"
+        );
+    }
+    future.boxed_local()
+}
 
 /// The oldest leader version against which a replacement-migrated builtin materialized view may
 /// write its new persist shard while this environment is still read-only.
@@ -407,11 +422,6 @@ pub enum Message {
         stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
-    PeekStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: PeekStage,
-    },
     CreateIndexStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -559,7 +569,6 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
-            Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
@@ -627,24 +636,6 @@ pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>
 pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
-pub enum PeekStage {
-    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
-    LinearizeTimestamp(PeekStageLinearizeTimestamp),
-    RealTimeRecency(PeekStageRealTimeRecency),
-    TimestampReadHold(PeekStageTimestampReadHold),
-    Optimize(PeekStageOptimize),
-    /// Final stage for a peek.
-    Finish(PeekStageFinish),
-    /// Final stage for an explain.
-    ExplainPlan(PeekStageExplainPlan),
-    ExplainPushdown(PeekStageExplainPushdown),
-    /// Preflight checks for a copy to operation.
-    CopyToPreflight(PeekStageCopyTo),
-    /// Final stage for a copy to which involves shipping the dataflow.
-    CopyToDataflow(PeekStageCopyTo),
-}
-
-#[derive(Debug)]
 pub struct CopyToContext {
     /// The `RelationDesc` of the data to be copied.
     pub desc: RelationDesc,
@@ -660,114 +651,9 @@ pub struct CopyToContext {
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into
     /// to distribute the load across workers deterministically.
-    /// This is only an option since it's not set when CopyToContext is instantiated
-    /// but immediately after in the PeekStageValidate stage.
+    /// Not set when the context is created, but during sequencing, to the
+    /// largest worker count among the target cluster's replicas.
     pub output_batch_count: Option<u64>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageLinearizeTimestamp {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageRealTimeRecency {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageTimestampReadHold {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimize {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageFinish {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination,
-    cluster_id: ComputeInstanceId,
-    finishing: RowSetFinishing,
-    /// When present, an optimizer trace to be used for emitting a plan insights
-    /// notice.
-    plan_insights_optimizer_trace: Option<OptimizerTrace>,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-    global_lir_plan: optimize::peek::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-}
-
-#[derive(Debug)]
-pub struct PeekStageCopyTo {
-    validity: PlanValidity,
-    optimizer: optimize::copy_to::Optimizer,
-    global_lir_plan: optimize::copy_to::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPlan {
-    validity: PlanValidity,
-    optimizer: optimize::peek::Optimizer,
-    df_meta: DataflowMetainfo,
-    explain_ctx: ExplainPlanContext,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPushdown {
-    validity: PlanValidity,
-    determination: TimestampDetermination,
-    imports: BTreeMap<GlobalId, MapFilterProject>,
 }
 
 #[derive(Debug)]
@@ -861,6 +747,7 @@ pub struct CreateViewFinish {
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -1478,9 +1365,47 @@ pub struct PendingReadTxn {
 }
 
 impl PendingReadTxn {
-    /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> &TimestampContext {
-        &self.timestamp_context
+    /// Returns the timestamp that needs a fresh oracle check, if any.
+    fn timestamp_to_linearize(&self) -> Option<(&Timeline, &Timestamp)> {
+        // The stored oracle result belongs to this transaction. A result cached
+        // from an earlier transaction would not establish its real-time bound.
+        match &self.timestamp_context {
+            TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts: Some(oracle_ts),
+            } if chosen_ts > oracle_ts => Some((timeline, chosen_ts)),
+            _ => None,
+        }
+    }
+
+    /// Finishes an already-linearized ordinary read, or returns it unchanged.
+    fn try_finish_read(self, metrics: &Metrics) -> Option<Self> {
+        if self.timestamp_to_linearize().is_some() {
+            return Some(self);
+        }
+        metrics.linearize_read_fast_path.inc();
+        self.finish_with_metrics(metrics, Instant::now());
+        None
+    }
+
+    /// Retires a linearized transaction and records its completion delay.
+    fn finish_with_metrics(self, metrics: &Metrics, now: Instant) {
+        let span = tracing::debug_span!("retire_read_results");
+        self.otel_ctx.attach_as_parent_to(&span);
+        let _entered = span.enter();
+        metrics
+            .linearize_message_seconds
+            .with_label_values(&[
+                "read",
+                if self.num_requeues == 0 {
+                    "true"
+                } else {
+                    "false"
+                },
+            ])
+            .observe((now - self.created).as_secs_f64());
+        self.finish();
     }
 
     pub(crate) fn take_context(self) -> ExecuteContext {
@@ -1773,7 +1698,7 @@ impl ExecuteContext {
 
     /// Delays sending this statement's response until `barrier` resolves.
     pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
-        self.response_barriers.push(barrier.into_notify());
+        self.response_barriers.extend(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -2636,6 +2561,11 @@ impl Coordinator {
             optimize_dataflows_start.elapsed()
         );
 
+        info!(
+            missed_local = uncached_local_exprs.len(),
+            missed_global = uncached_global_exps.len(),
+            "optimized expressions without an expression cache hit at startup"
+        );
         // We don't need to wait for the cache to update.
         let _fut = self.catalog().update_expression_cache(
             uncached_local_exprs.into_iter().collect(),
@@ -4287,7 +4217,6 @@ impl Coordinator {
                         "coord::handle_message",
                         kind = msg_kind
                     );
-                    let otel_context = span.context().span().span_context().clone();
 
                     // Record the last kind of message in case we get stuck. For
                     // execute commands, we additionally stash the user's SQL,
@@ -4310,7 +4239,7 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span).await;
+                    self.handle_message(msg).instrument(span.clone()).await;
                     let duration = start.elapsed();
 
                     self.metrics
@@ -4320,6 +4249,7 @@ impl Coordinator {
 
                     // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                     if duration > warn_threshold {
+                        let otel_context = span.context().span().span_context().clone();
                         let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                         tracing::error!(
                             ?msg_kind,
@@ -4518,7 +4448,7 @@ impl Coordinator {
     /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) {
@@ -4531,7 +4461,7 @@ impl Coordinator {
     /// initialize the read policies for its exported readable objects.
     pub(crate) async fn try_ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -4562,7 +4492,7 @@ impl Coordinator {
     /// Like `ship_dataflow`, but also await on builtin table updates.
     pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
         target_replica: Option<ReplicaId>,
@@ -4782,38 +4712,10 @@ impl Coordinator {
         });
     }
 
-    /// The environment's current credit consumption rate, summed over all user
-    /// cluster replicas except those of `exclude_cluster`.
     fn current_credit_consumption_rate(&self, exclude_cluster: Option<ClusterId>) -> Numeric {
         self.catalog()
-            .user_cluster_replicas()
-            .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
-            .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(self.replica_credits_per_hour(location)),
-                ReplicaLocation::Unmanaged(_) => None,
-            })
-            .sum()
-    }
-
-    /// The credit rate of a managed replica, read from the size map by its billing size.
-    ///
-    /// An unknown billing size counts as free. DDL validates `SIZE` and `BILLED AS` against
-    /// the map at replica creation, but the map is external configuration and can lose a
-    /// size later. That case is a soft panic rather than a hard one, so that in production
-    /// such a replica can still be dropped from SQL.
-    fn replica_credits_per_hour(&self, location: &ManagedReplicaLocation) -> Numeric {
-        let size = location.size_for_billing();
-        match self.catalog().cluster_replica_sizes().0.get(size) {
-            Some(allocation) => allocation.credits_per_hour,
-            None => {
-                soft_panic_or_log!(
-                    "replica of size {:?} bills as unknown replica size {:?}, counting it as free",
-                    location.size,
-                    size,
-                );
-                Numeric::zero()
-            }
-        }
+            .state()
+            .current_credit_consumption_rate(exclude_cluster)
     }
 }
 
@@ -4857,10 +4759,7 @@ fn arrangement_sizes_expired_retractions(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-    ) {
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: LirDataflowDescription) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has
@@ -5516,7 +5415,7 @@ pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     system_parameter_sync_timeout: Duration,
-) -> Result<Option<BTreeMap<String, String>>, AdapterError> {
+) -> Result<RemoteSystemParameters, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
 
@@ -5561,7 +5460,8 @@ pub async fn load_remote_system_parameters(
         //    6. Reboot environmentd.
         let mut params = SynchronizedParameters::new(SystemVars::default());
         let frontend_sync = async {
-            let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+            let frontend =
+                Arc::new(SystemParameterFrontend::from(&system_parameter_sync_config).await?);
             frontend.pull(&mut params);
             let ops = params
                 .modified()
@@ -5574,7 +5474,10 @@ pub async fn load_remote_system_parameters(
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");
-            Ok(Some(ops))
+            Ok(RemoteSystemParameters {
+                params: Some(ops),
+                frontend: Some(frontend),
+            })
         };
         if !storage.has_system_config_synced_once().await? {
             frontend_sync.await
@@ -5584,13 +5487,23 @@ pub async fn load_remote_system_parameters(
                 Err(TimeoutError::Inner(e)) => Err(e),
                 Err(TimeoutError::DeadlineElapsed) => {
                     tracing::info!("parameter sync on boot: sync has timed out");
-                    Ok(None)
+                    Ok(RemoteSystemParameters::default())
                 }
             }
         }
     } else {
-        Ok(None)
+        Ok(RemoteSystemParameters::default())
     }
+}
+
+/// The result of [`load_remote_system_parameters`].
+#[derive(Debug, Default)]
+pub struct RemoteSystemParameters {
+    /// The parameter values that differ from their defaults, or `None` if
+    /// syncing is not configured or timed out.
+    pub params: Option<BTreeMap<String, String>>,
+    /// The frontend the values were pulled from, for the sync loop to reuse.
+    pub frontend: Option<Arc<SystemParameterFrontend>>,
 }
 
 #[derive(Debug)]
@@ -5751,11 +5664,280 @@ pub(crate) fn infer_sql_type_for_catalog(
 
 #[cfg(test)]
 mod execute_context_tests {
+    use mz_sql::session::vars::{SystemVars, VarInput};
     use tokio::sync::{mpsc, oneshot};
 
     use super::*;
+    use crate::command::Response;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_completed_barrier_answers_without_scheduling() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert!(ctx.response_barriers.is_empty());
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        // No await: a task spawned on this current-thread runtime cannot run yet.
+        let response = client_rx.try_recv().expect("response must be synchronous");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_pending_barrier_waits_for_completion() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let (done_tx, done_rx) = oneshot::channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+            done_rx.await.expect("completion sender stays alive");
+        })));
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert_eq!(ctx.response_barriers.len(), 1);
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        done_tx.send(()).expect("barrier must retain its receiver");
+        let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+            .await
+            .expect("response must follow completion")
+            .expect("client must be answered");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
+
+    fn pending_read(
+        timestamp_context: TimestampContext,
+    ) -> (PendingReadTxn, oneshot::Receiver<Response<ExecuteResponse>>) {
+        let (client_tx, client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut session = Session::dummy();
+        session
+            .vars_mut()
+            .set_default("application_name", VarInput::Flat("session"))
+            .expect("valid default");
+        session
+            .vars_mut()
+            .set(
+                &SystemVars::new(),
+                "application_name",
+                VarInput::Flat("transaction"),
+                true,
+            )
+            .expect("valid local value");
+        let ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            session,
+            ExecuteContextGuard::default(),
+        );
+        (
+            PendingReadTxn {
+                txn: PendingTxn {
+                    ctx,
+                    response: Ok(PendingTxnResponse::Committed {
+                        params: BTreeMap::from([("retained", "value".into())]),
+                    }),
+                    action: EndTransactionAction::Commit,
+                },
+                timestamp_context,
+                created: Instant::now() - Duration::from_secs(1),
+                num_requeues: 0,
+                otel_ctx: OpenTelemetryContext::obtain(),
+            },
+            client_rx,
+        )
+    }
+
+    fn timestamp_context(chosen_ts: u64, oracle_ts: Option<u64>) -> TimestampContext {
+        TimestampContext::TimelineTimestamp {
+            timeline: Timeline::EpochMilliseconds,
+            chosen_ts: chosen_ts.into(),
+            oracle_ts: oracle_ts.map(Into::into),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_finishes_without_scheduling() {
+        for context in [
+            TimestampContext::NoTimestamp,
+            timestamp_context(u64::MAX, None),
+            timestamp_context(0, Some(0)),
+            timestamp_context(99, Some(100)),
+            timestamp_context(100, Some(100)),
+            timestamp_context(u64::MAX, Some(u64::MAX)),
+        ] {
+            let metrics = Metrics::register_into(&MetricsRegistry::new());
+            let (pending, mut client_rx) = pending_read(context.clone());
+
+            assert!(pending.try_finish_read(&metrics).is_none(), "{context:?}");
+            // No await: a response queued onto this runtime cannot run yet.
+            let response = client_rx.try_recv().expect("response must be synchronous");
+            assert_eq!(response.session.vars().application_name(), "session");
+            let ExecuteResponse::TransactionCommitted { params } =
+                response.result.expect("commit succeeds")
+            else {
+                panic!("expected commit response");
+            };
+            assert_eq!(
+                params.get("application_name").map(String::as_str),
+                Some("session")
+            );
+            assert_eq!(params.get("retained").map(String::as_str), Some("value"));
+            assert_eq!(metrics.linearize_read_fast_path.get(), 1);
+            let histogram = metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "true"]);
+            assert_eq!(histogram.get_sample_count(), 1);
+            assert!(histogram.get_sample_sum() >= 1.0);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_rollback_finalizes_session() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(timestamp_context(100, Some(100)));
+        let txn = &mut pending.txn;
+        txn.action = EndTransactionAction::Rollback;
+        txn.response = Ok(PendingTxnResponse::Rolledback {
+            params: BTreeMap::new(),
+        });
+
+        assert!(pending.try_finish_read(&metrics).is_none());
+        let response = client_rx.try_recv().expect("response must be synchronous");
+        assert_eq!(response.session.vars().application_name(), "session");
+        let ExecuteResponse::TransactionRolledBack { params } =
+            response.result.expect("rollback succeeds")
+        else {
+            panic!("expected rollback response");
+        };
+        assert_eq!(
+            params.get("application_name").map(String::as_str),
+            Some("session")
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_future_read_remains_pending() {
+        for (chosen, oracle) in [(1, 0), (101, 100), (u64::MAX, u64::MAX - 1)] {
+            let metrics = Metrics::register_into(&MetricsRegistry::new());
+            let context = timestamp_context(chosen, Some(oracle));
+            let (pending, mut client_rx) = pending_read(context.clone());
+            let created = pending.created;
+            let pending = pending
+                .try_finish_read(&metrics)
+                .expect("future read must wait");
+
+            assert_eq!(pending.timestamp_context, context);
+            assert_eq!(pending.created, created);
+            assert_eq!(pending.num_requeues, 0);
+            assert_eq!(
+                pending.timestamp_to_linearize(),
+                Some((&Timeline::EpochMilliseconds, &Timestamp::from(chosen)))
+            );
+            assert!(matches!(
+                client_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert_eq!(metrics.linearize_read_fast_path.get(), 0);
+            assert_eq!(
+                metrics
+                    .linearize_message_seconds
+                    .with_label_values(&["read", "true"])
+                    .get_sample_count(),
+                0
+            );
+            let ctx = pending.take_context();
+            assert_eq!(ctx.session().vars().application_name(), "transaction");
+            ctx.retire(Err(AdapterError::Canceled));
+            assert!(matches!(
+                client_rx.try_recv().expect("cancellation responds").result,
+                Err(AdapterError::Canceled)
+            ));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_preserves_response_barrier() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(timestamp_context(100, Some(100)));
+        let (done_tx, done_rx) = oneshot::channel();
+        let txn = &mut pending.txn;
+        txn.ctx
+            .delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+                done_rx.await.expect("completion sender stays alive");
+            })));
+
+        assert!(pending.try_finish_read(&metrics).is_none());
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        done_tx.send(()).expect("barrier retains receiver");
+        let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+            .await
+            .expect("response follows completion")
+            .expect("client answered");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::TransactionCommitted { .. })
+        ));
+        assert_eq!(response.session.vars().application_name(), "session");
+        assert_eq!(metrics.linearize_read_fast_path.get(), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_queued_read_preserves_requeue_metric() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(TimestampContext::NoTimestamp);
+        pending.num_requeues = 1;
+        pending.finish_with_metrics(&metrics, Instant::now());
+
+        assert!(matches!(
+            client_rx.try_recv().expect("queued read responds").result,
+            Ok(ExecuteResponse::TransactionCommitted { .. })
+        ));
+        assert_eq!(metrics.linearize_read_fast_path.get(), 0);
+        assert_eq!(
+            metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "false"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "true"])
+                .get_sample_count(),
+            0
+        );
+    }
 
     /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
     /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.

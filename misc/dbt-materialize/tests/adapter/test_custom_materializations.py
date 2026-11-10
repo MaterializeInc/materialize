@@ -14,7 +14,12 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import check_relations_equal, run_dbt, run_sql_with_adapter
+from dbt.tests.util import (
+    check_relations_equal,
+    run_dbt,
+    run_dbt_and_capture,
+    run_sql_with_adapter,
+)
 from fixtures import (
     actual_indexes,
     expected_indexes,
@@ -22,6 +27,9 @@ from fixtures import (
     test_materialized_view_index,
     test_materialized_view_multiple_with_options,
     test_materialized_view_partition_by,
+    test_materialized_view_refresh_all_options,
+    test_materialized_view_refresh_at_and_at_creation,
+    test_materialized_view_refresh_on_commit_and_every,
     test_materialized_view_retain_history,
     test_relation_name_length,
     test_sink,
@@ -124,3 +132,50 @@ class TestCustomMaterializations:
         # correct data once sinks land.
         # From benesch: Ideally we'd just ingest the sink back into Materialize
         # with the source and then use `relations_equal` with `test_materialized_view`.
+
+
+class TestRefreshInterval:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {"name": "refresh_interval"}
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "refresh_at_and_at_creation.sql": test_materialized_view_refresh_at_and_at_creation,
+            "refresh_all_options.sql": test_materialized_view_refresh_all_options,
+            "refresh_on_commit_and_every.sql": test_materialized_view_refresh_on_commit_and_every,
+        }
+
+    def show_create(self, project, name):
+        relation = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                name,
+            ]
+        )
+        return run_sql_with_adapter(
+            project.adapter,
+            f"SHOW CREATE MATERIALIZED VIEW {relation}",
+            fetch="one",
+        )[1]
+
+    def test_at_and_at_creation(self, project):
+        run_dbt(["run", "--select", "refresh_at_and_at_creation"])
+        ddl = self.show_create(project, "refresh_at_and_at_creation")
+        # `AT CREATION` is stored as a second `AT` with a resolved timestamp.
+        assert ddl.count("REFRESH = AT ") == 2
+        assert "REFRESH = AT '3000-01-01 00:00'" in ddl
+
+    def test_all_options(self, project):
+        run_dbt(["run", "--select", "refresh_all_options"])
+        ddl = self.show_create(project, "refresh_all_options")
+        assert ddl.count("REFRESH = AT ") == 2
+        assert "REFRESH = EVERY '1 day' ALIGNED TO '2024-01-01 00:00'" in ddl
+
+    def test_on_commit_with_other_options_reaches_the_server(self, project):
+        _, output = run_dbt_and_capture(
+            ["run", "--select", "refresh_on_commit_and_every"], expect_pass=False
+        )
+        assert "REFRESH ON COMMIT is not compatible" in output

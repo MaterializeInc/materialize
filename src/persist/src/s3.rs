@@ -31,6 +31,7 @@ use aws_types::region::Region;
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -57,6 +58,83 @@ pub struct S3BlobConfig {
     prefix: String,
 }
 
+/// Which S3 endpoints get [`mz_aws_util::pooled_http_client`], one of the
+/// [`BlobHttpPool`] values.
+///
+/// Read on every request, so a change takes effect without reopening the blob.
+pub const BLOB_HTTP_POOL: Config<&'static str> = Config::new(
+    "persist_blob_http_pool",
+    BlobHttpPool::default().as_str(),
+    "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' \
+    (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+    ParameterScope::Environment,
+);
+
+/// The `max_in_flight` that [`BLOB_HTTP_POOL`]'s pool passes to
+/// [`mz_aws_util::pooled_http_client`].
+///
+/// The default matches the `MAX_CONCURRENT_STREAMS: 100` that GCS advertised in its HTTP/2
+/// settings, as observed in October 2026 with
+/// `curl -v --trace-config http/2 --http2 https://storage.googleapis.com/`.
+pub const BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT: Config<usize> = Config::new(
+    "persist_blob_http_pool_max_in_flight_per_client",
+    100,
+    "When `persist_blob_http_pool` applies, a blob request goes to a new HTTP client once every \
+    client in the pool has this many requests in flight. 0 means 1.",
+    ParameterScope::Environment,
+);
+
+/// The values of [`BLOB_HTTP_POOL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobHttpPool {
+    /// No endpoint uses the pool.
+    Off,
+    /// Only GCS endpoints use the pool.
+    Gcs,
+    /// Every endpoint uses the pool.
+    On,
+}
+
+impl BlobHttpPool {
+    const ALL: [Self; 3] = [Self::Off, Self::Gcs, Self::On];
+
+    /// The value [`BLOB_HTTP_POOL`] defaults to.
+    pub const fn default() -> Self {
+        Self::Off
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Gcs => "gcs",
+            Self::On => "on",
+        }
+    }
+
+    /// Falls back to the default if `s` is unrecognized.
+    ///
+    /// Silent: this runs per request, so a typo would log on every request.
+    fn from_str_lossy(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .unwrap_or_else(Self::default)
+    }
+
+    /// Reads and parses [`BLOB_HTTP_POOL`].
+    pub fn get(configs: &ConfigSet) -> Self {
+        Self::from_str_lossy(&BLOB_HTTP_POOL.get(configs))
+    }
+
+    fn use_pool(self, is_google_endpoint: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Gcs => is_google_endpoint,
+            Self::On => true,
+        }
+    }
+}
+
 // There is no simple way to hook into the S3 client to capture when its various timeouts
 // are hit. Instead, we pass along marker values that inform our [MetricsSleep] impl which
 // type of timeout was requested so it can substitute in a dynamic value set by config
@@ -68,7 +146,7 @@ const READ_TIMEOUT_MARKER: Duration = Duration::new(444, 4444);
 
 #[derive(Debug)]
 struct MetricsSleep {
-    knobs: Box<dyn BlobKnobs>,
+    knobs: Arc<dyn BlobKnobs>,
     metrics: S3BlobMetrics,
 }
 
@@ -125,6 +203,7 @@ impl S3BlobConfig {
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
     ) -> Result<Self, Error> {
+        let knobs: Arc<dyn BlobKnobs> = Arc::from(knobs);
         let mut loader = mz_aws_util::defaults();
 
         if let Some(region) = region {
@@ -148,6 +227,21 @@ impl S3BlobConfig {
                 None,
             ));
         }
+
+        let is_google = endpoint.as_deref().is_some_and(is_google_endpoint);
+        let use_pool = {
+            let knobs = Arc::clone(&knobs);
+            move || knobs.http_pool().use_pool(is_google)
+        };
+        let pool_max_in_flight = {
+            let knobs = Arc::clone(&knobs);
+            move || knobs.http_pool_max_in_flight_per_client()
+        };
+        loader = loader.http_client(mz_aws_util::switched_http_client(
+            use_pool,
+            pool_max_in_flight,
+            metrics.http_pool(),
+        ));
 
         if let Some(endpoint) = endpoint {
             loader = loader.endpoint_url(endpoint)
@@ -273,6 +367,22 @@ impl S3BlobConfig {
         )
         .await?;
         Ok(Some(config))
+    }
+
+    /// Replaces the HTTP client that [S3Blob] sends requests through, keeping
+    /// every other setting. For benchmarking alternative HTTP clients.
+    pub fn with_http_client(
+        mut self,
+        http_client: impl aws_sdk_s3::config::HttpClient + 'static,
+    ) -> Self {
+        let config = self
+            .client
+            .config()
+            .to_builder()
+            .http_client(http_client)
+            .build();
+        self.client = S3Client::from_conf(config);
+        self
     }
 
     /// Returns a clone of Self with a new v4 uuid prefix.
@@ -973,6 +1083,20 @@ enum PartSelector {
     Range(Range<u64>),
 }
 
+/// Whether `endpoint`'s host is `googleapis.com` or one of its subdomains, which
+/// covers GCS's global, regional (`storage.<region>.rep.googleapis.com`) and
+/// Private Service Connect (`*.p.googleapis.com`) endpoints.
+fn is_google_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host == "googleapis.com" || host.ends_with(".googleapis.com")
+}
+
 /// The total size in a `Content-Range` header (`bytes 0-8388607/9711660`), if
 /// the header states one.
 fn parse_content_range_total(content_range: &str) -> Option<u64> {
@@ -1163,6 +1287,36 @@ mod tests {
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn blob_http_pool_values() {
+        for mode in BlobHttpPool::ALL {
+            assert_eq!(BlobHttpPool::from_str_lossy(mode.as_str()), mode);
+        }
+        assert_eq!(
+            BlobHttpPool::from_str_lossy(BLOB_HTTP_POOL.default()),
+            BlobHttpPool::default()
+        );
+        assert_eq!(
+            BlobHttpPool::from_str_lossy("not_a_mode"),
+            BlobHttpPool::default()
+        );
+    }
+
+    #[mz_ore::test]
+    fn google_endpoints() {
+        assert!(is_google_endpoint("https://storage.googleapis.com"));
+        assert!(is_google_endpoint("https://STORAGE.googleapis.com/"));
+        assert!(is_google_endpoint("https://storage.googleapis.com."));
+        assert!(is_google_endpoint(
+            "https://storage.us-east1.rep.googleapis.com"
+        ));
+        assert!(is_google_endpoint("https://storage-mz.p.googleapis.com"));
+        assert!(!is_google_endpoint("https://notgoogleapis.com"));
+        assert!(!is_google_endpoint("https://googleapis.com.example.com"));
+        assert!(!is_google_endpoint("https://s3.us-east-1.amazonaws.com"));
+        assert!(!is_google_endpoint("not a url"));
+    }
 
     #[mz_ore::test]
     fn content_range_total() {

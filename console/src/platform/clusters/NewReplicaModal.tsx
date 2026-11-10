@@ -23,6 +23,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import React from "react";
 import { useForm } from "react-hook-form";
 
@@ -40,7 +41,7 @@ import { useToast } from "~/hooks/useToast";
 import docUrls from "~/mz-doc-urls.json";
 import { MaterializeTheme } from "~/theme";
 
-import { useAvailableClusterSizes } from "./queries";
+import { availableClusterSizesQuery } from "./queries";
 
 type FormState = {
   name: string;
@@ -72,7 +73,7 @@ const NewReplicaForm = ({
     mode: "onTouched",
   });
 
-  const { data: clusterSizes } = useAvailableClusterSizes();
+  const { data: clusterSizes } = useSuspenseQuery(availableClusterSizesQuery());
   const { runSql: createReplica, loading: isCreationInFlight } = useSqlLazy({
     queryBuilder: (values: FormState & { clusterName: string }) => {
       const compiledStatement =

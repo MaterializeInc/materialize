@@ -13,6 +13,7 @@ import { sql } from "kysely";
 import { escapedLiteral as lit, executeSqlV2 } from "~/api/materialize";
 
 import { queryBuilder } from "./db";
+import { buildSourceExportsQuery } from "./expressionBuilders";
 
 export interface WorkflowGraphEdge {
   parentId: string | null;
@@ -55,16 +56,7 @@ WITH MUTUALLY RECURSIVE
   ),
   -- TODO: (#3400) Remove once all subsources are tables
   sources_with_subsources_object_dependencies(child_id text, parent_id text) AS (
-    SELECT od.object_id as child_id, referenced_object_id as parent_id
-    FROM mz_object_dependencies od
-    JOIN mz_sources AS parent_sources ON parent_sources.id = od.referenced_object_id
-    JOIN mz_sources AS child_sources ON child_sources.id = od.object_id
-    WHERE parent_sources.id LIKE 'u%'
-    AND child_sources.type IS NOT NULL AND child_sources.type = 'subsource'
-    UNION ALL
-    SELECT t.id as child_id, source_id as parent_id
-    FROM mz_tables t
-    JOIN mz_sources AS parent_sources ON parent_sources.id = t.source_id
+    ${buildSourceExportsQuery()}
   ),
   allowed_dependencies(child_id text, parent_id text) AS (
     SELECT * from allowed_compute_dependencies

@@ -39,7 +39,6 @@ from dbt.adapters.materialize.exceptions import (
     IndexConfigError,
     PartitionByConfigError,
     RefreshIntervalConfigError,
-    RefreshIntervalConfigNotDictError,
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres.column import PostgresColumn
@@ -91,8 +90,6 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
             return cls.from_dict(raw_refresh_interval)
         except ValidationError as exc:
             raise RefreshIntervalConfigError(exc)
-        except TypeError:
-            raise RefreshIntervalConfigNotDictError(raw_refresh_interval)
 
 
 @dataclass
@@ -252,7 +249,9 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
                 text=True,
             )
             return result.stdout.strip()
-        except subprocess.CalledProcessError:
+        # Without git on PATH this raises FileNotFoundError. `deploy_promote`
+        # calls this after its swap commits, so raising would stop it halfway.
+        except (subprocess.CalledProcessError, OSError):
             return None
 
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:

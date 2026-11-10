@@ -17,8 +17,11 @@ import {
   QUERY_HISTORY_LIST_TABLE,
   QUERY_HISTORY_LIST_TABLE_REDACTED,
   QueryHistoryListSchema,
+  WILDCARD_TOKEN,
 } from "~/api/materialize/query-history/queryHistoryList";
 import { HasPrivilegeCallback } from "~/hooks/usePrivileges";
+import { encodeObjectAsSearchParams } from "~/hooks/useSyncObjectToSearchParams";
+import { regionPath } from "~/platform/routeHelpers";
 import { ThemeColors, ThemeShadows } from "~/theme";
 import { decodeArraySearchParam } from "~/util";
 import {
@@ -82,6 +85,46 @@ export function mapQueryHistorySearchParams(
   }
 
   return decodedSearchParamValues;
+}
+
+/**
+ * A link to Query History listing every user's statements on `clusterId` that
+ * began in `dateRange`, optionally only those with `finishedStatuses`, by
+ * `sortField`. The list reads its range in whole minutes, needs its start
+ * before its end, and refuses a start more than `MAX_TIME_SPAN_HOURS` back
+ * when it's opened.
+ */
+export function queryHistoryPath(
+  regionSlug: string,
+  {
+    clusterId,
+    dateRange: [startDate, endDate],
+    finishedStatuses = [],
+    sortField,
+    sortOrder = "desc",
+  }: {
+    clusterId: string;
+    dateRange: [Date, Date];
+    finishedStatuses?: QueryHistoryListSchema["finishedStatuses"];
+    sortField: QueryHistoryListSchema["sortField"];
+    sortOrder?: QueryHistoryListSchema["sortOrder"];
+  },
+) {
+  const params = encodeObjectAsSearchParams(
+    formatToURLParamObject({
+      columns: DEFAULT_COLUMNS,
+      listFilters: {
+        ...DEFAULT_SCHEMA_VALUES,
+        clusterId,
+        dateRange: [startDate.toISOString(), endDate.toISOString()],
+        finishedStatuses,
+        user: WILDCARD_TOKEN,
+        sortField,
+        sortOrder,
+      },
+    }),
+  );
+  return `${regionPath(regionSlug)}/query-history?${params}`;
 }
 
 /**

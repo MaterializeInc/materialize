@@ -22,6 +22,7 @@ use mz_compute_client::logging::LogVariant;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_sql::names::FullItemName;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::GenericSourceConnection;
 
@@ -43,7 +44,7 @@ pub enum ParsedStateUpdateKind {
         durable_item: durable::objects::Item,
         parsed_item: memory::objects::CatalogItem,
         connection: Option<GenericSourceConnection>,
-        parsed_full_name: String,
+        parsed_full_name: FullItemName,
     },
     Cluster {
         durable_cluster: durable::objects::Cluster,
@@ -144,13 +145,11 @@ fn parse_item_update(
 fn parse_item_update_common(
     catalog: &CatalogState,
     item_id: &CatalogItemId,
-) -> (CatalogItem, Option<GenericSourceConnection>, String) {
+) -> (CatalogItem, Option<GenericSourceConnection>, FullItemName) {
     let entry = catalog.get_entry(item_id);
 
     let parsed_item = entry.item().clone();
-    let parsed_full_name = catalog
-        .resolve_full_name(entry.name(), entry.conn_id())
-        .to_string();
+    let parsed_full_name = catalog.resolve_full_name(entry.name(), entry.conn_id());
 
     let connection = match &parsed_item {
         memory::objects::CatalogItem::Source(source) => {

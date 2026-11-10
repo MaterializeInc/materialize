@@ -18,13 +18,12 @@ use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_row_spine::{DatumSeq, RowRowBuilder};
-use mz_timely_util::columnation::ColumnationChunker;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{ErrBatcher, RowRowAgent, RowRowEnter, RowRowSpine};
 
 /// Thresholds a dataflow-local ok arrangement, keeping rows with a positive count.
 ///
@@ -87,10 +86,7 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_trace(oks, "Threshold trace");
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
-            let errs = errs
-                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                    "Arrange threshold basic err",
-                );
+            let errs = errs.mz_arrange::<ErrBatcher<_, _>, _>("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }

@@ -1112,6 +1112,22 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains a call that constant folding must not
+    /// evaluate: an `UnmaterializableFunc`, or `jq`, whose programs can loop or
+    /// recurse without bound and would hang or abort the optimizing process.
+    pub fn contains_unfoldable(&self) -> bool {
+        let mut contains = false;
+        self.visit_pre(|e| match e {
+            MirScalarExpr::CallUnmaterializable(_)
+            | MirScalarExpr::CallUnary {
+                func: UnaryFunc::Jq(_),
+                ..
+            } => contains = true,
+            _ => {}
+        });
+        contains
+    }
+
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {

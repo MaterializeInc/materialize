@@ -6,5 +6,5 @@
 {{ .Description }}
 {{- end -}}
 
-{{- .RenderShortcodes -}}
+{{- partial "markdown-body.html" (dict "page" .) -}}
 {{- end -}}

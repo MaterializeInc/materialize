@@ -12,3 +12,6 @@
  * "contact support" and a "join our Slack" call to action.
  */
 export const SUPPORT_CHAT_URL = "https://materialize.com/s/chat";
+
+/** Materialize support page, listing every support channel. */
+export const SUPPORT_URL = "https://materialize.com/support/";

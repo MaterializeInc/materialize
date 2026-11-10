@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import React from "react";
+
 import { SchemaObject } from "~/api/materialize";
 import {
   relativeDatabasePath,
@@ -30,6 +32,21 @@ export const absoluteClusterPath = (
   regionSlug: string,
   cluster: ClusterPathParams,
 ) => `${regionPath(regionSlug)}/clusters/${relativeClusterPath(cluster)}`;
+
+/** The Freshness page, optionally opened on a given cluster. */
+export const absoluteFreshnessPath = (
+  regionSlug: string,
+  clusterId?: string,
+) =>
+  clusterId
+    ? `${regionPath(regionSlug)}/freshness?cluster=${encodeURIComponent(clusterId)}`
+    : `${regionPath(regionSlug)}/freshness`;
+
+/** An object's detail drawer, on Monitoring's Objects page. */
+export const absoluteMaintainedObjectPath = (
+  regionSlug: string,
+  objectId: string,
+) => `${regionPath(regionSlug)}/maintained-objects/${objectId}`;
 
 export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;
@@ -147,12 +164,15 @@ export interface WorkflowGraphPathParams {
 
 export function useBuildWorkflowGraphPath() {
   const regionSlug = useRegionSlug();
-  return (params: WorkflowGraphPathParams) =>
-    `${objectExplorerObjectPath(regionSlug, {
-      ...params.databaseObject,
-      objectName: params.databaseObject.name,
-      objectType: params.type,
-    })}/workflow`;
+  return React.useCallback(
+    (params: WorkflowGraphPathParams) =>
+      `${objectExplorerObjectPath(regionSlug, {
+        ...params.databaseObject,
+        objectName: params.databaseObject.name,
+        objectType: params.type,
+      })}/workflow`,
+    [regionSlug],
+  );
 }
 
 export const relativeQueryHistoryPath = (executionId: string) =>

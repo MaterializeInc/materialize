@@ -16,7 +16,7 @@ use crate::EvalError;
 #[sqlfunc(
     sqlname = "bytea_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToBytes)
+    inverse = super::CastStringToBytes
 )]
 fn cast_bytes_to_string(a: &[u8]) -> String {
     let mut buf = String::new();

@@ -13,7 +13,7 @@
 # `test/debezium` runs against, and 2022-CU25 broke `sp_cdc_disable_db`
 # (error 22912, `sp_repldone failed`) for `test/sql-server-cdc*` — staying
 # on CU21 until both are resolved.
-FROM mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04
+FROM mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04@sha256:b1395aa51b4ec39981883560f1379ea9eba2a1c0719bf8e6477902769316bb79
 
 ARG TARGETARCH
 

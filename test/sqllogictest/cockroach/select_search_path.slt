@@ -33,7 +33,7 @@ SHOW TABLES
 query I
 SELECT count(DISTINCT(1)) FROM pg_attrdef
 ----
-1
+0
 
 query I
 SELECT count(DISTINCT(1)) FROM pg_attribute
@@ -92,7 +92,7 @@ SELECT count(*) FROM words
 query I
 SELECT count(DISTINCT(1)) FROM pg_attrdef
 ----
-1
+0
 
 query I
 SELECT count(DISTINCT(1)) FROM pg_attribute
@@ -134,7 +134,7 @@ SELECT count(*) FROM words
 query I
 SELECT count(DISTINCT(1)) FROM pg_attrdef
 ----
-1
+0
 
 query I
 SELECT count(DISTINCT(1)) FROM pg_attribute

@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
 
-use async_trait::async_trait;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
@@ -25,7 +24,7 @@ use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::client::{Partitionable, PartitionedState};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
@@ -38,28 +37,6 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
 
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-
-/// A client to a storage server.
-pub trait StorageClient: GenericClient<StorageCommand, StorageResponse> {}
-
-impl<C> StorageClient for C where C: GenericClient<StorageCommand, StorageResponse> {}
-
-#[async_trait]
-impl GenericClient<StorageCommand, StorageResponse> for Box<dyn StorageClient> {
-    async fn send(&mut self, cmd: StorageCommand) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<StorageResponse>, anyhow::Error> {
-        // `GenericClient::recv` is required to be cancel safe.
-        (**self).recv().await
-    }
-}
 
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

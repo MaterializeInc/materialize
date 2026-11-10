@@ -13,8 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import psycopg2
+import pytest
+from dbt.adapters.contracts.connection import Connection
+from dbt.adapters.exceptions import FailedToConnectError
 from dbt.adapters.materialize.connections import (
     DEFAULT_SESSION_PARAMETERS,
+    NOT_MATERIALIZE_ERROR,
+    MaterializeConnectionManager,
     MaterializeCredentials,
     _build_options_string,
 )
@@ -82,3 +88,53 @@ def test_non_string_values_are_stringified():
 
     assert options["welcome_message"] == "True"
     assert options["statement_timeout"] == "5"
+
+
+def open_with_connect_error(monkeypatch, message):
+    calls = []
+
+    def failing_connect(**kwargs):
+        calls.append(kwargs)
+        raise psycopg2.OperationalError(message)
+
+    monkeypatch.setattr(psycopg2, "connect", failing_connect)
+    monkeypatch.setattr("dbt.adapters.base.connections.sleep", lambda _: None)
+    credentials = MaterializeCredentials(
+        host="localhost",
+        port=5432,
+        database="postgres",
+        schema="public",
+        user="postgres",
+        password="",
+        retries=3,
+    )
+    connection = Connection(type="materialize", name="test", credentials=credentials)
+    with pytest.raises(FailedToConnectError) as exc_info:
+        MaterializeConnectionManager.open(connection)
+    return str(exc_info.value), calls
+
+
+@pytest.mark.parametrize(
+    "server_message",
+    [
+        'FATAL:  unrecognized configuration parameter "auto_route_catalog_queries"',
+        "FATAL:  unbekannter Konfigurationsparameter »auto_route_catalog_queries«",
+    ],
+)
+def test_postgres_rejecting_session_parameters_fails_fast(monkeypatch, server_message):
+    # libpq reports one line per attempted address.
+    line = f'connection to server at "localhost" (::1), port 5432 failed: {server_message}\n'
+    message, calls = open_with_connect_error(monkeypatch, line * 2)
+
+    assert NOT_MATERIALIZE_ERROR in message
+    assert "auto_route_catalog_queries" in message
+    assert len(calls) == 1, "a rejected session parameter must not be retried"
+
+
+def test_other_connection_errors_are_retried_unchanged(monkeypatch):
+    message, calls = open_with_connect_error(
+        monkeypatch, "could not connect to server: Connection refused"
+    )
+
+    assert NOT_MATERIALIZE_ERROR not in message
+    assert len(calls) == 4

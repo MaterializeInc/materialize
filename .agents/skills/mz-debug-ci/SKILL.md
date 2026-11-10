@@ -220,9 +220,15 @@ Use these Materialize-specific patterns to diagnose:
 Code lint issues in changed files. Fix the code, not the lint config.
 
 ### `check-test-flags` lint failure
-A new configuration flag was introduced but not registered in the required places:
-- `misc/python/materialize/parallel_workload/action.py` (FlipFlagsAction)
+A new dyncfg (`Config::new("name", ...)`) was introduced but not registered in the required places. Reproduce with `bin/lint-test-flags`.
+- `misc/python/materialize/parallel_workload/action.py` (`FlipFlagsAction.flags_with_values` or `uninteresting_flags`)
 - `misc/python/materialize/mzcompose/__init__.py` (get_variable_system_parameters / get_minimal_system_parameters / UNINTERESTING_SYSTEM_PARAMETERS)
+
+### Doctests failure
+The Doctests job runs `bin/doc --document-private-items` (`ci/test/lint-doc.sh`), which sets `RUSTDOCFLAGS=-D warnings` and uses the pinned nightly. Reproduce on one crate with `bin/doc --document-private-items -p <crate>`. A common cause is a public doc comment linking a private item (`rustdoc::private_intra_doc_links`), which fails even with `--document-private-items`. `cargo doc` stops at the first failing crate, so a fix can reveal errors in the next crate.
+
+### Merge skew cargo check failure
+This PR-only job (`ci/test/check-merge-with-target.sh`) merges the PR with its target branch and runs `cargo check --all-targets`. When it is red while the PR's own build and clippy jobs pass, the branch compiles alone but not merged with current main. Rebase and fix as the mz-commit skill describes.
 
 ### Testdrive cascades
 After one test crashes environmentd, all subsequent tests in that shard fail with `Name or service not known` or `connection closed`. **Only the first failure in a shard matters** — everything after it is a cascade. Look for the first `error:` or `FAIL` in the log.
@@ -240,6 +246,9 @@ last completed unit of work, plus anything marked as still running when the
 job was canceled (nextest prints `SLOW [>1200.000s]` lines naming the stuck
 tests). If no such marker appears, compare wall-clock against the job's last
 passing run to tell a gradually outgrown budget from a hung test.
+
+### Infrastructure flakes
+Observed: failures in unrelated jobs while downloading from `github.com/.../releases/download/` were GitHub CDN outages. Retry the job instead of debugging it.
 
 ### Rarer classes
 

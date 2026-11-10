@@ -35,9 +35,17 @@ review. The changes will (correctly) go live as soon as your PR is merged.
 
 ### Adding documentation for new features
 
-If documenting a *new* feature of Materialize that has not yet rolled out to
-production, use the `warn-if-unreleased` shortcode to indicate in what version
-the feature will become available:
+Put non-trivial documentation for a *new* feature of Materialize in its own PR,
+so that the docs team can review it separately. Open it together with the
+feature PR, but merge it only once the feature's release has rolled out, that
+is, once the release's page in `content/releases/` has `released: true`. The
+docs then need no unreleased warnings.
+
+#### Documentation that goes live before the release
+
+If, for some reason, docs merge before the feature they describe goes live, use
+the `warn-if-unreleased` shortcode to indicate in what version the feature will
+become available:
 
 ```
 {{< warn-if-unreleased "v0.86" >}}
@@ -58,6 +66,10 @@ can appear inline in a paragraph, table, or list:
 {{< warn-if-unreleased-inline "v0.86" >}}
 ```
 
+The inline warning does not name the feature, so after a passing mention of one
+it can read as covering the whole paragraph or section. There, link to the
+feature's own docs instead and leave the warning to them.
+
 For new SQL functions, add a `version-added` field to the function's definition:
 
 ```yml:
@@ -69,16 +81,12 @@ For new SQL functions, add a `version-added` field to the function's definition:
 This will render the same warning next to the function's description until the
 version containing the function is deployed to production.
 
-#### Rationale
-
-Using these shortcodes allows developers to merge the documentation for a change
-in the same PR that adds the implementation of the change. This greatly improves
-the odds that developers will adjust the docs when making a change.
-
-In the past, we instead asked developers to open a separate docs PR for each
-change, then wait to merge the docs PR until that change was deployed to
-production. This was enough overhead that they would often skip writing docs
-entirely.
+These shortcodes, and `if-released` and `if-unreleased` below, read the
+release's page in `content/releases/vX.Y.md`. The warnings show its `date` as
+the scheduled release date, and all of them switch once the page has
+`released: true`. The `version` shortcode also reads these pages. It expands to
+the latest released version, including its `patch` number, for example
+`v26.46.0`.
 
 #### Special cases
 
@@ -99,7 +107,7 @@ Exercise caution with these shortcodes! It is easy to have typos or rendering
 glitches in an `if-released` block that slip through review because they are not
 visible when the PR is previewed during review. To preview an `if-released`
 block while developing the docs locally, toggle the `released` parameter in
-/releases/vX.Y.md.
+/releases/vX.Y.md, and do not commit the toggle.
 
 ### Updating CSS
 

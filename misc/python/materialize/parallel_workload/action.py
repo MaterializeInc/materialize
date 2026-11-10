@@ -332,14 +332,13 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
+            "Window function performance issue",  # TODO: Remove when SQL-858 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
-            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
             # generate_select_query occasionally emits a WITH MUTUALLY
             # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
             # purpose when the iteration outruns the limit. Only our generated
@@ -1588,7 +1587,7 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        # TODO: Drop the RepeatRow gate once STG-36 is fixed.
+        # TODO: Drop the RepeatRow gate once DB-217 is fixed.
         # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
         # target table with a net-negative row, and every later reader of that
         # table then surfaces the corruption. Tolerating that class outside
@@ -1744,6 +1743,12 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A materialized view or a newer index may read from it.
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:
@@ -2931,6 +2936,11 @@ class FlipFlagsAction(Action):
             "16",
         ]
         self.flags_with_values["persist_blob_hedged_get_enabled"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_blob_http_pool"] = ["off", "gcs", "on"]
+        self.flags_with_values["persist_blob_http_pool_max_in_flight_per_client"] = [
+            "1",
+            "100",
+        ]
         self.flags_with_values["persist_blob_hedged_get_delay"] = [
             "'0s'",
             "'10ms'",
@@ -2941,6 +2951,13 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_mv_sink_shared_batch_max_bytes"] = [
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            "0",
+            "65536",
+            "1048576",
+            "134217728",
+        ]
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
@@ -2991,6 +3008,10 @@ class FlipFlagsAction(Action):
             "'^u1'",
             "'.*'",
         ]
+        self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_gc_remove_finalized_rollups"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
@@ -3002,6 +3023,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_enable_incremental_compaction"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_fast_path_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_stats_audit_percent"] = [
             "0",
             "1",
@@ -3085,9 +3107,6 @@ class FlipFlagsAction(Action):
             "65536",
             "2097152",
         ]
-        self.flags_with_values["enable_compute_temporal_bucketing"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
@@ -3150,10 +3169,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3194,10 +3209,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
-            "0",
-            "2",
-            "4",
+        self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
+            "0.0",
+            "0.125",
+            "0.5",
         ]
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3273,7 +3288,6 @@ class FlipFlagsAction(Action):
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
-            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
@@ -3385,6 +3399,8 @@ class FlipFlagsAction(Action):
             "balancerd_sigterm_listen_wait",
             "balancerd_inject_proxy_protocol_header_http",
             "balancerd_max_connections",
+            "balancerd_connection_high_watermark",
+            "balancerd_connection_low_watermark",
             "balancerd_pre_resolved_timeout",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
@@ -3424,6 +3440,7 @@ class FlipFlagsAction(Action):
             "mysql_replication_heartbeat_interval",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
+            "pg_source_replication_slot_creation_timeout",
             "storage_enforce_external_addresses",
             "storage_upsert_prevent_snapshot_buffering",
             "storage_rocksdb_use_merge_operator",
@@ -3457,12 +3474,13 @@ class FlipFlagsAction(Action):
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
             "enable_password_auth",
-            "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
+            "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -4392,11 +4410,8 @@ class AlterOwnerAction(Action):
         for cluster in clusters:
             candidates.append(("CLUSTER", str(cluster)))
         candidates.append(("SECRET", "materialize.public.pgpass"))
-        # NOTE: No CONNECTION target. Changing a connection's owner emits a
-        # Connection(Altered) implication, which re-alters every dependent
-        # sink's export connection. That re-alter can fail with InvalidAlter
-        # and panic the coordinator.
-        # See https://linear.app/materializeinc/issue/SQL-517
+        for conn in AlterConnectionAction.SET_CLAUSES:
+            candidates.append(("CONNECTION", f"materialize.public.{conn}"))
         kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
@@ -4484,11 +4499,10 @@ class BroadPrivilegesAction(Action):
             targets: list[tuple[str, list[str]]] = [
                 ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
-                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
-                # a Connection(Altered) implication, which re-alters every
-                # dependent sink's export connection. That re-alter can fail
-                # with InvalidAlter and panic the coordinator.
-                # See https://linear.app/materializeinc/issue/SQL-517
+                (
+                    f"CONNECTION materialize.public.{self.rng.choice(list(AlterConnectionAction.SET_CLAUSES))}",
+                    ["USAGE", "ALL"],
+                ),
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4660,6 +4674,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
@@ -4720,6 +4735,19 @@ class DiscardAction(Action):
         return True
 
 
+# A concurrent ALTER SECRET rotation (the workload only rotates a secret to its
+# own value) can transiently expose an empty secret, so validating a connection,
+# with VALIDATE CONNECTION or a validating ALTER CONNECTION, sends an empty
+# password and the upstream system rejects it (secret-rotation atomicity). The
+# same race surfaces with each upstream's own wording.
+# TODO: Remove when https://linear.app/materializeinc/issue/SS-347 is fixed.
+SECRET_ROTATION_VALIDATION_ERRORS = [
+    "empty password returned by client",  # Postgres
+    "Access denied for user",  # MySQL
+    "Login failed for user",  # SQL Server
+]
+
+
 class ValidateConnectionAction(Action):
     # aws_conn is excluded, MinIO's STS support for validation is unclear.
     CONNECTIONS = [
@@ -4732,19 +4760,11 @@ class ValidateConnectionAction(Action):
     ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # A concurrent ALTER SECRET rotation (the workload only rotates a
-            # secret to its own value) can transiently expose an empty secret,
-            # so VALIDATE CONNECTION sends an empty password and the upstream
-            # system rejects it (secret-rotation atomicity). The same race
-            # surfaces with each upstream's own wording.
-            # TODO: Remove when https://linear.app/materializeinc/issue/SS-347
-            # is fixed.
-            "empty password returned by client",  # Postgres
-            "Access denied for user",  # MySQL
-            "Login failed for user",  # SQL Server
-        ] + super().errors_to_ignore(exe)
+        return (
+            ["timeout: error trying to connect"]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(self.CONNECTIONS)
@@ -4754,8 +4774,8 @@ class ValidateConnectionAction(Action):
 
 class AlterConnectionAction(Action):
     # The SET clause per connection, setting the option to the value the
-    # connection already has. That still exercises the full reconfiguration
-    # path (restarting dependent sources and sinks) without breaking them.
+    # connection already has. That still restarts dependent sinks without
+    # breaking them. Sources skip an unchanged connection.
     # NOTE: BROKER takes no `=` (it is parsed specially), HOST/URL do.
     SET_CLAUSES = {
         "kafka_conn": "BROKER 'kafka:9092'",
@@ -4766,12 +4786,16 @@ class AlterConnectionAction(Action):
     }
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # The storage controller can refuse an in-place connection change
-            # depending on the connection's current state or dependents.
-            "cannot be altered in the requested way",
-        ] + super().errors_to_ignore(exe)
+        return (
+            [
+                "timeout: error trying to connect",
+                # The storage controller can refuse an in-place connection change
+                # depending on the connection's current state or dependents.
+                "cannot be altered in the requested way",
+            ]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(list(self.SET_CLAUSES.keys()))
@@ -6404,12 +6428,9 @@ class SourceReadHoldSweepAction(Action):
 
     PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
     kill scenario, where racing envd/clusterd restarts stresses read-hold
-    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
-    shard not upheld across a restart, so its since advances past the
-    dependent's upper) and PER-49 (a compute import as_of behind the compacted
-    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
-    those known coordinator/compute panics.
-    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+    reinstatement. Enabling it now just re-triggers PER-49 (a compute import
+    as_of behind the compacted since after ALTER TABLE ADD COLUMN + kill).
+    TODO: enable in read_action_list once PER-49 is fixed."""
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -6469,7 +6490,7 @@ read_action_list = ActionList(
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
         # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
-        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
@@ -6522,7 +6543,7 @@ dml_nontrans_action_list = ActionList(
         (FlipFlagsAction, 2),
         (SetSessionVariableAction, 2),
         (DiscardAction, 2),
-        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # TODO: Reenable when SS-325 is fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
@@ -6577,12 +6598,7 @@ ddl_action_list = ActionList(
         (BroadPrivilegesAction, 2),
         (ShowAction, 4),
         (ValidateConnectionAction, 2),
-        # TODO: Reenable once altering a connection that sinks or sources depend
-        # on can no longer panic the coordinator. Re-altering a dependent sink's
-        # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic.
-        # See https://linear.app/materializeinc/issue/SQL-517
-        # (AlterConnectionAction, 2),
+        (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),

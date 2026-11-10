@@ -17,11 +17,12 @@ import pathlib
 import re
 import sys
 
+import yaml
+
 SKILL = pathlib.Path(".agents/skills/mz-release-signoff")
 CATALOG = pathlib.Path("doc/user/data/metrics.yml")
 ALLOWLIST = SKILL / "scripts" / "metrics-allowlist.txt"
 
-CATALOG_NAME = re.compile(r"^- name: '?(.+?)'?$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 CANDIDATE = re.compile(r"\b(mz_[a-z0-9_]+)\b")
 # Markdown allows a fence to open with backticks or tildes and to be indented by
@@ -46,11 +47,9 @@ def catalog_names():
     a mix of literal names and patterns and membership is not a set lookup.
     """
     exact, globs = set(), set()
-    for line in CATALOG.read_text().splitlines():
-        match = CATALOG_NAME.match(line)
-        if match:
-            name = match.group(1)
-            (globs if "*" in name else exact).add(name)
+    for metric in yaml.safe_load(CATALOG.read_text())["metrics"]:
+        name = metric["name"]
+        (globs if "*" in name else exact).add(name)
     # A base name is resolvable when any member of its family is catalogued.
     bases = {
         name.rsplit("_", 1)[0]
@@ -189,7 +188,7 @@ REFERENCE_NAME_COUNTS = {
     "adapter.md": 35,
     "compute.md": 31,
     "persist.md": 84,
-    "reference-dashboards.md": 24,
+    "reference-dashboards.md": 26,
     "sources-and-sinks.md": 63,
 }
 

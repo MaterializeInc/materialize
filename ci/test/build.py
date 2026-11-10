@@ -10,8 +10,6 @@
 # by the Apache License, Version 2.0.
 
 import os
-import shutil
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -26,6 +24,7 @@ from materialize.mzbuild import (
     Repository,
     ResolvedImage,
     RustIncrementalBuildFailure,
+    exit_for_retryable_build_failure,
 )
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
@@ -68,17 +67,8 @@ def main() -> None:
             if public_check is not None:
                 public_check.result()
         annotate_buildkite_with_tags(repo.rd.arch, deps)
-    except RustIncrementalBuildFailure:
-        print(
-            "--- Detected incremental build failure, clearing cargo target directories"
-        )
-        for dir in ["target", "target-xcompile"]:
-            if os.path.exists(dir):
-                shutil.rmtree(dir, ignore_errors=True)
-        sys.exit(199)
-    except CargoRegistryFetchFailure:
-        print("--- Detected transient cargo registry failure, retrying")
-        sys.exit(199)
+    except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
+        exit_for_retryable_build_failure(e)
 
 
 def check_images_public(deps: mzbuild.DependencySet) -> None:

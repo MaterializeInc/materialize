@@ -74,6 +74,7 @@ aggtransspace
 aggtranstype
 aligned_to
 allocations
+amcanorder
 amhandler
 amname
 amtype
@@ -1369,6 +1370,7 @@ relnatts
 reloftype
 reloptions
 relowner
+relpages
 relpersistence
 relreplident
 relrowsecurity

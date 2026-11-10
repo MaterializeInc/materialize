@@ -10,7 +10,7 @@
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,9 +21,8 @@ use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Sink};
+use mz_catalog::memory::objects::Sink;
 use mz_cluster_client::ReplicaId;
-use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
@@ -32,17 +31,9 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
-use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_sql::plan::ConnectionDetails;
+use mz_sql::catalog::CatalogClusterReplica;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::{
-    self, DEFAULT_TIMESTAMP_INTERVAL, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
-};
+use mz_sql::session::vars::{self, DEFAULT_TIMESTAMP_INTERVAL, SystemVars, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -61,6 +52,92 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
+    pub(super) fn sequence_catalog_result_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::CatalogResultCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let row = match catalog::command::CatalogResultCommand::result(&plan) {
+            Ok(row) => row,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        let command = Arc::new(command);
+        ctx.session()
+            .add_notices(command.notices().iter().cloned().map(Into::into));
+        ctx.session_mut().retain_catalog_result(command);
+        ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
+    pub(super) async fn sequence_rename_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::RenameCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if self.controller.read_only() {
+            return ctx.retire(Err(AdapterError::ReadOnly));
+        }
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let command = Arc::new(command);
+        let result = self
+            .catalog_transact_with_ddl_transaction(
+                &mut ctx,
+                vec![Op::RenameCommand(Arc::clone(&command))],
+                |_, _| Box::pin(async {}),
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                ctx.session()
+                    .add_notices(command.notices().iter().cloned().map(Into::into));
+                ctx.retire(Ok(crate::ExecuteResponse::AlteredObject(
+                    command.object_type(),
+                )));
+            }
+            Err(error) => ctx.retire(Err(error)),
+        }
+    }
+
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
@@ -103,15 +180,17 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates) = self
-            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
-            .await?;
+        // Keep catalog work out of the inline state of callers such as ordinary
+        // transaction completion and the coordinator's command dispatcher.
+        let (table_updates, catalog_updates) = Box::pin(
+            self.catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops),
+        )
+        .await?;
 
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
-        let apply_implications_res = self
-            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
-            .await;
+        let apply_implications_res =
+            Box::pin(self.apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)).await;
 
         // We would get into an inconsistent state if we updated the catalog but
         // then failed to apply commands/updates to the controller. Easiest
@@ -196,13 +275,15 @@ impl Coordinator {
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates) =
+            Box::pin(self.catalog_transact_inner(conn_id, ops)).await?;
 
         let table_updates_wait = self
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
-        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+        let apply_catalog_implications_fut =
+            Box::pin(self.apply_catalog_implications(ctx, catalog_updates));
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = futures::future::join(
@@ -273,6 +354,7 @@ impl Coordinator {
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
+                    revision_fenced,
                     state: txn_state,
                     snapshot: txn_snapshot,
                     side_effects: _,
@@ -290,8 +372,18 @@ impl Coordinator {
             return result;
         };
 
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        // Statements without replay require their original catalog revision.
+        if self.catalog().transient_revision() != *txn_revision
+            && (*revision_fenced
+                || !txn_ops.iter().chain(&ops).all(|op| {
+                    matches!(
+                        op,
+                        catalog::Op::RenameCommand(_)
+                            | catalog::Op::CatalogResult(_)
+                            | catalog::Op::Description(_)
+                    )
+                }))
+        {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -308,6 +400,8 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
+        let txn_revision = *txn_revision;
+        let revision_fenced = *revision_fenced;
         let txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
@@ -337,7 +431,10 @@ impl Coordinator {
             }
         }
         let conn_id = ctx.session().conn_id().clone();
-        let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
+        let validate_res = self
+            .catalog()
+            .state()
+            .validate_resource_limits(&combined_ops, &conn_id);
         phase_seconds
             .with_label_values(&["ddl_txn_prep"])
             .observe(prep_start.elapsed().as_secs_f64());
@@ -359,18 +456,16 @@ impl Coordinator {
         // initialize the transaction so it starts in sync with the accumulated
         // state. Otherwise (first statement), the fresh durable transaction is
         // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
+        let (new_state, new_snapshot) = Box::pin(self.catalog().transact_incremental_dry_run(
+            &txn_state_clone,
+            ops.clone(),
+            conn,
+            prev_snapshot,
+            oracle_write_ts,
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
+        .await?;
 
         // Accumulate ops for eventual COMMIT.
         let result = ctx
@@ -380,7 +475,8 @@ impl Coordinator {
                 ops: combined_ops,
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
+                revision: txn_revision,
+                revision_fenced,
                 snapshot: Some(new_snapshot),
             });
 
@@ -394,7 +490,7 @@ impl Coordinator {
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
     /// called after this function successfully returns on any built
-    /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
+    /// [`MirDataflowDescription`](mz_compute_types::dataflows::MirDataflowDescription).
     #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_inner(
         &mut self,
@@ -414,7 +510,6 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let phase_start = Instant::now();
 
-        let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
@@ -508,34 +603,6 @@ impl Coordinator {
                     update_optimizer_e2e_latency_warning_threshold = true;
                     reconcile_metric_sinks = true;
                 }
-                catalog::Op::RenameItem { id, .. } => {
-                    let item = self.catalog().get_entry(id);
-                    let is_webhook_source = item
-                        .source()
-                        .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                        .unwrap_or(false);
-                    if is_webhook_source {
-                        webhook_sources_to_restart.insert(*id);
-                    }
-                }
-                catalog::Op::RenameSchema {
-                    database_spec,
-                    schema_spec,
-                    ..
-                } => {
-                    let schema = self.catalog().get_schema(
-                        database_spec,
-                        schema_spec,
-                        conn_id.unwrap_or(&SYSTEM_CONN_ID),
-                    );
-                    let webhook_sources = schema.item_ids().filter(|id| {
-                        let item = self.catalog().get_entry(id);
-                        item.source()
-                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                            .unwrap_or(false)
-                    });
-                    webhook_sources_to_restart.extend(webhook_sources);
-                }
                 catalog::Op::CreateCluster { id, .. } => {
                     clusters_to_create.push(*id);
                 }
@@ -557,7 +624,10 @@ impl Coordinator {
 
         // Observe before propagating, so a transaction rejected on resource
         // limits still accounts for the op scan it burned on the loop.
-        let validate_res = self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
+        let validate_res = self
+            .catalog()
+            .state()
+            .validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
         phase_seconds
             .with_label_values(&["prep"])
             .observe(phase_start.elapsed().as_secs_f64());
@@ -657,10 +727,6 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            if !webhook_sources_to_restart.is_empty() {
-                self.restart_webhook_sources(webhook_sources_to_restart);
-            }
-
             if update_metrics_config {
                 mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
             }
@@ -789,12 +855,6 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
-        for id in sources {
-            self.active_webhooks.remove(&id);
-        }
-    }
-
     /// Like `drop_compute_sinks`, but for a single compute sink.
     ///
     /// Returns the controller's state for the compute sink if the identified
@@ -877,6 +937,10 @@ impl Coordinator {
                 (sink, write_notify, reason)
             })
             .collect();
+
+        if to_retire.is_empty() {
+            return BuiltinTableAppendCompletion::completed();
+        }
 
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
@@ -1179,428 +1243,6 @@ impl Coordinator {
         Ok(res?)
     }
 
-    /// Validate all resource limits in a catalog transaction and return an error if that limit is
-    /// exceeded.
-    fn validate_resource_limits(
-        &self,
-        ops: &Vec<catalog::Op>,
-        conn_id: &ConnectionId,
-    ) -> Result<(), AdapterError> {
-        let mut new_kafka_connections = 0;
-        let mut new_postgres_connections = 0;
-        let mut new_mysql_connections = 0;
-        let mut new_sql_server_connections = 0;
-        let mut new_aws_privatelink_connections = 0;
-        let mut new_tables = 0;
-        let mut new_sources = 0;
-        let mut new_sinks = 0;
-        let mut new_materialized_views = 0;
-        let mut new_clusters = 0;
-        let mut new_replicas_per_cluster = BTreeMap::new();
-        let mut new_credit_consumption_rate = Numeric::zero();
-        let mut new_databases = 0;
-        let mut new_schemas_per_database = BTreeMap::new();
-        let mut new_objects_per_schema = BTreeMap::new();
-        let mut new_secrets = 0;
-        let mut new_roles = 0;
-        let mut new_network_policies = 0;
-        for op in ops {
-            match op {
-                Op::CreateDatabase { .. } => {
-                    new_databases += 1;
-                }
-                Op::CreateSchema { database_id, .. } => {
-                    if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
-                        *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
-                    }
-                }
-                Op::CreateRole { .. } => {
-                    new_roles += 1;
-                }
-                Op::CreateNetworkPolicy { .. } => {
-                    new_network_policies += 1;
-                }
-                Op::CreateCluster { .. } => {
-                    // TODO(benesch): having deprecated linked clusters, remove
-                    // the `max_sources` and `max_sinks` limit, and set a higher
-                    // max cluster limit?
-                    new_clusters += 1;
-                }
-                Op::CreateClusterReplica {
-                    cluster_id, config, ..
-                } => {
-                    if cluster_id.is_user() {
-                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
-                        if let ReplicaLocation::Managed(location) = &config.location {
-                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
-                        }
-                    }
-                }
-                Op::CreateItem { name, item, .. } => {
-                    *new_objects_per_schema
-                        .entry((
-                            name.qualifiers.database_spec.clone(),
-                            name.qualifiers.schema_spec.clone(),
-                        ))
-                        .or_insert(0) += 1;
-                    match item {
-                        CatalogItem::Connection(connection) => match connection.details {
-                            ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
-                            ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
-                            ConnectionDetails::MySql(_) => new_mysql_connections += 1,
-                            ConnectionDetails::SqlServer(_) => new_sql_server_connections += 1,
-                            ConnectionDetails::AwsPrivatelink(_) => {
-                                new_aws_privatelink_connections += 1
-                            }
-                            ConnectionDetails::Csr(_)
-                            | ConnectionDetails::GlueSchemaRegistry(_)
-                            | ConnectionDetails::Ssh { .. }
-                            | ConnectionDetails::Aws(_)
-                            | ConnectionDetails::Gcp(_)
-                            | ConnectionDetails::IcebergCatalog(_) => {}
-                        },
-                        CatalogItem::Table(_) => {
-                            new_tables += 1;
-                        }
-                        CatalogItem::Source(source) => {
-                            new_sources += source.user_controllable_persist_shard_count()
-                        }
-                        CatalogItem::Sink(_) => new_sinks += 1,
-                        CatalogItem::MaterializedView(_) => {
-                            new_materialized_views += 1;
-                        }
-                        CatalogItem::Secret(_) => {
-                            new_secrets += 1;
-                        }
-                        CatalogItem::Log(_)
-                        | CatalogItem::View(_)
-                        | CatalogItem::Index(_)
-                        | CatalogItem::Type(_)
-                        | CatalogItem::Func(_)
-                        | CatalogItem::MetricSink(_) => {}
-                    }
-                }
-                Op::DropObjects(drop_object_infos) => {
-                    for drop_object_info in drop_object_infos {
-                        match drop_object_info {
-                            DropObjectInfo::Cluster(_) => {
-                                new_clusters -= 1;
-                            }
-                            DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
-                                if cluster_id.is_user() {
-                                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                                    let cluster = self
-                                        .catalog()
-                                        .get_cluster_replica(*cluster_id, *replica_id);
-                                    if let ReplicaLocation::Managed(location) =
-                                        &cluster.config.location
-                                    {
-                                        new_credit_consumption_rate -=
-                                            self.replica_credits_per_hour(location);
-                                    }
-                                }
-                            }
-                            DropObjectInfo::Database(_) => {
-                                new_databases -= 1;
-                            }
-                            DropObjectInfo::Schema((database_spec, _)) => {
-                                if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                                    *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                                }
-                            }
-                            DropObjectInfo::Role(_) => {
-                                new_roles -= 1;
-                            }
-                            DropObjectInfo::NetworkPolicy(_) => {
-                                new_network_policies -= 1;
-                            }
-                            DropObjectInfo::Item(id) => {
-                                let entry = self.catalog().get_entry(id);
-                                *new_objects_per_schema
-                                    .entry((
-                                        entry.name().qualifiers.database_spec.clone(),
-                                        entry.name().qualifiers.schema_spec.clone(),
-                                    ))
-                                    .or_insert(0) -= 1;
-                                match entry.item() {
-                                    CatalogItem::Connection(connection) => match connection.details
-                                    {
-                                        ConnectionDetails::AwsPrivatelink(_) => {
-                                            new_aws_privatelink_connections -= 1;
-                                        }
-                                        _ => (),
-                                    },
-                                    CatalogItem::Table(_) => {
-                                        new_tables -= 1;
-                                    }
-                                    CatalogItem::Source(source) => {
-                                        new_sources -=
-                                            source.user_controllable_persist_shard_count()
-                                    }
-                                    CatalogItem::Sink(_) => new_sinks -= 1,
-                                    CatalogItem::MaterializedView(_) => {
-                                        new_materialized_views -= 1;
-                                    }
-                                    CatalogItem::Secret(_) => {
-                                        new_secrets -= 1;
-                                    }
-                                    CatalogItem::Log(_)
-                                    | CatalogItem::View(_)
-                                    | CatalogItem::Index(_)
-                                    | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_)
-                                    | CatalogItem::MetricSink(_) => {}
-                                }
-                            }
-                        }
-                    }
-                }
-                Op::UpdateItem {
-                    name: _,
-                    id,
-                    to_item,
-                } => match to_item {
-                    CatalogItem::Source(source) => {
-                        let current_source = self
-                            .catalog()
-                            .get_entry(id)
-                            .source()
-                            .expect("source update is for source item");
-
-                        new_sources += source.user_controllable_persist_shard_count()
-                            - current_source.user_controllable_persist_shard_count();
-                    }
-                    CatalogItem::Connection(_)
-                    | CatalogItem::Table(_)
-                    | CatalogItem::Sink(_)
-                    | CatalogItem::MaterializedView(_)
-                    | CatalogItem::Secret(_)
-                    | CatalogItem::Log(_)
-                    | CatalogItem::View(_)
-                    | CatalogItem::Index(_)
-                    | CatalogItem::Type(_)
-                    | CatalogItem::Func(_)
-                    | CatalogItem::MetricSink(_) => {}
-                },
-                Op::AlterRole { .. }
-                | Op::AlterRetainHistory { .. }
-                | Op::AlterSourceTimestampInterval { .. }
-                | Op::AlterNetworkPolicy { .. }
-                | Op::AlterAddColumn { .. }
-                | Op::AlterMaterializedViewApplyReplacement { .. }
-                | Op::UpdatePrivilege { .. }
-                | Op::UpdateDefaultPrivilege { .. }
-                | Op::GrantRole { .. }
-                | Op::RenameCluster { .. }
-                | Op::RenameClusterReplica { .. }
-                | Op::RenameItem { .. }
-                | Op::RenameSchema { .. }
-                | Op::UpdateOwner { .. }
-                | Op::RevokeRole { .. }
-                | Op::UpdateClusterConfig { .. }
-                | Op::UpdateSourceReferences { .. }
-                | Op::UpdateSystemConfiguration { .. }
-                | Op::ResetSystemConfiguration { .. }
-                | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateScopedSystemParameters { .. }
-                | Op::Comment { .. }
-                | Op::CheckClusterState { .. }
-                | Op::InjectAuditEvents { .. } => {}
-            }
-        }
-
-        let mut current_aws_privatelink_connections = 0;
-        let mut current_postgres_connections = 0;
-        let mut current_mysql_connections = 0;
-        let mut current_sql_server_connections = 0;
-        let mut current_kafka_connections = 0;
-        for c in self.catalog().user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
-
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::GlueSchemaRegistry(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::Gcp(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
-            }
-        }
-        self.validate_resource_limit(
-            current_kafka_connections,
-            new_kafka_connections,
-            SystemVars::max_kafka_connections,
-            "Kafka Connection",
-            MAX_KAFKA_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_postgres_connections,
-            new_postgres_connections,
-            SystemVars::max_postgres_connections,
-            "PostgreSQL Connection",
-            MAX_POSTGRES_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_mysql_connections,
-            new_mysql_connections,
-            SystemVars::max_mysql_connections,
-            "MySQL Connection",
-            MAX_MYSQL_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_sql_server_connections,
-            new_sql_server_connections,
-            SystemVars::max_sql_server_connections,
-            "SQL Server Connection",
-            MAX_SQL_SERVER_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            current_aws_privatelink_connections,
-            new_aws_privatelink_connections,
-            SystemVars::max_aws_privatelink_connections,
-            "AWS PrivateLink Connection",
-            MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_tables().count(),
-            new_tables,
-            SystemVars::max_tables,
-            "table",
-            MAX_TABLES.name(),
-        )?;
-
-        let current_sources: usize = self
-            .catalog()
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
-        self.validate_resource_limit(
-            current_sources,
-            new_sources,
-            SystemVars::max_sources,
-            "source",
-            MAX_SOURCES.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_sinks().count(),
-            new_sinks,
-            SystemVars::max_sinks,
-            "sink",
-            MAX_SINKS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_materialized_views().count(),
-            new_materialized_views,
-            SystemVars::max_materialized_views,
-            "materialized view",
-            MAX_MATERIALIZED_VIEWS.name(),
-        )?;
-        self.validate_resource_limit(
-            // Linked compute clusters don't count against the limit, since
-            // we have a separate sources and sinks limit.
-            //
-            // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
-            // and set a higher max cluster limit?
-            self.catalog().user_clusters().count(),
-            new_clusters,
-            SystemVars::max_clusters,
-            "cluster",
-            MAX_CLUSTERS.name(),
-        )?;
-        for (cluster_id, new_replicas) in new_replicas_per_cluster {
-            // It's possible that the cluster hasn't been created yet.
-            let current_amount = self
-                .catalog()
-                .try_get_cluster(cluster_id)
-                .map(|instance| instance.user_replicas().count())
-                .unwrap_or(0);
-            self.validate_resource_limit(
-                current_amount,
-                new_replicas,
-                SystemVars::max_replicas_per_cluster,
-                "cluster replica",
-                MAX_REPLICAS_PER_CLUSTER.name(),
-            )?;
-        }
-        self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(None),
-            new_credit_consumption_rate,
-            |system_vars| {
-                self.license_key
-                    .max_credit_consumption_rate()
-                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
-            },
-            "cluster replica",
-            MAX_CREDIT_CONSUMPTION_RATE.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().databases().count(),
-            new_databases,
-            SystemVars::max_databases,
-            "database",
-            MAX_DATABASES.name(),
-        )?;
-        for (database_id, new_schemas) in new_schemas_per_database {
-            self.validate_resource_limit(
-                self.catalog().get_database(database_id).schemas_by_id.len(),
-                new_schemas,
-                SystemVars::max_schemas_per_database,
-                "schema",
-                MAX_SCHEMAS_PER_DATABASE.name(),
-            )?;
-        }
-        for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
-            // For temporary schemas that don't exist yet (lazy creation),
-            // treat them as having 0 items.
-            let current_items = self
-                .catalog()
-                .try_get_schema(&database_spec, &schema_spec, conn_id)
-                .map(|schema| schema.items.len())
-                .unwrap_or(0);
-            self.validate_resource_limit(
-                current_items,
-                new_objects,
-                SystemVars::max_objects_per_schema,
-                "object",
-                MAX_OBJECTS_PER_SCHEMA.name(),
-            )?;
-        }
-        self.validate_resource_limit(
-            self.catalog().user_secrets().count(),
-            new_secrets,
-            SystemVars::max_secrets,
-            "secret",
-            MAX_SECRETS.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_roles().count(),
-            new_roles,
-            SystemVars::max_roles,
-            "role",
-            MAX_ROLES.name(),
-        )?;
-        self.validate_resource_limit(
-            self.catalog().user_network_policies().count(),
-            new_network_policies,
-            SystemVars::max_network_policies,
-            "network_policy",
-            MAX_NETWORK_POLICIES.name(),
-        )?;
-        Ok(())
-    }
-
-    /// Validate a specific type of resource limit and return an error if that limit is exceeded.
     pub(crate) fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
@@ -1612,43 +1254,15 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        if new_instances <= 0 {
-            return Ok(());
-        }
-
-        let limit: i64 = resource_limit(self.catalog().system_config()).into();
-        let current_amount: Option<i64> = current_amount.try_into().ok();
-        let desired =
-            current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
-
-        let exceeds_limit = if let Some(desired) = desired {
-            desired > limit
-        } else {
-            true
-        };
-
-        let desired = desired
-            .map(|desired| desired.to_string())
-            .unwrap_or_else(|| format!("more than {}", i64::MAX));
-        let current = current_amount
-            .map(|current| current.to_string())
-            .unwrap_or_else(|| format!("more than {}", i64::MAX));
-        if exceeds_limit {
-            Err(AdapterError::ResourceExhaustion {
-                resource_type: resource_type.to_string(),
-                limit_name: limit_name.to_string(),
-                desired,
-                limit: limit.to_string(),
-                current,
-            })
-        } else {
-            Ok(())
-        }
+        self.catalog().state().validate_resource_limit(
+            current_amount,
+            new_instances,
+            resource_limit,
+            resource_type,
+            limit_name,
+        )
     }
 
-    /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
-    ///
-    /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
     pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
         current_amount: Numeric,
@@ -1660,25 +1274,12 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> Numeric,
     {
-        if new_amount <= Numeric::zero() {
-            return Ok(());
-        }
-
-        let limit = resource_limit(self.catalog().system_config());
-        // Floats will overflow to infinity instead of panicking, which has the correct comparison
-        // semantics.
-        // NaN should be impossible here since both values are positive.
-        let desired = current_amount + new_amount;
-        if desired > limit {
-            Err(AdapterError::ResourceExhaustion {
-                resource_type: resource_type.to_string(),
-                limit_name: limit_name.to_string(),
-                desired: desired.to_string(),
-                limit: limit.to_string(),
-                current: current_amount.to_string(),
-            })
-        } else {
-            Ok(())
-        }
+        self.catalog().state().validate_resource_limit_numeric(
+            current_amount,
+            new_amount,
+            resource_limit,
+            resource_type,
+            limit_name,
+        )
     }
 }

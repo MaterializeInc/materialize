@@ -23,7 +23,7 @@ use tracing::warn;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, MirDataflowDescription};
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -269,8 +269,8 @@ pub enum EvalTime {
 }
 
 /// Returns an ID bundle with the given dataflows imports.
-pub fn dataflow_import_id_bundle<P>(
-    dataflow: &DataflowDescription<P>,
+pub fn dataflow_import_id_bundle<P, O>(
+    dataflow: &DataflowDescription<P, (), O>,
     compute_instance: ComputeInstanceId,
 ) -> CollectionIdBundle {
     let storage_ids = dataflow.source_imports.keys().copied().collect();
@@ -308,7 +308,7 @@ impl<'a> DataflowBuilder<'a> {
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
-        dataflow: &mut DataflowDesc,
+        dataflow: &mut MirDataflowDescription,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
@@ -396,7 +396,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
-        dataflow: &mut DataflowDesc,
+        dataflow: &mut MirDataflowDescription,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
@@ -410,7 +410,7 @@ impl<'a> DataflowBuilder<'a> {
     // configuration if reoptimization is requested.
     pub fn maybe_reoptimize_imported_views(
         &self,
-        df_desc: &mut DataflowDesc,
+        df_desc: &mut MirDataflowDescription,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
         if !config.features.reoptimize_imported_views {
@@ -717,9 +717,18 @@ fn eval_unmaterializable_func(
             pack_1d_array(names.iter().map(|n| Datum::from(n.as_str())).collect())
         }
         UnmaterializableFunc::MzUptime => {
-            let uptime = state.config().start_instant.elapsed();
-            let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
-            pack(uptime)
+            // Derived from the transaction's wall time so that every occurrence
+            // in a plan folds to the same literal. Rewrites that duplicate a
+            // subtree, such as the `INTERSECT` lowering, rely on the copies
+            // being identical, and differing literals there produce negative
+            // multiplicities. Clamped at zero because the wall clock can step
+            // backwards.
+            let uptime = session
+                .pcx()
+                .wall_time
+                .signed_duration_since(state.config().start_time)
+                .max(chrono::Duration::zero());
+            pack(Datum::from(uptime))
         }
         UnmaterializableFunc::MzVersion => pack(Datum::from(
             &*state

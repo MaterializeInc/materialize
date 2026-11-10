@@ -27,8 +27,12 @@ use crate::config::{
 /// Run a loop that periodically pulls system parameters defined in the
 /// LaunchDarkly-backed [SystemParameterFrontend] and pushes modified values to the
 /// `ALTER SYSTEM`-backed [SystemParameterBackend].
+///
+/// `boot_frontend` is the frontend the boot-time sync pulled from, if any. The
+/// loop adopts it on its first enabled tick instead of building a second one.
 pub async fn system_parameter_sync(
     sync_config: SystemParameterSyncConfig,
+    mut boot_frontend: Option<Arc<SystemParameterFrontend>>,
     adapter_client: Client,
     tick_interval: Option<Duration>,
 ) -> Result<(), anyhow::Error> {
@@ -66,9 +70,12 @@ pub async fn system_parameter_sync(
         backend.pull(&mut params).await;
 
         if !params.enable_launchdarkly() && sync_config.backend_config.is_launch_darkly() {
-            if frontend.is_some() {
+            // The boot-time sync does not consult `enable_launchdarkly`, so its
+            // frontend is dropped here like a running one.
+            if frontend.is_some() || boot_frontend.is_some() {
                 tracing::info!("stopping system parameter frontend");
                 frontend = None;
+                boot_frontend = None;
             } else {
                 tracing::info!("system parameter sync is disabled; not syncing")
             }
@@ -78,8 +85,13 @@ pub async fn system_parameter_sync(
         }
 
         if frontend.is_none() {
-            tracing::info!("initializing system parameter frontend");
-            let new_frontend = Arc::new(SystemParameterFrontend::from(&sync_config).await?);
+            let new_frontend = match boot_frontend.take() {
+                Some(boot_frontend) => boot_frontend,
+                None => {
+                    tracing::info!("initializing system parameter frontend");
+                    Arc::new(SystemParameterFrontend::from(&sync_config).await?)
+                }
+            };
             // Share the frontend with the coordinator so the create-cluster /
             // create-replica paths can resolve a new object's scoped overrides
             // synchronously, instead of waiting for the next tick.

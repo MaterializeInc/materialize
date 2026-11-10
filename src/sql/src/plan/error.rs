@@ -153,6 +153,11 @@ pub enum PlanError {
     UnsupportedRangeElementType {
         element_type_name: String,
     },
+    /// The cast exists, but `TRY_CAST` cannot turn its failures into NULL.
+    TryCastUnsupported {
+        from: String,
+        to: String,
+    },
     InvalidTable {
         name: String,
     },
@@ -424,6 +429,9 @@ impl PlanError {
             Self::ShowCreateViewOnMaterializedView(_) => {
                 Some("Use SHOW CREATE MATERIALIZED VIEW to show a materialized view.".into())
             }
+            Self::TryCastUnsupported { .. } => {
+                Some("Use CAST, which supports this cast but reports an error when it fails.".into())
+            }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
             }
@@ -659,6 +667,12 @@ impl fmt::Display for PlanError {
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
+            }
+            Self::TryCastUnsupported { from, to } => {
+                write!(
+                    f,
+                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}"
+                )
             }
             Self::InvalidCast { name, ccx, from, to } =>{
                 write!(

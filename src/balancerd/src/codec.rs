@@ -111,6 +111,17 @@ where
     pub fn inner_mut(&mut self) -> &mut Conn<A> {
         self.inner.get_mut().get_mut()
     }
+
+    /// Releases the framing buffers, returning the connection and any bytes
+    /// read from it but not yet decoded.
+    ///
+    /// Messages sent but not flushed are lost, so callers must
+    /// [`FramedConn::flush`] first.
+    pub fn into_parts(self) -> (Conn<A>, BytesMut) {
+        let parts = self.inner.into_inner().into_parts();
+        debug_assert!(parts.write_buf.is_empty(), "unflushed messages");
+        (parts.io, parts.read_buf)
+    }
 }
 
 #[async_trait]

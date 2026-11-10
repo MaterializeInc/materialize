@@ -16,16 +16,16 @@ import multiprocessing
 import os
 import shutil
 import subprocess
-import sys
 from argparse import Namespace
 from typing import Any, Literal
 from urllib.parse import quote
 
-from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
+from materialize import MZ_ROOT, buildkite, gcp_oidc, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzbuild import (
     CargoRegistryFetchFailure,
     RustIncrementalBuildFailure,
+    exit_for_retryable_build_failure,
     run_and_detect_retryable_build_failure,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -133,6 +133,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
     )
 
+    persist_gcs_bucket = os.getenv("PERSIST_GCS_BUCKET")
+    if persist_gcs_bucket:
+        gcp_oidc.authenticate()
+
     env = dict(
         os.environ,
         KAFKA_ADDRS="localhost:30123",
@@ -146,6 +150,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
     )
+    if persist_gcs_bucket:
+        env["MZ_PERSIST_EXTERNAL_STORAGE_TEST_GCS_BUCKET"] = persist_gcs_bucket
 
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
@@ -421,10 +427,8 @@ def run_cargo_nextest(
                 cwd=MZ_ROOT,
                 env=env,
             )
-        except RustIncrementalBuildFailure:
-            _handle_incremental_build_failure()
-        except CargoRegistryFetchFailure:
-            _handle_registry_fetch_failure()
+        except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
+            exit_for_retryable_build_failure(e)
         clusterd_thread.join()
 
     try:
@@ -446,20 +450,5 @@ def run_cargo_nextest(
             cwd=MZ_ROOT,
             env=env,
         )
-    except RustIncrementalBuildFailure:
-        _handle_incremental_build_failure()
-    except CargoRegistryFetchFailure:
-        _handle_registry_fetch_failure()
-
-
-def _handle_incremental_build_failure() -> None:
-    print("--- Detected incremental build failure, clearing cargo target directories")
-    for dir in ["target", "target-xcompile"]:
-        if os.path.exists(dir):
-            shutil.rmtree(dir, ignore_errors=True)
-    sys.exit(199)
-
-
-def _handle_registry_fetch_failure() -> None:
-    print("--- Detected transient cargo registry failure, retrying")
-    sys.exit(199)
+    except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
+        exit_for_retryable_build_failure(e)

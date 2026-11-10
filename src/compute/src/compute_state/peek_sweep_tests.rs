@@ -105,6 +105,7 @@ impl Harness {
 
         let state = ComputeState::new(
             Arc::new(PersistClientCache::new_no_metrics()),
+            SharedBatches::new(),
             TxnsContext::default(),
             metrics,
             Arc::new(TracingHandle::disabled()),

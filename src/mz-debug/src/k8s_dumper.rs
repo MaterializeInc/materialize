@@ -105,7 +105,7 @@ where
             ));
             let mut file = File::create(&file_name)?;
 
-            serde_yaml::to_writer(&mut file, &item)?;
+            serde_saphyr::to_io_writer(&mut file, &item)?;
 
             info!("Exported {}", file_name.display());
         }

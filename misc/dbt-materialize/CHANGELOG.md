@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 1.9.13 - 2026-11-10
+
+* Quote names in the hints `deploy_init` prints when the deploying role lacks
+  a permission, so each hint can be run as is for names that need quoting. The
+  ownership hints now quote the cluster or schema name, and the CREATECLUSTER
+  hint quotes the role.
+
+* Fix `refresh_interval` configs that set both `at` and `at_creation`. The
+  two options were rendered without a comma between them, so creating the
+  materialized view failed with `Expected right parenthesis, found REFRESH`.
+
+* Fail fast with a clear error when the profile points at PostgreSQL. The
+  server rejected the adapter's session parameters at startup, so dbt retried
+  the connection and then reported only `unrecognized configuration parameter
+  "auto_route_catalog_queries"`.
+
+* Fix the hint `deploy_init` prints when a deployment schema is not empty.
+  It named a `create_deployment_environment` operation that does not exist
+  instead of `deploy_init`.
+
+* Fix `deploy_promote` when `git` is not installed. Looking up the commit SHA
+  for the schema tag raised `FileNotFoundError`, so the operation stopped
+  after the swap committed, before tagging the schemas and cutting over
+  sinks. The tag now leaves out the SHA instead.
+
+## 1.9.12 - 2026-11-03
+
 * Fix the deployment timestamp in the schema comment `deploy_promote` leaves
   behind. It read the second row of the first column instead of the second
   column of the only row, so every tag said `Deployment by <user> on ` with
@@ -38,6 +65,22 @@
   nodes do not carry the tested model's `cluster` config, so the profile
   cluster is what applies; when none is set, the session default cluster is
   used, as before.
+
+* Fix the cluster and schema ownership checks in `deploy_init`. Both subtracted
+  the wrong way around, so the set of objects missing ownership was always
+  empty and a role that did not own the production clusters or schemas got no
+  warning until the deployment failed later on. The checks also count
+  membership in the owning role as ownership, matching how Materialize decides
+  who may run the swap in `deploy_promote`.
+
+* Warn in `strict_mode` when a `view`, `materialized_view` or `table` model is
+  built in a schema that also holds sources, sinks or source tables. The check
+  for this never ran, because the flags it set inside a loop did not survive
+  the loop. It warns instead of failing because runs that exclude sources and
+  sinks, as the docs recommend, have always passed it. It will become an error
+  in a future release.
+
+* Allow installing with `dbt-postgres` 1.11.
 
 ## 1.9.11 - 2026-07-26
 

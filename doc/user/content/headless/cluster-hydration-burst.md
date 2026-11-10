@@ -17,7 +17,8 @@ provision an extra burst replica at the configured `HYDRATION SIZE` while it has
 un-hydrated objects**. This speeds up hydration without manually scaling the
 cluster up before hydration and back down afterward. The steady-size replicas
 continue hydrating in parallel, and once one of them catches up with the burst,
-the burst replica lingers for the `LINGER DURATION` and is then removed. The
+the burst replica lingers for the `LINGER DURATION` and is then removed.
+A failed readiness check during linger restarts the period. The
 burst replica is an ordinary cluster replica, billed only for the time it is
 provisioned. See [Usage & billing](/materialize-cloud/billing/) for details.
 

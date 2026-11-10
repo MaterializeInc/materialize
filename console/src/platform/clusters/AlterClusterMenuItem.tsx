@@ -8,15 +8,22 @@
 // by the Apache License, Version 2.0.
 
 import { MenuItem, useDisclosure } from "@chakra-ui/react";
+import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 
 import { AlterClusterModal } from "./AlterClusterModal";
-import { useAvailableClusterSizes, useMaxReplicasPerCluster } from "./queries";
+import {
+  availableClusterSizesQuery,
+  useMaxReplicasPerCluster,
+} from "./queries";
 
 const AlterClusterMenuItem = ({ cluster }: { cluster: Cluster }) => {
-  const { data: clusterSizes } = useAvailableClusterSizes();
+  // NOTE: this mounts while its overflow menu is closed, in cluster list rows
+  // and the cluster detail header. Suspending would swap the page it renders
+  // in for that page's Suspense fallback.
+  const { data: clusterSizes } = useQuery(availableClusterSizesQuery());
   const { data: maxReplicas } = useMaxReplicasPerCluster();
 
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -24,6 +31,7 @@ const AlterClusterMenuItem = ({ cluster }: { cluster: Cluster }) => {
   return (
     <>
       <MenuItem
+        isDisabled={!clusterSizes}
         onClick={(e) => {
           e.stopPropagation();
           onOpen();

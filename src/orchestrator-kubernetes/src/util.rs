@@ -38,7 +38,18 @@ pub async fn create_client(context: String) -> Result<(Client, String), anyhow::
     };
 
     kubeconfig.connect_timeout = Some(Duration::from_secs(10));
-    kubeconfig.read_timeout = Some(Duration::from_secs(60));
+    // The read timeout bounds how long a hung Kubernetes call can block an orchestrator worker,
+    // which handles one command at a time.
+    //
+    // NOTE: The read timeout must exceed the connection pool's 90 s idle expiry. hyper-timeout
+    // starts the read timer while a pooled connection sits idle and does not reset it when a
+    // request is written. A request on a connection that idled for close to `read_timeout`
+    // therefore times out before the response arrives and fails with
+    // `client error (SendRequest)`.
+    //
+    // TODO(CPU-306): Return to 60 s once kube-client enables hyper-timeout's
+    // `reset_reader_on_write`.
+    kubeconfig.read_timeout = Some(Duration::from_secs(120));
     kubeconfig.write_timeout = Some(Duration::from_secs(60));
 
     let namespace = kubeconfig.default_namespace.clone();

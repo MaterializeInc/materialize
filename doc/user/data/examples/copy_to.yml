@@ -73,7 +73,7 @@
 
     If you encounter issues trying to ingest Parquet files produced by
     Materialize into your downstream systems, please [contact our
-    team](/support/).
+    team](https://materialize.com/support/).
 
 - name: "parquet-data-types"
   content: |

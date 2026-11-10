@@ -48,9 +48,10 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| AKS Cluster | Version 1.34 with Cilium networking (network plugin: azure, data plane: cilium, policy: cilium) |
-| Default Node Pool | Standard_D4pds_v6 VMs, autoscaling 2-5 nodes, labeled for generic workloads |
-| Materialize Node Pool | Standard_E4pds_v6 VMs with 100GB disk, autoscaling 2-5 nodes, swap enabled, dedicated taints for Materialize workloads |
+| AKS Cluster | Version 1.35 with Cilium networking (network plugin: azure, data plane: cilium, policy: cilium) |
+| Default Node Pool | 2 Standard_D4ps_v6 VMs, labeled for generic workloads |
+| Generic NodePool | Node Auto Provisioning adds Standard_D4ps_v6 VMs for generic workloads that don't fit on the default node pool |
+| Materialize NodePool | Node Auto Provisioning adds Standard_E4pds_v6 VMs with a 100GB managed OS disk, swap on the local NVMe disk, and dedicated taints for Materialize workloads |
 | Managed Identities | AKS cluster identity (used by AKS control plane to provision Azure resources like load balancers and network interfaces) and Workload identity (used by Materialize pods for secure, passwordless authentication to Azure Storage) |
 
 ### Database
@@ -403,7 +404,10 @@ deployment
 guide](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/).
 
 {{< note >}}
-Autoscaling: Uses Azure's native cluster autoscaler that integrates directly with Azure Virtual Machine Scale Sets for automated node scaling.
+Autoscaling: Uses AKS [Node Auto
+Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning),
+Azure's managed [Karpenter](https://github.com/Azure/karpenter-provider-azure),
+to provision right-sized nodes based on pending pod requirements.
 {{< /note >}}
 
 See also:

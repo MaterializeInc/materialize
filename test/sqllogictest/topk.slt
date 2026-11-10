@@ -266,3 +266,27 @@ SELECT * FROM (SELECT * FROM t LIMIT 15) LIMIT 10 OFFSET 5;
 13
 14
 15
+
+# Regression test for CPU-321: an equality filter on the column just before the
+# key of a `MonotonicTop1` must not turn into a lookup of its arrangement.
+mode cockroach
+
+statement ok
+CREATE TABLE tt (a int, f text, k text);
+
+statement ok
+INSERT INTO tt VALUES (1, 'x', 'k1'), (2, 'y', 'k1'), (3, 'x', 'k2'), (4, 'x', 'k3');
+
+statement ok
+CREATE VIEW tt_latest AS SELECT DISTINCT ON (k) a, f, k FROM tt ORDER BY k, a DESC;
+
+query I
+SELECT count(*) FROM tt_latest WHERE f = 'x';
+----
+2
+
+query ITT rowsort
+SELECT * FROM tt_latest WHERE f = 'x';
+----
+3  x  k2
+4  x  k3

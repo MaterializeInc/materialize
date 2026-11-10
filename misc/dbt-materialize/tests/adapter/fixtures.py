@@ -49,6 +49,38 @@ test_materialized_view_multiple_with_options = """
     SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
+test_materialized_view_refresh_at_and_at_creation = """
+{{ config(
+    materialized='materialized_view',
+    refresh_interval={'at': '3000-01-01 00:00', 'at_creation': true}
+) }}
+
+    SELECT 1 AS a
+"""
+
+test_materialized_view_refresh_all_options = """
+{{ config(
+    materialized='materialized_view',
+    refresh_interval={
+        'at': '3000-01-01 00:00',
+        'at_creation': true,
+        'every': '1 day',
+        'aligned_to': '2024-01-01 00:00'
+    }
+) }}
+
+    SELECT 1 AS a
+"""
+
+test_materialized_view_refresh_on_commit_and_every = """
+{{ config(
+    materialized='materialized_view',
+    refresh_interval={'every': '1 day', 'on_commit': true}
+) }}
+
+    SELECT 1 AS a
+"""
+
 test_materialized_view_index = """
 {{ config(
     materialized='materialized_view',

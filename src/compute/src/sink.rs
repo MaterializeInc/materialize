@@ -20,4 +20,5 @@ mod materialized_view;
 mod materialized_view_v2;
 mod metric_sink;
 mod refresh;
+mod shared_batch;
 mod subscribe;

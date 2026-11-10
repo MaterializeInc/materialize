@@ -53,10 +53,11 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ProtoColumnName,
-    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationDescDiff, RelationVersion, RelationVersionSelector, ReprColumnType, ReprRelationType,
-    SemanticType, SqlColumnType, SqlRelationType, UNKNOWN_COLUMN_NAME, VersionedRelationDesc,
+    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ORDINALITY_COL_NAME,
+    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc,
+    RelationDescBuilder, RelationDescDiff, RelationVersion, RelationVersionSelector,
+    ReprColumnType, ReprRelationType, SemanticType, SqlColumnType, SqlRelationType,
+    UNKNOWN_COLUMN_NAME, VersionedRelationDesc,
 };
 #[cfg(any(test, feature = "proptest"))]
 pub use crate::relation::{

@@ -106,10 +106,12 @@ pub enum Expr<T: AstInfo> {
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
-    /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
+    /// CAST an expression to a different data type, e.g. `CAST(foo AS VARCHAR(123))`
+    /// or `TRY_CAST(foo AS int4)`.
     Cast {
         expr: Box<Expr<T>>,
         data_type: T::DataType,
+        failure_mode: CastFailureMode,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -365,7 +367,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     }
                 }
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::Error,
+            } => {
                 // `::` binds very tightly, so a non-self-delimiting operand must
                 // be parenthesized or the cast re-associates into its spine.
                 // `CAST(-0 AS int4)` (i.e. `Cast(- 0)`) would otherwise print as
@@ -382,6 +388,17 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
                 f.write_str("::");
                 f.write_node(data_type);
+            }
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::NullFallback,
+            } => {
+                f.write_str("TRY_CAST(");
+                f.write_node(&expr);
+                f.write_str(" AS ");
+                f.write_node(data_type);
+                f.write_str(")");
             }
             Expr::Collate { expr, collation } => {
                 // `COLLATE` binds very tightly (`PostfixCollateAt`), so a
@@ -852,7 +869,11 @@ fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
         | Expr::Map(_)
         | Expr::MapSubquery(_)
         | Expr::Case { .. }
-        | Expr::Row { .. } => true,
+        | Expr::Row { .. }
+        | Expr::Cast {
+            failure_mode: CastFailureMode::NullFallback,
+            ..
+        } => true,
         // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
         // so they are safe only when their inner operand is.
         Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
@@ -892,7 +913,12 @@ fn bare_prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
     let mut saw_postfix = false;
     loop {
         match e {
-            Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+            Expr::Cast {
+                expr,
+                failure_mode: CastFailureMode::Error,
+                ..
+            }
+            | Expr::Subscript { expr, .. } => {
                 saw_postfix = true;
                 e = expr.as_ref();
             }
@@ -948,8 +974,12 @@ fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, 
         | Expr::MapSubquery(_)
         | Expr::FieldAccess { .. }
         | Expr::WildcardAccess(_)
-        | Expr::Collate { .. } => false,
-        // `Cast`: the type parser swallows a following `[…]` as an array suffix
+        | Expr::Collate { .. }
+        | Expr::Cast {
+            failure_mode: CastFailureMode::NullFallback,
+            ..
+        } => false,
+        // `::` `Cast`: the type parser swallows a following `[…]` as an array suffix
         // (`a::int4[1]` is `a` cast to `int4[]`, not a subscript of `a::int4`).
         // `Subscript`: consecutive `[…]` flatten into one node (`a[1][2]` is a
         // single subscript), so a nested subscript receiver must be parenthesized
@@ -1050,6 +1080,7 @@ impl<T: AstInfo> Expr<T> {
         Expr::Cast {
             expr: Box::new(self),
             data_type,
+            failure_mode: CastFailureMode::Error,
         }
     }
 
@@ -1113,6 +1144,16 @@ impl Op {
             op: op.into(),
         }
     }
+}
+
+/// What a cast does when the value cannot be converted to the target type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CastFailureMode {
+    /// The cast raises an error, as `CAST(expr AS type)` and `expr::type` do.
+    Error,
+    /// The cast evaluates to `NULL`, as `TRY_CAST(expr AS type)` does. Errors
+    /// raised while evaluating `expr` itself still propagate.
+    NullFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -31,7 +31,7 @@ The developer endpoint is enabled by default. To disable it:
 
 {{< tab "Cloud" >}}
 
-Contact [Materialize support](https://materialize.com/docs/support/) to
+Contact [Materialize support](https://materialize.com/support/) to
 disable the MCP developer endpoint for your environment.
 
 {{< /tab >}}

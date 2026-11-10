@@ -83,7 +83,7 @@ import {
   statusBucketForRow,
   statusFilterFn,
 } from "./filters";
-import { MaintainedObjectListItem } from "./queries";
+import { isSourceCollection, MaintainedObjectListItem } from "./queries";
 
 const PAGE_SIZE = 25;
 
@@ -233,7 +233,7 @@ const ClusterCell = ({
   );
 };
 
-const FreshnessCell = ({
+export const FreshnessCell = ({
   row,
   ready,
 }: {
@@ -288,14 +288,14 @@ const SourceStatusCell = ({
   );
 };
 
-const StatusCell = ({
+export const StatusCell = ({
   row,
   hydrationReady,
 }: {
   row: MaintainedObjectListItem;
   hydrationReady: boolean;
 }) => {
-  if (row.objectType === "source") {
+  if (isSourceCollection(row)) {
     return <SourceStatusCell row={row} ready={hydrationReady} />;
   }
   const { hydratedReplicas, totalReplicas } = row;
@@ -368,7 +368,7 @@ const columns = [
     },
     meta: {
       tooltip:
-        "Ingestion status for sources, replica hydration across all clusters for everything else.",
+        "Ingestion status for sources and their subsources and tables, replica hydration across all clusters for everything else.",
       renderFilter: (column) => <StatusFilterPanel column={column} />,
     },
   }),

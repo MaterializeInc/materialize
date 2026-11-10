@@ -40,7 +40,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
+use mz_ore::{assert_none, halt, instrument, restart_in_place, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -70,7 +70,7 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
 };
-use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_client::storage_collections::{StorageCollections, shard_has_no_updates};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
@@ -1028,13 +1028,22 @@ impl StorageController for Controller {
                 // halting on it would wedge bootstrap forever instead of
                 // resolving on the next attempt.
                 if dependency_since.is_empty() && !write_frontier.is_empty() {
-                    halt!(
+                    let reason = format!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
                         this indicates concurrent deletion of a collection",
-                        write_frontier,
-                        dependency_read_holds,
+                        write_frontier, dependency_read_holds,
                     );
+                    // A read-only controller can restart without Kubernetes
+                    // crash backoff. If its generation has been promoted
+                    // meanwhile, by a replacement pod or by this process after
+                    // a skipped catch-up, `preflight_0dt` halts the restarted
+                    // process.
+                    if self.read_only {
+                        restart_in_place!("{}", reason);
+                    } else {
+                        halt!("{}", reason);
+                    }
                 }
 
                 // If the dependency is between a remap shard and a source (and
@@ -1054,11 +1063,17 @@ impl StorageController for Controller {
                 // We don't care about the dependency since when the write
                 // frontier is empty. In that case, no-one can write down any
                 // more updates.
-                if description.primary.is_none() {
-                    mz_ore::soft_assert_or_log!(
-                        write_frontier.elements() == &[Timestamp::MIN]
-                            || write_frontier.is_empty()
-                            || PartialOrder::less_than(&dependency_since, &write_frontier),
+                //
+                // An ingestion export whose shard holds no updates is exempt,
+                // see `StorageCollectionsImpl::create_collections_for_bootstrap`.
+                if description.primary.is_none()
+                    && write_frontier.elements() != &[Timestamp::MIN]
+                    && !write_frontier.is_empty()
+                    && !PartialOrder::less_than(&dependency_since, &write_frontier)
+                    && !(matches!(data_source, DataSource::IngestionExport { .. })
+                        && shard_has_no_updates(persist_client, id, &metadata).await)
+                {
+                    mz_ore::soft_panic_or_log!(
                         "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
@@ -1699,7 +1714,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(STG-26): unify this with run_export, if possible
+        // TODO(SS-513): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 
@@ -1707,10 +1722,10 @@ impl StorageController for Controller {
             id,
             description: StorageSinkDesc {
                 from: from_id,
-                from_desc: new_description.sink.from_desc,
-                connection: new_description.sink.connection,
+                from_desc: new_description.sink.from_desc.clone(),
+                connection: new_description.sink.connection.clone(),
                 envelope: new_description.sink.envelope,
-                as_of: new_description.sink.as_of,
+                as_of: new_description.sink.as_of.clone(),
                 version: new_description.sink.version,
                 from_storage_metadata,
                 with_snapshot,
@@ -1729,6 +1744,19 @@ impl StorageController for Controller {
             })?;
 
         instance.send(StorageCommand::RunSink(Box::new(cmd)));
+
+        // alter_export_connections rebuilds the sink from this description and
+        // checks new connections against it with alter_compatible, so it must
+        // describe the sink we just told the cluster to run.
+        let state = self
+            .collections
+            .get_mut(&id)
+            .expect("export known to exist");
+        let DataSource::Sink { desc } = &mut state.data_source else {
+            panic!("export known to exist")
+        };
+        *desc = new_description;
+
         Ok(())
     }
 
@@ -1748,7 +1776,7 @@ impl StorageController for Controller {
             // update that because `ExportState` is not clone, because it holds
             // a `ReadHandle` and cloning that would cause additional work for
             // whoever guarantees those read holds.
-            let (mut new_export_description, as_of): (ExportDescription, _) = {
+            let (current_export_description, as_of): (ExportDescription, _) = {
                 let export = &self.collections[&id];
                 let DataSource::Sink { desc } = &export.data_source else {
                     panic!("export exists")
@@ -1761,12 +1789,15 @@ impl StorageController for Controller {
 
                 (export_description, as_of)
             };
-            let current_sink = new_export_description.sink.clone();
+
+            let mut new_export_description = current_export_description.clone();
 
             new_export_description.sink.connection = connection;
 
             // Ensure compatibility
-            current_sink.alter_compatible(id, &new_export_description.sink)?;
+            current_export_description
+                .sink
+                .alter_compatible(id, &new_export_description.sink)?;
 
             let from_storage_metadata = self
                 .storage_collections

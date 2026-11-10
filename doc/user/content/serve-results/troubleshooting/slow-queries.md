@@ -152,7 +152,7 @@ cluster, select the object under **Materialized Views** or **Indexes**, then
 open the **Workflow** tab.
 
 To find why an object is lagging, see [Freshness
-troubleshooting](/transform-data/freshness-troubleshooting/) and [Dataflow
+troubleshooting](/transform-data/freshness/troubleshoot-freshness/) and [Dataflow
 troubleshooting](/transform-data/dataflow-troubleshooting/). For a lagging
 source, see [Troubleshoot ingestion](/ingest-data/troubleshooting/).
 
@@ -203,7 +203,7 @@ console.
 ### Fix lagging dependencies
 
 - To find and fix the cause of lag in a materialized view or index, see
-  [Freshness troubleshooting](/transform-data/freshness-troubleshooting/) and
+  [Freshness troubleshooting](/transform-data/freshness/troubleshoot-freshness/) and
   [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/). For a
   lagging source, see [Troubleshoot ingestion](/ingest-data/troubleshooting/).
 - Avoid chaining materialized views where you don't need to. Each materialized

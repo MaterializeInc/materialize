@@ -19,6 +19,8 @@ tokio-postgres.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test"] }
+tempfile.workspace = true
+tokio.workspace = true
 
 [features]
 default = []

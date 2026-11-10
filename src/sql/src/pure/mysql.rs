@@ -343,6 +343,7 @@ pub(super) async fn purify_source_exports(
     // purified, as `CREATE TABLE .. FROM SOURCE` does, since constraint names
     // are validated against that single table's keys. Enforced below.
     filter_constraints: &FilterConstraints,
+    exclude_all_not_null_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -468,6 +469,31 @@ pub(super) async fn purify_source_exports(
                         if let Some(column_type) = &mut c.column_type {
                             column_type.nullable = true;
                         }
+                    }
+                }
+            }
+            if exclude_all_not_null_constraints {
+                // Columns of a retained primary key stay NOT NULL. The planner
+                // declares them NOT NULL in the table's `RelationDesc`
+                // regardless of this desc, so a nullable column here would
+                // drop the decoder's NULL check and let a NULL reach persist
+                // in a column it treats as non-nullable, which panics.
+                // The reason we need this to avoid panics for MySQL sources
+                // and not for Postgres sources is because schemas are compared
+                // by name/column in MySQL. Postgres on the other hand has an OID
+                // that would differ and prevent this case.
+                let pk_cols: BTreeSet<&str> = parsed_table
+                    .keys
+                    .iter()
+                    .filter(|k| k.is_primary)
+                    .flat_map(|k| k.columns.iter().map(String::as_str))
+                    .collect();
+                for c in &mut parsed_table.columns {
+                    if pk_cols.contains(c.name.as_str()) {
+                        continue;
+                    }
+                    if let Some(column_type) = &mut c.column_type {
+                        column_type.nullable = true;
                     }
                 }
             }

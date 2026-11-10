@@ -135,7 +135,7 @@ America/Indiana/Tell_City,CST,-06:00:00,f
 America/Indiana/Vevay,EST,-05:00:00,f
 America/Indiana/Vincennes,EST,-05:00:00,f
 America/Indiana/Winamac,EST,-05:00:00,f
-America/Inuvik,MST,-07:00:00,f
+America/Inuvik,CST,-06:00:00,f
 America/Iqaluit,EST,-05:00:00,f
 America/Jamaica,EST,-05:00:00,f
 America/Jujuy,-03,-03:00:00,f
@@ -187,7 +187,7 @@ America/Port_of_Spain,AST,-04:00:00,f
 America/Porto_Velho,-04,-04:00:00,f
 America/Puerto_Rico,AST,-04:00:00,f
 America/Punta_Arenas,-03,-03:00:00,f
-America/Rainy_River,CST,-06:00:00,f
+America/Rainy_River,EST,-05:00:00,f
 America/Rankin_Inlet,CST,-06:00:00,f
 America/Recife,-03,-03:00:00,f
 America/Regina,CST,-06:00:00,f
@@ -218,7 +218,7 @@ America/Tortola,AST,-04:00:00,f
 America/Vancouver,MST,-07:00:00,f
 America/Virgin,AST,-04:00:00,f
 America/Whitehorse,MST,-07:00:00,f
-America/Winnipeg,CST,-06:00:00,f
+America/Winnipeg,EST,-05:00:00,f
 America/Yakutat,AKST,-09:00:00,f
 America/Yellowknife,CST,-06:00:00,f
 Antarctica/Casey,+08,08:00:00,f
@@ -373,7 +373,7 @@ Brazil/DeNoronha,-02,-02:00:00,f
 Brazil/East,-03,-03:00:00,f
 Brazil/West,-04,-04:00:00,f
 Canada/Atlantic,AST,-04:00:00,f
-Canada/Central,CST,-06:00:00,f
+Canada/Central,EST,-05:00:00,f
 Canada/Eastern,EST,-05:00:00,f
 Canada/Mountain,CST,-06:00:00,f
 Canada/Newfoundland,NST,-03:30:00,f

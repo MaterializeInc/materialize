@@ -255,7 +255,7 @@ per-object rows live, and default to 120 and 30 days.
 
 On Materialize Cloud, these parameters are managed for you. If both tables are
 empty for a cluster that has certainly hydrated, contact
-[support](/support/).
+[support](https://materialize.com/support/).
 
 On Materialize Self-Managed, set them as the `mz_system` user, or through the
 [system parameters

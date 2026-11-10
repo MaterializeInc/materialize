@@ -29,8 +29,8 @@ $ psql-execute command="\d tbl"
 \                Table "public.tbl"
  Column |  Type   | Collation | Nullable | Default
 --------+---------+-----------+----------+---------
- a      | integer |           |          | NULL
- b      | text    |           |          | NULL
+ a      | integer |           |          |
+ b      | text    |           |          |
 Indexes:
     "tbl_ind" arrangement (b)
     "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
@@ -513,10 +513,8 @@ name                           comment
 mz_array_types                 ""
 mz_base_types                  ""
 mz_cluster_replica_sizes       ""
-mz_columns                     ""
 mz_egress_ips                  ""
 mz_functions                   ""
-mz_index_columns               ""
 mz_list_types                  ""
 mz_map_types                   ""
 mz_operators                   ""
@@ -541,10 +539,12 @@ mz_audit_events       mz_catalog_server   ""
 mz_aws_privatelink_connections mz_catalog_server ""
 mz_clusters           mz_catalog_server   ""
 mz_cluster_replicas   mz_catalog_server   ""
+mz_columns            mz_catalog_server   ""
 mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_iceberg_sinks      mz_catalog_server   ""
+mz_index_columns      mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
 mz_kafka_connections  mz_catalog_server   ""
 mz_kafka_sinks        mz_catalog_server   ""
@@ -604,9 +604,7 @@ name                                     comment
 ------------------------------------------------
 mz_aggregates                            ""
 mz_cluster_replica_size_internal         ""
-mz_history_retention_strategies          ""
 mz_license_keys                          ""
-mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
 mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
@@ -621,6 +619,10 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_columns                       ""
+mz_builtin_index_columns                 ""
+mz_builtin_indexes                       ""
+mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
@@ -725,8 +727,10 @@ mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
 mz_comments                    mz_catalog_server   ""
+mz_history_retention_strategies mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_kafka_source_tables         mz_catalog_server   ""
+mz_materialized_view_refresh_strategies mz_catalog_server   ""
 mz_metric_sinks                mz_catalog_server   ""
 mz_mysql_source_tables         mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
@@ -838,7 +842,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-27
+23
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

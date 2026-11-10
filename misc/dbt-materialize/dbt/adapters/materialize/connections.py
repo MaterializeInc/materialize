@@ -54,6 +54,21 @@ DEFAULT_SESSION_PARAMETERS = {
 }
 
 
+NOT_MATERIALIZE_ERROR = (
+    "Make sure you are connecting to Materialize and not to another "
+    "PostgreSQL-compatible database."
+)
+
+
+def _rejects_default_session_parameter(exc: psycopg2.OperationalError) -> bool:
+    # PostgreSQL refuses the connection when the startup packet sets a
+    # parameter it does not know, so it fails here, before the `mz_version`
+    # check in `open` can run. Match on the name alone because the rest of the
+    # message is localized. Materialize only sends a notice for unknown
+    # startup parameters, so this cannot fire against it.
+    return any(name in str(exc) for name in DEFAULT_SESSION_PARAMETERS)
+
+
 def _escape_option_value(v: object) -> str:
     # libpq's options-string parser treats a backslash as an escape and splits
     # on spaces, so both must be escaped. Backslashes go first, otherwise the
@@ -154,15 +169,24 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         )
 
         def connect():
-            handle = psycopg2.connect(
-                dbname=credentials.database,
-                user=credentials.user,
-                host=credentials.host,
-                password=credentials.password,
-                port=credentials.port,
-                connect_timeout=credentials.connect_timeout,
-                **kwargs,
-            )
+            try:
+                handle = psycopg2.connect(
+                    dbname=credentials.database,
+                    user=credentials.user,
+                    host=credentials.host,
+                    password=credentials.password,
+                    port=credentials.port,
+                    connect_timeout=credentials.connect_timeout,
+                    **kwargs,
+                )
+            except psycopg2.OperationalError as exc:
+                if _rejects_default_session_parameter(exc):
+                    # Not an OperationalError, so `retry_connection` fails
+                    # right away instead of retrying a permanent error.
+                    raise dbt_common.exceptions.DbtRuntimeError(
+                        f"{str(exc).rstrip()}\n{NOT_MATERIALIZE_ERROR}"
+                    ) from exc
+                raise
 
             if credentials.role:
                 handle.cursor().execute(f"set role {credentials.role}")
@@ -194,9 +218,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         )  # e.g. v0.79.0-dev (937dfde5e)
         if mz_version is None:
             raise dbt_common.exceptions.DbtRuntimeError(
-                "Server did not report an mz_version. Make sure you are "
-                "connecting to Materialize and not to another PostgreSQL-"
-                "compatible database."
+                f"Server did not report an mz_version. {NOT_MATERIALIZE_ERROR}"
             )
         mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
         mz_version = mz_version[1:]  # e.g. 0.79.0-dev

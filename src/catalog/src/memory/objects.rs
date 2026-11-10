@@ -21,8 +21,7 @@ use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr as ComputePlan;
+use mz_compute_types::dataflows::{DataflowDescription, LirDataflowDescription};
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -894,6 +893,72 @@ pub struct Table {
 }
 
 impl Table {
+    /// Constructs a user table from its planned definition.
+    ///
+    /// # Panics
+    /// Panics for unsupported table data sources or webhook plans without a cluster.
+    pub fn from_plan(
+        plan: mz_sql::plan::Table,
+        global_id: GlobalId,
+        connection_id: ConnectionId,
+        resolved_ids: ResolvedIds,
+    ) -> Self {
+        let conn_id = plan.temporary.then_some(connection_id);
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+        let data_source = match plan.data_source {
+            mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                TableDataSource::TableWrites { defaults }
+            }
+            mz_sql::plan::TableDataSource::DataSource {
+                desc: data_source_plan,
+                timeline,
+            } => match data_source_plan {
+                mz_sql::plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                    data_config,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                        details,
+                        data_config,
+                    },
+                    timeline,
+                },
+                mz_sql::plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    body_format,
+                    headers,
+                    cluster_id,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
+                    },
+                    timeline,
+                },
+                o => {
+                    unreachable!("CREATE TABLE data source got {:?}", o)
+                }
+            },
+        };
+
+        Self {
+            create_sql: Some(plan.create_sql),
+            desc: plan.desc,
+            collections,
+            conn_id,
+            resolved_ids,
+            custom_logical_compaction_window: plan.compaction_window,
+            is_retained_metrics_object: false,
+            data_source,
+        }
+    }
+
     pub fn timeline(&self) -> Timeline {
         match &self.data_source {
             // The Coordinator controls insertions for writable tables
@@ -1455,7 +1520,7 @@ pub struct MaterializedView {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1599,7 +1664,7 @@ pub struct Index {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1633,7 +1698,7 @@ pub struct MetricSink {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1833,7 +1898,7 @@ impl CatalogItem {
     }
 
     /// Returns the physical (LIR) plan, if this item has one.
-    pub fn physical_plan(&self) -> Option<&Arc<DataflowDescription<ComputePlan>>> {
+    pub fn physical_plan(&self) -> Option<&Arc<LirDataflowDescription>> {
         match self {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
@@ -1870,7 +1935,7 @@ impl CatalogItem {
         &mut self,
     ) -> Option<(
         &mut Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
-        &mut Option<Arc<DataflowDescription<ComputePlan>>>,
+        &mut Option<Arc<LirDataflowDescription>>,
         &mut Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
     )> {
         match self {
@@ -3853,7 +3918,7 @@ impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    pub steady_hydrated_at: Option<Timestamp>,
+    pub steady_ready_at: Option<Timestamp>,
 }
 
 impl From<BurstState> for durable::BurstState {
@@ -3863,12 +3928,12 @@ impl From<BurstState> for durable::BurstState {
         let BurstState {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         } = burst;
         Self {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         }
     }
 }
@@ -3880,12 +3945,12 @@ impl From<durable::BurstState> for BurstState {
         let durable::BurstState {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         } = burst;
         Self {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         }
     }
 }

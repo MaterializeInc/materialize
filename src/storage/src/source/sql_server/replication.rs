@@ -422,8 +422,8 @@ pub(crate) fn render<'scope>(
             let mut log_rewinds_complete = true;
 
             // deferred_updates temporarily stores rows for UPDATE operation to support Large Object
-            // Data (LOD) types (i.e. varchar(max), nvarchar(max)). The value of a
-            // LOD column will be NULL for the old row (operation = 3) if the value of the
+            // (LOB) types (i.e. varchar(max), nvarchar(max)). The value of a
+            // LOB column will be NULL for the old row (operation = 3) if the value of the
             // field did not change. The field data will be available in the new row
             // (operation = 4).
             // The CDC stream implementation emits a [`CdcEvent::Data`] event, which contains a

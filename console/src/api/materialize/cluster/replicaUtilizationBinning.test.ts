@@ -11,6 +11,7 @@ import {
   attachOfflineEvents,
   Bucket,
   bucketRowsToBucketsByReplicaId,
+  hasNoUtilizationMetrics,
   maxByMetric,
   OfflineEvent,
   rebucketUtilizationSamples,
@@ -165,6 +166,26 @@ describe("rebucketUtilizationSamples", () => {
     expect(rows[0].maxCpuAt).toEqual(new Date(50_000));
   });
 
+  it("takes swap from the max-heap sample, not its own maximum", () => {
+    const samples = [
+      mkSample({
+        occurredAt: new Date(1_000),
+        heapPercent: 0.9,
+        swapOfRamPercent: 0.1,
+        heapLimitPercent: 1.25,
+      }),
+      mkSample({
+        occurredAt: new Date(2_000),
+        heapPercent: 0.5,
+        swapOfRamPercent: 0.3,
+        heapLimitPercent: 1.25,
+      }),
+    ];
+    const [row] = rebucketUtilizationSamples(samples, MINUTE, 0);
+    expect(row.swapOfRamPercent).toBe(0.1);
+    expect(row.heapLimitPercent).toBe(1.25);
+  });
+
   it("separates buckets per replica and sorts by bucket start", () => {
     const samples = [
       mkSample({ replicaId: "u2", occurredAt: new Date(MINUTE + 1_000) }),
@@ -270,6 +291,34 @@ describe("bucketRowsToBucketsByReplicaId", () => {
 });
 
 describe("toReplicaUtilizationGraphData", () => {
+  const firstPoint = (row: Partial<UtilizationBucketRow>) =>
+    toReplicaUtilizationGraphData(
+      bucketRowsToBucketsByReplicaId([mkBucketRow(row)]),
+      new Date(0),
+      new Date(MINUTE),
+    ).graphData[0].data[0];
+
+  it("rescales swap and the RAM limit to percentages of the heap limit", () => {
+    const point = firstPoint({
+      swapOfRamPercent: 0.25,
+      heapLimitPercent: 1.25,
+    });
+    expect(point.swapPercent).toBeCloseTo(20);
+    expect(point.ramLimitPercent).toBeCloseTo(80);
+  });
+
+  it("keeps zero swap as a reading", () => {
+    const point = firstPoint({ swapOfRamPercent: 0, heapLimitPercent: 1 });
+    expect(point.swapPercent).toBe(0);
+    expect(point.ramLimitPercent).toBe(100);
+  });
+
+  it("leaves swap null when the query didn't select it", () => {
+    const point = firstPoint({});
+    expect(point.swapPercent).toBeNull();
+    expect(point.ramLimitPercent).toBeNull();
+  });
+
   it("scales bucket percents to a 0-100 range per replica", () => {
     const data = {
       bucketsByReplicaId: {
@@ -346,5 +395,52 @@ describe("toReplicaUtilizationGraphData", () => {
     );
     expect(result.offlineEvents).toHaveLength(1);
     expect(result.offlineEvents[0].offlineReason).toBe("crashed");
+  });
+});
+
+describe("hasNoUtilizationMetrics", () => {
+  const replica = (readings: {
+    cpuPercent?: number | null;
+    memoryPercent?: number | null;
+    diskPercent?: number | null;
+  }) => ({
+    id: "u1",
+    data: [
+      {
+        id: "u1",
+        name: "r1",
+        size: "100cc",
+        bucketStart: 0,
+        bucketEnd: MINUTE,
+        cpuPercent: null,
+        memoryPercent: null,
+        heapPercent: null,
+        diskPercent: null,
+        maxMemoryAndDiskPercent: null,
+        swapPercent: null,
+        ramLimitPercent: null,
+        offlineEvents: [],
+        ...readings,
+      },
+    ],
+  });
+
+  it("flags replicas whose readings are all empty or zero", () => {
+    expect(
+      hasNoUtilizationMetrics([
+        replica({}),
+        replica({ cpuPercent: 0, memoryPercent: 0 }),
+      ]),
+    ).toBe(true);
+  });
+
+  it("passes once any replica reports CPU, memory or disk", () => {
+    expect(
+      hasNoUtilizationMetrics([replica({}), replica({ diskPercent: 3 })]),
+    ).toBe(false);
+  });
+
+  it("passes when there are no replicas to judge", () => {
+    expect(hasNoUtilizationMetrics([])).toBe(false);
   });
 });

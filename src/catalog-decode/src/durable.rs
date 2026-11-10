@@ -8,13 +8,16 @@
 // by the Apache License, Version 2.0.
 
 //! Decoders for values in their durable catalog JSON encoding, the serde shape
-//! of the `mz-catalog-protos` types.
+//! of the `mz-catalog-protos` types, and conversions from parsed SQL values
+//! into `mz_repr` types.
 
 use mz_repr::Datum;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_repr::role_id::RoleId;
+use mz_sql_parser::ast::{DateTimeField, IntervalValue};
 
 /// Converts a JSONB `Datum` into a `u64`.
 fn jsonb_datum_to_u64<'a>(d: Datum<'a>) -> Result<u64, String> {
@@ -143,4 +146,34 @@ pub fn privileges(a: JsonbRef<'_>) -> Result<Vec<MzAclItem>, String> {
 /// (e.g. `{"bitflags": 514}`) into an `AclMode`.
 pub fn acl_mode(a: JsonbRef<'_>) -> Result<AclMode, String> {
     jsonb_datum_to_acl_mode(a.into_datum())
+}
+
+/// Converts the parts of an `INTERVAL '...'` literal into an `Interval`.
+///
+/// Mirrors `plan_interval` in `mz_sql`.
+pub(crate) fn interval_literal(literal: &IntervalValue) -> Result<Interval, String> {
+    Interval::from_literal(
+        &literal.value,
+        date_time_field(literal.precision_high),
+        date_time_field(literal.precision_low),
+        literal.fsec_max_precision,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn date_time_field(field: DateTimeField) -> mz_repr::adt::datetime::DateTimeField {
+    use mz_repr::adt::datetime::DateTimeField as Repr;
+    match field {
+        DateTimeField::Millennium => Repr::Millennium,
+        DateTimeField::Century => Repr::Century,
+        DateTimeField::Decade => Repr::Decade,
+        DateTimeField::Year => Repr::Year,
+        DateTimeField::Month => Repr::Month,
+        DateTimeField::Day => Repr::Day,
+        DateTimeField::Hour => Repr::Hour,
+        DateTimeField::Minute => Repr::Minute,
+        DateTimeField::Second => Repr::Second,
+        DateTimeField::Milliseconds => Repr::Milliseconds,
+        DateTimeField::Microseconds => Repr::Microseconds,
+    }
 }

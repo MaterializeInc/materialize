@@ -60,25 +60,27 @@ replica itself, at its larger size, in `replicas`:
 To check whether the objects driving the burst have finished hydrating on the
 steady-size replicas, query
 [`mz_internal.mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
-for the cluster's steady-size replica IDs. Once every object is hydrated on a
-steady-size replica, the burst replica lingers for the configured `LINGER
-DURATION` and is then removed.
+for the cluster's steady-size replica IDs. Retirement starts once at least one
+steady-size replica is hydrated and caught up to the burst replica (within the
+lag allowance, 60 seconds by default), then waits for `LINGER DURATION`. A failed readiness check
+restarts linger.
 
 The [audit log](/sql/system-catalog/mz_catalog/#mz_audit_events) records when a
 burst replica is created and dropped, so you can look back at past autoscaling
 events after the fact.
 
-## If the steady-size replica never hydrates
+## If the steady-size replica never catches up
 
 The burst replica has no maximum lifetime: if a steady-size replica never
-catches up (for example, it's undersized and runs out of memory during
-hydration), the burst replica keeps serving indefinitely at the configured
+catches up (for example, it runs out of memory during hydration, or hydrates
+but cannot keep up with incoming updates), the burst replica keeps serving
+indefinitely at the configured
 `HYDRATION SIZE`, billed for as long as it runs. This is deliberate: the burst
 replica may be the only thing keeping the cluster able to serve results, so
 Materialize does not tear it down just because it has been up a while.
 
 If you find yourself in this situation, [resize the cluster](/sql/alter-cluster/#resizing)
-to a `SIZE` that can hydrate the objects at steady state. The burst replica
+to a `SIZE` that can hydrate the objects and keep up with incoming updates. The burst replica
 keeps serving throughout the resize, so there's no gap in availability while
 you find the right size.
 

@@ -30,7 +30,7 @@ The `materialize-agent` endpoint is enabled by default. To disable it:
 
 {{< tab "Cloud" >}}
 
-Contact [Materialize support](https://materialize.com/docs/support/) to
+Contact [Materialize support](https://materialize.com/support/) to
 enable/disable the MCP agent endpoint for your environment.
 {{< /tab >}}
 

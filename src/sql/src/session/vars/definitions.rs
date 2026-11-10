@@ -198,6 +198,47 @@ impl VarDefinition {
     pub fn default_value(&self) -> &'_ dyn Value {
         self.value.value()
     }
+
+    /// Returns every property of this definition.
+    pub fn parts(&self) -> VarDefinitionParts<'_> {
+        // Destructured without `..`, so a new field fails to compile here
+        // until it is either exposed or deliberately skipped.
+        let VarDefinition {
+            name,
+            description,
+            user_visible,
+            value: _,
+            constraint,
+            require_feature_flag,
+            scope,
+            // Exposed as `VarDefinition::parse`.
+            parse: _,
+            type_name,
+        } = self;
+        VarDefinitionParts {
+            name,
+            description,
+            user_visible: *user_visible,
+            default_value: self.default_value(),
+            constraint: constraint.as_ref(),
+            require_feature_flag: *require_feature_flag,
+            scope: *scope,
+            type_name: type_name(),
+        }
+    }
+}
+
+/// The properties of a [`VarDefinition`], see [`VarDefinition::parts`].
+#[derive(Debug)]
+pub struct VarDefinitionParts<'a> {
+    pub name: &'static UncasedStr,
+    pub description: &'static str,
+    pub user_visible: bool,
+    pub default_value: &'a dyn Value,
+    pub constraint: Option<&'a ValueConstraint>,
+    pub require_feature_flag: Option<&'static FeatureFlag>,
+    pub scope: ParameterScope,
+    pub type_name: Cow<'static, str>,
 }
 
 impl Var for VarDefinition {
@@ -1293,6 +1334,13 @@ pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static EMIT_EXECUTION_TIME_NOTICE: VarDefinition = VarDefinition::new(
+    "emit_execution_time_notice",
+    value!(bool; false),
+    "Boolean flag indicating whether to send a NOTICE with the server-side execution time of statements (Materialize).",
+    true,
+);
+
 pub static EMIT_TIMESTAMP_NOTICE: VarDefinition = VarDefinition::new(
     "emit_timestamp_notice",
     value!(bool; false),
@@ -1880,6 +1928,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_jq,
+        desc: "the jq function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,
@@ -2060,6 +2114,14 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    // NOTE: `false` is the safe setting, unlike most `enable_*` flags. Turning it on lets
+    // `DROP INDEX` orphan the dataflows of indexes that other dataflows still read from.
+    {
+        name: enable_drop_in_use_index,
+        desc: "dropping an index while other dataflows read from it, leaving them running on an orphaned arrangement",
+        default: false,
+        enable_for_item_parsing: false,
+    },
     {
         name: enable_managed_cluster_availability_zones,
         desc: "MANAGED, AVAILABILITY ZONES syntax",
@@ -2153,6 +2215,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_try_cast,
+        desc: "TRY_CAST(<expr> AS <type>) syntax",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
@@ -2231,7 +2299,7 @@ feature_flags!(
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2329,12 +2397,6 @@ feature_flags!(
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
-        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
-        default: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_replacement_materialized_views,

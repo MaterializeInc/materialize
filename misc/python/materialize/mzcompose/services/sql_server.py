@@ -33,6 +33,18 @@ class SqlServer(Service):
         volumes_extra: list[str] = [],
         enable_agent: bool = True,
     ) -> None:
+        # Verify all system databases are ONLINE before declaring healthy.
+        # Without this, the container can be marked healthy while msdb is
+        # still recovering, causing error 904 ("cannot be autostarted during
+        # server shutdown or startup").
+        ready_query = "SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)"
+        if enable_agent:
+            # The databases come ONLINE before SQL Server Agent has finished
+            # starting, and enabling CDC in that window fails with error
+            # 14258 ("Cannot perform this operation while SQLServerAgent is
+            # starting"). This procedure raises that same error while the
+            # Agent is starting, and fails before the Agent has started.
+            ready_query += "; EXEC msdb.dbo.sp_is_sqlagent_starting"
         config: ServiceConfig = {
             "ports": [1433],
             "volumes": volumes_extra,
@@ -44,11 +56,6 @@ class SqlServer(Service):
                 *environment_extra,
             ],
             "healthcheck": {
-                # Verify all system databases are ONLINE before declaring
-                # healthy. Without this, the container can be marked
-                # healthy while msdb is still recovering, causing error
-                # 904 ("cannot be autostarted during server shutdown or
-                # startup").
                 # NOTE: -b is what turns the RAISERROR into a nonzero exit
                 # code; without it sqlcmd exits 0 and the check degrades to
                 # a plain connectivity probe.
@@ -56,7 +63,7 @@ class SqlServer(Service):
                     "SQLCMD=/opt/mssql-tools18/bin/sqlcmd; "
                     '[ -x "$$SQLCMD" ] || SQLCMD=/opt/mssql-tools/bin/sqlcmd; '
                     f"\"$$SQLCMD\" -b -C -S localhost -U sa -P '{sa_password}' "
-                    "-Q \"SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)\""
+                    f'-Q "{ready_query}"'
                 ),
                 # Recovering can take a while
                 "start_period": "300s",

@@ -1380,6 +1380,23 @@ mod scalar {
                     exprs,
                 ))
             }
+            // `try_cast[<unary func name>](<expr>)` wraps the named cast so
+            // that its errors become NULL.
+            "try_cast" => {
+                let name = params.parse::<syn::Ident>()?;
+                let Some(cast) = UnaryFunc::from_variant_name(&name.to_string()) else {
+                    return Err(Error::new(name.span(), "unsupported function name"));
+                };
+                let func = UnaryFunc::try_cast_if_fallible(cast);
+                if !matches!(func, UnaryFunc::TryCast(_)) {
+                    return Err(Error::new(
+                        name.span(),
+                        "try_cast wraps only functions that can error",
+                    ));
+                }
+                let expr = Box::new(parse_expr(&inner)?);
+                Ok(MirScalarExpr::CallUnary { func, expr })
+            }
             _ => Err(Error::new(
                 ident.span(),
                 "unsupported parameterized function",

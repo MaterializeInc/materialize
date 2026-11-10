@@ -49,6 +49,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -77,6 +78,7 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
+    MySql(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -1525,6 +1527,208 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_pg_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a PostgreSQL source keep ingesting
+    CDC while a newly added table's snapshot runs, and that a table added
+    alongside completes its own snapshot without waiting. The new table's
+    snapshot is held with the pg_snapshot_pause failpoint."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("pg-snapshot-freshness/03-verify.td")
+
+
+def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a table whose snapshot is held while CDC streams into it
+    converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind
+    the held frontier, not a re-run snapshot. The hold is timed with the
+    pg_snapshot_pause failpoint, long enough for the staging assertions of the
+    shared add-tables phase to run against a frontier that is still held."""
+
+    with c.override(
+        # The release waits out the hold, and after it the shard upper waits
+        # for the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused:30000)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
+
+
+def workflow_mysql_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a MySQL source keep ingesting CDC
+    while a newly added table's snapshot runs, and that a table added alongside
+    completes its own snapshot without waiting. The new table's snapshot is
+    held with the mysql_snapshot_pause failpoint."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=mysql_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("mysql-snapshot-freshness/03-verify.td")
+
+
+def workflow_mysql_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a MySQL table whose snapshot is held while CDC streams into
+    it converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind the
+    held frontier, not a re-run snapshot. The hold is timed with the
+    mysql_snapshot_pause failpoint, long enough for the staging assertions of
+    the shared add-tables phase to run against a frontier that is still held."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        # The release waits out the hold. After that the shard upper waits for
+        # the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                "FAILPOINTS=mysql_snapshot_pause=return(t_paused:30000)"
+            ],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/04-release.td")
+
+
+def workflow_pg_seal_on_replay(c: Composition) -> None:
+    """Test that a PostgreSQL table whose incompatible schema change is found
+    while the replication slot replays changes the table already committed is
+    sealed with its error. A held snapshot of another table keeps the slot
+    behind the committed changes across a restart."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        # The validation that runs when the stream starts precedes the schema
+        # change, and no other one runs before the restart.
+        c.sql(
+            "ALTER SYSTEM SET pg_schema_validation_interval = '1h'",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-seal-on-replay/01-alter-schema.td")
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+        c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
+
+
+def workflow_pg_late_add_restart(c: Composition) -> None:
+    """Test that a table added to an established PostgreSQL source reports
+    snapshot_committed = false while its snapshot is held, and that
+    environmentd restarts while the table is still snapshotting."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+
+        # Each ingestion render opens a leased reader on the remap shard and
+        # holds it at the since it read for 300s (`deferred_expire` in
+        # async_storage_worker.rs). The setup's renders read a since of 0, so
+        # the remap since only moves past 0 once they expire.
+        time.sleep(330)
+
+        c.testdrive(
+            "> CREATE TABLE t_paused FROM SOURCE mz_source (REFERENCE t_paused);"
+        )
+
+        # A new table reads snapshot_committed = false until its first report,
+        # which would satisfy the assertion vacuously. WAL written after the
+        # table is added can only reach its offset_known through a report from
+        # the ingestion that includes it.
+        lsn = c.sql_query(
+            "INSERT INTO t_before VALUES (3) RETURNING pg_current_wal_insert_lsn() - '0/0'",
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database="postgres",
+        )[0][0]
+
+        c.testdrive(dedent(f"""
+                > SELECT u.offset_known::numeric >= {lsn}
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                true
+
+                > SELECT u.snapshot_committed
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                false
+                """))
+
+        c.kill("materialized")
+        c.up("materialized")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
@@ -2082,6 +2286,15 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         # Drop the index on the base table. This will change the plan of `mv1` the
         # next time it is replanned, which should cause reconciliation to replace
         # it, as well as the other dataflows that depend on `mv1`.
+        #
+        # NOTE: This deliberately orphans `idx`'s dataflow. `mv` and `idx1` read
+        # from `idx`, so their plans only change on replan if `idx` goes away
+        # while they survive, which `enable_drop_in_use_index` allows.
+        c.sql(
+            "ALTER SYSTEM SET enable_drop_in_use_index = true",
+            port=6877,
+            user="mz_system",
+        )
         c.sql("DROP INDEX idx")
 
         # Restart environmentd to trigger a replanning and reconciliation.
@@ -2773,8 +2986,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         # Check that collection metrics update when collections are dropped.
         c.sql("""
-            DROP INDEX idx;
             DROP MATERIALIZED VIEW mv;
+            DROP INDEX idx;
             """)
 
         time.sleep(2)
@@ -2929,8 +3142,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Drop the dataflows.
     c.sql("""
-        DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
+        DROP INDEX idx;
         """)
 
     # Wait for the controller to asynchronously drop the dataflows and update
@@ -3206,6 +3419,25 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
     assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("subscribe")
     assert 0 < time < 10, f"got {time}"
+
+
+def workflow_test_dropped_role_begin(c: Composition) -> None:
+    c.up("materialized")
+    c.sql("CREATE ROLE dropped_role")
+
+    with c.sql_connection(user="dropped_role") as conn:
+        conn.autocommit = False
+        c.sql("DROP ROLE dropped_role")
+
+        # Psycopg first sends an implicit BEGIN. Duplicate error responses
+        # mask the dropped-role error with a client-side InternalError.
+        try:
+            conn.execute("SELECT 1")
+        except psycopg.errors.InsufficientPrivilege as e:
+            assert "was concurrently dropped" in str(e), str(e)
+            assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        else:
+            raise AssertionError("query succeeded after its role was dropped")
 
 
 def workflow_test_pgwire_metrics(c: Composition) -> None:
@@ -5251,13 +5483,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
         ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
     ]
 
-    def check(frontend_peek: bool) -> None:
-        c.sql(
-            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
-            port=6877,
-            user="mz_system",
-        )
-        # The peek flag is read when a connection is set up, so use a fresh one.
+    def check() -> None:
         with c.sql_cursor() as cur:
             # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
             # rows forever.
@@ -5293,8 +5519,55 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
                 INSERT INTO t VALUES (1);
                 CREATE VIEW v AS SELECT a FROM t;
                 """))
-        for frontend_peek in (False, True):
-            check(frontend_peek)
+        check()
+
+
+def workflow_test_refresh_mv_constant_error_past_last_refresh(
+    c: Composition,
+) -> None:
+    """
+    A REFRESH MV whose plan contains a constant error must not emit that error
+    after its last refresh. On restart the dataflow of a pending replacement
+    can get an as-of beyond its last refresh, and the error, placed at the
+    as-of, reached `apply_refresh` and tripped its soft assertion, crash-looping
+    the replica.
+    """
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_refresh_every_mvs": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+        c.sql(dedent("""
+                CREATE TABLE t (a int);
+                INSERT INTO t SELECT generate_series(1, 1000);
+                CREATE TABLE t3 (a int);
+                INSERT INTO t3 VALUES (1), (2), (3);
+                CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a IS NOT NULL;
+                CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
+                  WITH (REFRESH AT mz_now()::text::int8 + 5000)
+                  AS WITH MUTUALLY RECURSIVE
+                    r(a int) AS (SELECT a FROM t UNION SELECT a FROM e),
+                    e(a int) AS (SELECT (1/0)::int)
+                  SELECT r.a FROM r JOIN t3 ON r.a = t3.a;
+                """))
+
+        # Sleep through the last refresh, then restart so that as-of selection
+        # runs for the replacement's dataflow.
+        time.sleep(10)
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Give the replica time to render the dataflow and, if broken, crash.
+        time.sleep(15)
+        c.sql("SELECT count(*) FROM t3")
+
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        assert (
+            "Received data after the last refresh" not in logs
+        ), "apply_refresh received data after the last refresh"
 
 
 def workflow_test_refresh_mv_warmup(
@@ -7357,6 +7630,84 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         """)
 
 
+def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
+    """
+    Test that reconnecting to a cluster's only replica does not advance the
+    read frontier of an index on that cluster past its write frontier.
+
+    While the controller reconnects, its replica map is briefly empty. Treating
+    that as a cluster without replicas forwards the index's read hold, and a
+    replica that still renders the index at its old as-of then halts with
+    "cannot serve requested as_of" once the index's input compacts.
+    """
+
+    query = """
+        SELECT f.read_frontier, f.write_frontier
+        FROM mz_internal.mz_frontiers f
+        JOIN mz_indexes i ON i.id = f.object_id
+        WHERE i.name = 'idx'
+        """
+
+    def reconnects() -> int:
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        return logs.count("starting replica task")
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+    try:
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+            CREATE INDEX idx ON t (a);
+            SELECT a FROM t;
+            """)
+
+        # A paused replica stops reporting frontiers, so the index's write
+        # frontier stays put. The controller times out the connection after
+        # `grpc_client_http2_keep_alive_timeout` and reconnects, which must
+        # leave the index's read frontier behind its write frontier.
+        connects_before = reconnects()
+        c.pause("clusterd1")
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                read, write = (int(f) for f in c.sql_query(query)[0])
+                assert read <= write, (
+                    f"read frontier of idx advanced to {read}, past its write"
+                    f" frontier {write}, while its replica was reconnecting"
+                )
+                time.sleep(1)
+            assert (
+                reconnects() > connects_before
+            ), "the controller did not reconnect to the paused replica"
+        finally:
+            c.unpause("clusterd1")
+
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT a FROM t;
+            """)
+    finally:
+        # Later workflows in the same shard reuse the volumes and create their
+        # own `t`.
+        c.down(destroy_volumes=True)
+
+
 def workflow_test_swap_heap_limiting(c: Composition) -> None:
     """
     Test that heap limits are correctly configured for swap replicas, based
@@ -7565,8 +7916,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
     # writes every size to `mz_cluster_replica_size_internal`, including
     # disabled ones, so `disk` for the existing `noswap_nonzero` cluster and
     # its replica should still resolve to `true`. The public
-    # `mz_cluster_replica_sizes` table drops the disabled row, which the
-    # final assertion checks.
+    # `mz_cluster_replica_sizes` table lists the disabled row as disabled,
+    # which the final assertion checks.
     c.kill("materialized")
     sizes_with_disabled = dict(sizes)
     sizes_with_disabled["noswap,nonzero"] = {
@@ -7598,8 +7949,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 noswap_zero    false
                 noswap_nonzero true
 
-                > SELECT 'noswap,nonzero' IN (SELECT size FROM mz_cluster_replica_sizes)
-                false
+                > SELECT disabled FROM mz_cluster_replica_sizes WHERE size = 'noswap,nonzero'
+                true
                 """))
 
 
@@ -8295,7 +8646,7 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
                 "enable_eager_delta_joins": "false",
             },
             environment_extra=[
-                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,mz_adapter::catalog::state=debug,info",
             ],
         ),
     ):
@@ -8313,12 +8664,18 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             user="mz_system",
         )
 
+        # `CREATE VIEW v` comes after `CREATE OR REPLACE VIEW`, whose cache
+        # invalidation is not awaited. The cache applies writes in order, so
+        # once `v`'s awaited write returns, the invalidation is durable too.
         c.sql("""
             SET cluster = test_cache;
 
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
             CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+            CREATE VIEW v_replaced AS SELECT a FROM t;
+            CREATE OR REPLACE VIEW v_replaced AS SELECT a + 1 AS a FROM t;
+            CREATE VIEW v AS SELECT a * 2 AS c FROM t WHERE a > 0;
 
             SELECT * FROM t;
             SELECT * FROM mv;
@@ -8343,6 +8700,23 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             if re.search(r"global expression cache hit for User\(\d+\)", line)
         ]
         assert len(cache_hits) == 2, cache_hits
+
+        # A view has only a local expression. Only the restarted boot can hit its
+        # durable entry, so count nothing before that boot's startup marker.
+        view_id = c.sql_query("SELECT id FROM mz_views WHERE name = 'v'")[0][0]
+        restarted_boot = logs[logs.rindex("startup: envd init: beginning") :]
+        view_hit = f"local expression cache hit for User({view_id.removeprefix('u')})"
+        assert view_hit in restarted_boot, f"no '{view_hit}' after the restart"
+
+        # `CREATE OR REPLACE VIEW` invalidates the replaced view's entry right
+        # away, so the restarted boot finds no entry of a dropped item to remove.
+        reconciled = [
+            line
+            for line in restarted_boot.splitlines()
+            if "reconciled the expression cache" in line
+        ]
+        assert reconciled, "no expression cache reconciliation after the restart"
+        assert "removed_dropped_item=0" in reconciled[-1], reconciled[-1]
 
 
 def workflow_test_github_11219(c: Composition) -> None:

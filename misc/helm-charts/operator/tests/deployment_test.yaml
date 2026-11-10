@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v26.44.1
+      value: materialize/orchestratord:v26.49.1
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -300,6 +300,31 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--environmentd-priority-class-name=mz-environmentd-high"
 
+- it: should not pass default environmentd probes when not configured
+  asserts:
+  - notMatchRegex:
+      path: spec.template.spec.containers[0].args[*]
+      pattern: "^--environmentd-default-(readiness|liveness|startup)-probe"
+
+- it: should pass default environmentd probes when configured
+  set:
+    environmentd.defaultReadinessProbe:
+      periodSeconds: 5
+    environmentd.defaultLivenessProbe:
+      failureThreshold: 60
+    environmentd.defaultStartupProbe:
+      failureThreshold: 360
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-readiness-probe={"periodSeconds":5}'
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-liveness-probe={"failureThreshold":60}'
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-startup-probe={"failureThreshold":360}'
+
 - it: should not pass the clusterd priority class when not configured
   asserts:
   - notMatchRegex:
@@ -327,6 +352,19 @@ tests:
   - notContains:
       path: spec.template.spec.containers[0].args
       content: "--disable-license-key-checks"
+
+- it: should pass license key intermediate certificates
+  set:
+    operator.args.licenseKeyIntermediateCerts:
+    - cert-a
+    - cert-b
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--license-key-intermediate-cert=cert-a"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--license-key-intermediate-cert=cert-b"
 
 - it: should have database network policies disabled by default
   asserts:
@@ -391,3 +429,36 @@ tests:
   - equal:
       path: spec.template.spec.terminationGracePeriodSeconds
       value: 30
+- it: should pass the balancerd readiness probe path
+  set:
+    balancerd.readinessProbePath: /api/livez
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--balancerd-readiness-probe-path=/api/livez"
+- it: should not use user namespaces by default
+  asserts:
+  - notExists:
+      path: spec.template.spec.hostUsers
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should run the operator in a user namespace and pass the flag when enabled
+  set:
+    operator.args.enableUserNamespaces: true
+  asserts:
+  - equal:
+      path: spec.template.spec.hostUsers
+      value: false
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--enable-user-namespaces"
+
+- it: should pass the balancerd termination grace period
+  set:
+    balancerd.terminationGracePeriodSeconds: 900
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--balancerd-termination-grace-period-seconds=900"

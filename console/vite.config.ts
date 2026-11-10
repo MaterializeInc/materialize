@@ -62,6 +62,9 @@ function buildDefinitions() {
       __IMPERSONATION_HOSTNAME__: JSON.stringify(
         process.env.IMPERSONATION_HOSTNAME,
       ),
+      // Production builds (including staging and previews) never accept a
+      // dev-server origin as a post-login redirect.
+      __MARKETING_SITE_DEV_ORIGINS__: JSON.stringify(""),
       __MZ_CONSOLE_IMAGE_TAG__: JSON.stringify(
         process.env.MZ_CONSOLE_IMAGE_TAG,
       ),
@@ -77,11 +80,22 @@ function buildDefinitions() {
     __IMPERSONATION_HOSTNAME__: JSON.stringify(
       process.env.IMPERSONATION_HOSTNAME,
     ),
+    // Comma-separated origins of a local marketing site that `yarn start` may
+    // redirect back to after sign-in. Defaults to its Vite dev server.
+    __MARKETING_SITE_DEV_ORIGINS__: JSON.stringify(
+      process.env.MARKETING_SITE_DEV_ORIGINS ?? "http://localhost:5173",
+    ),
     __MZ_CONSOLE_IMAGE_TAG__: JSON.stringify(process.env.MZ_CONSOLE_IMAGE_TAG),
     __SENTRY_ENABLED__: JSON.stringify(process.env.SENTRY_ENABLED || false),
     __SENTRY_RELEASE__: JSON.stringify(process.env.SENTRY_RELEASE || null),
   };
 }
+
+// vite-plugin-svgr 4.5 transforms with oxc whenever Vite exports
+// `transformWithOxc`, which Vite 8 does, and passes `esbuildOptions` to it.
+// oxc ignores `loader` and defaults `lang` to "jsx", which cannot parse the
+// TypeScript that `svgrTemplate` emits.
+const svgrTransformOptions = { loader: "tsx", lang: "tsx" } as const;
 
 const plugins = [
   wasm(),
@@ -95,9 +109,7 @@ const plugins = [
       typescript: true,
       template: svgrTemplate,
     },
-    esbuildOptions: {
-      loader: "tsx",
-    },
+    esbuildOptions: svgrTransformOptions,
     // A minimatch pattern, or array of patterns, which specifies the files in the build the plugin should include.
     include: "**/*.svg?react",
   }),

@@ -19,6 +19,8 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 pipeline=${1:-test}
 if [ "$#" -gt 0 ]; then
   shift
@@ -55,6 +57,10 @@ done < "$tmpfile"
 rm "$tmpfile"
 
 if [ -n "$bootstrap_steps" ]; then
+  queue=hetzner-x86-64-4cpu-8gb-mkpipeline
+  if is_truthy "${CI_FORCE_SWITCH_TO_AWS-0}"; then
+    queue=linux-x86_64-small
+  fi
   exec buildkite-agent pipeline upload <<EOF
 steps:
   $bootstrap_steps
@@ -63,7 +69,7 @@ steps:
     command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:
-      queue: hetzner-x86-64-4cpu-8gb-mkpipeline
+      queue: $queue
     retry:
       automatic:
         - exit_status: -1

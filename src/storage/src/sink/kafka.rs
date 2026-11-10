@@ -80,11 +80,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
-use crate::statistics::SinkStatistics;
-use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
@@ -146,6 +141,12 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
+
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
 
 impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
@@ -743,11 +744,8 @@ fn sink_collection<'scope>(
                 // ..but the since frontier is now beyond that
                 !PartialOrder::less_equal(&as_of, &resume_upper);
             if overcompacted {
-                let err = format!(
-                    "{name}: input compacted past resume upper: as_of {}, resume_upper: {}",
-                    as_of.pretty(),
-                    resume_upper.pretty()
-                );
+                let err =
+                    super::overcompacted_error(&name, &as_of, &resume_upper, "recreate the sink");
                 // This would normally be an assertion but because it can happen after a
                 // Materialize backup/restore we log an error so that it appears on Sentry but
                 // leaves the rest of the objects in the cluster unaffected.
@@ -1612,8 +1610,12 @@ fn encode_collection<'scope>(
 
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, mut batches) = event {
-                    for batch in batches.drain(..) {
-                        for_each_diff_pair(&batch, |key, time, value| {
+                    for span in batches.drain(..) {
+                        // A span with no updates carries no batch to encode.
+                        let Some(batch) = &span.inner else {
+                            continue;
+                        };
+                        for_each_diff_pair(batch, |key, time, value| {
                             if let Some(warner) = pk_warner.as_mut() {
                                 warner.observe(key, time);
                             }

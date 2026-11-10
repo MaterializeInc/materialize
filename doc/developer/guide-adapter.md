@@ -66,6 +66,19 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Index imports are not catalog dependencies
+
+Which indexes a dataflow reads from is an optimizer decision recorded in the
+physical plan and in the compute controller (`compute_dependencies`), not in the
+catalog. A materialized view's `uses()` comes from its HIR and names relations
+only, so an index's `used_by` is always empty and the planner's `CASCADE`
+expansion and `RESTRICT` check never see index readers. The sequencer asks
+`ComputeController::collection_reverse_dependencies` instead
+(`Coordinator::check_index_dependents`), which is why that check lives in the
+sequencer rather than in `plan_drop_objects`. Anything else that needs "who
+reads this index" has to go through the compute controller too. See
+`doc/developer/design/20260923_drop_in_use_index.md`.
+
 ### Background reconcilers own convergence resource failures
 
 When a catalog mutation writes desired state that a background reconciler
@@ -85,6 +98,20 @@ transaction nets replacement drops against creates, its implications must queue
 those drops before the creates. An orchestrator can retry a failed create
 indefinitely. Queuing the drop behind it would deadlock a replacement against
 the same physical quota that catalog accounting correctly considered available.
+
+### Keep the coordinator loop live, including in read-only mode
+
+Slow message handling stalls the coordinator: nothing else runs while a handler
+awaits. Do network round trips, such as timestamp-oracle and persist calls, off
+the loop and hand the handler only the result, and keep per-message work from
+growing with catalog size. The loop is biased: it polls its sources in a fixed
+order, internal commands first, so a steady stream on an early source starves
+the later ones. A task that sends periodic internal commands must therefore
+pause after each reply. A `tokio::time::interval` does not: it fires an overdue
+tick immediately, whatever its missed-tick behavior.
+
+A read-only (0dt) coordinator needs the same liveness as the leader: it serves
+no queries, but a stall there blocks promotion.
 
 ## Correctness Invariants
 

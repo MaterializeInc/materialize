@@ -38,7 +38,7 @@ where
 #[sqlfunc(
     sqlname = "\"char\"_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToPgLegacyChar)
+    inverse = super::CastStringToPgLegacyChar
 )]
 fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
     let mut buf = String::new();
@@ -49,7 +49,7 @@ fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
 #[sqlfunc(
     sqlname = "\"char\"_to_char",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToPgLegacyChar)
+    inverse = super::CastStringToPgLegacyChar
 )]
 fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalError> {
     let mut buf = String::new();
@@ -60,10 +60,10 @@ fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalErro
 #[sqlfunc(
     sqlname = "\"char\"_to_varchar",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToVarChar{
+    inverse = super::CastStringToVarChar{
         fail_on_len: false,
         length: Some(VarCharMaxLength::try_from(1).unwrap()),
-    })
+    }
 )]
 fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, EvalError> {
     let mut buf = String::new();
@@ -74,7 +74,7 @@ fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, E
 #[sqlfunc(
     sqlname = "\"char\"_to_integer",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt32ToPgLegacyChar)
+    inverse = super::CastInt32ToPgLegacyChar
 )]
 fn cast_pg_legacy_char_to_int32(a: PgLegacyChar) -> i32 {
     // Per PostgreSQL, casts to `i32` are performed as if `PgLegacyChar` is

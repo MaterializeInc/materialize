@@ -49,12 +49,13 @@ pub enum AllowedRoles {
 }
 
 /// A group of HTTP routes
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "SerializedRouteGroup", into = "SerializedRouteGroup")]
 pub enum RouteGroup {
     /// Enabled, restricted to these roles.
     Enabled(AllowedRoles),
     /// Disabled.
+    #[default]
     Disabled,
 }
 
@@ -129,6 +130,11 @@ pub struct HttpRoutesEnabled {
     pub mcp_agent: RouteGroup,
     /// Include /api/mcp/developer endpoint for system catalog queries via MCP.
     pub mcp_developer: RouteGroup,
+    /// Include the unified /api/mcp endpoint for Model Context Protocol.
+    /// Disabled when missing, so configs written before this field existed
+    /// still load.
+    #[serde(default)]
+    pub mcp: RouteGroup,
     /// Include /api/console/config endpoint for unauthenticated console configuration.
     pub console_config: RouteGroup,
 }
@@ -318,6 +324,7 @@ impl From<v0_147_0::HttpListenerConfig> for HttpListenerConfig {
                 profiling: group(legacy.routes.profiling),
                 mcp_agent: group(legacy.routes.mcp_agent),
                 mcp_developer: group(legacy.routes.mcp_developer),
+                mcp: RouteGroup::Disabled,
                 console_config: group(legacy.routes.console_config),
             },
         }
@@ -405,6 +412,64 @@ mod tests {
         assert_eq!(routes.base, RouteGroup::Enabled(AllowedRoles::Normal));
         assert_eq!(routes.internal, RouteGroup::Enabled(AllowedRoles::Internal));
         assert_eq!(routes.webhook, RouteGroup::Disabled);
+    }
+
+    #[mz_ore::test]
+    fn v26_32_0_schema_without_mcp_group_parses_as_disabled() {
+        let json = r#"{
+            "version": "26.32.0",
+            "sql": {},
+            "http": {
+                "external": {
+                    "addr": "0.0.0.0:6876",
+                    "authenticator_kind": "None",
+                    "enable_tls": false,
+                    "routes": {
+                        "base": { "enabled": true, "allowed_roles": "Normal" },
+                        "webhook": { "enabled": false },
+                        "internal": { "enabled": false },
+                        "metrics": { "enabled": false },
+                        "profiling": { "enabled": false },
+                        "mcp_agent": { "enabled": true, "allowed_roles": "Normal" },
+                        "mcp_developer": { "enabled": true, "allowed_roles": "Normal" },
+                        "console_config": { "enabled": false }
+                    }
+                }
+            }
+        }"#;
+        let routes = parse(json).http["external"].routes;
+        assert_eq!(routes.mcp, RouteGroup::Disabled);
+        assert_eq!(routes.mcp_agent, RouteGroup::Enabled(AllowedRoles::Normal));
+    }
+
+    #[mz_ore::test]
+    fn mcp_group_parses_when_present() {
+        let json = r#"{
+            "version": "26.32.0",
+            "sql": {},
+            "http": {
+                "external": {
+                    "addr": "0.0.0.0:6876",
+                    "authenticator_kind": "None",
+                    "enable_tls": false,
+                    "routes": {
+                        "base": { "enabled": false },
+                        "webhook": { "enabled": false },
+                        "internal": { "enabled": false },
+                        "metrics": { "enabled": false },
+                        "profiling": { "enabled": false },
+                        "mcp_agent": { "enabled": false },
+                        "mcp_developer": { "enabled": false },
+                        "mcp": { "enabled": true, "allowed_roles": "NormalAndInternal" },
+                        "console_config": { "enabled": false }
+                    }
+                }
+            }
+        }"#;
+        assert_eq!(
+            parse(json).http["external"].routes.mcp,
+            RouteGroup::Enabled(AllowedRoles::NormalAndInternal)
+        );
     }
 
     #[mz_ore::test]

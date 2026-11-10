@@ -59,7 +59,6 @@ const TELEPORT_REWRITE_HEADER_VALUE: &str = "mz_support";
 /// The settings that the `--teleport-*` flags provide.
 #[derive(Clone)]
 pub struct TeleportConfig {
-    pub endpoint: String,
     pub stack_type: String,
     pub cluster_name: String,
 }
@@ -80,24 +79,22 @@ struct Rewrite {
 ///
 /// `environment-controller` derives the ordinal the same way, in `ordinal()`
 /// in the `cloud` repo (`src/environment/src/util.rs`). The two must agree,
-/// because the un-prefixed form of the name this module builds has to equal
-/// the one `environment-controller` registers.
+/// because the name this module builds has to equal the one
+/// `environment-controller` registered.
 fn ordinal(resource_name: &str) -> &str {
     resource_name.split('-').next_back().unwrap_or("0")
 }
 
-/// The Teleport `app` resource name: `mz-{cloud_provider}-{region}-{base32(org_uuid)}-{ordinal}`.
+/// The Teleport `app` resource name: `{cloud_provider}-{region}-{base32(org_uuid)}-{ordinal}`.
 ///
-/// The `mz-` prefix lets this registration coexist with the `app`
-/// `environment-controller` registers under the un-prefixed name. Add the
-/// prefix only here, never in `Materialize::environment_id`, which other
-/// consumers (the `--environment-id` flag, KMS key aliases) rely on staying
-/// stable.
+/// It is the name `environment-controller` registered before this module
+/// took over, so dashboards, runbooks and console impersonation that hold it
+/// keep working.
 ///
 /// Returns an error when the result is not a valid DNS-1035 label, which
 /// Teleport requires. A long enough cloud provider and region can exceed the
-/// 63-character limit: `generic` plus a 23-character region leaves room for a
-/// single-digit ordinal and no more.
+/// 63-character limit: `generic` plus a 23-character region leaves room for an
+/// ordinal of up to four digits.
 fn teleport_app_name(
     cloud_provider: CloudProvider,
     region: &str,
@@ -105,7 +102,7 @@ fn teleport_app_name(
     ordinal: &str,
 ) -> Result<String, String> {
     let name = format!(
-        "mz-{}-{}-{}-{}",
+        "{}-{}-{}-{}",
         cloud_provider,
         region,
         BASE32_NOPAD
@@ -145,8 +142,9 @@ fn dns1035_label_error(name: &str) -> Option<&'static str> {
 }
 
 /// Adds the Teleport discovery labels and annotations to `service` when
-/// `--teleport-endpoint` is set. A no-op otherwise, which is the rollback
-/// path: absent the flag, this function changes nothing about the Service.
+/// `--enable-teleport-registration` is set. A no-op otherwise, which is the
+/// rollback path: without the flag, this function changes nothing about the
+/// Service.
 ///
 /// A Service the agent would reject is left unannotated rather than annotated
 /// and silently dropped, so the reason reaches our own logs instead of only
@@ -177,12 +175,13 @@ pub(super) fn apply_teleport_registration(
     let labels = service.metadata.labels.get_or_insert_with(BTreeMap::new);
     // NOTE: `materialize.cloud/app` does double duty. It identifies the Service, and
     // it is the only label the agent's discovery matcher selects on, so writing it
-    // only when `--teleport-endpoint` is set is what keeps discovery inert on a
-    // cluster where the matcher is deployed but the flag is not. Moving it to
-    // `ManagedResource::default_labels` would make it unconditional and register
-    // every environmentd Service under a name the agent invents, with no rewrite
-    // header. Change `teleport_discovery_kube_apps` in the cloud repo's
-    // `infra/cluster/environment.py` to select on a dedicated gate label first.
+    // only when `--enable-teleport-registration` is set is what stops the agent
+    // registering anything on a cluster where the matcher is deployed but the flag
+    // is not. Moving it to `ManagedResource::default_labels` would make it
+    // unconditional and register every environmentd Service under a name the agent
+    // invents, with no rewrite header. Change `teleport_discovery_kube_apps` in the
+    // cloud repo's `infra/cluster/environment.py` to select on a dedicated gate
+    // label first.
     labels.insert(
         "materialize.cloud/app".to_string(),
         mz.environmentd_app_name(),
@@ -231,7 +230,7 @@ mod tests {
     const ORG: Uuid = uuid!("01d730c7-5a61-4d7a-9f3c-63ed01f34ebf");
 
     // The expected value is `environment_id_base32_from_env`'s own fixture in
-    // the `cloud` repo (`src/environment/src/util.rs`), with the prefix added.
+    // the `cloud` repo (`src/environment/src/util.rs`).
     #[mz_ore::test]
     fn app_name_matches_the_base32_convention() {
         assert_eq!(
@@ -241,7 +240,7 @@ mod tests {
                 ORG,
                 ordinal("environment-01d730c7-5a61-4d7a-9f3c-63ed01f34ebf-0"),
             ),
-            Ok("mz-local-kind-ahltbr22mfgxvhz4mpwqd42ox4-0".to_string()),
+            Ok("local-kind-ahltbr22mfgxvhz4mpwqd42ox4-0".to_string()),
         );
     }
 
@@ -254,7 +253,7 @@ mod tests {
                 ORG,
                 ordinal("environment-01d730c7-5a61-4d7a-9f3c-63ed01f34ebf-12"),
             ),
-            Ok("mz-local-kind-ahltbr22mfgxvhz4mpwqd42ox4-12".to_string()),
+            Ok("local-kind-ahltbr22mfgxvhz4mpwqd42ox4-12".to_string()),
         );
     }
 
@@ -264,7 +263,7 @@ mod tests {
     fn app_name_fits_the_longest_region_we_deploy() {
         let name = teleport_app_name(CloudProvider::Aws, "ap-southeast-2", ORG, "0")
             .expect("valid DNS-1035 label");
-        assert_eq!(name.len(), 50);
+        assert_eq!(name.len(), 47);
     }
 
     #[mz_ore::test]
@@ -274,10 +273,10 @@ mod tests {
                 CloudProvider::Generic,
                 "northamerica-northeast2",
                 ORG,
-                "123",
+                "12345",
             ),
             Err(
-                "\"mz-generic-northamerica-northeast2-ahltbr22mfgxvhz4mpwqd42ox4-123\" \
+                "\"generic-northamerica-northeast2-ahltbr22mfgxvhz4mpwqd42ox4-12345\" \
                  is not a valid DNS-1035 label: longer than 63 characters"
                     .to_string()
             ),
@@ -300,7 +299,7 @@ mod tests {
 
     #[mz_ore::test]
     fn dns1035_label_error_matches_the_kubernetes_rules() {
-        assert_eq!(dns1035_label_error("mz-aws-us-east-1-abc-0"), None);
+        assert_eq!(dns1035_label_error("aws-us-east-1-abc-0"), None);
         assert_eq!(
             dns1035_label_error("0-leading-digit"),
             Some("does not start with a lowercase letter"),
@@ -310,7 +309,7 @@ mod tests {
             Some("does not end with a lowercase letter or digit"),
         );
         assert_eq!(
-            dns1035_label_error("mz-AWS-us-east-1"),
+            dns1035_label_error("aws-US-east-1"),
             Some("contains a character outside [-a-z0-9]"),
         );
     }

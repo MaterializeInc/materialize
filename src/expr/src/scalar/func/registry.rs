@@ -470,6 +470,13 @@ fn record_type() -> SqlScalarType {
     }
 }
 
+fn time_record_type() -> SqlScalarType {
+    SqlScalarType::Record {
+        fields: [("a".into(), SqlScalarType::Time.nullable(false))].into(),
+        custom_id: None,
+    }
+}
+
 fn list_type(element: SqlScalarType) -> SqlScalarType {
     SqlScalarType::List {
         element_type: Box::new(element),
@@ -579,6 +586,33 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             record_type(),
         ),
         unary(RecordGet(1), record_type()),
+        // The null-fallback wrapper around a cast. Its properties derive from
+        // the wrapped function, so the samples cover the branches that differ:
+        // a fallible parse, a narrowing cast with an inverse (which the wrapper
+        // must not inherit), a nullable output the wrapper only forces nullable,
+        // and a container cast whose element cast lives inside the wrapper.
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
+            SqlScalarType::String,
+        ),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastInt64ToInt32),
+            SqlScalarType::Int64,
+        )
+        .labeled("narrowing"),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastJsonbToNumeric(None)),
+            SqlScalarType::Jsonb,
+        )
+        .labeled("jsonb"),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastList1ToList2 {
+                return_ty: list_type(SqlScalarType::Int32),
+                cast_expr: column(0),
+            }),
+            list_type(SqlScalarType::Int64),
+        )
+        .labeled("list"),
         unary(
             CastStringToArray {
                 return_ty: array_type(SqlScalarType::Int32),
@@ -668,6 +702,10 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
         ),
         unary(IsRegexpMatch(regex()), SqlScalarType::String),
         unary(RegexpMatch(regex()), SqlScalarType::String),
+        unary(
+            Jq(JqProgram::new(".a").expect("valid program")),
+            SqlScalarType::Jsonb,
+        ),
         unary(RegexpSplitToArray(regex()), SqlScalarType::String),
         // Date and time functions carrying units, time zones and formats.
         unary(
@@ -819,6 +857,43 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             },
         )
         .labeled("widening"),
+        // Text rounds `time` elements to microseconds, so these casts do not
+        // preserve uniqueness.
+        unary(
+            CastArrayToString {
+                ty: array_type(SqlScalarType::Time),
+            },
+            array_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastListToString {
+                ty: list_type(SqlScalarType::Time),
+            },
+            list_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastMapToString {
+                ty: map_type(SqlScalarType::Time),
+            },
+            map_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastRangeToString {
+                ty: range_type(SqlScalarType::Time),
+            },
+            range_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastRecordToString {
+                ty: time_record_type(),
+            },
+            time_record_type(),
+        )
+        .labeled("time"),
         // Units below the most significant ones are not monotone.
         unary(
             ExtractInterval(DateTimeUnits::Month),

@@ -58,12 +58,12 @@ output "aks_workload_identity_client_id" {
 
 output "materialize_nodepool_name" {
   description = "The name of the Materialize node pool"
-  value       = module.materialize_nodepool.nodepool_name
+  value       = module.nodepool_materialize.nodepool_name
 }
 
-output "materialize_nodepool_id" {
-  description = "The ID of the Materialize node pool"
-  value       = module.materialize_nodepool.nodepool_id
+output "materialize_nodeclass_name" {
+  description = "The name of the Materialize AKSNodeClass"
+  value       = module.nodepool_materialize.nodeclass_name
 }
 
 # Database outputs
@@ -131,15 +131,6 @@ output "aks_cluster" {
   value = {
     name     = module.aks.cluster_name
     endpoint = module.aks.cluster_endpoint
-  }
-  sensitive = true
-}
-
-output "connection_strings" {
-  description = "Connection strings for mzcompose"
-  value = {
-    metadata_backend_url = local.metadata_backend_url
-    persist_backend_url  = local.persist_backend_url
   }
   sensitive = true
 }

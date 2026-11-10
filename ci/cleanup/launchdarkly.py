@@ -10,8 +10,8 @@
 from datetime import UTC, datetime, timedelta
 from os import environ
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
+import launchdarkly_api
+from launchdarkly_api.api import feature_flags_api
 
 MAX_AGE = timedelta(hours=24)
 
@@ -21,6 +21,9 @@ LAUNCHDARKLY_API_TOKEN = environ.get("LAUNCHDARKLY_API_TOKEN")
 
 def clean_up_test_features() -> None:
     print(f"Deleting LaunchDarkly features whose age exceeds {MAX_AGE}")
+
+    if LAUNCHDARKLY_API_TOKEN is None:
+        raise ValueError("Missing LAUNCHDARKLY_API_TOKEN environment variable")
 
     configuration = launchdarkly_api.Configuration(
         api_key=dict(ApiKey=LAUNCHDARKLY_API_TOKEN)
@@ -38,9 +41,9 @@ def clean_up_test_features() -> None:
             archived=True,
         )
 
-        for flag in flags["items"]:
-            key = flag["key"]
-            age = now - datetime.fromtimestamp(flag["creation_date"] / 1000, UTC)
+        for flag in flags.items:
+            key = flag.key
+            age = now - datetime.fromtimestamp(flag.creation_date / 1000, UTC)
             if age <= MAX_AGE:
                 print(f"Skipping flag {key} (age={age}) whose age is beneath threshold")
             else:

@@ -1,0 +1,65 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(sqlname = \"to_arena_string\", test = true)]\nfn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {\n    temp_storage.push_string(a.to_string())\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct ToArenaString;
+impl crate::func::EagerUnaryFunc for ToArenaString {
+    type Input<'a> = i32;
+    type Output<'a> = &'a str;
+    fn call<'a>(
+        &self,
+        a: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        to_arena_string(a, temp_storage)
+    }
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+}
+impl std::fmt::Display for ToArenaString {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("to_arena_string")
+    }
+}
+impl crate::func::FuncName for ToArenaString {
+    const NAME: &'static str = stringify!(to_arena_string);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(sqlname = \"to_arena_string\", test = true)] fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str",
+        signature: "fn(i32) -> &'a str",
+        body_fingerprint: 17915273539525400975u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<i32>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}
+fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {
+    temp_storage.push_string(a.to_string())
+}

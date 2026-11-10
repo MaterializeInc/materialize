@@ -145,7 +145,10 @@ provides and therefore the oldest version anything is tested against. It is also
 no newer than the default Python in the [most recent Ubuntu LTS
 release](https://wiki.ubuntu.com/Releases), which ships 3.14 as of Ubuntu 26.04
 "Resolute Raccoon", so a current LTS satisfies it. Earlier versions may work but
-are not supported. Our recommended installation methods are:
+are not supported. `bin/pyactivate` also refuses Python 3.15 and newer until our
+pinned dependencies support it. If your package manager upgraded `python3` past
+that, install 3.13 with `uv python install 3.13` and put it first on your `PATH`.
+Our recommended installation methods are:
 
 - macOS: [Homebrew](https://brew.sh) + [uv](https://docs.astral.sh/uv/)
   1. `brew install uv`

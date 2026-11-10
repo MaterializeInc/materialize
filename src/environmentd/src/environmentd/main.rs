@@ -104,6 +104,10 @@ pub struct Args {
     /// this should never be enabled in CI.
     #[clap(long, env = "ALL_FEATURES")]
     all_features: bool,
+    /// Set by the container entrypoint when it restarts environmentd after
+    /// `mz_ore::restart_in_place!`.
+    #[clap(long, env = "RESTARTED_IN_PLACE", hide = true)]
+    restarted_in_place: bool,
 
     // === Connection options. ===
     /// Path to a file containing the json-formatted configuration of our
@@ -255,6 +259,10 @@ pub struct Args {
         env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
     )]
     orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
+    /// Whether to run service (clusterd) pods in a Kubernetes user namespace
+    /// by setting `hostUsers: false` on their pod specs.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_ENABLE_USER_NAMESPACES")]
+    orchestrator_kubernetes_enable_user_namespaces: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -597,6 +605,10 @@ pub struct Args {
     /// File containing a valid Materialize license key.
     #[clap(long, env = "LICENSE_KEY")]
     license_key: Option<String>,
+    /// Root-signed intermediate certificates whose keys may also sign the
+    /// license key.
+    #[clap(long, env = "LICENSE_KEY_INTERMEDIATE_CERTS", value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -684,8 +696,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let license_key = if let Some(license_key_file) = args.license_key {
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
-        let license_key = mz_license_keys::validate(license_key_text.trim())
-            .context("failed to validate license key file")?;
+        let license_key =
+            mz_license_keys::validate(license_key_text.trim(), &args.license_key_intermediate_cert)
+                .context("failed to validate license key file")?;
         if license_key.expired {
             let message = format!(
                 "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
@@ -824,41 +837,46 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
             let orchestrator = Arc::new(
                 runtime
-                    .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
-                        context: args.orchestrator_kubernetes_context.clone(),
-                        scheduler_name: args.orchestrator_kubernetes_scheduler_name,
-                        priority_class_name: args.orchestrator_kubernetes_priority_class_name,
-                        service_annotations: args
-                            .orchestrator_kubernetes_service_annotation
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_labels: args
-                            .orchestrator_kubernetes_service_label
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_node_selector: args
-                            .orchestrator_kubernetes_service_node_selector
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_affinity: args.orchestrator_kubernetes_service_affinity,
-                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
-                        service_account: args.orchestrator_kubernetes_service_account,
-                        image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
-                        aws_external_id_prefix: args.aws_external_id_prefix.clone(),
-                        coverage: args.orchestrator_kubernetes_coverage,
-                        ephemeral_volume_storage_class: args
-                            .orchestrator_kubernetes_ephemeral_volume_class
-                            .clone(),
-                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
-                        name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
-                        collect_pod_metrics: !args
-                            .orchestrator_kubernetes_disable_pod_metrics_collection,
-                        enable_prometheus_scrape_annotations: args
-                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
-                    }))
+                    .block_on(KubernetesOrchestrator::new(
+                        KubernetesOrchestratorConfig {
+                            context: args.orchestrator_kubernetes_context.clone(),
+                            scheduler_name: args.orchestrator_kubernetes_scheduler_name,
+                            priority_class_name: args.orchestrator_kubernetes_priority_class_name,
+                            service_annotations: args
+                                .orchestrator_kubernetes_service_annotation
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_labels: args
+                                .orchestrator_kubernetes_service_label
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_node_selector: args
+                                .orchestrator_kubernetes_service_node_selector
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_affinity: args.orchestrator_kubernetes_service_affinity,
+                            service_tolerations: args.orchestrator_kubernetes_service_tolerations,
+                            service_account: args.orchestrator_kubernetes_service_account,
+                            image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                            aws_external_id_prefix: args.aws_external_id_prefix.clone(),
+                            coverage: args.orchestrator_kubernetes_coverage,
+                            ephemeral_volume_storage_class: args
+                                .orchestrator_kubernetes_ephemeral_volume_class
+                                .clone(),
+                            service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
+                            name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
+                            collect_pod_metrics: !args
+                                .orchestrator_kubernetes_disable_pod_metrics_collection,
+                            enable_prometheus_scrape_annotations: args
+                                .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                            enable_user_namespaces: args
+                                .orchestrator_kubernetes_enable_user_namespaces,
+                        },
+                        &metrics_registry,
+                    ))
                     .context("creating kubernetes orchestrator")?,
             );
             let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
@@ -1097,7 +1115,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
+        let listeners = Listeners::bind(listeners_config)?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
@@ -1107,6 +1125,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,
+                restarted_in_place: args.restarted_in_place,
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),

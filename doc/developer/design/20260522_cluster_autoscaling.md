@@ -297,3 +297,16 @@ to restore hydration-only cutover. Timeout behavior is unchanged: `ROLLBACK`
 preserves the current configuration, while `COMMIT` forces cutover once the
 target set exists. A downsize that cannot meet the lag allowance waits until
 the deadline and follows that timeout policy.
+
+## Amendment: Burst retirement readiness
+
+Hydration still triggers a burst. Retirement requires at least one steady-size
+replica to be hydrated and caught up to the burst replica within the same lag
+allowance as graceful reconfiguration. Only then does `LINGER DURATION` begin.
+A failed readiness check restarts linger. If the steady replicas never catch
+up, the burst keeps running and remains billed.
+
+After a graceful cutover, the new steady set must catch up and complete a fresh
+linger before automatic burst retirement. Rollback leaves the current steady
+set and its linger unchanged. Removing the burst policy or scaling the cluster
+to zero still ends the burst without waiting for readiness.
