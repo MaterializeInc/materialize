@@ -2482,9 +2482,9 @@ impl Coordinator {
                 self.sequence_rotate_keys(ctx, id).await;
             }
             AlterConnectionAction::AlterOptions { .. } => {
-                ctx.retire(Err(AdapterError::Unsupported(
-                    "ALTER CONNECTION options require submitted intent",
-                )));
+                let msg = "ALTER CONNECTION options must execute as a catalog command";
+                soft_panic_or_log!("{msg}");
+                ctx.retire(Err(AdapterError::Internal(msg.into())));
             }
         }
     }
