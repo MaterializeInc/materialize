@@ -9,27 +9,18 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-CDC admission/readiness and bounded PG, MySQL and SQL Server lifecycle coverage
-are verified. `native-cdc-runtime-verification.md` records source/binary receipts,
-review fixes, successful fixtures and limits. Published in `18888155b6`.
+Rebuild the debug candidate with `build-retirement-candidate.py`, then rerun the
+full DDL lifecycle using `run-native-ddl-retirement-fixed.py`. The runner keeps
+original retry limits and records phase logs and request timing.
 
-The current full native `workflow_ddl` passed in `aj-native-ddl-569f7b9d`, including
-the corrected post-restart recovery probe, sources/sinks, subscriptions, retained
-peer writes and explicit retirement. Formatting, preservation comparison and
-helper tests pass. The recovery-order helper has negative/positive evidence.
+Retirement now shares DDL's empty-progress rebase loop. Genuine content, including
+opaque-only changes, still requires fresh raw preparation. Durable/read-write
+checks, negative controls, formatting and independent review passed. Runtime
+repeatability remains unverified. Earlier DDL runs include both a complete pass
+and intermittent retirement contention failures. See `native-retirement-verification.md`
+and `native-ddl-runtime-findings.md` for evidence and limits.
 
-Retirement exhausted three explicit contention409 responses in two earlier
-runs. The successful diagnostic measured3.537s and1.491s conflict responses, then
-1.826s success. Its failure-only extra retry window did not run. Oracle task2
-examines whether a caller retry budget or retirement progress repair is needed.
-Do not treat this passing retry as resolving contention or broaden into a raw
-catalog cache/follower without justification. No retry policy was changed.
-
-The host restart interrupted the previous diagnostic. Its labelled resources
-were removed after saving logs/inspections in
-`aj-native-ddl-6cc880ed/interrupted-cleanup.json`. No runtime remains active.
-Detailed evidence: `native-ddl-runtime-findings.md`,
-`native-ddl-preserved-workload.txt`, `native-ddl-recovery-order-*.log`.
+Temporary ownership follows this repair. No runtime fixture remains active.
 
 ## Verified outcome
 
@@ -66,7 +57,7 @@ distinct-version acceptance.
   forced-migration cases, temporary cleanup and platform/stress workflows.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
-- Full DDL, current-source preservation, upsert/data-ingest/parallel stress,
+- Current-source preservation, upsert/data-ingest/parallel stress,
   randomized zippy/restore and bumped-version platform runtimes remain unverified.
   A fresh distinct-compatible-version demonstration and external-sink handover
   remain outstanding. Earlier version proof predates this cleanup.
@@ -108,8 +99,8 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` remain the performance baseline, not a cleanup
   performance claim. Further history is in the [archive](20260903_decoupled_coordination_log_archive.md).
 
-All owned runtime fixtures were removed. About 35 GiB is
-free. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
+All owned runtime fixtures were removed. Unused executables were reclaimed
+along with orphaned debug objects to restore 50 GiB free before the current checks. Keep measuring available space. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
 reserves, and use one low-priority Cargo job. Scratch SSO was expired on the last
 checks. Local verification does not depend on it.
 

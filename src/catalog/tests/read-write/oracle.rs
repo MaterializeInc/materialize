@@ -221,13 +221,23 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
             .is_retired(old_client)
     );
 
-    // Exclusion is durable before acknowledgement, which waits for the oracle.
-    let completion_gate = Arc::new(Notify::new());
-    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&completion_gate));
+    // Unlike content, empty upper progress must preserve the prepared retirement.
+    let cleanup_gate = Arc::new(Notify::new());
+    *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
     let retiring = mz_ore::task::spawn(|| "retirement oracle completion", async move {
         assert!(promoted.retire_deployment(7).await.unwrap());
         promoted
     });
+    tokio::time::timeout(Duration::from_secs(5), oracle.allocation_started.notified())
+        .await
+        .unwrap();
+    let upper = peer.current_upper().await;
+    peer.advance_upper(upper.step_forward()).await.unwrap();
+
+    // Exclusion is durable before acknowledgement, which waits for the oracle.
+    let completion_gate = Arc::new(Notify::new());
+    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&completion_gate));
+    cleanup_gate.notify_one();
     tokio::time::timeout(Duration::from_secs(5), oracle.completion_started.notified())
         .await
         .unwrap();

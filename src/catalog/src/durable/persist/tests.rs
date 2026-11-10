@@ -716,6 +716,108 @@ async fn bootstrap_admission(builder: TestCatalogStateBuilder) -> Box<dyn Durabl
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn test_exact_prefix_append_rebases_only_empty_progress() {
+    for replacement_value in [None, Some(("2GB", true)), Some(("1GB", false))] {
+        let version = semver::Version::new(26, 1, 0);
+        let organization_id = Uuid::new_v4();
+        let mut cache = PersistClientCache::new_no_metrics();
+        let (_, builder) = admission_participant(&mut cache, organization_id, 7, &version).await;
+        let active = bootstrap_admission(builder.clone()).await;
+        let row = |generation, value, preserve| {
+            StateUpdateKindJson::from_serde(serde_json::json!({
+                "kind": "ReplicaSystemConfiguration",
+                "key": {
+                    "replica_id": {"User": 23},
+                    "deployment_generation": generation,
+                    "name": "max_result_size"
+                },
+                "value": {"value": value, "unknown_extra_field": {"preserve": preserve}}
+            }))
+        };
+        let target = row(8, "1GB", true);
+        let survivor = row(9, "1GB", true);
+        let replacement = replacement_value.map(|(value, preserve)| row(8, value, preserve));
+        let mut peer = raw_catalog(&builder).await;
+        let ts = peer.upper;
+        peer.compare_and_append(
+            vec![(target.clone(), Diff::ONE), (survivor.clone(), Diff::ONE)],
+            ts,
+        )
+        .await
+        .expect("seed exact realization rows");
+
+        let mut candidate = raw_catalog(&builder)
+            .await
+            .open_inner(
+                super::Mode::Writable,
+                mz_repr::Timestamp::MIN,
+                super::OpenPurpose::Join,
+            )
+            .await
+            .expect("open a typed retirement writer");
+        let prepared_at = candidate.upper;
+        let snapshot: Vec<_> = candidate.persist_snapshot_raw().await.collect();
+        let updates = super::super::promotion::retired_realizations(
+            snapshot.iter().map(|update| &update.kind),
+            8..=8,
+        )
+        .expect("prepare retirement retractions")
+        .into_iter()
+        .map(|row| (row, Diff::MINUS_ONE))
+        .collect();
+        let peer_updates = if let Some(replacement) = &replacement {
+            vec![
+                (target.clone(), Diff::MINUS_ONE),
+                (replacement.clone(), Diff::ONE),
+            ]
+        } else {
+            Vec::new()
+        };
+        peer.sync_to_current_upper()
+            .await
+            .expect("observe candidate startup before racing its append");
+        let ts = peer.upper;
+        peer.compare_and_append(peer_updates, ts)
+            .await
+            .expect("peer advances after candidate preparation");
+        assert!(peer.upper > prepared_at);
+
+        let result = candidate
+            .commit_exact_prefix(updates, prepared_at.into())
+            .await;
+        if replacement.is_some() {
+            assert!(matches!(
+                result,
+                Err(DurableCatalogError::CatalogOutOfSync { .. })
+            ));
+        } else {
+            assert!(result.expect("empty progress preserves the raw retractions") > peer.upper);
+        }
+
+        peer.sync_to_current_upper().await.expect("observe outcome");
+        peer.consolidate();
+        let configs: Vec<_> = peer
+            .snapshot
+            .iter()
+            .filter(|(row, _, _)| row.kind() == "ReplicaSystemConfiguration")
+            .map(|(row, _, diff)| (row.clone(), *diff))
+            .collect();
+        assert!(configs.contains(&(survivor, Diff::ONE)));
+        assert!(!configs.iter().any(|(row, _)| row == &target));
+        if let Some(replacement) = replacement {
+            assert_eq!(configs.len(), 2);
+            assert!(configs.contains(&(replacement, Diff::ONE)));
+        } else {
+            assert_eq!(configs.len(), 1);
+        }
+        candidate.expire().await;
+        Box::new(peer).expire().await;
+        active.expire().await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn test_retirement_retracts_raw_rows_and_fences_before_unreadable_suffix() {
     let version = semver::Version::new(26, 1, 0);
     let organization_id = Uuid::new_v4();

@@ -784,6 +784,57 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         Ok(next_upper)
     }
 
+    /// Commits updates prepared from this handle's current prefix.
+    ///
+    /// Empty upper progress preserves the candidate, including exact raw rows.
+    /// Content changes return `CatalogOutOfSync` so the caller rebuilds it.
+    async fn commit_exact_prefix<S: IntoStateUpdateKindJson + Clone>(
+        &mut self,
+        updates: Vec<(S, Diff)>,
+        mut commit_ts: crate::durable::CatalogCommitTimestamp,
+    ) -> Result<Timestamp, DurableCatalogError> {
+        let mut attempt = 0u64;
+        loop {
+            let updates_applied_before = self.updates_applied;
+            attempt += 1;
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "commit_attempt", attempt,
+                "durable catalog phase start",
+            );
+            let result = self.compare_and_append(updates.clone(), commit_ts).await;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "commit_attempt", attempt,
+                elapsed = ?phase_started.elapsed(),
+                outcome = match &result {
+                    Ok(_) => "ok",
+                    Err(CompareAndAppendError::Durable(_)) => "error",
+                    Err(CompareAndAppendError::UpperMismatch { .. }) => "upper_mismatch",
+                },
+                "durable catalog phase complete",
+            );
+            match result {
+                Ok(next_upper) => return Ok(next_upper),
+                Err(CompareAndAppendError::Durable(error)) => return Err(error),
+                Err(CompareAndAppendError::UpperMismatch { .. }) => {
+                    // The mismatch synchronized the handle. Retry only if it applied no
+                    // content.
+                    let result = self.classify_upper_mismatch(updates_applied_before);
+                    debug!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        phase = "commit_mismatch", attempt,
+                        outcome = if result.is_ok() { "retry" } else { "error" },
+                        "durable catalog mismatch classified",
+                    );
+                    result?;
+                    commit_ts = commit_ts.advance_to(self.upper);
+                }
+            }
+        }
+    }
+
     /// Accepts an upper mismatch caused only by empty progress.
     ///
     /// `updates_applied_before` must be captured before the compare-and-append, which synchronizes
@@ -1001,6 +1052,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
             .collect();
 
+        // Count before typed consolidation. Compatible writers may change opaque fields that
+        // this build discards, leaving a cancelling typed pair. Exact raw retractions must still
+        // treat that as content rather than empty progress.
+        self.updates_applied += u64::cast_from(updates.len());
+
         // This helps guarantee that for a single key, there is at most a single retraction and a
         // single insertion per timestamp. Otherwise, we would need to match the retractions and
         // insertions up by value and manually figure out what the end value should be.
@@ -1016,8 +1072,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
-            self.updates_applied += 1;
-
             match self.update_applier.apply_update(
                 StateUpdate { kind, ts, diff },
                 &mut self.fenceable_token,
@@ -3084,10 +3138,10 @@ impl DurableCatalogState for PersistCatalogState {
             StateUpdateKind::DeploymentAdmission(admission).into(),
             Diff::ONE,
         ));
-        match self.compare_and_append(updates, self.upper).await {
+        match self.commit_exact_prefix(updates, self.upper.into()).await {
             Ok(_) => Ok(true),
-            Err(CompareAndAppendError::UpperMismatch { .. }) => Ok(false),
-            Err(CompareAndAppendError::Durable(error)) => Err(error.into()),
+            Err(DurableCatalogError::CatalogOutOfSync { .. }) => Ok(false),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -3224,49 +3278,10 @@ impl DurableCatalogState for PersistCatalogState {
             debug!("committing updates: {updates:?}");
 
             // Empty upper progress does not invalidate the transaction.
-            let mut commit_ts = commit_ts.advance_to(catalog.upper);
+            let commit_ts = commit_ts.advance_to(catalog.upper);
 
-            let mut attempt = 0u64;
             let next_upper = match catalog.mode {
-                Mode::Writable => loop {
-                    let updates_applied_before = catalog.updates_applied;
-                    attempt += 1;
-                    let phase_started = Instant::now();
-                    debug!(
-                        target: "mz_adapter::frontend_read_then_write",
-                        phase = "commit_attempt", attempt,
-                        "durable catalog phase start",
-                    );
-                    let result = catalog.compare_and_append(updates.clone(), commit_ts).await;
-                    debug!(
-                        target: "mz_adapter::frontend_read_then_write",
-                        phase = "commit_attempt", attempt,
-                        elapsed = ?phase_started.elapsed(),
-                        outcome = match &result {
-                            Ok(_) => "ok",
-                            Err(CompareAndAppendError::Durable(_)) => "error",
-                            Err(CompareAndAppendError::UpperMismatch { .. }) => "upper_mismatch",
-                        },
-                        "durable catalog phase complete",
-                    );
-                    match result {
-                        Ok(next_upper) => break next_upper,
-                        Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
-                        Err(CompareAndAppendError::UpperMismatch { .. }) => {
-                            // The mismatch synchronized the handle. Retry only if it applied no
-                            // content.
-                            let result = catalog.classify_upper_mismatch(updates_applied_before);
-                            debug!(
-                                target: "mz_adapter::frontend_read_then_write",
-                                phase = "commit_mismatch", attempt,
-                                outcome = if result.is_ok() { "retry" } else { "error" },
-                                "durable catalog mismatch classified",
-                            );
-                            result?;
-                            commit_ts = commit_ts.advance_to(catalog.upper);
-                        }
-                    }
-                },
+                Mode::Writable => catalog.commit_exact_prefix(updates, commit_ts).await?,
                 Mode::Savepoint => {
                     let updates = updates.into_iter().map(|(kind, diff)| StateUpdate {
                         kind,
