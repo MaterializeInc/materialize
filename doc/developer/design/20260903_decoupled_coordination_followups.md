@@ -48,16 +48,17 @@ prevent opening these connections. Legacy read-only prewarming skipped these
 connectors. This is persistent contention before process restarts, not merely
 OOM recovery. It does not establish data loss.
 
-The proposed boundary, awaiting Aljoscha's agreement, is one replica-owned,
-catalog-authorized upstream reader across deployments, handed over at promotion.
-SQL/table writers remain independent. Candidate compute can prewarm from shared
-source data, but independent candidate CDC progress would no longer be a readiness
-requirement for these connectors. This requires an explicit exception to the
-current non-sink-execution preservation rule. Independent upstream identifiers
-would instead require slot bootstrap/continuity and retirement-cleanup design.
+The approved boundary is a catalog-selected desired reader, enacted by replica
+followers and handed over at promotion alongside sink authority. SQL/table writers
+remain independent. Candidate compute prewarms from shared Persist source data,
+without requiring independent candidate upstream-reader progress. Temporary overlap
+is acceptable. Existing takeover/recovery must converge so superseded readers stop
+reconnecting. No stop acknowledgement, lease or new coordination protocol is needed.
+Verify continued ingestion and eventual cessation of contention, not uninterrupted
+connections. Implementation and runtime verification remain outstanding.
 
 Evidence: `~/.local/share/aj/m3-evidence/native-only/native-cdc-reader-ownership.md`
-and the matched actor logs in `aj-native-ddl-6f303bf0/`. No policy change is made.
+and the matched actor logs in `aj-native-ddl-6f303bf0/`.
 
 ## Backend writes and blob consumption
 
@@ -127,12 +128,13 @@ without reclaiming their Items, so joining those observations is not a durable
 ownership contract. This is the unresolved ownership issue discussed on October 30,
 not a new regression from the lifecycle harness changes.
 
-Proposed separate repair, awaiting approval: store the existing adapter execution
-owner on temporary Items and let adapters reclaim only catalog-retired owners.
-Keep cleanup transactional and preserve surviving sessions. Do not restore global
-promotion cleanup, add a controllerd maintenance owner, or turn every connection
-into a durable catalog write. Leave the existing temporary-item lifecycle test
-unconverted until that contract is resolved.
+Approved separate repair: retain the session UUID for visibility and store the
+existing adapter execution incarnation on temporary Items in the same creation
+transaction. Keep normal disconnect cleanup. Adapters reclaim Items only after
+catalog-confirmed execution replacement or deployment retirement, preserving
+surviving sessions and promotion alone. Do not add a creation transaction,
+controllerd maintenance owner or per-connection catalog record. `mz_sessions`
+remains observational. Implementation and lifecycle verification remain outstanding.
 
 ## Native source-status latency
 

@@ -50,6 +50,17 @@ deployment before releasing its protection and cleaning up its processes.
 Preserve surviving deployments and shared pubsub. Each external sink retains one
 authorized execution even while both versions serve writes. A brief candidate
 adapter restart at promotion is acceptable, but preserve warmed replicas.
+Singleton CDC readers follow catalog-selected ownership through replica followers
+and transfer alongside sink authority. Candidate compute warms from shared Persist
+source data. Allow temporary reader overlap and existing connector takeover/recovery,
+but superseded readers must eventually stop reconnecting. Do not add stop
+acknowledgements, leases or another coordination protocol. Verify continued
+ingestion and eventual cessation of contention, not interruption-free handover.
+Temporary Items keep their session UUID for visibility and gain the existing
+adapter execution incarnation as ownership metadata in the same transaction.
+Keep normal disconnect cleanup. Reclaim only catalog-confirmed replaced or retired
+executions, preserving items on promotion. Do not make `mz_sessions` a correctness
+dependency or add per-connection catalog records.
 Read-only prewarming or build-metadata variants of one version do not satisfy
 this outcome. Keep schema/encoding/semantic compatibility checks. Document and
 execute the commands, not only test coverage. Reuse catalog admission and Persist

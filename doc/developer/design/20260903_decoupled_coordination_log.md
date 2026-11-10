@@ -9,12 +9,22 @@ separate. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Resolve the singleton CDC-reader policy decision before completing the uncommitted
-native `workflow_ddl` conversion. Both admitted generations select the same
-PostgreSQL slot/MySQL server ID and repeatedly disconnect one another, before
-OOM-related process restarts. `native-cdc-reader-ownership.md` contains matched
-actors, source evidence and the proposed exception awaiting Aljoscha's agreement.
-Do not implement a new ownership policy or drop the CDC coverage silently.
+Finish the native index-protection runtime, then repeat with a larger stable
+cohort. The uncommitted conversion checks both candidate replicas and live catalog
+bounds, using the existing publication-pause flag. Independent review caught and
+closed a missing initial-pause assertion. See `native-index-review.md` and
+`native-index-runtime.log`. No runtime acceptance is claimed yet.
+
+After the index work, implement the approved singleton CDC-reader ownership repair
+and complete the uncommitted native `workflow_ddl` conversion. The catalog chooses
+the desired reader and replica followers converge. Promotion transfers singleton
+readers alongside sink authority while both deployments remain SQL/table writers.
+Candidate compute warms from shared Persist source data. Temporary overlap is
+allowed, but superseded readers must eventually stop reconnecting. Use existing
+connector takeover/recovery, without stop acknowledgements, leases or a new
+coordination protocol. Verify continued ingestion and eventual cessation of
+contention, not zero overlap or uninterrupted upstream connections.
+`native-cdc-reader-ownership.md` contains the matched actors and source evidence.
 
 Helper checks, preservation comparison and independent review pass. Partial runtime
 checks passed candidate/peer writes and DDL, but full lifecycle acceptance remains
@@ -36,6 +46,10 @@ acceptance remain unverified. See `native-platform-runtime-verification.md`,
 `native-platform-verification.md` and `native-bumped-platform-verification.md`.
 Other platform scenarios remain to be converted.
 
+The managed MV snapshot-pruning workflow passes after waiting for candidate
+execution readiness. Its original SQL, correction-buffer assertions and pruning
+deadline remain intact. See `native-pruning-verification.md`.
+
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
 Preserve the source/sink workloads, in-place predecessors and compatible-image
@@ -43,7 +57,7 @@ lane. Then convert remaining platform/stress callers. Keep the old promotion
 cleanup parameter until callers migrate. `native-lifecycle-harness-seams.md` is
 an inventory, not current status. Its PG CDC reporting gap is already fixed.
 
-Three scope decisions are pending:
+Two scope decisions remain pending:
 
 - Replica-side catalog-free ingress is still present. Proposed replacement for
   the headless driver's programmable coverage is a test-only native runtime.
@@ -52,11 +66,13 @@ Three scope decisions are pending:
 - The dormant final-preflight hook supports manually configured old-to-old runs.
   Its proposed explicit retirement is not yet approved. Leave it unchanged.
   See `final-preflight-boundary-research.md`.
-- Native retirement does not reclaim orphaned temporary Items. Session rows carry
-  execution identity but publish asynchronously and can be reaped first. Proposed
-  separate repair: put the existing execution owner on temporary Items and let
-  adapters reclaim only catalog-retired owners. Leave the temporary-item workflow
-  unchanged pending this decision. Details are in the follow-up inventory.
+
+Temporary-item ownership is approved for a separate repair after CDC: retain the
+session UUID for visibility and commit the existing adapter execution incarnation
+with each Item. Keep disconnect cleanup, reclaim only catalog-confirmed replaced
+or retired executions, and preserve items on promotion. No per-connection catalog
+records or correctness dependency on `mz_sessions`. Details are in the follow-up
+inventory. The implementation and temporary-item lifecycle conversion remain open.
 
 The user approved explicit unsupported reporting for pre-native-to-native
 upgrades, not conversion/reset workarounds. Preserve old-only tests and separate
@@ -128,8 +144,14 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   removals. `container-runtime/verification.md` and the boundary-reporting reports
   preserve container and unsupported-upgrade evidence.
 
-No verification task or managed runtime remains running. All owned fixture
-containers, networks and volumes were removed. About 41 GiB is free. Scratch SSO
+Two index-protection attempts timed out on the first catalog dump after 30 seconds
+and cleaned up. A diagnostic dump returned 117 MB in 28.4 seconds. Oracle task 240
+is reviewing compact authority observations without weakening coverage. The
+diagnostic was interrupted after exceeding the paused-startup budget. Its owned
+resources were removed and no runtime remains active. See
+`native-index-dump-investigation.md`. Follow `native-index-latest`
+and `native-index-runtime.log`, using `run-native-index-protection.py` in the
+evidence root. Previous owned fixtures were removed. About 41 GiB is free. Scratch SSO
 was expired on two checks. Local fixture guards enforce backend/OOM checks,
 2 GiB host available memory and 30 GiB disk reserve. Keep heavy work sequential
 and use one low-priority Cargo job.

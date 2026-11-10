@@ -124,9 +124,10 @@ Catalog fencing, read protection and external-sink transaction/version checks
 remain required.
 
 Protection accounts for all admitted deployments. Promotion preserves both
-deployments' requirements and non-sink execution. Retirement is a separate explicit
-administrative operation targeting one deployment identity. It durably revokes
-that deployment's authority, authorizing release of its query/execution protection
+deployments' requirements and maintained execution, except for external sinks and
+singleton CDC readers whose authority transfers with promotion. Retirement is a
+separate explicit administrative operation targeting one deployment identity. It
+durably revokes that deployment's authority, authorizing release of its query/execution protection
 and removal of its processes without waiting for physical process death. Shared
 declarations, maintained requirements, surviving deployments' protection and the
 shared pubsub relay remain intact. Physical cleanup may follow asynchronously.
@@ -420,6 +421,23 @@ but cannot obtain fresh admission after losing output authority, even if its
 deployment remains admitted. No guarantee of interruption-free takeover or wait
 for old process death is required.
 
+### Singleton CDC readers
+
+The catalog selects the desired upstream reader for connectors that require
+singleton ingestion. Replica followers converge to that ownership. Promotion
+transfers these readers alongside sink authority, without retiring either
+deployment's SQL or table-write authority.
+
+Temporary overlap during handover is acceptable. Reuse connector takeover and
+recovery behavior. Superseded readers must eventually stop reconnecting, but no
+stop-acknowledgement barrier, lease or additional coordination protocol is required.
+Candidate compute warms from shared Persist source data. Readiness does not require
+an independent candidate upstream reader for these connectors.
+
+Verify correct continued ingestion and eventual cessation of competing readers,
+not zero overlap or uninterrupted upstream connections. Other maintained execution
+and surviving deployments' protection remain intact.
+
 ### Index creation and reconstruction
 
 The index-creation catalog transaction commits the selected plan, an admitted
@@ -523,8 +541,12 @@ controllerd continues maintaining the committed process inventory.
 Adapter declarations have stable IDs independent of names. Rename does not change
 process identity or require a restart. Realizations are deployment-qualified.
 Each realization has its own execution and protection. Replacing one adapter
-does not replace a peer. Temporary objects record enough durable execution
-ownership for targeted cleanup when temp DDL occurs, without a catalog record
+does not replace a peer. Temporary Items retain their session UUID for visibility
+and record the existing adapter execution incarnation as ownership metadata in
+the object's creation transaction. Normal disconnect uses session cleanup.
+Adapters may reclaim an execution's Items after catalog-confirmed replacement or
+retirement, but not on promotion alone. Cleanup does not depend on observational
+`mz_sessions` rows and adds neither a creation transaction nor a catalog record
 for every connection.
 
 Controller-published endpoint and status describe the realization, separately
@@ -943,9 +965,10 @@ after promotion. Use distinct compatible versions, not merely different build
 metadata for one version. Show readiness inspection, explicit promotion, client
 endpoint switching, separate old-deployment retirement and process cleanup,
 including relay provisioning handoff where needed. Verify continued ingestion,
-query results and external-sink authority, and that only the retired deployment
-loses its authority and protection. Keep the existing schema compatibility checks
-and exclusions. Test-harness coverage alone does not suffice.
+query results, external-sink authority and singleton-reader handover, and that only
+the retired deployment loses SQL/table-write authority and protection. Keep the
+existing schema compatibility checks and exclusions. Test-harness coverage alone
+does not suffice.
 
 Demonstrate SQL creation, listing, rename and drop of adapters, endpoint discovery
 and the HTTP inventory. Use two adapters concurrently, kill one, and show
