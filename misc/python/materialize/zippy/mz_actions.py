@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -48,6 +49,11 @@ class MzStart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                depends_on=["pubsub"],
+                options=[
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ],
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -127,6 +133,11 @@ class MzRestart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                depends_on=["pubsub"],
+                options=[
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ],
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -151,6 +162,8 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
         return {MzIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
+        previous_generation = state.deploy_generation
+        previous_service = state.mz_service
         state.deploy_generation += 1
 
         state.mz_service = (
@@ -162,6 +175,11 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                depends_on=["pubsub"],
+                options=[
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ],
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -179,14 +197,14 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
             c.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, state.mz_service
             )
-            c.promote_mz(
+            c.promote_mz(state.mz_service, retire_mz_service=None)
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, state.mz_service)
+            c.retire_mz_deployment(
                 state.mz_service,
-                retire_mz_service=(
-                    "materialized2"
-                    if state.mz_service == "materialized"
-                    else "materialized"
-                ),
+                previous_generation,
+                environment_id=DEFAULT_MZ_ENVIRONMENT_ID,
             )
+            c.kill_fenced_mz(previous_service)
 
         # Balancerd's resolver is fixed at startup and still points at the
         # previous generation. Re-point it at the new leader.

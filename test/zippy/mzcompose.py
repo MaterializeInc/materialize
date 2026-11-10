@@ -16,6 +16,7 @@ expected state it can verify results for correctness.
 import random
 import re
 import time
+from contextlib import ExitStack
 from datetime import timedelta
 from enum import Enum
 
@@ -26,7 +27,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
@@ -37,6 +38,7 @@ from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -47,7 +49,6 @@ from materialize.mzcompose.services.ssh_bastion_host import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.zippy.framework import Test, ci_additional_system_parameter_defaults
-from materialize.zippy.mz_actions import Mz0dtDeploy
 from materialize.zippy.scenarios import *  # noqa: F403
 
 
@@ -59,6 +60,11 @@ def create_mzs(
     return [
         Materialized(
             name=mz_name,
+            depends_on=["pubsub"],
+            options=[
+                "--persist-pubsub-external",
+                "--persist-pubsub-url=http://pubsub:6879",
+            ],
             external_blob_store=True,
             blob_store_is_azure=azurite,
             external_metadata_store=True,
@@ -88,6 +94,7 @@ def create_mzs(
 
 
 SERVICES = [
+    Pubsub(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
     Postgres(),
@@ -226,18 +233,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     additional_system_parameter_defaults = ci_additional_system_parameter_defaults()
 
-    with c.override(
-        Cockroach(
-            image=f"cockroachdb/cockroach:{args.cockroach_tag}",
-            # Workaround for database-issues#5719
-            restart="on-failure:5",
-            setup_materialize=True,
+    with (
+        c.override(
+            Cockroach(
+                image=f"cockroachdb/cockroach:{args.cockroach_tag}",
+                # Workaround for database-issues#5719
+                restart="on-failure:5",
+                setup_materialize=True,
+            ),
+            *create_mzs(
+                args.azurite,
+                args.transaction_isolation,
+                additional_system_parameter_defaults,
+            ),
         ),
-        *create_mzs(
-            args.azurite,
-            args.transaction_isolation,
-            additional_system_parameter_defaults,
-        ),
+        ExitStack() as overrides,
     ):
         c.up("materialized")
 
@@ -265,8 +275,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         scenario = scenario_class()
 
-        # Separate clusterd not supported by Mz0dtDeploy yet
-        if Mz0dtDeploy in scenario.actions_with_weight():
+        if not scenario.uses_external_storage():
             c.sql("""
                 CREATE CLUSTER storage (SIZE = 'scale=2,workers=2');
             """)
@@ -280,6 +289,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     WORKERS 4
                 ))
             """)
+
+            replicas = c.sql_query(
+                "SELECT c.id, r.id FROM mz_clusters c "
+                "JOIN mz_cluster_replicas r ON r.cluster_id = c.id "
+                "WHERE c.name = 'storage' AND r.name = 'r2'"
+            )
+            assert len(replicas) == 1, f"expected one storage.r2 replica: {replicas}"
+            cluster_id, replica_id = replicas[0]
+            # Capture shared context before removing Materialized, and retain
+            # this definition through all starts, restarts and finalization.
+            overrides.enter_context(
+                c.override(
+                    Clusterd(
+                        name="storaged",
+                        workers=4,
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *native_catalog_options(c),
+                            "--persist-pubsub-url=http://pubsub:6879",
+                        ],
+                    )
+                )
+            )
 
         setup_default_ssh_test_connection(c, "zippy_ssh")
 

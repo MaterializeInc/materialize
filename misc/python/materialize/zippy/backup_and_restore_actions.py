@@ -26,12 +26,21 @@ class BackupAndRestore(Action):
             return
 
         # Required because of database-issues#6880
-        c.kill("storaged")
+        if state.external_storage:
+            c.kill("storaged")
 
         c.backup()
+        # Restored metadata must not receive queued notifications from the
+        # discarded store state. The deployment's dependency restarts the relay.
+        c.kill("pubsub")
         with c.override(
             Materialized(
                 name=state.mz_service,
+                depends_on=["pubsub"],
+                options=[
+                    "--persist-pubsub-external",
+                    "--persist-pubsub-url=http://pubsub:6879",
+                ],
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -46,4 +55,5 @@ class BackupAndRestore(Action):
         ):
             c.restore(state.mz_service)
 
-        c.up("storaged")
+        if state.external_storage:
+            c.up("storaged")

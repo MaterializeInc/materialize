@@ -11,4 +11,4 @@ from materialize.zippy.framework import Capability
 
 
 class StoragedRunning(Capability):
-    pass
+    """Storage is available through the configured managed or standalone topology."""

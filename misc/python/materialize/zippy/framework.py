@@ -40,7 +40,8 @@ class State:
     deploy_generation: int
     system_parameter_defaults: dict[str, str]
 
-    def __init__(self):
+    def __init__(self, *, external_storage: bool = True):
+        self.external_storage = external_storage
         self.mz_service = "materialized"
         self.deploy_generation = 0
         self.system_parameter_defaults = get_default_system_parameters()
@@ -223,7 +224,7 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
-        self._state = State()
+        self._state = State(external_storage=scenario.uses_external_storage())
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():

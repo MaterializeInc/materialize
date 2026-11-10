@@ -17,7 +17,7 @@ from materialize.zippy.storaged_capabilities import StoragedRunning
 
 
 class StoragedStart(Action):
-    """Starts a storaged clusterd instance."""
+    """Make storage available, starting the standalone replica when configured."""
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
@@ -28,7 +28,10 @@ class StoragedStart(Action):
         return {StoragedRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        c.up("storaged")
+        # Managed storage is started by MzStart. Keep its capability so source
+        # actions remain eligible without launching an unused standalone process.
+        if state.external_storage:
+            c.up("storaged")
 
     def provides(self) -> list[Capability]:
         return [StoragedRunning()]
@@ -42,6 +45,7 @@ class StoragedRestart(Action):
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition, state: State) -> None:
+        assert state.external_storage, "standalone disruption requires external storage"
         c.kill("storaged")
         c.up("storaged")
 
@@ -52,6 +56,7 @@ class StoragedKill(Action):
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition, state: State) -> None:
+        assert state.external_storage, "standalone disruption requires external storage"
         c.kill("storaged")
 
     def withholds(self) -> set[type[Capability]]:

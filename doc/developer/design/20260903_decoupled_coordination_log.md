@@ -9,11 +9,12 @@ separate. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Next convert zippy's launch/lifecycle path. `native-zippy-external-boundary.md`
-identifies the existing native standalone-replica helper, required override lifetime,
-managed/external storage distinction and backup/restore considerations. Preserve
-source-action capabilities and balancerd rerouting. No zippy edits or verification
-have been made. Data-ingest relay/retirement wiring is committed with helper checks.
+Next convert the remaining native lifecycle callers, starting with parallel-workload's
+`ZeroDowntimeDeployAction`. Preserve concurrent workload and routing behavior while
+separating promotion, durable retirement and process cleanup. Zippy now uses native
+standalone context and a shared relay. Its actual start/restart/promotion actions
+passed with continued source ingestion in both storage topologies. Full randomized
+zippy and runtime backup/restore remain unrun.
 
 Remaining 0dt work includes
 read-only/fencing expectations, forced-migration cases and temporary-item cleanup.
@@ -87,6 +88,9 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   workflows, provenance, failures, reviews and cleanup. Cached images mounted current
   debug binaries. The restart test establishes warmup rather than assuming it from
   a fixed sleep. Its recovery bound is unchanged.
+- `native-zippy-verification.md` and `native-zippy-review.md` cover standalone
+  four-worker recovery, managed multi-process promotion/retirement and continuing
+  load-generator ingestion. Backend and full-workload limitations remain explicit.
 - `native-current-source-verification.md`, `native-upsert-lifecycle-verification.md`
   and `native-data-ingest-verification.md` distinguish checked harness contracts
   from unexecuted container/stress coverage.

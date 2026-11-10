@@ -89,6 +89,10 @@ from materialize.zippy.view_actions import (
 
 
 class Scenario:
+    def uses_external_storage(self) -> bool:
+        # Standalone replicas cannot span deployment generations.
+        return Mz0dtDeploy not in self.actions_with_weight()
+
     def bootstrap(self) -> list[ActionOrFactory]:
         bootstrap: list[ActionOrFactory] = [
             KafkaStart,

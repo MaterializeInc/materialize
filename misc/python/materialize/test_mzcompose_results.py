@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import copy
 import importlib.util
 import json
 import threading
@@ -429,6 +430,207 @@ def test_data_ingest_retirement_tracks_generations_across_service_reuse():
         assert "pubsub" in service.config["depends_on"]
         assert "--persist-pubsub-external" in service.config["command"]
         assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_zippy_storage_topology_keeps_source_actions_eligible(external):
+    from datetime import timedelta
+
+    from materialize.zippy.framework import Action, Test
+    from materialize.zippy.mz_actions import Mz0dtDeploy
+    from materialize.zippy.scenarios import Scenario
+    from materialize.zippy.storaged_actions import StoragedStart
+    from materialize.zippy.storaged_capabilities import StoragedRunning
+
+    class NeedsStorage(Action):
+        @classmethod
+        def requires(cls):
+            return {StoragedRunning}
+
+        def run(self, c, state):
+            c.sql("storage action remains eligible")
+
+    class StorageScenario(Scenario):
+        def bootstrap(self):
+            return [StoragedStart]
+
+        def actions_with_weight(self):
+            actions = {NeedsStorage: 1}
+            if not external:
+                actions[Mz0dtDeploy] = 0
+            return actions
+
+        def finalization(self):
+            return []
+
+    c = MagicMock(spec=Composition)
+    Test(StorageScenario(), actions=2, max_execution_time=timedelta(seconds=10)).run(c)
+    c.sql.assert_called_once_with("storage action remains eligible")
+    assert c.up.call_args_list == ([call("storaged")] if external else [])
+
+
+@pytest.mark.parametrize("retirement_fails", [False, True])
+def test_zippy_retirement_precedes_cleanup_and_routing(monkeypatch, retirement_fails):
+    from materialize.zippy import mz_actions
+    from materialize.zippy.framework import Capabilities, State
+
+    c = MagicMock(spec=Composition)
+    c.blob_store.return_value = "minio"
+    c.is_running.return_value = True
+    route = Mock()
+    c.attach_mock(route, "route")
+    monkeypatch.setattr(mz_actions, "restart_balancerd", route)
+    state = State(external_storage=False)
+    state.deploy_generation = 2
+    if retirement_fails:
+        c.retire_mz_deployment.side_effect = UIError("retirement failed")
+        with pytest.raises(UIError, match="retirement failed"):
+            mz_actions.Mz0dtDeploy(Capabilities()).run(c, state)
+        c.kill_fenced_mz.assert_not_called()
+        route.assert_not_called()
+    else:
+        mz_actions.Mz0dtDeploy(Capabilities()).run(c, state)
+        c.kill_fenced_mz.assert_called_once_with("materialized")
+        route.assert_called_once_with(c, state)
+        events = [invocation[0] for invocation in c.method_calls]
+        assert events.index("retire_mz_deployment") < events.index("kill_fenced_mz")
+        assert events.index("kill_fenced_mz") < events.index("route")
+    c.retire_mz_deployment.assert_called_once_with(
+        "materialized2", 2, environment_id=mz_actions.DEFAULT_MZ_ENVIRONMENT_ID
+    )
+    c.promote_mz.assert_called_once_with("materialized2", retire_mz_service=None)
+    service = c.override.call_args.args[0]
+    assert "--deploy-generation=3" in service.config["command"]
+    assert "--persist-pubsub-external" in service.config["command"]
+
+
+@pytest.mark.parametrize("action_name", ["MzStart", "MzRestart"])
+def test_zippy_restart_factories_keep_shared_relay_and_generation(action_name):
+    from materialize.zippy import mz_actions
+    from materialize.zippy.framework import Capabilities, State
+
+    c = MagicMock(spec=Composition)
+    c.blob_store.return_value = "minio"
+    state = State(external_storage=False)
+    state.mz_service = "materialized2"
+    state.deploy_generation = 3
+    getattr(mz_actions, action_name)(Capabilities()).run(c, state)
+    service = c.override.call_args.args[0]
+    assert service.name == "materialized2"
+    assert "--deploy-generation=3" in service.config["command"]
+    assert "pubsub" in service.config["depends_on"]
+    assert "--persist-pubsub-external" in service.config["command"]
+    assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+    c.up.assert_called_once_with("materialized2")
+    assert call("pubsub") not in c.kill.call_args_list
+
+
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_zippy_restore_quiesces_relay_and_only_external_storage(
+    external, restore_fails
+):
+    from materialize.zippy.backup_and_restore_actions import BackupAndRestore
+    from materialize.zippy.framework import Capabilities, State
+
+    c = MagicMock(spec=Composition)
+    c.blob_store.return_value = "minio"
+    c.metadata_store.return_value = "cockroach"
+    c.restore.side_effect = lambda *args: Composition.restore(c, *args)
+
+    def execute(*args):
+        if restore_fails and args[0] == "persistcli":
+            raise UIError("blob restoration failed")
+
+    c.exec.side_effect = execute
+    state = State(external_storage=external)
+    state.mz_service = "materialized2"
+    state.deploy_generation = 3
+    action = BackupAndRestore(Capabilities())
+    if restore_fails:
+        with pytest.raises(UIError, match="blob restoration failed"):
+            action.run(c, state)
+    else:
+        action.run(c, state)
+
+    # Exercise the real Composition/Cockroach restore helpers, mocking only I/O.
+    events = []
+    for invocation in c.method_calls:
+        name, args, _ = invocation
+        if name == "kill":
+            events.append(("stop", args[0]))
+        elif name == "backup":
+            events.append(("backup",))
+        elif name == "exec" and args[0] == "cockroach":
+            assert "RESTORE DATABASE" in args[-1]
+            events.append(("restore metadata",))
+        elif name == "exec" and args[0] == "persistcli":
+            assert "restore-blob" in args
+            events.append(("restore blobs",))
+        elif name == "up" and args[0] in ("materialized2", "storaged"):
+            events.append(("start", args[0]))
+    expected = [("stop", "storaged")] if external else []
+    expected += [
+        ("backup",),
+        ("stop", "pubsub"),
+        ("stop", "materialized2"),
+        ("restore metadata",),
+        ("restore blobs",),
+    ]
+    if not restore_fails:
+        expected.append(("start", "materialized2"))
+        if external:
+            expected.append(("start", "storaged"))
+    assert events == expected
+    service = c.override.call_args.args[0]
+    assert service.name == "materialized2"
+    assert "--deploy-generation=3" in service.config["command"]
+    assert "pubsub" in service.config["depends_on"]
+    assert "--persist-pubsub-url=http://pubsub:6879" in service.config["command"]
+
+
+@pytest.mark.parametrize("scenario", ["UserTables", "PostgresCdc"])
+def test_zippy_native_replica_override_spans_execution_and_restores(
+    monkeypatch, scenario
+):
+    repo = mzbuild.Repository(MZ_ROOT)
+    c = Composition(repo, "zippy", resolve_image_specs=False)
+    scope = c.workflows["default"].__globals__
+    before = copy.deepcopy(c.compose["services"])
+    for operation in ("up", "rm", "sql", "enable_minio_versioning", "pull_if_variable"):
+        monkeypatch.setattr(c, operation, Mock())
+    monkeypatch.setattr(c, "sql_query", Mock(return_value=[("u10", "u20")]))
+    monkeypatch.setitem(scope, "setup_default_ssh_test_connection", Mock())
+    shared_options = ["--catalog-config=test", "--catalog-deploy-generation=0"]
+    options = Mock(return_value=shared_options)
+    monkeypatch.setitem(scope, "native_catalog_options", options)
+
+    def run(composition):
+        c.rm.assert_called_once_with("materialized")
+        command = composition.compose["services"]["storaged"]["command"]
+        if scenario == "PostgresCdc":
+            assert "--catalog-cluster-id=u10" in command
+            assert "--catalog-replica-id=u20" in command
+            assert all(option in command for option in shared_options)
+            assert "--persist-pubsub-url=http://pubsub:6879" in command
+        else:
+            options.assert_not_called()
+        for service in ("materialized", "materialized2"):
+            config = composition.compose["services"][service]
+            assert "pubsub" in config["depends_on"]
+            assert "--persist-pubsub-external" in config["command"]
+
+    execute = Mock(side_effect=run)
+    monkeypatch.setitem(scope, "Test", lambda **kwargs: SimpleNamespace(run=execute))
+    c.workflows["default"](
+        c,
+        WorkflowArgumentParser(
+            "default", "", ["--scenario", scenario, "--actions", "0"]
+        ),
+    )
+    execute.assert_called_once_with(c)
+    for service in ("materialized", "materialized2", "storaged"):
+        assert c.compose["services"][service] == before[service]
 
 
 @pytest.fixture
