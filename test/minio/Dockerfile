@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
 
-FROM golang:1.24.0@sha256:3f7444391c51a11a039bf0359ee81cc64e663c17d787ad0e637a4de1a3f62a71 AS builder
+FROM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS builder
 # Fetch apt sources over HTTPS only.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \

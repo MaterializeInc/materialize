@@ -16,7 +16,7 @@ FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b2
 RUN npm install -g corepack
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
 
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self

@@ -11,7 +11,7 @@
 # digest for security fixes.
 # NOTE: requirements.txt is compiled for this Python minor version. Bump
 # --python-version in its header and recompile when changing it.
-FROM python:3.14.8@sha256:455fc8bf2552c51738d27fde570c22bb0146d22f2e16e32a9baff8d2da94daf6
+FROM python:3.15.2@sha256:d650864079477d7468a0f384777be3b534f2bbdf5beb6155dbd73a4723b89300
 
 # The official image can lag Debian security updates by weeks, so a digest bump
 # alone does not pick them up. libbrotli is CVE-2026-111497.

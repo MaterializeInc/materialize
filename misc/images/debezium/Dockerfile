@@ -11,7 +11,7 @@
 # converter (which knows how to write schemas to the Confluent Schema Registry)
 # and Debezium connectors, so we have to build our own.
 
-FROM confluentinc/cp-kafka-connect-base:8.0.0
+FROM confluentinc/cp-kafka-connect-base:8.3.2@sha256:6ce23d4af58c228b13681fb7affa9cf746d0726f3b2b3d0cdc75e6d61c5e7fd1
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest minor
 # version in the release series, and minor versions have been known to introduce
