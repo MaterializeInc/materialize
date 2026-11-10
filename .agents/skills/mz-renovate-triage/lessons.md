@@ -22,13 +22,20 @@ the PR that taught it. Add to this file when a triage teaches something new.
   rule automerges it on green CI. #40629 (codemirror-toolkit 0.6 → 0.7) showed
   "Automerge: Enabled" while it needed a migration. kysely 0.28 → 0.29 was the
   same shape (#39534).
+- **A replacement PR swaps one package for another.** Renovate's presets
+  replaced `framer-motion` with `motion` in `package.json` (#40621), but three
+  files still imported `framer-motion` and Chakra 2 declares it as a peer. It
+  resolved only because `motion` depends on it. Grep for the old name, and
+  check who declares it as a peer.
 - **`devDependencies` doesn't mean tooling.** `p-retry` is a devDependency that
   the app imports and Vite bundles. Grep imports to decide (#40638).
 - **A bumped `resolutions` entry is a forced override.** Renovate moved the
   security floors for `js-yaml` and `diff` across majors (#40634, #40633), which
-  forces the new major onto every transitive consumer, including tools behind
-  `gen:api` and `gen:types`. List each consumer's declared range. If the entry
-  is only a security floor, the latest release of the old major may be enough.
+  forces the new major onto every transitive consumer. js-yaml 5 crashed
+  `yarn gen:api`: Redocly reads js-yaml 4's `types` export at load time
+  (#40634, reverted in #40648). `diff` 9 turned out fine for kysely-codegen.
+  List each consumer's declared range. If the entry is only a security floor,
+  the latest release of the old major may be enough.
 
 ## Shapes of breaking change to grep for
 
@@ -62,7 +69,7 @@ the PR that taught it. Add to this file when a triage teaches something new.
   and kysely-codegen 0.20 `require`s kysely). CI and Volta run Node 26 while
   `engines.node` still allows 20 (#39684, #39686, #39683).
 - **Dev scripts.** `yarn gen:types` was broken from kysely 0.28 (#35669) until
-  #40550, because CI never runs it. kysely-codegen 0.20 also started writing a
+  #40550, and `yarn gen:api` from #40634 until #40648, because CI runs neither. kysely-codegen 0.20 also started writing a
   file into `node_modules` unless `outFile` is `null`. `lint-staged` runs only
   from the opt-in local pre-commit hook (#40636).
 - **Generated output.** For a query builder, compile every affected query shape
@@ -85,7 +92,7 @@ the PR that taught it. Add to this file when a triage teaches something new.
   into a preview checklist ordered by risk.
 - **Security.** When a dependency changes how it stores keyed data (plain
   objects, `in` checks), check call sites that key by user-controlled strings
-  such as role or object names (#39685).
+  such as role or object names (#39685, fixed in #40647).
 
 ## Groups, lock files and holds
 
@@ -108,7 +115,9 @@ the PR that taught it. Add to this file when a triage teaches something new.
   hold, and suggest encoding new holds as a `package.json` pin or an
   `allowedVersions` rule with a comment.
 - **Current holds:** `jotai` `~2.9.3`, the `@types/react@*` resolution to React
-  18 types, and Chakra majors disabled in `.github/renovate.json5`.
+  18 types, and Chakra majors disabled in `.github/renovate.json5`. #40648
+  adds `js-yaml` below 5, `@babel/core` below 8 and no `framer-motion`
+  replacement. #40649 stops automerging breaking 0.x console updates.
 
 ## Working with Renovate PRs
 
@@ -129,21 +138,34 @@ the PR that taught it. Add to this file when a triage teaches something new.
   An automated QA review caught the visx collapse on #39508 and a security
   regression on #39685.
 
+## Outside `console/`
+
+- **Rust lock file bumps fail `cargo deny`.** `deny.toml` sets
+  `multiple-versions = "deny"`, so a crate update that pulls a second version
+  of a shared dependency turns `lint-and-rustfmt` red even when everything
+  builds (#40624 parking_lot 0.13, #40628 duckdb on arrow 60 next to our
+  arrow 58). Crates that share a dependency have to move together (#40628 with
+  #40631). Name the duplicate and its consumers, and leave the fix to
+  `mz-dependencies`.
+
 ## By package
 
 | Package | What it needed |
 |---|---|
 | `@chakra-ui/*` | 2.9 folded sub-packages into `@chakra-ui/react`, removed `keyframes` (now `@emotion/react`), typed toast `render` strictly. `Menu` calls `scrollTo`, so jsdom needs a stub in `src/__mocks__/globalMocks.js`. Modal focus is delayed. Majors disabled (#39613, #40521) |
 | `@codemirror-toolkit/react`, `@lezer/*` | 0.7 replaced the context API. `useViewEffect` reruns when its setup changes identity. Keep one `@lezer/highlight` copy, guarded by `CommandBlock/theme.test.ts` (#39610, #40629) |
-| `@dagrejs/dagre`, `@dagrejs/graphlib` | dagre 3 bundles types and changes node order within a rank in most graphs (#39685) |
+| `@babel/core` | 8 failed the console build. `@emotion/babel-plugin` 11 and jotai's Babel preset depend on Babel 7, and Babel 8 needs Node 22.18 (#40632, held in #40648) |
+| `@dagrejs/dagre`, `@dagrejs/graphlib` | dagre 3 bundles types and changes node order within a rank in most graphs. graphlib 4 keeps nodes in plain objects, so node ids must not be user-controlled names (#39685, #40647) |
 | `@frontegg/*` | Minors changed signup and auth types. Typecheck, then try login on the preview (#40341, #40394, #40580) |
+| `framer-motion` | Imported directly and a Chakra 2 peer. Don't accept a replacement with `motion` (#40621, #40648) |
 | `@hookform/resolvers` | 7.0 broke only the typebox resolver. We import only `/zod` (#40454) |
+| `js-yaml` | Only a `resolutions` security floor. 5 breaks Redocly behind `yarn gen:api` (#40634, held below 5 in #40648) |
 | `jotai` | 2.10 adds the environment version to query keys, so default msw handlers stop matching (82 tests). Held at `~2.9.3` (#40580) |
 | `jsdom` | 30.1.2 doesn't focus `display: none` elements. Query by role, not label (#39683) |
 | `kysely`, `kysely-codegen` | 0.29 rejects `limit(sql.raw(...))`, calls `toSorted`, and is ESM-only. kysely-codegen 0.20 renamed `schemas` to `defaultSchemas`, lists materialized views itself, and writes into `node_modules` without `outFile: null`. Run `yarn gen:types` against a real Materialize (#39686, #40550) |
 | `msw` | 3 renamed `onUnhandledRequest` to `onUnhandledFrame` (silently ignored), mocks fetch at the socket, and needs Node 22.12. `src/api/mocks/server.ts` uses the experimental `defineNetwork` with a TODO tied to undici 8.12.3 (#39684) |
 | `react`, `react-dom`, `@types/react` | 19 needs peer-range bumps across the UI stack first, a types codemod, and awaited `act` in tests. A `@types/react` 17 copy can keep the global `JSX` namespace alive and hide errors (#39615) |
-| `react-virtualized-auto-sizer` | 1.0.26 measures fractional sizes, which the Shell's exact scroll-to-bottom check may not tolerate. 2.x changes the API (#39609) |
+| `react-virtualized-auto-sizer` | 1.0.26 measures fractional sizes, so `scrollToItem(last, "end")` can stop 1px short, which turned Shell auto-scroll off. The at-bottom check now allows 1px (#39609, #40651). 2.x changes the API |
 | `string-width` | 8 emits `v`-flag regexes that Chrome below 112 can't parse (#39687) |
 | `use-resize-observer` | 10 removed the default export and reports 0 instead of `undefined` (#39609) |
 | `vite-plugin-svgr` | 4.5 and 5 transform with oxc under Vite 8. Needs `lang: "tsx"`, passed as `oxcOptions` in 5 (#39683, #40580) |

@@ -50,11 +50,12 @@ PR disagree.
 ## 2. Check access
 
 ```bash
-gh auth status
 gh api user --jq .login
 ```
 
-Without `gh` auth you can still read public data, but you can't comment. Say so
+`gh auth status` can report an invalid token while API calls work, so test
+with a real call. Without `gh`, use the GitHub MCP tools if the session has
+them. Without either you can still read public data, but you can't comment. Say so
 at the top of your summary and continue read-only. Buildkite logs need the
 Buildkite MCP server or an authenticated `bk` (see `mz-debug-ci`). Without
 either, report failing check names and their Buildkite links, not error text.
@@ -115,7 +116,7 @@ jq '.scripts, .resolutions' package.json
 |---|---|---|
 | A | Minor, patch, pin or digest from a 1.x or later version, CI green | No comment. Count it in the summary. It automerges |
 | B | Major of a package that only tooling uses (lint, formatting, release scripts), not imported by the app, the tests, the build or a dev script | Section 5 steps 1, 2, 6 and 10 |
-| C | A major, a 0.x minor, lock file maintenance, a bumped `resolutions` entry, or a group, touching anything the app, the build, the tests or a dev script imports. Also any package with a row in `lessons.md` | All of section 5 |
+| C | A major, a 0.x minor, a replacement, lock file maintenance, a bumped `resolutions` entry, or a group, touching anything the app, the build, the tests or a dev script imports. Also any package with a row in `lessons.md` | All of section 5 |
 | Red | Any PR whose `buildkite/test` failed | Section 6, then its tier |
 
 Green CI on Tier A is enough. Lock file maintenance in #40580 carried in-range
