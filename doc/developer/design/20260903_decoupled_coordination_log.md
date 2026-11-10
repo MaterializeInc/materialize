@@ -39,6 +39,10 @@ restart before promotion, then checks the same contents after explicit retiremen
 Its real same-build debug run passed. Evidence: `native-id-pool-verification.md`.
 The temporary-item workflow remains unchanged pending its ownership decision.
 
+The alternating-service upsert caller now retires its actual predecessor
+generation before service reuse. Its workload is unchanged, but the full stress
+run remains unverified. Evidence: `native-upsert-lifecycle-verification.md`.
+
 Next convert the remaining 0dt sites, preserving stopped/in-place predecessors,
 full-writer behavior and the compatible-image lane. `native-lifecycle-harness-seams.md`
 maps callers and contracts. The old promotion cleanup parameter remains until

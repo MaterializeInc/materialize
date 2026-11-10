@@ -2733,8 +2733,10 @@ def workflow_upsert_sources(c: Composition) -> None:
         ):
             c.up(mz2)
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz2)
-            c.promote_mz(mz2, retire_mz_service=mz1)
+            c.promote_mz(mz2, retire_mz_service=None)
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz2)
+            c.retire_mz_deployment(mz2, i - 1, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+            c.kill_fenced_mz(mz1)
 
         i += 1
         mz1, mz2 = mz2, mz1
