@@ -274,6 +274,31 @@ fn rejects_transient_index_exports() {
 }
 
 #[mz_ore::test]
+fn rejects_transient_sink_exports() {
+    let mut df = imports_only();
+    let curated_sink = GlobalId::Transient(9);
+    df.sink_exports.insert(
+        curated_sink,
+        ComputeSinkDesc {
+            from: VIEW,
+            from_desc: mv_desc(),
+            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                label: "mz_replica_metrics".to_string(),
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: Vec::new(),
+            refresh_schedule: None,
+            from_arrangement: None,
+        },
+    );
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::TransientSinkExport(curated_sink))
+    );
+}
+
+#[mz_ore::test]
 #[should_panic(expected = "pinning a dataflow with no exports")]
 fn rejects_dataflows_without_exports() {
     let _ = PinnedDataflow::try_from(imports_only());

@@ -23,7 +23,8 @@
 //! Only dataflows behind catalog items can be pinned: indexes, materialized
 //! views, and metric sinks. Subscribes and one-shot copies have no durable
 //! identity to pin under, and the [`TryFrom`] conversion rejects them, along
-//! with a peek's transient index export and a dataflow that exports nothing.
+//! with any export under a transient id (a peek's index, a curated metric
+//! sink) and a dataflow that exports nothing.
 //!
 //! [`TryFrom`] also rejects a dataflow that imports or exports a builtin
 //! collection. Builtins keep their ids across releases while their schemas
@@ -213,6 +214,9 @@ pub enum PinError {
     UnpinnableSink(GlobalId),
     /// The dataflow exports an index under a transient id, as a peek does.
     TransientIndexExport(GlobalId),
+    /// The dataflow exports a sink under a transient id, as a curated
+    /// per-replica metric sink does.
+    TransientSinkExport(GlobalId),
     /// The dataflow exports nothing, so no catalog item anchors it.
     NoExports,
     /// The dataflow imports or exports the builtin collection under this id.
@@ -229,6 +233,12 @@ impl fmt::Display for PinError {
                 write!(
                     f,
                     "index {id} is a peek's transient result and cannot be pinned"
+                )
+            }
+            PinError::TransientSinkExport(id) => {
+                write!(
+                    f,
+                    "sink {id} has a transient id and no catalog item, so it cannot be pinned"
                 )
             }
             PinError::NoExports => write!(f, "a dataflow with no exports cannot be pinned"),
@@ -366,6 +376,9 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
                         return Err(PinError::UnpinnableSink(id));
                     }
                 };
+                if id.is_transient() {
+                    return Err(PinError::TransientSinkExport(id));
+                }
                 Ok((
                     id,
                     PinnedSink {
