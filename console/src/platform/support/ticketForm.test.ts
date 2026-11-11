@@ -8,15 +8,12 @@
 // by the Apache License, Version 2.0.
 
 import {
-  addFiles,
   ATTACHMENT_LIMITS,
   attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
-  isUnchangedTemplate,
   isValidFileName,
-  TICKET_TEMPLATE,
 } from "./ticketForm";
 
 const values = {
@@ -108,21 +105,6 @@ describe("buildTicketTargets", () => {
   });
 });
 
-describe("isUnchangedTemplate", () => {
-  it("treats the untouched template, or only whitespace changes, as empty", () => {
-    expect(isUnchangedTemplate(TICKET_TEMPLATE, TICKET_TEMPLATE)).toBe(true);
-    expect(
-      isUnchangedTemplate(`\n${TICKET_TEMPLATE}\n\n `, TICKET_TEMPLATE),
-    ).toBe(true);
-    expect(
-      isUnchangedTemplate(
-        TICKET_TEMPLATE.replace("What's affected:", "What's affected: a sink"),
-        TICKET_TEMPLATE,
-      ),
-    ).toBe(false);
-  });
-});
-
 describe("attachmentError", () => {
   const file = (name: string, megabytes = 0.01) => ({
     name,
@@ -199,22 +181,5 @@ describe("isValidFileName", () => {
     `${"a".repeat(252)}.txt`,
   ])("rejects %j", (name) => {
     expect(isValidFileName(name)).toBe(false);
-  });
-});
-
-describe("addFiles", () => {
-  const picked = (name: string, contents: string, lastModified: number) =>
-    new File([contents], name, { lastModified });
-
-  it("adds a file picked again once", () => {
-    const first = picked("error.txt", "hi", 1);
-    const again = picked("error.txt", "hi", 1);
-    expect(addFiles([first], [again])).toEqual([first]);
-  });
-
-  it("keeps different files with the same name and size", () => {
-    const today = picked("error.txt", "hi", 2);
-    const yesterday = picked("error.txt", "ho", 1);
-    expect(addFiles([today], [yesterday])).toEqual([today, yesterday]);
   });
 });

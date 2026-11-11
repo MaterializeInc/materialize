@@ -34,6 +34,7 @@ import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { defaultRegionId, renderComponent } from "~/test/utils";
 
 import {
+  isAttachUnconfirmedError,
   retryWhenUploadsAreBusy,
   supportTicketQueryKeys,
   supportTicketsQueryOptions,
@@ -188,9 +189,7 @@ const fillTicketForm = async (
     await screen.findByRole("textbox", { name: /Subject/ }),
     title,
   );
-  // Replaces the template the description starts with.
   const details = screen.getByRole("textbox", { name: /What happened/ });
-  await user.clear(details);
   await user.type(details, description);
 };
 
@@ -1264,9 +1263,8 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("radio", { name: /^High/ }));
       await user.click(screen.getByRole("radio", { name: /^Staging/ }));
       const details = screen.getByRole("textbox", { name: /What happened/ });
-      expect(details).toHaveValue(TICKET_TEMPLATE);
-      // Clearing the template doesn't count as a description either.
-      await user.clear(details);
+      expect(details).toHaveValue("");
+      expect(details).toHaveAttribute("placeholder", TICKET_TEMPLATE);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
       expect(screen.getByText("Describe what happened.")).toBeVisible();
       expect(createdWith).toBeUndefined();
@@ -1358,6 +1356,39 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
+    it("keeps keyboard focus in the file picker when files are removed", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      // The Attach files button opens it; the hidden input isn't a tab stop.
+      expect(input).toHaveAttribute("tabindex", "-1");
+      await user.upload(input, [
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+        new File(["png"], "screen.png", { type: "image/png" }),
+      ]);
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove error.txt" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Remove screen.png" }),
+        ).toHaveFocus(),
+      );
+      await user.click(
+        screen.getByRole("button", { name: "Remove screen.png" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Attach files" }),
+        ).toHaveFocus(),
+      );
+    });
+
     it("doesn't open a ticket with files that can't be attached", async () => {
       let createdWith: unknown;
       server.use(
@@ -1413,7 +1444,9 @@ describe("SupportPage", () => {
 
       const sent = await screen.findByTestId("support-ticket-sent");
       expect(sent).toHaveTextContent("Ticket #4821 is open");
-      expect(await within(sent).findByRole("alert")).toHaveTextContent(
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
         "Your ticket is open, but the 1 file couldn't be added.",
       );
       // Says how to send it instead.
@@ -1500,11 +1533,41 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       const sent = await screen.findByTestId("support-ticket-sent");
-      expect(await within(sent).findByRole("alert")).toHaveTextContent(
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
         "Your ticket is open, but we couldn't confirm the 2 files were added. Check the ticket in Help Center before adding them again.",
       );
       // Sending them again could add them twice.
       expect(attachRequests).toBe(1);
+    });
+
+    it("treats a network drop while adding files as unconfirmed", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        http.post(`${TICKETS_URL}/:ticketId/attachments`, () =>
+          HttpResponse.error(),
+        ),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but we couldn't confirm the 1 file was added. Check the ticket in Help Center before adding them again.",
+      );
     });
 
     it("only retries adding files when the server turned them away unread", () => {
@@ -1519,6 +1582,22 @@ describe("SupportPage", () => {
       expect(retryWhenUploadsAreBusy(0, new TypeError("Failed to fetch"))).toBe(
         false,
       );
+    });
+
+    it("treats only request-level ambiguity as unconfirmed", () => {
+      expect(isAttachUnconfirmedError(new OpenApiFetchError(504, {}))).toBe(
+        true,
+      );
+      expect(isAttachUnconfirmedError(new TypeError("Failed to fetch"))).toBe(
+        true,
+      );
+      expect(isAttachUnconfirmedError(new OpenApiFetchError(502, {}))).toBe(
+        false,
+      );
+      // FileReader failures happen before anything is sent.
+      expect(
+        isAttachUnconfirmedError(new DOMException("NotReadableError")),
+      ).toBe(false);
     });
 
     it("opens a ticket without files as before", async () => {
@@ -1786,7 +1865,7 @@ describe("SupportPage", () => {
       ).toHaveTextContent("Production");
       expect(
         screen.getByRole("textbox", { name: /What happened/ }),
-      ).toHaveValue(OUTAGE_TEMPLATE);
+      ).toHaveAttribute("placeholder", OUTAGE_TEMPLATE);
       expect(
         screen.getByRole("link", { name: "How to run mz-debug ↗" }),
       ).toHaveAttribute("href", MZ_DEBUG_SELF_MANAGED_URL);

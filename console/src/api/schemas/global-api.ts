@@ -1666,6 +1666,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The attachment request body took too long to upload */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description The request is too large */
             413: {
                 headers: {
@@ -1683,6 +1690,8 @@ export interface operations {
             /** @description Too many uploads are running (safe to retry after `Retry-After` seconds), or support tickets are not configured */
             503: {
                 headers: {
+                    /** @description Seconds to wait before retrying a busy server */
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content?: never;

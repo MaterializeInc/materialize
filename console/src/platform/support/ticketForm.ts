@@ -157,24 +157,6 @@ export const isValidFileName = (name: string) => {
   return dot > 0 && stem !== "" && [...trimmed].length <= MAX_FILE_NAME_LENGTH;
 };
 
-/**
- * The files with the newly picked ones added. A file picked again (the same
- * name, size and modification time) is only added once.
- */
-export const addFiles = (files: File[], added: File[]) =>
-  added.reduce(
-    (all, file) =>
-      all.some(
-        (existing) =>
-          existing.name === file.name &&
-          existing.size === file.size &&
-          existing.lastModified === file.lastModified,
-      )
-        ? all
-        : [...all, file],
-    files,
-  );
-
 /** Why these files can't be attached, or undefined if they can. */
 export const attachmentError = (files: { name: string; size: number }[]) => {
   if (files.length > MAX_ATTACHMENTS) {
@@ -223,28 +205,18 @@ export const readAsBase64 = (file: Blob) =>
     reader.readAsDataURL(file);
   });
 
-/** What the description box starts with, so tickets arrive with the basics. */
+/** Placeholder prompts for a regular support ticket. */
 export const TICKET_TEMPLATE = `What's affected:
 When it started (with time zone):
 Is it still happening?
 What changed recently (upgrade, deploy, upstream change):
 Error messages, if available:`;
 
+/** Placeholder prompts for an outage report. */
 export const OUTAGE_TEMPLATE = `What's down (whole environment, or specific clusters, sources, sinks, or queries):
 When it started (with time zone):
 What changed right before (upgrade, deploy, upstream change):
 Error messages, if available:`;
-
-const withoutBlankLines = (text: string) =>
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-
-/** Whether a description adds nothing to the template it started from. */
-export const isUnchangedTemplate = (description: string, template: string) =>
-  withoutBlankLines(description) === withoutBlankLines(template);
 
 export type TicketFormValues = {
   title: string;

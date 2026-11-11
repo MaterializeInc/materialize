@@ -294,6 +294,16 @@ export const retryWhenUploadsAreBusy = (failureCount: number, error: unknown) =>
   error.status === 503;
 
 /**
+ * Whether an attach failure may mean the files still landed on the ticket.
+ * A 504 is Cloud saying Intercom didn't confirm. A `TypeError` is a dropped
+ * request after `readAsBase64` (FileReader failures are DOMExceptions).
+ */
+export const isAttachUnconfirmedError = (error: unknown) =>
+  error instanceof OpenApiFetchError
+    ? error.status === 504
+    : error instanceof TypeError;
+
+/**
  * Adds files to one of the user's tickets, as a reply from them. The files
  * are read and base64-encoded here, as the global API takes them.
  *

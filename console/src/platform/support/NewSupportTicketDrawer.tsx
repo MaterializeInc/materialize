@@ -66,13 +66,13 @@ import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import {
+  isAttachUnconfirmedError,
   useAttachFilesState,
   useCreateSupportTicket,
   useSupportOrganizations,
 } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
-  addFiles,
   ATTACHMENT_ACCEPT,
   ATTACHMENT_LIMITS,
   attachmentError,
@@ -80,7 +80,6 @@ import {
   buildTicketTargets,
   defaultTicketTarget,
   ENVIRONMENT_OPTIONS,
-  isUnchangedTemplate,
   OUTAGE_TEMPLATE,
   SEVERITY_OPTIONS,
   TICKET_SEVERITY_OPTIONS,
@@ -123,6 +122,24 @@ const AttachmentPicker = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const input = React.useRef<HTMLInputElement>(null);
+  const attachButton = React.useRef<HTMLButtonElement>(null);
+  const removeButtons = React.useRef(new Map<number, HTMLButtonElement>());
+
+  const removeFile = (file: File) => {
+    const index = files.indexOf(file);
+    const remaining = files.filter((f) => f !== file);
+    onChange(remaining);
+    // Keep keyboard focus in the picker after the removed control unmounts.
+    queueMicrotask(() => {
+      const next = remaining[index] ?? remaining[index - 1];
+      if (next) {
+        removeButtons.current.get(fileKey(next))?.focus();
+      } else {
+        attachButton.current?.focus();
+      }
+    });
+  };
+
   return (
     <Box data-testid="support-ticket-attachments">
       <VisuallyHiddenInput
@@ -130,17 +147,19 @@ const AttachmentPicker = ({
         type="file"
         multiple
         accept={ATTACHMENT_ACCEPT}
+        tabIndex={-1}
         aria-label="Files to attach"
         data-testid="support-ticket-file-input"
         onChange={(event) => {
           const added = Array.from(event.target.files ?? []);
-          onChange(addFiles(files, added));
+          onChange([...files, ...added]);
           // Lets the same file be picked again after it's removed.
           event.target.value = "";
         }}
       />
       <Tooltip label={ATTACHMENT_LIMITS} lineHeight={1.2} hasArrow>
         <Button
+          ref={attachButton}
           variant="secondary"
           size="sm"
           leftIcon={<PaperclipIcon aria-hidden />}
@@ -160,11 +179,19 @@ const AttachmentPicker = ({
                 {formatSize(file.size)}
               </Text>
               <IconButton
+                ref={(node) => {
+                  const key = fileKey(file);
+                  if (node) {
+                    removeButtons.current.set(key, node);
+                  } else {
+                    removeButtons.current.delete(key);
+                  }
+                }}
                 aria-label={`Remove ${file.name}`}
                 icon={<CloseIcon />}
                 variant="ghost"
                 size="xs"
-                onClick={() => onChange(files.filter((f) => f !== file))}
+                onClick={() => removeFile(file)}
               />
             </HStack>
           ))}
@@ -310,7 +337,7 @@ const NewTicketForm = ({
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
   const targets = buildTicketTargets(supportOrganizations.data ?? [], signedIn);
-  const template = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
+  const descriptionPlaceholder = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
   const { register, handleSubmit, formState, watch } =
     useForm<TicketFormValues>({
       mode: "onTouched",
@@ -318,7 +345,7 @@ const NewTicketForm = ({
         title: "",
         severity: isOutage ? "urgent" : "normal",
         environmentType: "production",
-        description: template,
+        description: "",
         target: defaultTicketTarget(targets, signedIn)?.key ?? "",
       },
     });
@@ -536,17 +563,18 @@ const NewTicketForm = ({
             <FormLabel fontWeight="600">What happened?</FormLabel>
             <Textarea
               {...register("description", {
-                // Neither empty nor just the template.
                 validate: (value) =>
-                  (value.trim().length > 0 &&
-                    !isUnchangedTemplate(value, template)) ||
-                  "Describe what happened.",
+                  value.trim().length > 0 || "Describe what happened.",
                 maxLength: {
                   value: 10000,
                   message: "Keep the description under 10,000 characters.",
                 },
               })}
+              placeholder={descriptionPlaceholder}
+              variant={errors.description ? "error" : "default"}
               rows={6}
+              minH="9.5rem"
+              lineHeight="1.4"
               resize="vertical"
             />
             <FormErrorMessage>{errors.description?.message}</FormErrorMessage>
@@ -660,7 +688,7 @@ const TicketSent = ({
   const filesLabel = fileCount === 1 ? "1 file" : `${fileCount} files`;
   // Without an answer, the files may have been added anyway.
   const isUnconfirmed =
-    attach?.error instanceof OpenApiFetchError && attach.error.status === 504;
+    attach?.status === "error" && isAttachUnconfirmedError(attach.error);
   const { colors } = useTheme<MaterializeTheme>();
   const supportOrganizations = useSupportOrganizations();
   // A ticket for another organization says which one it went to.
@@ -755,7 +783,10 @@ const TicketSent = ({
                   ? colors.accent.red
                   : colors.foreground.secondary
               }
-              role={attach?.status === "error" ? "alert" : undefined}
+              // Keep a stable role: swapping status/alert mid-update is
+              // announced unreliably by screen readers.
+              role="status"
+              aria-live={attach?.status === "error" ? "assertive" : "polite"}
               data-testid="support-ticket-attachments-status"
             >
               {attach?.status === "error"
