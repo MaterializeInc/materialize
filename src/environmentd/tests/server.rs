@@ -8193,6 +8193,91 @@ fn test_mcp_agent_rbac() {
     );
 }
 
+/// A materialized view whose only index sits on a cluster the role cannot use
+/// is advertised with a null cluster. `query` must still read it when the
+/// agent omits `cluster` (DEX-71).
+#[mz_ore::test]
+fn test_mcp_agent_query_reads_null_cluster_product() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    let mut super_user = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    for stmt in [
+        format!("CREATE ROLE {user}"),
+        format!("GRANT USAGE ON DATABASE materialize TO {user}"),
+        format!("GRANT USAGE ON SCHEMA materialize.public TO {user}"),
+        "CREATE CLUSTER hidden REPLICAS ()".to_string(),
+        "CREATE MATERIALIZED VIEW null_cluster_product IN CLUSTER quickstart AS SELECT 42::int AS id"
+            .to_string(),
+        "CREATE INDEX null_cluster_product_idx IN CLUSTER hidden ON null_cluster_product (id)"
+            .to_string(),
+        format!("GRANT SELECT ON null_cluster_product TO {user}"),
+    ] {
+        super_user.batch_execute(&stmt).unwrap();
+    }
+
+    let call = |id: u64, name: &str, arguments: serde_json::Value| {
+        mcp_post(
+            &agents_url,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            }),
+        )
+    };
+    let product = "\"materialize\".\"public\".\"null_cluster_product\"";
+    let sql_query = format!("SELECT id FROM {product}");
+
+    let (status, body) = call(
+        1,
+        "get_data_product_details",
+        serde_json::json!({"name": product}),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let rows: serde_json::Value =
+        serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(
+        rows[0][1].is_null(),
+        "the hidden index cluster should be advertised as null: {rows}"
+    );
+
+    for arguments in [
+        serde_json::json!({"sql_query": sql_query}),
+        serde_json::json!({"cluster": null, "sql_query": sql_query}),
+    ] {
+        let (status, body) = call(2, "query", arguments.clone());
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["error"].is_null() && body["result"]["isError"] != true,
+            "{arguments} should read on the default cluster: {body}"
+        );
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("42"), "{arguments} returned {text}");
+    }
+
+    let (status, body) = call(
+        3,
+        "query",
+        serde_json::json!({"cluster": "hidden", "sql_query": sql_query}),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.to_string().contains("permission denied"),
+        "naming the hidden cluster should be refused: {body}"
+    );
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_inject_audit_events() {
