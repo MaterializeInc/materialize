@@ -641,6 +641,8 @@ impl PeekClient {
             Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self.ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
+                #[cfg(debug_assertions)]
+                fail::fail_point!("frontend_peek_after_oracle_read");
                 Some(oracle_read_ts)
             }
             Some(_) | None => None,
@@ -781,6 +783,7 @@ impl PeekClient {
                 if in_immediate_multi_stmt_txn
                     && determination.timestamp_context.contains_timestamp()
                 {
+                    session.require_coordinator_completion();
                     self.call_coordinator(|tx| Command::StoreTransactionReadHolds {
                         conn_id: session.conn_id().clone(),
                         read_holds: read_holds.clone(),
@@ -1401,6 +1404,7 @@ impl PeekClient {
                         .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
+                        session.require_coordinator_completion();
                         if let Some(logging_id) = logging.id() {
                             self.log_set_transient_index_id(logging_id, dataflow_plan.id);
                         }
@@ -1457,6 +1461,7 @@ impl PeekClient {
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                session.require_coordinator_completion();
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
                         bound: *df_desc.until.as_option().expect("as of set"),
@@ -1533,6 +1538,7 @@ impl PeekClient {
 
                 // Perform S3 preflight check in background task (via coordinator).
                 // This runs slow S3 operations without blocking the coordinator's main task.
+                session.require_coordinator_completion();
                 self.call_coordinator(|tx| Command::CopyToPreflight {
                     s3_sink_connection,
                     sink_id,

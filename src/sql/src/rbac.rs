@@ -39,8 +39,8 @@ use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
 
-/// Common checks that need to be performed before we can start checking a role's privileges.
-fn rbac_check_preamble(
+/// Checks that the session's current, session, and authenticated roles still exist.
+pub fn check_session_roles(
     catalog: &impl SessionCatalog,
     session_meta: &dyn SessionMetadata,
 ) -> Result<(), UnauthorizedError> {
@@ -362,7 +362,7 @@ pub fn check_usage(
     resolved_ids: &ResolvedIds,
     item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
-    rbac_check_preamble(catalog, session)?;
+    check_session_roles(catalog, session)?;
 
     // See: doc/developer/design/20260508_restrict_to_user_objects.md
     check_restrict_to_user_objects(catalog, session, resolved_ids)?;
@@ -414,7 +414,7 @@ pub fn check_purification(
     // Like `check_plan`: `validate` reads the current role's membership through
     // the panicking `get_role`, so the concurrent-role-drop case must be turned
     // into a clean error before anything else runs.
-    rbac_check_preamble(catalog, session)?;
+    check_session_roles(catalog, session)?;
 
     let role_id = session.role_metadata().current_role;
     let mut requirements = RbacRequirements {
@@ -454,7 +454,7 @@ pub fn check_plan(
     resolved_ids: &ResolvedIds,
     sql_impl_resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
-    rbac_check_preamble(catalog, session)?;
+    check_session_roles(catalog, session)?;
 
     // Check sql_impl function body dependencies against restrict_to_user_objects.
     // These are checked separately from the main resolved_ids because they are

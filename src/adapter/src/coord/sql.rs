@@ -229,9 +229,10 @@ impl Coordinator {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
-        // and `AdapterClient::end_transaction` protect against this by each executing their parts
-        // of this function. Thus, if this function changes, ensure that the changes are propogated
-        // to either of those components.
+        // and `SessionClient::end_transaction` protect against this by each executing their parts
+        // of this function. Keep session cleanup in sync with those paths and frontend transaction
+        // completion. New coordinator resources also require transferring completion ownership
+        // through `Session::require_coordinator_completion`.
         let retire_notify = self.clear_connection(session.conn_id()).await;
         (session.clear_transaction(), retire_notify)
     }

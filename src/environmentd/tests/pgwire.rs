@@ -931,6 +931,416 @@ fn test_pgtest_transactions() {
 }
 
 #[mz_ore::test]
+#[cfg(debug_assertions)] // Synchronization hooks are absent from release builds.
+#[allow(clippy::disallowed_methods)] // Coordinate a SQL read with input compaction and cancellation.
+fn test_session_owned_completion_oracle_wait() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    use mz_adapter::TimestampExplanation;
+    use mz_adapter_types::compaction::{
+        DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION, SINCE_GRANULARITY,
+    };
+    use mz_ore::now::{NowFn, SYSTEM_TIME};
+    use mz_repr::Timestamp;
+
+    const AFTER_READ: &str = "frontend_peek_after_oracle_read";
+    const BEFORE_CHECK: &str = "frontend_transaction_before_oracle_read";
+    const HOLD_CHECK: &str = "frontend_transaction_hold_oracle_read";
+
+    struct Resume(mpsc::SyncSender<()>);
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            for name in [AFTER_READ, BEFORE_CHECK, HOLD_CHECK] {
+                fail::remove(name);
+            }
+            let _ = self.0.try_send(());
+        }
+    }
+
+    for cancel in [false, true] {
+        let initial = SYSTEM_TIME();
+        let now = Arc::new(AtomicU64::new(0));
+        let now_fn = {
+            let now = Arc::clone(&now);
+            NowFn::from(move || SYSTEM_TIME() + now.load(Ordering::SeqCst))
+        };
+        let server = test_util::TestHarness::default()
+            .with_now(now_fn)
+            .with_system_parameter_default(
+                "enable_frontend_transaction_completion".into(),
+                "true".into(),
+            )
+            .start_blocking();
+        let mut admin = server.connect(postgres::NoTls).unwrap();
+        admin
+            .batch_execute("SET statement_timeout = '30s'")
+            .unwrap();
+        admin
+            .batch_execute("CREATE TABLE completion_wait (v int)")
+            .unwrap();
+        admin
+            .batch_execute("INSERT INTO completion_wait VALUES (42)")
+            .unwrap();
+        admin
+            .batch_execute("CREATE DEFAULT INDEX ON completion_wait")
+            .unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("SET statement_timeout = '30s'")
+            .unwrap();
+        let statement = client
+            .prepare("SELECT v FROM completion_wait WHERE v = $1")
+            .unwrap();
+        assert_eq!(
+            client
+                .query_one(&statement, &[&42_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+        let cancel_token = client.cancel_token();
+        let before_waits = test_util::get_counter_value(
+            server.metrics_registry(),
+            "mz_frontend_transaction_waits_total",
+            &[],
+        );
+        let linearizations = || -> u64 {
+            server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|m| m.name() == "mz_linearize_message_seconds")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    m.get_label()
+                        .iter()
+                        .any(|l| l.name() == "type" && l.value() == "read")
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum()
+        };
+        let before_linearizations = linearizations();
+        let (sampled_tx, sampled_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+        let armed = AtomicBool::new(true);
+        let resume_rx = Mutex::new(resume_rx);
+        fail::cfg_callback(AFTER_READ, move || {
+            if armed.swap(false, Ordering::SeqCst) {
+                tokio::task::block_in_place(|| {
+                    sampled_tx.send(()).unwrap();
+                    resume_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(60))
+                        .unwrap();
+                });
+            }
+        })
+        .unwrap();
+        let _resume = Resume(resume_tx.clone());
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            let result = client.query_one(&statement, &[&42_i32]);
+            let _ = done_tx.send((client, result));
+        });
+        sampled_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("read sampled the oracle before acquiring input holds");
+
+        // The original oracle sample is now older than the earliest readable input.
+        // This is a real timestamp-selection race, not an injected chosen timestamp.
+        let advanced = initial + 86_400_000;
+        now.store(86_400_000, Ordering::SeqCst);
+        admin
+            .batch_execute("INSERT INTO completion_wait VALUES (7)")
+            .unwrap();
+        let retained_ms =
+            u64::try_from(DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION.as_millis()).unwrap();
+        let granularity_ms: u64 = SINCE_GRANULARITY.into();
+        let minimum_since = Timestamp::from(advanced - retained_ms - granularity_ms);
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .retry(|_| {
+                let raw: String = admin
+                    .query_one(
+                        "EXPLAIN TIMESTAMP AS JSON FOR SELECT v FROM completion_wait WHERE v = 42",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                let explanation: TimestampExplanation = serde_json::from_str(&raw).unwrap();
+                let since = explanation.determination.since.into_option().unwrap();
+                if since >= minimum_since {
+                    Ok(())
+                } else {
+                    Err(since)
+                }
+            })
+            .expect("input compacted beyond the paused read's oracle sample");
+
+        // The real oracle may already have caught up. Hold its completion-time
+        // check pending to exercise the asynchronous wait and its cancellation.
+        fail::cfg(HOLD_CHECK, "return").unwrap();
+        let (checking_tx, checking_rx) = mpsc::sync_channel(1);
+        fail::cfg_callback(BEFORE_CHECK, move || {
+            let _ = checking_tx.try_send(());
+        })
+        .unwrap();
+        resume_tx.send(()).unwrap();
+        checking_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("SQL read reached frontend oracle completion");
+        assert_eq!(
+            test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_frontend_transaction_waits_total",
+                &[]
+            ),
+            before_waits + 1
+        );
+        assert!(
+            matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "read cannot complete while the oracle check is held"
+        );
+        if cancel {
+            cancel_token.cancel_query(postgres::NoTls).unwrap();
+        } else {
+            fail::remove(HOLD_CHECK);
+        }
+        let (mut client, result) = done_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("completion or cancellation released the read");
+        if cancel {
+            assert_eq!(
+                result.unwrap_err().as_db_error().unwrap().code(),
+                &SqlState::QUERY_CANCELED
+            );
+        } else {
+            assert_eq!(result.unwrap().get::<_, i32>(0), 42);
+        }
+        assert_eq!(
+            linearizations(),
+            before_linearizations + u64::from(!cancel),
+            "only successful oracle completions record linearization latency"
+        );
+        drop(_resume);
+        reader.join().unwrap();
+        assert_eq!(
+            client.query_one("SELECT 42", &[]).unwrap().get::<_, i32>(0),
+            42
+        );
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Exercise simple-query protocol with fixed SQL literals.
+fn test_session_owned_read_completion() {
+    for enabled in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_frontend_transaction_completion".into(),
+                enabled.to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("CREATE TABLE completion_read (v int)")
+            .unwrap();
+        client
+            .batch_execute("INSERT INTO completion_read VALUES (42), (7)")
+            .unwrap();
+        client
+            .batch_execute("CREATE DEFAULT INDEX ON completion_read")
+            .unwrap();
+        let counts = || {
+            // The coordinator records a handler's duration after sending its response.
+            // A subsequent command ensures the preceding commit sample is visible.
+            server
+                .runtime()
+                .block_on(server.inner().adapter_client().get_system_vars());
+            let metrics = server.metrics_registry().gather();
+            let local = metrics
+                .iter()
+                .find(|m| m.name() == "mz_frontend_transaction_completions_total")
+                .unwrap()
+                .get_metric()[0]
+                .get_counter()
+                .value();
+            let commits: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_slow_message_handling")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    m.get_label()
+                        .iter()
+                        .any(|l| l.name() == "message_kind" && l.value() == "command-commit")
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum();
+            let fast = test_util::get_counter_value(
+                server.metrics_registry(),
+                "mz_linearize_read_fast_path_total",
+                &[],
+            );
+            let linearized: u64 = metrics
+                .iter()
+                .filter(|m| m.name() == "mz_linearize_message_seconds")
+                .flat_map(|m| m.get_metric())
+                .filter(|m| {
+                    m.get_label()
+                        .iter()
+                        .any(|l| l.name() == "type" && l.value() == "read")
+                })
+                .map(|m| m.get_histogram().get_sample_count())
+                .sum();
+            (local, commits, fast, linearized)
+        };
+
+        // Warm up the collection and protocol paths before measuring completion routing.
+        client
+            .simple_query("SELECT v FROM completion_read WHERE v = 42")
+            .unwrap();
+        let stmt = client
+            .prepare("SELECT v FROM completion_read WHERE v = $1")
+            .unwrap();
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&42_i32])
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+        let before = counts();
+        for key in [42_i32, 7, 42, 7] {
+            let rows = client
+                .simple_query("SELECT v FROM completion_read WHERE v = 42")
+                .unwrap();
+            let values: Vec<_> = rows
+                .iter()
+                .filter_map(|message| match message {
+                    SimpleQueryMessage::Row(row) => Some(row.get(0)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, vec![Some("42")]);
+            assert_eq!(
+                client.query_one(&stmt, &[&key]).unwrap().get::<_, i32>(0),
+                key
+            );
+        }
+        let after = counts();
+        assert_eq!(
+            after.2 - before.2,
+            8,
+            "both completion paths must count already-linearized reads"
+        );
+        assert_eq!(
+            after.3 - before.3,
+            8,
+            "both completion paths must record read linearization latency"
+        );
+        if enabled {
+            assert!(
+                after.0 >= before.0 + 8.0,
+                "reads must finish in the session"
+            );
+            assert_eq!(after.1, before.1, "reads must not send coordinator commits");
+        } else {
+            assert_eq!(after.0, before.0, "disabled path must use the coordinator");
+            assert!(after.1 >= before.1 + 8);
+        }
+
+        let before = counts();
+        assert!(client.simple_query("SELECT 1 / 0").is_err());
+        let after = counts();
+        assert_eq!(
+            after.2, before.2,
+            "failed reads must not count as linearized"
+        );
+        assert_eq!(
+            after.3, before.3,
+            "failed reads must not record linearization latency"
+        );
+        assert_eq!(
+            client.query_one("SELECT 42", &[]).unwrap().get::<_, i32>(0),
+            42
+        );
+        client.batch_execute("BEGIN").unwrap();
+        let before = counts();
+        assert_eq!(
+            client.query_one(&stmt, &[&7_i32]).unwrap().get::<_, i32>(0),
+            7
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+        let after = counts();
+        assert_eq!(
+            after.0, before.0,
+            "explicit transactions remain coordinator-owned from BEGIN"
+        );
+
+        client
+            .batch_execute("PREPARE completion_sql AS SELECT v FROM completion_read WHERE v = $1")
+            .unwrap();
+        client.simple_query("EXECUTE completion_sql(42)").unwrap();
+        let before = counts();
+        for key in [7, 42] {
+            let rows = client
+                .simple_query(&format!("EXECUTE completion_sql({key})"))
+                .unwrap();
+            let values: Vec<_> = rows
+                .iter()
+                .filter_map(|message| match message {
+                    SimpleQueryMessage::Row(row) => {
+                        Some(row.get(0).unwrap().parse::<i32>().unwrap())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, vec![key]);
+        }
+        let after = counts();
+        if enabled {
+            assert!(after.0 >= before.0 + 2.0);
+            assert_eq!(after.1, before.1);
+        } else {
+            assert_eq!(after.0, before.0);
+            assert!(after.1 >= before.1 + 2);
+        }
+        let before = counts();
+        client
+            .simple_query("EXECUTE completion_sql(42); EXECUTE completion_sql(7)")
+            .unwrap();
+        let after = counts();
+        assert_eq!(after.0, before.0, "shared read holds cannot retire locally");
+        assert!(
+            after.1 > before.1,
+            "implicit multi-statement transaction must reach coordinator completion"
+        );
+        client
+            .batch_execute("BEGIN; INSERT INTO completion_read VALUES (7); COMMIT")
+            .unwrap();
+        assert_eq!(
+            client
+                .query("SELECT v FROM completion_read", &[])
+                .unwrap()
+                .len(),
+            3
+        );
+        client
+            .batch_execute("SET LOCAL application_name = 'local'; SELECT 1")
+            .unwrap();
+        assert_ne!(
+            client
+                .query_one("SHOW application_name", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "local"
+        );
+    }
+}
+
+#[mz_ore::test]
 fn test_pgtest_vars() {
     pg_test_inner(Path::new("../../test/pgtest/vars.pt"), false);
 }
