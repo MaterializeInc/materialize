@@ -9,11 +9,10 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Convert `workflow_basic` from candidate write rejection and promotion fencing
-to native coexistence followed by explicit retirement. The phase/state audit is
-complete. Preserve source workloads, cursor subscriptions, cross-deployment DDL
-and exact sink rows. Forced-migration and remaining pruning cases still need
-separate treatment.
+Adapt the forward-write correction-buffer pruning fixture to native candidate
+readiness and execution discovery, preserving its workload and memory bound.
+Forced-migration workflows need separate treatment: controller startup explicitly
+rejects forced migrations, so those cases are not native coverage.
 Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
 final-preflight coverage still need the scope decisions below.
 
@@ -23,6 +22,9 @@ No production Kafka metrics change was needed. The replacement-deployment
 workflow also passes with no active-generation processes: candidate SQL/table
 writes work before promotion, while maintained output waits for authority.
 See `native-compatible-current/offline-candidate-verification.md`.
+The basic coexistence workflow also passes with the distinct-version pair,
+including fresh source/sink input and cursor subscriptions after predecessor
+shutdown. See `native-compatible-current/basic-verification.md`.
 All runtime fixtures are removed.
 
 ## Verified outcome
@@ -62,7 +64,7 @@ scoped all-target checks and independent review.
   transport, native nonleader workers and both Timely topologies. The dormant
   final-preflight hook's old-to-old coverage also remains pending a decision.
   See `native-replica-execution-boundary.md` and `final-preflight-boundary-research.md`.
-- Remaining native lifecycle callers include read-only/fencing expectations,
+- Remaining native lifecycle callers include the forward-write pruning fixture,
   forced-migration cases and platform/stress workflows.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.

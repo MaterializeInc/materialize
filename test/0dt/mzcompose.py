@@ -668,7 +668,7 @@ def workflow_candidate_without_active_processes(c: Composition) -> None:
 
 
 def workflow_basic(c: Composition) -> None:
-    """Verify basic 0dt deployment flow."""
+    """Verify native writer coexistence, ingestion and explicit retirement."""
     c.down(destroy_volumes=True)
     c.up(
         "kafka",
@@ -820,11 +820,12 @@ def workflow_basic(c: Composition) -> None:
         > COMMIT
         """))
 
-    # Start new Materialize in a new deploy generation, which will cause
-    # Materialize to boot in read-only mode.
+    # Both adapters can commit while the active deployment maintains shared
+    # output. Wait for deployment-local replicas before querying the candidate.
     c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
 
-    # Verify against new Materialize that it is in read-only mode
+    # Exercise candidate writes, DDL and cursor subscriptions before promotion.
     with c.override(
         Testdrive(
             materialize_url="postgres://materialize@mz_new:6875",
@@ -838,7 +839,7 @@ def workflow_basic(c: Composition) -> None:
     ):
         c.up(Service("testdrive", idle=True))
         c.testdrive(dedent(f"""
-            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            $ webhook-append database=materialize schema=public name=webhook_source
             BBB
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
@@ -862,26 +863,20 @@ def workflow_basic(c: Composition) -> None:
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            ! INSERT INTO t VALUES (3, 4);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (3, 4);
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
-            1
-            # TODO: Currently hangs
-            # > SELECT max(b) FROM t;
-            # 2
+            4
+            > SELECT max(b) FROM t;
+            4
             > SELECT mz_unsafe.mz_sleep(5)
             <null>
-            ! INSERT INTO t VALUES (5, 6);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (5, 6);
             > SELECT * FROM mv;
-            1
-            ! DROP INDEX t_idx
-            contains: cannot write in read-only mode
-            ! CREATE INDEX t_idx2 ON t (a, b)
-            contains: cannot write in read-only mode
-            ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
-            contains: cannot write in read-only mode
+            9
+            > DROP INDEX t_idx
+            > CREATE INDEX t_idx2 ON t (a, b)
+            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
@@ -902,23 +897,29 @@ def workflow_basic(c: Composition) -> None:
             B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
 
             > SELECT * FROM webhook_source
             AAA
+            BBB
 
             $ set-max-tries max-tries=1
             $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
             > BEGIN
-            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
-            contains: cannot write in read-only mode
-            > ROLLBACK
-            # Actual subscribes without a declare still work though
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            > COMMIT
+            # Also exercise a direct finite subscription.
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
             """))
 
-    # But the old Materialize can still run writes
+    # The old deployment follows candidate DDL and commits its own changes.
     c.up(Service("testdrive", idle=True))
     c.testdrive(dedent(f"""
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -945,20 +946,22 @@ def workflow_basic(c: Composition) -> None:
         > SET CLUSTER = cluster;
         > SELECT 1
         1
-        > INSERT INTO t VALUES (3, 4);
+        > INSERT INTO t VALUES (7, 8);
         > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
         > SELECT * FROM mv;
-        4
+        16
         > SELECT max(b) FROM t;
-        4
+        8
         > SELECT mz_unsafe.mz_sleep(5)
         <null>
-        > INSERT INTO t VALUES (5, 6);
+        > INSERT INTO t VALUES (9, 10);
         > SELECT * FROM mv;
-        9
-        > DROP INDEX t_idx
-        > CREATE INDEX t_idx2 ON t (a, b)
-        > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+        25
+        > DROP INDEX t_idx2
+        > CREATE INDEX t_idx_peer ON t (a, b)
+        > CREATE MATERIALIZED VIEW mv_peer AS SELECT sum(a) FROM t;
+        > SELECT * FROM mv2;
+        25
 
         $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
@@ -985,8 +988,11 @@ def workflow_basic(c: Composition) -> None:
         <null> <null> 1 2
         <null> <null> 3 4
         <null> <null> 5 6
+        <null> <null> 7 8
+        <null> <null> 9 10
         > SELECT * FROM webhook_source
         AAA
+        BBB
         CCC
 
         $ set-max-tries max-tries=1
@@ -997,6 +1003,8 @@ def workflow_basic(c: Composition) -> None:
         <TIMESTAMP> 1 1
         <TIMESTAMP> 1 3
         <TIMESTAMP> 1 5
+        <TIMESTAMP> 1 7
+        <TIMESTAMP> 1 9
         > COMMIT
         """))
 
@@ -1013,21 +1021,24 @@ def workflow_basic(c: Composition) -> None:
     ):
         c.up(Service("testdrive", idle=True))
         c.testdrive(dedent("""
-            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            $ webhook-append database=materialize schema=public name=webhook_source
             DDD
 
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            ! INSERT INTO t VALUES (3, 4);
-            contains: cannot write in read-only mode
+            > INSERT INTO t VALUES (11, 12);
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
-            9
+            36
             > SELECT max(b) FROM t;
-            6
+            12
             > SELECT * FROM mv;
-            9
+            36
+            > SELECT * FROM mv2;
+            36
+            > SELECT * FROM mv_peer;
+            36
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -1048,147 +1059,267 @@ def workflow_basic(c: Composition) -> None:
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
+            <null> <null> 7 8
+            <null> <null> 9 10
+            <null> <null> 11 12
             > SELECT * FROM webhook_source
             AAA
+            BBB
             CCC
+            DDD
 
             $ set-max-tries max-tries=1
             $ set-regex match=\\d{13,20} replacement=<TIMESTAMP>
             > BEGIN
-            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
-            contains: cannot write in read-only mode
-            > ROLLBACK
-            # Actual subscribes without a declare still work though
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            <TIMESTAMP> 1 7
+            <TIMESTAMP> 1 9
+            <TIMESTAMP> 1 11
+            > COMMIT
+            # Also exercise a direct finite subscription.
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
             """))
 
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        # mz_old runs without a restart policy, so its container exits once
-        # the fence stops environmentd. The loop below asserts exactly that.
-        c.promote_mz("mz_new", retire_mz_service=None)
+        with c.sql_connection(service="mz_old") as old_conn:
+            old_conn.execute("SET cluster = cluster")
+            assert old_conn.execute("SELECT 1").fetchall() == [(1,)]
+            c.promote_mz("mz_new", retire_mz_service=None)
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
-        # Give some time for Mz to restart after promotion
-        for i in range(10):
+            for i in range(10):
+                try:
+                    c.sql("SELECT 1", service="mz_new", reuse_connection=False)
+                    break
+                except CommandFailureCausedUIError:
+                    pass
+                except OperationalError:
+                    pass
+                time.sleep(1)
+            else:
+                raise RuntimeError("mz_new didn't come up within 10 seconds")
+
+            old_conn.execute("INSERT INTO t VALUES (13, 14)")
+            old_conn.execute("CREATE TABLE basic_peer (a int)")
+            old_conn.execute("CREATE INDEX basic_peer_idx ON basic_peer (a)")
+
+            c.testdrive(dedent(f"""
+                $ webhook-append database=materialize schema=public name=webhook_source
+                EEE
+                > SET CLUSTER = cluster;
+                > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+                > INSERT INTO basic_peer VALUES (42);
+                > SELECT * FROM basic_peer;
+                42
+                > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
+                > SELECT * FROM mv;
+                49
+                > SELECT * FROM mv2;
+                49
+                > SELECT * FROM mv3;
+                49
+                > SELECT * FROM mv_peer;
+                49
+                > SELECT max(b) FROM t;
+                14
+                > INSERT INTO t VALUES (15, 16);
+                > SELECT * FROM mv;
+                64
+                > SELECT * FROM mv2;
+                64
+                > SELECT * FROM mv3;
+                64
+                > SELECT * FROM mv_peer;
+                64
+                > SELECT max(b) FROM t;
+                16
+                > SELECT * FROM kafka_source_tbl
+                key1A key1B value1A value1B
+                key2A key2B value2A value2B
+                key3A key3B value3A value3B
+                > SELECT * FROM postgres_source_table
+                A 0
+                B 1
+                C 2
+                > SELECT * FROM mysql_source_table;
+                A 0
+                B 1
+                C 2
+                > SELECT * FROM sql_server_source_table;
+                A 0
+                B 1
+                C 2
+
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
+                key4A,key4B:value4A,value4B
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO postgres_source_table VALUES ('D', 3);
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_source_table VALUES ('D', 3);
+
+                $ sql-server-connect name=sql-server
+                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                $ sql-server-execute name=sql-server
+                USE test;
+                INSERT INTO sql_server_source_table VALUES ('D', 3);
+
+                > SELECT * FROM kafka_source_tbl
+                key1A key1B value1A value1B
+                key2A key2B value2A value2B
+                key3A key3B value3A value3B
+                key4A key4B value4A value4B
+                > SELECT * FROM postgres_source_table
+                A 0
+                B 1
+                C 2
+                D 3
+                > SELECT * FROM mysql_source_table;
+                A 0
+                B 1
+                C 2
+                D 3
+                > SELECT * FROM sql_server_source_table;
+                A 0
+                B 1
+                C 2
+                D 3
+                > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
+                <null> <null> 1 2
+                <null> <null> 3 4
+                <null> <null> 5 6
+                <null> <null> 7 8
+                <null> <null> 9 10
+                <null> <null> 11 12
+                <null> <null> 13 14
+                <null> <null> 15 16
+                > SELECT * FROM webhook_source
+                AAA
+                BBB
+                CCC
+                DDD
+                EEE
+
+                $ set-max-tries max-tries=1
+                $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+                > BEGIN
+                > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+                > FETCH ALL c WITH (timeout='5s');
+                <TIMESTAMP> 1 1
+                <TIMESTAMP> 1 3
+                <TIMESTAMP> 1 5
+                <TIMESTAMP> 1 7
+                <TIMESTAMP> 1 9
+                <TIMESTAMP> 1 11
+                <TIMESTAMP> 1 13
+                <TIMESTAMP> 1 15
+                > COMMIT
+                """))
+
+            assert old_conn.execute("SELECT * FROM basic_peer").fetchall() == [(42,)]
+            c.retire_mz_deployment(
+                "mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID
+            )
             try:
-                c.sql("SELECT 1", service="mz_old")
-            except OperationalError as e:
-                assert (
-                    "server closed the connection unexpectedly" in str(e)
-                    or "Can't create a connection to host" in str(e)
-                    or "Connection refused" in str(e)
-                    or "the connection is closed" in str(e)
-                ), f"Unexpected error: {e}"
-            except CommandFailureCausedUIError as e:
-                # service "mz_old" is not running
-                assert "running docker compose failed" in str(
-                    e
-                ), f"Unexpected error: {e}"
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError("mz_old didn't stop running within 10 seconds")
+                old_conn.execute("INSERT INTO t VALUES (99, 100)")
+            except psycopg.Error as error:
+                assert isinstance(error, OperationalError) or "has been retired" in str(
+                    error
+                ), error
+            else:
+                raise AssertionError("retired deployment accepted a table write")
 
-        for i in range(10):
-            try:
-                c.sql("SELECT 1", service="mz_new")
-                break
-            except CommandFailureCausedUIError:
-                pass
-            except OperationalError:
-                pass
-            time.sleep(1)
-        else:
-            raise RuntimeError("mz_new didn't come up within 10 seconds")
-
-        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
-
+        c.kill_fenced_mz("mz_old")
         c.testdrive(dedent(f"""
-            $ webhook-append database=materialize schema=public name=webhook_source
-            EEE
             > SET CLUSTER = cluster;
-            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
-            > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
+            > SELECT count(*), sum(a), max(b) FROM t;
+            8 64 16
+            > CREATE TABLE basic_survivor (a int);
+            > INSERT INTO basic_survivor SELECT a FROM basic_peer;
+            > SELECT * FROM basic_survivor;
+            42
+            > INSERT INTO t VALUES (17, 18);
+            > SELECT count(*), sum(a), max(b) FROM t;
+            9 81 18
             > SELECT * FROM mv;
-            9
+            81
             > SELECT * FROM mv2;
-            9
+            81
+            > SELECT * FROM mv_peer;
+            81
             > SELECT * FROM mv3;
-            9
-            > SELECT max(b) FROM t;
-            6
-            > INSERT INTO t VALUES (7, 8);
-            > SELECT * FROM mv;
-            16
-            > SELECT * FROM mv2;
-            16
-            > SELECT max(b) FROM t;
-            8
-            > SELECT * FROM kafka_source_tbl
-            key1A key1B value1A value1B
-            key2A key2B value2A value2B
-            key3A key3B value3A value3B
-            > SELECT * FROM postgres_source_table
-            A 0
-            B 1
-            C 2
-            > SELECT * FROM mysql_source_table;
-            A 0
-            B 1
-            C 2
-            > SELECT * FROM sql_server_source_table;
-            A 0
-            B 1
-            C 2
+            81
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
-            key4A,key4B:value4A,value4B
+            key5A,key5B:value5A,value5B
 
             $ postgres-execute connection=postgres://postgres:postgres@postgres
-            INSERT INTO postgres_source_table VALUES ('D', 3);
+            INSERT INTO postgres_source_table VALUES ('E', 4);
 
             $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
             $ mysql-execute name=mysql
             USE public;
-            INSERT INTO mysql_source_table VALUES ('D', 3);
+            INSERT INTO mysql_source_table VALUES ('E', 4);
 
             $ sql-server-connect name=sql-server
             server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
             $ sql-server-execute name=sql-server
             USE test;
-            INSERT INTO sql_server_source_table VALUES ('D', 3);
+            INSERT INTO sql_server_source_table VALUES ('E', 4);
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             key3A key3B value3A value3B
             key4A key4B value4A value4B
+            key5A key5B value5A value5B
             > SELECT * FROM postgres_source_table
             A 0
             B 1
             C 2
             D 3
+            E 4
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
             C 2
             D 3
+            E 4
             > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2
             D 3
+            E 4
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
             <null> <null> 7 8
+            <null> <null> 9 10
+            <null> <null> 11 12
+            <null> <null> 13 14
+            <null> <null> 15 16
+            <null> <null> 17 18
+            $ webhook-append database=materialize schema=public name=webhook_source
+            FFF
             > SELECT * FROM webhook_source
             AAA
+            BBB
             CCC
+            DDD
             EEE
+            FFF
 
             $ set-max-tries max-tries=1
             $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
@@ -1199,8 +1330,13 @@ def workflow_basic(c: Composition) -> None:
             <TIMESTAMP> 1 3
             <TIMESTAMP> 1 5
             <TIMESTAMP> 1 7
+            <TIMESTAMP> 1 9
+            <TIMESTAMP> 1 11
+            <TIMESTAMP> 1 13
+            <TIMESTAMP> 1 15
+            <TIMESTAMP> 1 17
             > COMMIT
-            """))
+        """))
 
 
 def workflow_index_read_protection(
