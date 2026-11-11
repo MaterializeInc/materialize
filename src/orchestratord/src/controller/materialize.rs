@@ -350,6 +350,15 @@ impl k8s_controller::Context for Context {
         metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         let metadata = &*metadata;
+        // First, so that the environment stays described while reconciling
+        // it fails. Every status write triggers another pass, which publishes
+        // the new active generation.
+        self.metrics.observe_environment(
+            &mz.namespace(),
+            &mz.name_unchecked(),
+            mz.spec.environment_id,
+            mz.status.as_ref().map(|status| status.active_generation),
+        );
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
         let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
@@ -1031,6 +1040,8 @@ impl k8s_controller::Context for Context {
         _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         self.set_needs_update(mz, false);
+        self.metrics
+            .forget_environment(&mz.namespace(), &mz.name_unchecked());
 
         Ok(None)
     }
