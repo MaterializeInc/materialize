@@ -1,0 +1,256 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for the function relations: mz_catalog.mz_functions,
+# mz_catalog.mz_operators and mz_internal.mz_aggregates. Every function and
+# operator is builtin. mz_functions and mz_operators are
+# BuiltinMaterializedViews over mz_internal.mz_catalog_raw (see MZ_FUNCTIONS
+# in src/catalog/src/builtin/mz_catalog.rs) that read each signature from the
+# generated constant views mz_internal.mz_builtin_functions and
+# mz_internal.mz_builtin_operators (make_builtin_functions in
+# src/catalog/src/builtin/builtin.rs) and resolve the function and type names
+# to ids through GidMapping records. mz_aggregates is a view over
+# mz_builtin_functions.
+#
+# pg_proc, pg_operator and pg_aggregate read through these relations, so the
+# values pinned here are a compatibility surface.
+
+mode cockroach
+
+# --- mz_builtin_functions ------------------------------------------------------
+
+# A signature as the function registry reports it: type names, not ids.
+query TTTTTTT
+SELECT schema_name, name, kind, argument_type_names::text, variadic_argument_type_name, return_type_name, returns_set
+FROM mz_internal.mz_builtin_functions WHERE name = 'concat'
+----
+pg_catalog  concat  scalar  {any}  any  text  false
+
+# --- mz_functions ------------------------------------------------------------
+
+# Every implementation of an overloaded function shares the function's id.
+query I
+SELECT count(DISTINCT id) FROM mz_functions WHERE name = 'abs'
+----
+1
+
+query T
+SELECT count(*) > 1 FROM mz_functions WHERE name = 'abs'
+----
+true
+
+# The id comes from the function's GidMapping record, the schema from
+# mz_schemas, and the owner is mz_system.
+query TTT
+SELECT
+    id LIKE 's%',
+    schema_id = (SELECT id FROM mz_schemas WHERE name = 'pg_catalog' AND database_id IS NULL),
+    owner_id
+FROM mz_functions WHERE name = 'now'
+----
+true  true  s1
+
+# The oid is the compiled-in PostgreSQL oid, read out of the generated view,
+# while a regproc cast resolves the name through the in-memory catalog. Two
+# independent paths that must agree.
+query IT
+SELECT oid, oid = 'now'::regproc::oid FROM mz_functions WHERE name = 'now'
+----
+1299  true
+
+# Argument types resolve to mz_types ids in argument order.
+query TT rowsort
+SELECT a1.name, a2.name
+FROM mz_functions f
+JOIN mz_types a1 ON a1.id = f.argument_type_ids[1]
+JOIN mz_types a2 ON a2.id = f.argument_type_ids[2]
+WHERE f.name = 'date_trunc' AND array_length(f.argument_type_ids, 1) = 2
+----
+text  interval
+text  timestamp
+text  timestamptz
+
+# A nullary function has an empty argument array.
+query T
+SELECT argument_type_ids::text FROM mz_functions WHERE name = 'now'
+----
+{}
+
+# A variadic function names its variadic argument's type, which is also its
+# last argument; every other function reports NULL.
+query TTT
+SELECT a.name, v.name, r.name
+FROM mz_functions f
+JOIN mz_types a ON a.id = f.argument_type_ids[1]
+JOIN mz_types v ON v.id = f.variadic_argument_type_id
+JOIN mz_types r ON r.id = f.return_type_id
+WHERE f.name = 'concat'
+----
+any  any  text
+
+query I
+SELECT count(*) FROM mz_functions WHERE name = 'now' AND variadic_argument_type_id IS NOT NULL
+----
+0
+
+# Table functions return a set.
+query TT
+SELECT returns_set, r.name
+FROM mz_functions f JOIN mz_types r ON r.id = f.return_type_id
+WHERE f.name = 'jsonb_array_elements'
+----
+true  jsonb
+
+# Only a function that returns no value has no return type.
+query TT
+SELECT name, returns_set FROM mz_functions WHERE return_type_id IS NULL ORDER BY name
+----
+repeat_row  true
+repeat_row_non_negative  true
+
+# Functions live in the system schemas.
+query T
+SELECT s.name
+FROM mz_functions f JOIN mz_schemas s ON s.id = f.schema_id
+GROUP BY s.name ORDER BY s.name
+----
+information_schema
+mz_catalog
+mz_internal
+mz_unsafe
+pg_catalog
+
+# --- mz_operators ------------------------------------------------------------
+
+# Binary operators list their arguments in order, and the oid is PostgreSQL's.
+query ITTT
+SELECT o.oid, l.name, r.name, ret.name
+FROM mz_operators o
+JOIN mz_types l ON l.id = o.argument_type_ids[1]
+JOIN mz_types r ON r.id = o.argument_type_ids[2]
+JOIN mz_types ret ON ret.id = o.return_type_id
+WHERE o.name = '->' AND l.name = 'jsonb' AND r.name = 'text'
+----
+3211  jsonb  text  jsonb
+
+# Unary operators have one argument.
+query T
+SELECT ret.name
+FROM mz_operators o
+JOIN mz_types l ON l.id = o.argument_type_ids[1]
+JOIN mz_types ret ON ret.id = o.return_type_id
+WHERE o.name = '-' AND array_length(o.argument_type_ids, 1) = 1 AND l.name = 'int4'
+----
+int4
+
+# --- mz_aggregates -----------------------------------------------------------
+
+# Every implementation of an aggregate function has a row, and no other
+# function does.
+query TI rowsort
+SELECT a.agg_kind, a.agg_num_direct_args
+FROM mz_internal.mz_aggregates a JOIN mz_functions f USING (oid)
+WHERE f.name = 'count'
+----
+n  0
+n  0
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_builtin_functions b
+LEFT JOIN mz_internal.mz_aggregates a USING (oid)
+WHERE (b.kind = 'aggregate') <> (a.oid IS NOT NULL)
+----
+0
+
+# --- Cross-relation invariants -----------------------------------------------
+
+# Every type a signature names resolves to a type.
+query I
+SELECT count(*)
+FROM (
+    SELECT unnest(argument_type_ids) AS id FROM mz_functions
+    UNION ALL SELECT variadic_argument_type_id FROM mz_functions WHERE variadic_argument_type_id IS NOT NULL
+    UNION ALL SELECT return_type_id FROM mz_functions WHERE return_type_id IS NOT NULL
+    UNION ALL SELECT unnest(argument_type_ids) FROM mz_operators
+    UNION ALL SELECT return_type_id FROM mz_operators
+) refs
+LEFT JOIN mz_types t USING (id)
+WHERE t.id IS NULL
+----
+0
+
+# Every builtin signature is reported exactly once, by oid.
+query I
+SELECT count(*) FROM (
+    SELECT oid FROM mz_internal.mz_builtin_functions
+    EXCEPT ALL
+    SELECT oid FROM mz_functions
+)
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT oid FROM mz_functions
+    EXCEPT ALL
+    SELECT oid FROM mz_internal.mz_builtin_functions
+)
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT oid FROM mz_internal.mz_builtin_operators
+    EXCEPT ALL
+    SELECT oid FROM mz_operators
+)
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT oid FROM mz_operators
+    EXCEPT ALL
+    SELECT oid FROM mz_internal.mz_builtin_operators
+)
+----
+0
+
+# mz_objects reports each implementation, as it always has.
+query T
+SELECT count(*) = (SELECT count(*) FROM mz_functions)
+FROM mz_objects WHERE type = 'function'
+----
+true
+
+# --- pg_catalog ---------------------------------------------------------------
+
+query TI
+SELECT proname, prorettype FROM pg_proc WHERE oid = 1299
+----
+now  1184
+
+query T
+SELECT pg_function_is_visible(1299)
+----
+true
+
+query TII
+SELECT oprname, oprleft, oprright FROM pg_operator WHERE oid = 3211
+----
+->  3802  25
+
+query TI rowsort
+SELECT aggkind, aggnumdirectargs
+FROM pg_aggregate
+WHERE aggfnoid IN (SELECT oid FROM mz_functions WHERE name = 'count')
+----
+n  0
+n  0

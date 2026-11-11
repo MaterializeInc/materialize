@@ -682,38 +682,67 @@ WHERE data->>'kind' = 'NetworkPolicy'",
 });
 
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
-/// in the `mz_types` table as part of our public, stable API.
-pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_type_pg_metadata",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("typinput", SqlScalarType::Oid.nullable(false))
-        .with_column("typreceive", SqlScalarType::Oid.nullable(false))
-        // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
-        // because its `LEFT JOIN` against this table yields NULLs for types with
-        // no PostgreSQL metadata.
-        .with_column("typsend", SqlScalarType::Oid.nullable(false))
-        // NULL for pseudo-types and arrays of them.
-        .with_column("typlen", SqlScalarType::Int16.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
-pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+/// in `mz_types` as part of our public, stable API.
+pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_type_pg_metadata",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_TYPE_PG_METADATA_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("typinput", SqlScalarType::Oid.nullable(false))
+            .with_column("typreceive", SqlScalarType::Oid.nullable(false))
+            // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
+            // because its `LEFT JOIN` against this table yields NULLs for types with
+            // no PostgreSQL metadata.
+            .with_column("typsend", SqlScalarType::Oid.nullable(false))
+            // NULL for pseudo-types and arrays of them.
+            .with_column("typlen", SqlScalarType::Int16.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        // User-defined types carry no PostgreSQL metadata. A builtin type has
+        // either all three function oids or none (`CatalogTypePgMetadata`), so
+        // `typinput` stands in for the whole record.
+        sql: Box::leak(
+            format!(
+                "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL typinput,
+    ASSERT NOT NULL typreceive,
+    ASSERT NOT NULL typsend
+) AS
+WITH
+    {builtin_ctes}
+SELECT id, typinput, typreceive, typsend, typlen
+FROM builtin_types
+WHERE typinput IS NOT NULL",
+                builtin_ctes = super::builtin::builtin_types_ctes()
+            )
+            .into_boxed_str(),
+        ),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+pub static MZ_AGGREGATES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_aggregates",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_AGGREGATES_OID,
+    oid: oid::VIEW_MZ_AGGREGATES_OID,
     desc: RelationDesc::builder()
         .with_column("oid", SqlScalarType::Oid.nullable(false))
         .with_column("agg_kind", SqlScalarType::String.nullable(false))
         .with_column("agg_num_direct_args", SqlScalarType::Int16.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
+    // TODO(database-issues#1064): Support ordered-set aggregate functions,
+    // which have an agg_kind of 'o' and direct arguments.
+    sql: "
+SELECT oid, 'n' AS agg_kind, 0::int2 AS agg_num_direct_args
+FROM mz_internal.mz_builtin_functions
+WHERE kind = 'aggregate'",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "aggregate",

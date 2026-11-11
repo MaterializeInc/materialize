@@ -1,0 +1,403 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for the type relations: mz_catalog.mz_types, the per-kind
+# mz_catalog.mz_array_types, mz_base_types, mz_list_types, mz_map_types and
+# mz_pseudo_types, and mz_internal.mz_type_pg_metadata. Each is a
+# BuiltinMaterializedView over mz_internal.mz_catalog_raw (see MZ_TYPES in
+# src/catalog/src/builtin/mz_catalog.rs). User-defined types come from each
+# item's persisted create_sql through parse_catalog_create_sql
+# (src/catalog-decode/src/create_sql.rs). Builtin types come from
+# mz_internal.mz_builtin_types, a generated constant view
+# (make_builtin_types in src/catalog/src/builtin/builtin.rs), joined to their
+# GidMapping records for ids.
+#
+# pg_type reads through all seven relations, so the values pinned here are a
+# compatibility surface.
+
+mode cockroach
+
+# Stable object ids, so create_sql can name dependencies by id.
+reset-server
+
+# --- user types ---------------------------------------------------------------
+
+# `int4_list` is the first object created after the reset, so it is u1.
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
+
+query TT
+SELECT id, category FROM mz_types WHERE name = 'int4_list'
+----
+u1  list
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'public' AND database_id IS NOT NULL)
+FROM mz_types WHERE name = 'int4_list'
+----
+true
+
+query T
+SELECT owner_id = (SELECT id FROM mz_roles WHERE name = 'materialize')
+FROM mz_types WHERE name = 'int4_list'
+----
+true
+
+query T rowsort
+SELECT unnest(privileges)::text FROM mz_types WHERE name = 'int4_list'
+----
+=U/materialize
+materialize=U/materialize
+
+query T multiline
+SELECT create_sql FROM mz_types WHERE name = 'int4_list'
+----
+CREATE TYPE "materialize"."public"."int4_list" AS LIST (ELEMENT TYPE = [s20 AS "pg_catalog"."int4"])
+EOF
+
+query T multiline
+SELECT redacted_create_sql FROM mz_types WHERE name = 'int4_list'
+----
+CREATE TYPE materialize.public.int4_list AS LIST (ELEMENT TYPE = [s20 AS pg_catalog.int4])
+EOF
+
+# The oid column is read out of the durable JSON, while a regtype cast resolves
+# the name through the in-memory catalog. Two independent paths that must agree.
+query T
+SELECT oid = 'int4_list'::regtype::oid FROM mz_types WHERE name = 'int4_list'
+----
+true
+
+# --- mz_list_types ------------------------------------------------------------
+
+query TT
+SELECT element_id = (SELECT id FROM mz_types WHERE name = 'int4'), element_modifiers IS NULL
+FROM mz_list_types WHERE id = 'u1'
+----
+true  true
+
+# Element type modifiers come back as a bigint list.
+statement ok
+CREATE TYPE numeric_list AS LIST (ELEMENT TYPE = numeric(38, 2))
+
+query TT
+SELECT element_modifiers::text, pg_typeof(element_modifiers)::text = 'bigint list'
+FROM mz_list_types l JOIN mz_types t USING (id) WHERE t.name = 'numeric_list'
+----
+{38,2}  true
+
+# --- mz_map_types -------------------------------------------------------------
+
+statement ok
+CREATE TYPE text_numeric_map AS MAP (KEY TYPE = text, VALUE TYPE = numeric(5, 2))
+
+# A map's category is pseudo, as TypeCategory::from_catalog_type reports it.
+query T
+SELECT category FROM mz_types WHERE name = 'text_numeric_map'
+----
+pseudo
+
+query TTTT
+SELECT
+    key_id = (SELECT id FROM mz_types WHERE name = 'text'),
+    value_id = (SELECT id FROM mz_types WHERE name = 'numeric'),
+    key_modifiers IS NULL,
+    value_modifiers::text
+FROM mz_map_types m JOIN mz_types t USING (id) WHERE t.name = 'text_numeric_map'
+----
+true  true  true  {5,2}
+
+# --- record types -------------------------------------------------------------
+
+# A record type has no per-kind relation of its own and is reported as a base
+# type.
+statement ok
+CREATE TYPE rec AS (a int4, b text)
+
+query T
+SELECT category FROM mz_types WHERE name = 'rec'
+----
+composite
+
+query I
+SELECT count(*) FROM mz_base_types b JOIN mz_types t USING (id) WHERE t.name = 'rec'
+----
+1
+
+# User-defined types never carry PostgreSQL metadata.
+query I
+SELECT count(*)
+FROM mz_internal.mz_type_pg_metadata m JOIN mz_types t USING (id)
+WHERE t.id LIKE 'u%'
+----
+0
+
+# --- builtin types ------------------------------------------------------------
+
+query TTTTT
+SELECT id LIKE 's%', owner_id, create_sql IS NULL, redacted_create_sql IS NULL, category
+FROM mz_types WHERE name = 'int4'
+----
+true  s1  true  true  numeric
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'pg_catalog' AND database_id IS NULL)
+FROM mz_types WHERE name = 'int4'
+----
+true
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'mz_catalog' AND database_id IS NULL)
+FROM mz_types WHERE name = 'uint2'
+----
+true
+
+# The oid is the compiled-in PostgreSQL oid, and the regtype cast agrees.
+query IT
+SELECT oid, oid = 'int4'::regtype::oid FROM mz_types WHERE name = 'int4'
+----
+23  true
+
+query T rowsort
+SELECT unnest(privileges)::text FROM mz_types WHERE name = 'int4'
+----
+=U/mz_system
+mz_system=U/mz_system
+
+# Exactly once: the user and builtin branches must not both claim a row.
+query I
+SELECT count(*) FROM mz_types WHERE name = 'int4'
+----
+1
+
+# --- mz_array_types -----------------------------------------------------------
+
+# Array types are all builtin; element references resolve to the element's id.
+query T
+SELECT t.name
+FROM mz_array_types a
+JOIN mz_types arr ON a.id = arr.id
+JOIN mz_types t ON a.element_id = t.id
+WHERE arr.name = '_int4'
+----
+int4
+
+query I
+SELECT count(*) FROM mz_array_types WHERE id LIKE 'u%'
+----
+0
+
+# --- mz_pseudo_types and mz_base_types ----------------------------------------
+
+query T rowsort
+SELECT t.name
+FROM mz_pseudo_types p JOIN mz_types t USING (id)
+WHERE t.name IN ('anyelement', 'record', 'list', 'map', 'int4')
+----
+anyelement
+list
+map
+record
+
+# Range types have no per-kind relation of their own and are base types.
+query T rowsort
+SELECT t.name
+FROM mz_base_types b JOIN mz_types t USING (id)
+WHERE t.name IN ('int4', 'int4range', '_int4', 'anyelement')
+----
+int4
+int4range
+
+# --- mz_type_pg_metadata ------------------------------------------------------
+
+query IIII
+SELECT typinput, typreceive, typsend, typlen
+FROM mz_internal.mz_type_pg_metadata m JOIN mz_types t USING (id)
+WHERE t.name = 'int4'
+----
+42  2406  2407  4
+
+# typlen is the length pgwire reports for a column of the type: -1 for
+# variable-length types, NULL for pseudo-types and arrays of them, which have
+# no scalar type.
+query TT rowsort
+SELECT t.name, m.typlen::text
+FROM mz_internal.mz_type_pg_metadata m JOIN mz_types t USING (id)
+WHERE t.name IN ('_int4', 'text', 'record', '_record', 'anyelement', 'int4range')
+----
+_int4  -1
+_record  NULL
+anyelement  NULL
+int4range  -1
+record  NULL
+text  -1
+
+# A type without PostgreSQL metadata has no row.
+query I
+SELECT count(*)
+FROM mz_internal.mz_type_pg_metadata m JOIN mz_types t USING (id)
+WHERE t.name = 'uint2'
+----
+0
+
+# --- Cross-relation invariants ------------------------------------------------
+
+# Every type is in exactly one per-kind relation, and every per-kind row is a
+# type.
+query I
+SELECT count(*) FROM (
+    SELECT id FROM mz_types
+    EXCEPT ALL
+    SELECT id FROM (
+        SELECT id FROM mz_array_types
+        UNION ALL SELECT id FROM mz_base_types
+        UNION ALL SELECT id FROM mz_list_types
+        UNION ALL SELECT id FROM mz_map_types
+        UNION ALL SELECT id FROM mz_pseudo_types
+    )
+)
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT id FROM (
+        SELECT id FROM mz_array_types
+        UNION ALL SELECT id FROM mz_base_types
+        UNION ALL SELECT id FROM mz_list_types
+        UNION ALL SELECT id FROM mz_map_types
+        UNION ALL SELECT id FROM mz_pseudo_types
+    )
+    EXCEPT ALL
+    SELECT id FROM mz_types
+)
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT id FROM mz_internal.mz_type_pg_metadata
+    EXCEPT ALL
+    SELECT id FROM mz_types
+)
+----
+0
+
+# Every builtin type the catalog compiles in must be reported...
+query T
+SELECT array_agg(name ORDER BY name) FROM (
+  SELECT name FROM mz_internal.mz_builtin_types
+  EXCEPT
+  SELECT name FROM mz_types WHERE id LIKE 's%'
+)
+----
+NULL
+
+# ...and nothing else: every builtin row traces back to the reporter.
+query T
+SELECT array_agg(name ORDER BY name) FROM (
+  SELECT name FROM mz_types WHERE id LIKE 's%'
+  EXCEPT
+  SELECT name FROM mz_internal.mz_builtin_types
+)
+----
+NULL
+
+# The reporter view backing these MVs is itself a builtin view, reported
+# through mz_views with placeholder SQL. See mz_views.slt for the full contract.
+query I
+SELECT count(*) FROM mz_views WHERE name = 'mz_builtin_types'
+----
+1
+
+# --- pg_type reads through all seven relations --------------------------------
+
+query TTTII rowsort
+SELECT typname, typtype::text, typcategory::text, typlen, typelem
+FROM pg_type
+WHERE typname IN ('int4', '_int4', 'anyelement', 'int4_list', 'text_numeric_map', 'rec')
+----
+_int4  b  A  -1  23
+anyelement  p  P  NULL  0
+int4  b  N  4  0
+int4_list  l  U  NULL  23
+rec  b  C  NULL  0
+text_numeric_map  m  P  NULL  0
+
+# --- Lifecycle ----------------------------------------------------------------
+
+statement ok
+DROP TYPE rec
+
+query I
+SELECT count(*) FROM mz_types WHERE name = 'rec'
+----
+0
+
+query I
+SELECT count(*) FROM mz_base_types WHERE id LIKE 'u%'
+----
+0
+
+# --- Robustness over the whole catalog ----------------------------------------
+
+# The MVs run parse_catalog_create_sql over every Item row in the catalog, so a
+# single item whose create_sql the parser rejects makes every type relation
+# unreadable rather than dropping one row. Create one item of every kind
+# reachable here and confirm the relations still resolve.
+
+statement ok
+CREATE TABLE t (a int4_list)
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE SECRET sec AS 'hunter2'
+
+query T
+SELECT count(*) > 0 FROM mz_types
+----
+true
+
+query I
+SELECT count(*) FROM mz_list_types WHERE id LIKE 'u%'
+----
+2
+
+# --- NOT NULL invariants ------------------------------------------------------
+
+# The MVs declare ASSERT NOT NULL for these columns.
+query I
+SELECT count(*)
+FROM mz_types
+WHERE id IS NULL
+   OR oid IS NULL
+   OR schema_id IS NULL
+   OR name IS NULL
+   OR category IS NULL
+   OR owner_id IS NULL
+   OR privileges IS NULL
+----
+0
+
+query I
+SELECT count(*) FROM mz_internal.mz_type_pg_metadata
+WHERE id IS NULL OR typinput IS NULL OR typreceive IS NULL OR typsend IS NULL
+----
+0
+
+statement ok
+DROP TABLE t CASCADE
