@@ -1,17 +1,25 @@
 ---
-title: "Avoid sink backfills with a guard table"
-description: "Read source tables through a guard table so that you can recover from a definite source error without recreating sinks or re-emitting their snapshot."
+title: "Recover from source failures without a full sink backfill"
+description: "Use the guard table pattern to recover from a source failure without forcing Kafka sinks to receive a full backfill."
+mermaid: true
 menu:
   main:
     parent: 'sink-patterns'
-    name: "Avoid sink backfills with a guard table"
+    name: "Recover from source failures without a sink backfill"
 ---
 
-When a table ingested from a PostgreSQL source hits a [definite
+When a table from a source hits a [definite
 error](/ingest-data/lifecycle-of-a-source/#which-stalls-clear-on-their-own),
-such as an upstream `TRUNCATE`, Materialize seals the table: it never receives
-another update. Every materialized view that reads only from that table seals
-with it and can no longer be
+you often have to drop and recreate all downstream objects, including sinks.
+This means re-delivering a full backfill of data to your Kafka consumers. This
+guide walks you through a pattern to recover from a definite error without
+triggering a full backfill.
+
+## How it works
+
+A source table that hits a definite error, such as an upstream `TRUNCATE`,
+never receives another update. A materialized view that reads only from that
+table stops updating with it and can no longer be
 [replaced](/transform-data/updating-materialized-views/replace-materialized-view/).
 To recover, you must recreate the table, the views on top of it, and the sinks,
 and each new sink with `SNAPSHOT = true` re-emits its entire contents
@@ -19,9 +27,30 @@ downstream.
 
 A guard table avoids this. The materialized view that your sinks depend on
 reads the source table through a `UNION ALL` with an empty Materialize table.
-The empty table keeps the view's frontier advancing after the source table
-seals, so you can swap a new source table in with a replacement. Sinks keep
-running and emit only the rows that changed.
+The guard table keeps the view updating after the source table fails, so you
+can swap in a new source table with a replacement. Sinks keep running and emit
+only the rows that changed.
+
+```mermaid
+flowchart LR
+    subgraph source["source tables (disposable)"]
+        T1["orders_v1 (failed)"]
+        T2["orders_v2 (new)"]
+    end
+
+    G["orders_guard (empty table)"]
+
+    subgraph interface["guarded view (stable)"]
+        MV["orders = orders_vN UNION ALL orders_guard"]
+    end
+
+    S["orders_sink (Kafka)"]
+
+    T1 -.->|replaced| MV
+    T2 --> MV
+    G --> MV
+    MV --> S
+```
 
 ## When to use this pattern
 
@@ -31,12 +60,13 @@ running and emit only the rows that changed.
 | Upstream `DROP TABLE` | Yes |
 | Incompatible upstream schema change, such as a dropped column or a changed column type | Yes, if the replacement projects back to the view's original columns and types |
 | Upstream `DROP PUBLICATION` | Yes. Recover with a new publication and a new source. |
-| Upstream unreachable, for example a network outage | No. The view's frontier stalls with the source, and the source recovers on its own once the upstream is reachable. |
-| Replication slot dropped upstream (`slot overcompacted`) | No. The source retries indefinitely instead of sealing, so the view's frontier stalls with it. The view is not sealed, so you can still replace it onto a table from a new source, with or without a guard. |
+| Upstream unreachable, for example a network outage | No. The view stalls with the source, and the source recovers on its own once the upstream is reachable. |
+| Replication slot dropped upstream (`slot overcompacted`) | No. The source retries indefinitely, so the view stalls with it. You can still replace the view onto a table from a new source, with or without a guard. |
 
-The guard only helps once the source table is sealed. A sealed table and a
-retrying one both report `stalled` in `mz_source_statuses`. To tell them
-apart, check whether the table's write frontier is `NULL`:
+The guard only helps once the source table has permanently stopped updating.
+A table with a definite error and a table that is retrying both report
+`stalled` in `mz_source_statuses`. To tell them apart, check whether the
+table's write frontier is `NULL`, which means it will never update again:
 
 ```mzsql
 SELECT o.name, f.write_frontier
@@ -47,8 +77,10 @@ WHERE o.name = 'orders_v1';
 
 ## Before you begin
 
-- A PostgreSQL source on Materialize v26.49 or later. Earlier versions do not
-  seal a table on a definite error.
+This guide uses a PostgreSQL source, but the pattern applies to tables from any
+source.
+
+- Materialize v26.49 or later.
 - Familiarity with [replacing materialized
   views](/transform-data/updating-materialized-views/replace-materialized-view/).
 - Add the guard before you create the sinks. You cannot add a guard to an
@@ -101,8 +133,8 @@ WHERE o.name = 'orders_v1';
 
 ## Recover from a definite error
 
-Suppose the upstream table is truncated and reloaded. `orders_v1` seals, and
-queries against it and everything downstream return the error:
+Suppose the upstream table is truncated and reloaded. `orders_v1` stops
+updating, and queries against it and everything downstream return the error:
 
 ```nofmt
 ERROR:  Source error: source must be dropped and recreated due to failure: table was truncated
@@ -153,7 +185,7 @@ ERROR:  Source error: source must be dropped and recreated due to failure: table
    `orders_v1` and `orders_v2`: an update for each changed row, a tombstone
    for each removed row, and an insert for each new row.
 
-1. Drop the sealed table. Until you drop it, it holds back compaction of the
+1. Drop the failed table. Until you drop it, it holds back compaction of the
    source.
 
    ```mzsql
@@ -162,9 +194,9 @@ ERROR:  Source error: source must be dropped and recreated due to failure: table
 
 ## Considerations
 
-- **Reads fail until you apply the replacement.** From the moment the table
-  seals until the replacement is applied, queries against the guarded view and
-  everything downstream return the source error.
+- **Reads fail until you apply the replacement.** From the moment the source
+  table fails until the replacement is applied, queries against the guarded
+  view and everything downstream return the source error.
 - **Sinks do not report the error.** While the guarded view carries the error,
   sinks stay `running` and keep advancing, but write nothing. Monitor the
   source table's status in
