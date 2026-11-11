@@ -61,3 +61,24 @@ query T
 SELECT CASE WHEN false THEN row(a) ELSE row(null::int) END FROM t1
 ----
 ()
+
+# `ARRAY`, `LIST`, and `MAP` constructors union their element types the same
+# way, instead of taking the first element's type. `simple` because the runner
+# cannot decode records in the binary format.
+simple
+SELECT ARRAY[row(1), row(a)] FROM t2;
+----
+{(1),()}
+COMPLETE 1
+
+simple
+SELECT LIST[row(1), row(a)] FROM t2;
+----
+{(1),()}
+COMPLETE 1
+
+simple
+SELECT MAP['x' => row(1), 'y' => row(a)] FROM t2;
+----
+{x=>(1),y=>()}
+COMPLETE 1

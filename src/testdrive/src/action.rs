@@ -421,6 +421,10 @@ impl State {
             self.materialize.sasl_sql_addr.clone(),
         );
         self.cmd_vars.insert(
+            "testdrive.materialize-http-addr".into(),
+            self.materialize.http_addr.clone(),
+        );
+        self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
         );
