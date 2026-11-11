@@ -8247,6 +8247,7 @@ fn test_mcp_agent_query_reads_null_cluster_product() {
     assert_eq!(status, StatusCode::OK);
     let rows: serde_json::Value =
         serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    // Column 1 of `mz_mcp_data_product_details` is `cluster`.
     assert!(
         rows[0][1].is_null(),
         "the hidden index cluster should be advertised as null: {rows}"
@@ -8272,8 +8273,12 @@ fn test_mcp_agent_query_reads_null_cluster_product() {
         serde_json::json!({"cluster": "hidden", "sql_query": sql_query}),
     );
     assert_eq!(status, StatusCode::OK);
+    let error = body["error"]["message"]
+        .as_str()
+        .or(body["result"]["content"][0]["text"].as_str())
+        .unwrap_or_default();
     assert!(
-        body.to_string().contains("permission denied"),
+        error.contains("permission denied"),
         "naming the hidden cluster should be refused: {body}"
     );
 }
