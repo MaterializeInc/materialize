@@ -599,10 +599,9 @@ SELECT c.name FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE 
 agent_compute
 COMPLETE 1
 
-# DEX-71: when the index cluster is hidden, the read falls back to the
-# session's cluster and serves from persist, so hydration must describe the
-# view's own cluster. Reporting the hidden zero-replica index cluster instead
-# showed replica_count 0, which the agent contract reads as unreadable.
+# DEX-71: when the index cluster is hidden, the read falls back to persist,
+# so hydration describes the view's own cluster. A hidden zero-replica index
+# cluster must not make the product look unreadable.
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER agent_dead_idx REPLICAS ();
 ----
