@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -28,6 +28,7 @@ import {
   clusterQueryKeys,
   replicaStatusesUpdatedAt,
 } from "~/platform/clusters/queries";
+import { getQueryClient } from "~/queryClient";
 import { allClusters } from "~/store/allClusters";
 import { allObjectsCollection } from "~/store/allObjectsCollection";
 import { syncEngineCacheScopeAtom } from "~/store/syncEngineCache";
@@ -199,8 +200,14 @@ interface Scenario {
   }>;
   /** The CPU peak of the last finished hydration fails to load. */
   isCpuPeakError?: boolean;
+  /** Peaks sampled during any window other than a finished hydration's. */
+  attemptPeakUsage?: Record<string, string | null>;
   /** Objects in the last finished hydration, beyond its first. */
   extraObjectCount?: number;
+  /** Hydration episodes beyond the fixtures' own. */
+  extraEpisodes?: object[];
+  /** Object hydrations read from a replica, or a failure to read them. */
+  replicaObjectRows?: object[] | "error";
   liveObjects?: unknown[][];
   /** The live progress subscribe never delivers a snapshot. */
   isProgressStuck?: boolean;
@@ -209,6 +216,26 @@ interface Scenario {
   isStatusError?: boolean;
   search?: string;
 }
+
+/**
+ * Waits for the reads of replicas' own hydration times to settle, and for the
+ * tab to show what they found.
+ */
+const settleReplicaReads = async () => {
+  await waitFor(() => {
+    const reads = getQueryClient()
+      .getQueryCache()
+      .findAll({
+        predicate: ({ queryKey }) =>
+          (queryKey[1] as { scope?: string } | undefined)?.scope ===
+          "replicaObjectHydrations",
+      });
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every(({ state }) => state.status !== "pending")).toBe(true);
+  });
+  // The tab hears of a settled read a tick later.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+};
 
 const renderHydrationTab = async ({
   environment = ENVIRONMENT,
@@ -219,7 +246,7 @@ const renderHydrationTab = async ({
     {
       id: "u11",
       objectType: "materialized-view",
-      occurredAt: String(NOW_MS - 2 * DAY_MS),
+      occurredAt: String(BOOTED_AT_MS - DAY_MS),
     },
   ],
   droppedObjectRows = [],
@@ -227,7 +254,14 @@ const renderHydrationTab = async ({
   offlineReplicaIds = [],
   droppedReplicas = [],
   isCpuPeakError = false,
+  attemptPeakUsage = {
+    peakCpuNanoCores: "500000000",
+    peakMemoryBytes: String(7.5 * GIB),
+    peakHeapBytes: String(9.6 * GIB),
+  },
   extraObjectCount = 0,
+  extraEpisodes = [],
+  replicaObjectRows = [],
   liveObjects = [],
   isProgressStuck = false,
   isEpisodesError = false,
@@ -335,7 +369,7 @@ const renderHydrationTab = async ({
             },
           }
         : mapKyselyToTabular({
-            rows: EPISODES,
+            rows: [...EPISODES, ...extraEpisodes],
             columns: [
               timestamptz("startedAt"),
               timestamptz("finishedAt"),
@@ -456,35 +490,79 @@ const renderHydrationTab = async ({
         ],
       }),
     }),
-    buildSqlQueryHandlerV2({
-      queryKey: clusterQueryKeys.replicaCpuPeak({
-        replicaId: "u1",
-        startDate: lastFinishedStart,
-        endDate: lastFinishedEnd,
-      }),
-      results: isCpuPeakError
-        ? {
-            notices: [],
-            error: {
-              message: "Something went wrong",
-              code: ErrorCode.INTERNAL_ERROR,
-            },
-          }
-        : mapKyselyToTabular({
-            rows: [{ peakCpuNanoCores: "300000000" }],
-            columns: [float8("peakCpuNanoCores")],
-          }),
+    // Keyed on when the replica last needed a hydration, so matched by scope.
+    http.post("*/api/sql", ({ request }) => {
+      const [, params] = JSON.parse(
+        new URL(request.url).searchParams.get("query_key") ?? "[]",
+      );
+      if (params?.scope !== "replicaObjectHydrations") return undefined;
+      return HttpResponse.json({
+        results: [
+          replicaObjectRows === "error"
+            ? {
+                notices: [],
+                error: {
+                  message: "Something went wrong",
+                  code: ErrorCode.INTERNAL_ERROR,
+                },
+              }
+            : mapKyselyToTabular({
+                rows: replicaObjectRows,
+                columns: [
+                  timestamptz("installedAt"),
+                  timestamptz("startedAt"),
+                  timestamptz("hydratedAt"),
+                ],
+              }),
+        ],
+      });
     }),
-    buildSqlQueryHandlerV2({
-      queryKey: clusterQueryKeys.replicaCpuPeak({
-        replicaId: "u2",
-        startDate: latestStart,
-        endDate: latestEnd,
-      }),
-      results: mapKyselyToTabular({
-        rows: [{ peakCpuNanoCores: "900000000" }],
-        columns: [float8("peakCpuNanoCores")],
-      }),
+    // Keyed on each window, including restarts' windows, so matched by scope.
+    http.post("*/api/sql", ({ request }) => {
+      const [, params] = JSON.parse(
+        new URL(request.url).searchParams.get("query_key") ?? "[]",
+      );
+      if (params?.scope !== "replicaPeakUsage") return undefined;
+      const isLastFinished =
+        params.replicaId === "u1" &&
+        params.startDate === lastFinishedStart &&
+        params.endDate === lastFinishedEnd;
+      const isLatestFull =
+        params.replicaId === "u2" &&
+        params.startDate === latestStart &&
+        params.endDate === latestEnd;
+      if (isLastFinished && isCpuPeakError) {
+        return HttpResponse.json({
+          results: [
+            {
+              notices: [],
+              error: {
+                message: "Something went wrong",
+                code: ErrorCode.INTERNAL_ERROR,
+              },
+            },
+          ],
+        });
+      }
+      const finishedPeaks = { peakMemoryBytes: null, peakHeapBytes: null };
+      return HttpResponse.json({
+        results: [
+          mapKyselyToTabular({
+            rows: [
+              isLastFinished
+                ? { ...finishedPeaks, peakCpuNanoCores: "300000000" }
+                : isLatestFull
+                  ? { ...finishedPeaks, peakCpuNanoCores: "900000000" }
+                  : attemptPeakUsage,
+            ],
+            columns: [
+              float8("peakCpuNanoCores"),
+              float8("peakMemoryBytes"),
+              float8("peakHeapBytes"),
+            ],
+          }),
+        ],
+      });
     }),
     mockSubscribeSocket((sql) => {
       if (sql.includes("mz_compute_hydration_times_per_worker")) {
@@ -551,11 +629,11 @@ describe("ClusterHydration", () => {
     });
   });
 
-  it("opens the last successful hydration, and any other from the table", async () => {
+  it("opens the last hydration, and any other from the table", async () => {
     await renderHydrationTab();
 
     expect(
-      await screen.findByRole("heading", { name: "Last Successful Hydration" }),
+      await screen.findByRole("heading", { name: "Last Hydration" }),
     ).toBeVisible();
     expect(screen.getByText(/^Additive hydration on r1, /)).toBeVisible();
     // Every replica is hydrated, so there's nothing to call out.
@@ -570,12 +648,41 @@ describe("ClusterHydration", () => {
     ).toEqual(["Additive", "Full", "Full"]);
     await userEvent.click(within(rows[1]).getByRole("button"));
     expect(
-      await screen.findByRole("heading", { name: "Full Hydration on r2" }),
+      await screen.findByRole("heading", { name: "Selected Hydration" }),
     ).toBeVisible();
+    expect(screen.getByText(/^Full hydration on r2, /)).toBeVisible();
     const peakHeap = screen.getByRole("group", { name: "Peak heap" });
     expect(within(peakHeap).getByText("64%")).toBeVisible();
     expect(within(peakHeap).getByText("6.4 GB")).toBeVisible();
     expect(screen.getByText("90%")).toBeVisible();
+  });
+
+  it("opens the hydration that ended last, not the one that began last", async () => {
+    // r1 began a long hydration before r2's last restart and finished after it.
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u2", NOW_MS - 40 * MINUTE_MS),
+        online("u2", NOW_MS - 39 * MINUTE_MS),
+        outOfMemory("u2", NOW_MS - 20 * MINUTE_MS),
+        online("u2", NOW_MS - 19 * MINUTE_MS),
+      ],
+      progress: { u1: [9, 9], u2: [3, 9] },
+      extraEpisodes: [
+        episode("u1", NOW_MS - 30 * MINUTE_MS, 20 * MINUTE_MS, 2),
+      ],
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+    expect(screen.getByText(/^Full hydration on r1, /)).toBeVisible();
+    const table = screen.getByRole("table");
+    const firstRow = within(table).getAllByRole("row")[1];
+    expect(within(firstRow).getAllByRole("cell")[2]).toHaveTextContent(
+      "Restarted before finishing",
+    );
   });
 
   it("orders a hydration's objects slowest first, or by when they started", async () => {
@@ -670,7 +777,7 @@ describe("ClusterHydration", () => {
 
     expect(screen.getByRole("table")).toBeVisible();
     expect(
-      screen.getByRole("heading", { name: "Last Successful Hydration" }),
+      screen.getByRole("heading", { name: "Last Hydration" }),
     ).toBeVisible();
   });
 
@@ -704,11 +811,13 @@ describe("ClusterHydration", () => {
       progress: { u1: [3, 9], u2: [9, 9] },
     });
 
+    const ended = await screen.findByRole("group", { name: "Ended" });
+    expect(within(ended).getByText("Went offline")).toBeVisible();
     expect(
-      await screen.findByRole("button", {
-        name: /^r1 restarted 2 times before finishing, Each after going offline/,
-      }),
-    ).toBeInTheDocument();
+      within(screen.getByRole("table")).getAllByText(
+        "Restarted before finishing",
+      ),
+    ).toHaveLength(2);
   });
 
   it("counts a restart an index dropped since cut short", async () => {
@@ -736,11 +845,13 @@ describe("ClusterHydration", () => {
       ],
     });
 
-    expect(
-      await screen.findByRole("button", {
-        name: /^r1 restarted 3 times before finishing, Each after going offline/,
-      }),
-    ).toBeInTheDocument();
+    const table = await screen.findByRole("table");
+    // The third comes from the dropped index, which loads after the others.
+    await waitFor(() =>
+      expect(
+        within(table).getAllByText("Restarted before finishing"),
+      ).toHaveLength(3),
+    );
   });
 
   it("calls out a replica that keeps restarting before it finishes", async () => {
@@ -767,22 +878,32 @@ describe("ClusterHydration", () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByRole("link", {
+      within(screen.getByRole("status")).getByRole("link", {
         name: "docs on troubleshooting hydration failures",
       }),
     ).toBeVisible();
     expect(screen.getByText("Hydrated so far: 3 of 9 objects")).toBeVisible();
     // The alert already counts the restarts.
     expect(screen.queryByText(/without finishing/)).not.toBeInTheDocument();
-    // Close together, the two restarts are one mark, counted in its label.
-    const restarts = screen.getByRole("button", {
-      name: /^r1 restarted 2 times before finishing, Each after running out of memory/,
-    });
-    expect(restarts).not.toHaveTextContent("2");
     const table = await screen.findByRole("table");
     expect(
       within(table).getAllByText("Restarted before finishing"),
     ).toHaveLength(2);
+    // The last restart, with how it ended and what it used before it did.
+    expect(
+      screen.getByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+    const ended = screen.getByRole("group", { name: "Ended" });
+    expect(within(ended).getByText("Out of memory")).toBeVisible();
+    expect(
+      within(screen.getByRole("group", { name: "Ran for" })).getByText(/^19m/),
+    ).toBeVisible();
+    const peakHeap = screen.getByRole("group", { name: "Peak heap" });
+    expect(await within(peakHeap).findByText("96%")).toBeVisible();
+    expect(within(peakHeap).getByText("9.6 GB")).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "Object hydration times" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows what a hydrating replica is working on", async () => {
@@ -846,9 +967,6 @@ describe("ClusterHydration", () => {
     });
 
     expect(await screen.findByText(/^1m 3\ds so far/)).toBeVisible();
-    expect(
-      screen.getByRole("img", { name: /^r1 is hydrating, 1m 3\ds so far$/ }),
-    ).toBeInTheDocument();
   });
 
   it("lists past hydrations with each one's peak memory", async () => {
@@ -873,26 +991,137 @@ describe("ClusterHydration", () => {
     expect(within(table).getAllByText("75.0%")).toHaveLength(3);
   });
 
-  it("names each replica once in the legend and dates the time axis", async () => {
+  it("shows an empty progress bar for a replica that hasn't reported yet", async () => {
+    // Relative to this test's start, as the fixtures' `NOW_MS` is not.
+    const bootedAtMs = Date.now() - 30_000;
     await renderHydrationTab({
-      droppedReplicas: [
+      statusRows: [online("u1", BOOTED_AT_MS), online("u2", bootedAtMs)],
+      progressRows: [
+        ["u1", "u10", true],
+        ["u1", "u11", true],
+      ],
+    });
+
+    const bar = await screen.findByRole("progressbar", {
+      name: "r2 objects hydrated",
+    });
+    expect(bar).toHaveAttribute("aria-valuenow", "0");
+    expect(bar).toHaveAttribute("aria-valuemax", "2");
+    expect(screen.getByText("Hydrated so far: 0 of 2 objects")).toBeVisible();
+    expect(screen.getByText("Starting")).toBeVisible();
+    expect(await screen.findByText(/^3\d(\.\d+)?s so far/)).toBeVisible();
+    // The progress card says it's starting, so there's no alert.
+    expect(await screen.findByRole("table")).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("reads a hydration Materialize hasn't recorded yet from its replica", async () => {
+    // r2 ran out of memory, came back and hydrated, and the history doesn't
+    // have that hydration yet.
+    const bootedAtMs = NOW_MS - 19 * MINUTE_MS;
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u2", NOW_MS - 20 * MINUTE_MS),
+        online("u2", bootedAtMs),
+      ],
+      replicaObjectRows: [
         {
-          replicaId: "u0",
-          name: "r1",
-          createdAtMs: NOW_MS - 6 * DAY_MS,
-          droppedAtMs: NOW_MS - 4 * DAY_MS,
+          globalId: "u10",
+          objectId: "u10",
+          installedAt: String(bootedAtMs),
+          startedAt: String(bootedAtMs),
+          hydratedAt: String(bootedAtMs + 38_000),
+        },
+        {
+          globalId: "u11",
+          objectId: "u11",
+          installedAt: String(bootedAtMs),
+          startedAt: String(bootedAtMs + 10_000),
+          hydratedAt: String(bootedAtMs + 280_000),
         },
       ],
     });
 
-    const legend = await screen.findByRole("list", { name: "Legend" });
-    expect(within(legend).getAllByText("r1")).toHaveLength(1);
     expect(
-      screen.queryByText("From Materialize's hydration history"),
-    ).not.toBeInTheDocument();
+      await screen.findByText(/^Read from r2, since Materialize hasn't/),
+    ).toBeVisible();
     expect(
-      screen.getAllByText(/^[A-Z][a-z]{2} \d{1,2}$/).length,
-    ).toBeGreaterThan(0);
+      screen.getByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+    expect(screen.getByText(/^Full hydration on r2, /)).toBeVisible();
+    const duration = screen.getByRole("group", { name: "Duration" });
+    expect(within(duration).getByText("4m 40s")).toBeVisible();
+    expect(within(duration).getByText("2 objects")).toBeVisible();
+    const peakHeap = screen.getByRole("group", { name: "Peak heap" });
+    expect(await within(peakHeap).findByText("96%")).toBeVisible();
+    const waterfall = screen.getByRole("img", {
+      name: "Object hydration times",
+    });
+    expect(
+      within(waterfall).getByText("customer_ltv", { selector: "title" }),
+    ).toBeInTheDocument();
+
+    // A recorded hydration opens below it, as it isn't the last.
+    const table = screen.getByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    await userEvent.click(within(rows[0]).getByRole("button"));
+    expect(
+      await screen.findByRole("heading", { name: "Selected Hydration" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+  });
+
+  it("keeps the recorded last hydration when the replica can't be read", async () => {
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u2", NOW_MS - 20 * MINUTE_MS),
+        online("u2", NOW_MS - 19 * MINUTE_MS),
+      ],
+      replicaObjectRows: "error",
+    });
+
+    expect(
+      await screen.findByText(/^Additive hydration on r1, /),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+    await settleReplicaReads();
+    expect(screen.queryByText(/^Read from r2/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the recorded last hydration when a replica only blipped offline", async () => {
+    // r2's status went offline and back, but its process kept running, so
+    // its latest episode is the one recorded at boot.
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        offline("u2", NOW_MS - 20 * MINUTE_MS),
+        online("u2", NOW_MS - 19 * MINUTE_MS),
+      ],
+      replicaObjectRows: [
+        {
+          globalId: "u10",
+          objectId: "u10",
+          installedAt: String(LATEST_FULL.startedAtMs),
+          startedAt: String(LATEST_FULL.startedAtMs),
+          hydratedAt: String(LATEST_FULL.startedAtMs + LATEST_FULL.durationMs),
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByText(/^Additive hydration on r1, /),
+    ).toBeVisible();
+    await settleReplicaReads();
+    expect(screen.queryByText(/^Read from r2/)).not.toBeInTheDocument();
   });
 
   it("keeps a replica offline between restarts off the clock", async () => {
@@ -917,9 +1146,6 @@ describe("ClusterHydration", () => {
       screen.queryByRole("progressbar", { name: "r1 objects hydrated" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/^\d.* so far/)).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("img", { name: /^r1 is hydrating/ }),
-    ).not.toBeInTheDocument();
   });
 
   it("infers no restarts on environments without hydration history", async () => {
@@ -1005,15 +1231,19 @@ describe("ClusterHydration", () => {
     expect(await screen.findByText(/^3\d(\.\d+)?s so far/)).toBeVisible();
   });
 
-  it("calls out an offline replica rather than its last progress", async () => {
+  it("shows an offline replica rather than its last progress", async () => {
     await renderHydrationTab({ offlineReplicaIds: ["u2"] });
 
-    expect(await screen.findByText("r2 is offline.")).toBeVisible();
-    const inProgress = screen.getByRole("heading", {
-      name: "Hydration in Progress",
-    });
-    expect(inProgress).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Hydration in Progress" }),
+    ).toBeVisible();
     expect(screen.getByText("Offline")).toBeVisible();
+    expect(
+      screen.queryByRole("progressbar", { name: "r2 objects hydrated" }),
+    ).not.toBeInTheDocument();
+    // The progress card says it's offline, so there's no alert.
+    expect(await screen.findByRole("table")).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("says a cluster with no replicas has nothing hydrated", async () => {
@@ -1067,7 +1297,7 @@ describe("ClusterHydration", () => {
 
     expect(await screen.findByRole("table")).toBeVisible();
     expect(
-      screen.getByRole("heading", { name: "Last Successful Hydration" }),
+      screen.getByRole("heading", { name: "Last Hydration" }),
     ).toBeVisible();
   });
 
@@ -1102,8 +1332,8 @@ describe("ClusterHydration", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Replica")).toHaveValue("r1-burst");
     expect(
-      await screen.findAllByText("No hydrations in this period."),
-    ).toHaveLength(2);
+      await screen.findByText("No hydrations in this period."),
+    ).toBeVisible();
     // Its view is its history, with no alert about the current replicas.
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });

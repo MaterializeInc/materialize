@@ -16,10 +16,13 @@ import { ReplicaStatus } from "../Configuration/clusterConfigurationModel";
 import {
   Hydration,
   HydrationReplica,
+  ReplicaTransition,
   UnfinishedHydration,
 } from "./hydrationModel";
 import {
+  findUnrecordedHydrations,
   hydrationVerdict,
+  isUnrecordedEpisode,
   summarizeReplicasNow,
   toHydrationRows,
 } from "./hydrationView";
@@ -254,7 +257,7 @@ describe("hydrationVerdict", () => {
     ).toBeUndefined();
   });
 
-  it("calls out an offline replica while another hydrates", () => {
+  it("leaves an offline replica to the progress card", () => {
     expect(
       hydrationVerdict(
         summarize({
@@ -263,7 +266,7 @@ describe("hydrationVerdict", () => {
         }),
         NOW_MS,
       ),
-    ).toMatchObject({ variant: "warning", label: "r2 is offline." });
+    ).toBeUndefined();
   });
 
   it("has nothing to say once every replica is hydrated", () => {
@@ -290,7 +293,7 @@ describe("hydrationVerdict", () => {
     ).toBeUndefined();
   });
 
-  it("calls out an offline replica rather than its last progress", () => {
+  it("calls a replica offline rather than going by its last progress", () => {
     const replicasNow = summarize({
       progress: { u1: [9, 9], u2: [9, 9] },
       statuses: { u2: { kind: "offline", reason: null } },
@@ -300,10 +303,6 @@ describe("hydrationVerdict", () => {
       "hydrated",
       "offline",
     ]);
-    expect(hydrationVerdict(replicasNow, NOW_MS)).toMatchObject({
-      variant: "warning",
-      label: "r2 is offline.",
-    });
   });
 
   it("stops calling a replica starting once it has been up a while without reporting", () => {
@@ -324,20 +323,20 @@ describe("hydrationVerdict", () => {
     expect(hydrationVerdict(replicasNow, NOW_MS)).toBeUndefined();
   });
 
-  it("calls a replica that hasn't reported starting, on a cluster with objects", () => {
+  it("counts a replica that hasn't reported as starting on none of the cluster's objects", () => {
     const replicasNow = summarize({
       progress: { u1: [9, 9], u2: [0, 0] },
       bootTimes: new Map([["u2", [at("11:21:00").getTime()]]]),
     });
 
-    expect(replicasNow.map(({ state }) => state)).toEqual([
-      "hydrated",
-      "starting",
-    ]);
-    expect(hydrationVerdict(replicasNow, NOW_MS)).toMatchObject({
-      variant: "warning",
-      label: "r2 is starting.",
+    expect(replicasNow[1]).toMatchObject({
+      state: "starting",
+      isWorking: true,
+      hasReported: false,
+      progress: { hydratedCount: 0, objectCount: 9 },
+      startedAt: at("11:21:00"),
     });
+    expect(hydrationVerdict(replicasNow, NOW_MS)).toBeUndefined();
   });
 
   it("explains a cluster with no replicas", () => {
@@ -345,5 +344,159 @@ describe("hydrationVerdict", () => {
       variant: "info",
       label: "This cluster has no replicas, so nothing on it is hydrated.",
     });
+  });
+});
+
+describe("findUnrecordedHydrations", () => {
+  const outOfMemoryAt = (
+    replicaId: string,
+    time: string,
+  ): ReplicaTransition => ({
+    replicaId,
+    occurredAt: at(time),
+    status: "offline",
+    reason: "oom-killed",
+  });
+
+  const unrecorded = ({
+    progress = { u1: [9, 9], u2: [9, 9] },
+    statuses,
+    hydrations = [],
+    restarts = [],
+    createdObjects = [],
+    startMs = at("00:00:00").getTime(),
+  }: {
+    progress?: Record<string, [number, number, string[]?]>;
+    statuses?: Record<string, ReplicaStatus>;
+    hydrations?: Hydration[];
+    restarts?: ReplicaTransition[];
+    createdObjects?: Array<{ id: string; occurredAt: Date }>;
+    startMs?: number;
+  }) =>
+    findUnrecordedHydrations({
+      replicasNow: summarize({ progress, statuses, hydrations }),
+      hydrations,
+      restarts,
+      createdObjects,
+      startMs,
+    }).map(({ replica: { id }, since }) => [id, since]);
+
+  it("finds a replica hydrated since it restarted, with nothing recorded since", () => {
+    expect(
+      unrecorded({
+        hydrations: [
+          hydration("u1", "09:00:00", 60_000),
+          hydration("u2", "09:00:00", 60_000),
+        ],
+        restarts: [outOfMemoryAt("u1", "10:00:00")],
+      }),
+    ).toEqual([["u1", at("10:00:00")]]);
+  });
+
+  it("finds a replica hydrated since the cluster's newest object, with nothing recorded since", () => {
+    expect(
+      unrecorded({
+        hydrations: [
+          hydration("u1", "09:00:00", 60_000),
+          hydration("u2", "10:30:00", 60_000),
+        ],
+        createdObjects: [{ id: "u10", occurredAt: at("10:00:00") }],
+      }),
+    ).toEqual([["u1", at("10:00:00")]]);
+  });
+
+  it("finds a replica hydrating newer objects after finishing the ones it had", () => {
+    expect(
+      unrecorded({
+        progress: { u1: [8, 9, ["u20"]], u2: [8, 9, ["u20"]] },
+        hydrations: [
+          hydration("u1", "09:00:00", 60_000),
+          hydration("u2", "10:30:00", 60_000),
+        ],
+        createdObjects: [
+          { id: "u10", occurredAt: at("10:00:00") },
+          { id: "u20", occurredAt: at("11:00:00") },
+        ],
+      }),
+    ).toEqual([["u1", at("10:00:00")]]);
+  });
+
+  it("finds a replica that restarted just after it finished hydrating", () => {
+    expect(
+      unrecorded({
+        hydrations: [hydration("u1", "09:55:00", 300_000)],
+        restarts: [outOfMemoryAt("u1", "10:00:30")],
+      }),
+    ).toEqual([["u1", at("10:00:30")]]);
+  });
+
+  it("judges no restart before the window, whose hydrations aren't loaded", () => {
+    expect(
+      unrecorded({
+        restarts: [outOfMemoryAt("u1", "10:00:00")],
+        startMs: at("11:00:00").getTime(),
+      }),
+    ).toEqual([]);
+  });
+
+  it("leaves out a replica rebuilding after a restart, and an offline one", () => {
+    expect(
+      unrecorded({
+        progress: { u1: [3, 9], u2: [9, 9] },
+        statuses: { u2: { kind: "offline", reason: "oom-killed" } },
+        restarts: [
+          outOfMemoryAt("u1", "10:00:00"),
+          outOfMemoryAt("u2", "10:00:00"),
+        ],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("isUnrecordedEpisode", () => {
+  const episode = (startedAt: string, finishedAt: string) => ({
+    startedAt: at(startedAt),
+    finishedAt: at(finishedAt),
+    objects: [],
+  });
+
+  it("takes an episode finished since the replica needed one, and not recorded", () => {
+    expect(
+      isUnrecordedEpisode({
+        episode: episode("10:01:00", "10:05:00"),
+        since: at("10:00:00"),
+        hydrations: [hydration("u1", "09:00:00", 60_000)],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an episode the history has, by its finish", () => {
+    expect(
+      isUnrecordedEpisode({
+        episode: episode("10:01:00", "10:05:00"),
+        since: at("10:00:00"),
+        hydrations: [hydration("u1", "10:01:00", 240_000)],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an episode from before the replica needed one, as after a status blip", () => {
+    expect(
+      isUnrecordedEpisode({
+        episode: episode("08:00:00", "08:05:00"),
+        since: at("10:00:00"),
+        hydrations: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("allows for the replica's clock running behind the environment's", () => {
+    expect(
+      isUnrecordedEpisode({
+        episode: episode("10:00:05", "10:00:10"),
+        since: at("10:00:30"),
+        hydrations: [],
+      }),
+    ).toBe(true);
   });
 });

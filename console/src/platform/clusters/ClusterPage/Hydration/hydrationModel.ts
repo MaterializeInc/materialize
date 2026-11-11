@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { greatest, max } from "d3";
+import { greatest, max, min, sort } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 
+import { LiveObjectHydration } from "~/api/materialize/cluster/hydrationHistory";
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
 
@@ -461,4 +462,53 @@ export function transformObjectHydrationSpans(
       };
     })
     .sort((a, b) => a.startedMs - b.startedMs || a.installedMs - b.installedMs);
+}
+
+/** A hydration episode read from a replica, before Materialize records it. */
+export interface ReplicaEpisode {
+  startedAt: Date;
+  finishedAt: Date;
+  objects: LiveObjectHydration[];
+}
+
+/**
+ * The latest episode a replica finished, from its objects' hydrations, grouped
+ * as Materialize groups them when it records an episode (`replica_collection_sql`
+ * in `src/adapter/src/coord/hydration_history.rs`): objects whose spans from
+ * installation to hydrated overlap belong to one episode. An episode that an
+ * unhydrated object's installation falls in is still running.
+ */
+export function latestFinishedEpisode(
+  objects: LiveObjectHydration[],
+): ReplicaEpisode | undefined {
+  const openMs =
+    min(objects, ({ installedAt, hydratedAt }) =>
+      hydratedAt ? undefined : installedAt.getTime(),
+    ) ?? Infinity;
+  const hydrated = sort(
+    objects.flatMap((object) =>
+      object.hydratedAt ? [{ object, hydratedAt: object.hydratedAt }] : [],
+    ),
+    ({ object }) => object.installedAt.getTime(),
+    ({ object }) => object.globalId,
+  );
+  const episodes: ReplicaEpisode[] = [];
+  let coveredMs = -Infinity;
+  for (const { object, hydratedAt } of hydrated) {
+    const current = episodes.at(-1);
+    if (current && coveredMs >= object.installedAt.getTime()) {
+      current.objects.push(object);
+      if (hydratedAt.getTime() > current.finishedAt.getTime()) {
+        current.finishedAt = hydratedAt;
+      }
+    } else {
+      episodes.push({
+        startedAt: object.installedAt,
+        finishedAt: hydratedAt,
+        objects: [object],
+      });
+    }
+    coveredMs = Math.max(coveredMs, hydratedAt.getTime());
+  }
+  return episodes.findLast(({ finishedAt }) => finishedAt.getTime() < openMs);
 }

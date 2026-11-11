@@ -52,26 +52,27 @@ import {
 } from "../ResourceUsage/resourceUsageModel";
 import { useStatusStyles } from "../ResourceUsage/resourceUsageStyles";
 import { useSelectedReplica } from "../useSelectedReplica";
-import { InfoTip } from "./hydrationComponents";
-import { HydrationDetail } from "./HydrationDetail";
-import {
-  HydrationHistoryChart,
-  HydrationHistoryLegend,
-} from "./HydrationHistoryChart";
+import { InfoTip, InfoTipProps } from "./hydrationComponents";
+import { HydrationDetail, UnrecordedDetail } from "./HydrationDetail";
 import { HydrationReplica } from "./hydrationModel";
 import { HydrationTable } from "./HydrationTable";
 import {
+  findUnrecordedHydrations,
   HYDRATION_HELP,
   HydrationVerdict,
   hydrationVerdict,
   ReplicaNow,
   ROW_KIND_NAMES,
+  rowEndTime,
   rowKind,
   rowTime,
   summarizeReplicasNow,
   toHydrationRows,
 } from "./hydrationView";
-import { useClusterHydrationData } from "./useClusterHydrationData";
+import {
+  useClusterHydrationData,
+  useLastUnrecordedHydration,
+} from "./useClusterHydrationData";
 import { useLiveObjectHydrations } from "./useLiveHydration";
 
 // Status history, which unfinished hydrations come from, is kept 30 days.
@@ -85,10 +86,13 @@ const MAX_LIVE_OBJECTS = 8;
 const SectionCard = ({
   title,
   subtitle,
+  subtitleHelp,
   children,
 }: {
   title: string;
   subtitle?: string;
+  /** Explains the subtitle, from an info tip beside it. */
+  subtitleHelp?: InfoTipProps;
   children: React.ReactNode;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -107,9 +111,12 @@ const SectionCard = ({
             {title}
           </Text>
           {subtitle && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              {subtitle}
-            </Text>
+            <HStack spacing={1}>
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                {subtitle}
+              </Text>
+              {subtitleHelp && <InfoTip {...subtitleHelp} />}
+            </HStack>
           )}
         </VStack>
         {children}
@@ -193,8 +200,8 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
       })),
   ];
   // Held across renders, which come every second while a replica hydrates, so
-  // the table's and chart's memos keyed on them hold too.
-  const { replicaIds, hydrations, unfinished, rows } = React.useMemo(() => {
+  // the table's memos keyed on them hold too.
+  const { hydrations, unfinished, rows } = React.useMemo(() => {
     const ids = new Set(replicas.map(({ id }) => id));
     const shownHydrations = data.hydrations.filter(({ replicaId }) =>
       ids.has(replicaId),
@@ -203,7 +210,6 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
       ids.has(replicaId),
     );
     return {
-      replicaIds: replicas.map(({ id }) => id),
       hydrations: shownHydrations,
       unfinished: shownUnfinished,
       rows: toHydrationRows(shownHydrations, shownUnfinished),
@@ -237,30 +243,43 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     ? undefined
     : hydrationVerdict(replicasNow, nowMs);
   const nameById = new Map(data.replicas.map(({ id, name }) => [id, name]));
-  const lastFinished = greatest(hydrations, ({ finishedAt }) =>
-    finishedAt.getTime(),
-  );
-  const explicitRow = rows.find(({ id }) => id === selectedRowId);
+  const candidates =
+    isHistoryReady && data.hasHistory === true && !data.isProgressLoading
+      ? findUnrecordedHydrations({
+          replicasNow,
+          hydrations,
+          restarts: data.restarts,
+          createdObjects: data.createdObjects,
+          startMs: data.startMs,
+        })
+      : [];
+  const unrecorded = useLastUnrecordedHydration({
+    clusterId: cluster.id,
+    clusterName: cluster.name,
+    candidates,
+    hydrations,
+    bootTimes: data.bootTimes,
+    clusterObjectCount: data.objectCount,
+  });
+  // Until the replicas answer, the recorded hydrations stand.
+  const hasUnrecorded = unrecorded !== undefined;
+  // Rows are ordered by when each began, and a long hydration can end after a
+  // later one.
+  const lastRow = greatest(rows, (row) => rowEndTime(row).getTime());
+  // A hydration that isn't recorded yet finished recently and has no row to
+  // place it by, so it stands in for the last.
   const selectedRow =
-    explicitRow ?? rows.find(({ id }) => id === lastFinished?.id) ?? rows[0];
-  const isLastFinishedShown =
-    !explicitRow && lastFinished !== undefined && selectedRow !== undefined;
-  // A replica's boot comes from its status, so its start waits for it too.
-  const inProgress = replicasNow.flatMap(({ replica, isWorking, startedAt }) =>
-    isWorking && startedAt && !data.isProgressLoading
-      ? [
-          {
-            replicaId: replica.id,
-            startedAt,
-            elapsedMs: nowMs - startedAt.getTime(),
-          },
-        ]
-      : [],
-  );
+    rows.find(({ id }) => id === selectedRowId) ??
+    (hasUnrecorded ? undefined : lastRow);
+  const isLastShown = !hasUnrecorded && selectedRow === lastRow;
   const nameOf = (replicaId: string) => nameById.get(replicaId) ?? replicaId;
+  // A replica's boot comes from its status, so its start waits for it too.
+  const isTicking =
+    !data.isProgressLoading &&
+    notHydrated.some(({ isWorking, startedAt }) => isWorking && startedAt);
   useInterval(
     () => setTickMs(Date.now()),
-    inProgress.length > 0 ? millisecondsInSecond : null,
+    isTicking ? millisecondsInSecond : null,
   );
 
   return (
@@ -325,48 +344,34 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           <LoadingContainer />
         ) : (
           <>
-            <SectionCard title="Hydration History">
-              <HydrationHistoryLegend
-                replicas={replicas}
-                colorById={colorById}
-                hasInProgress={inProgress.length > 0}
-              />
-              {rows.length === 0 && inProgress.length === 0 ? (
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
-                >
-                  No hydrations in this period.
-                </Text>
-              ) : (
-                <HydrationHistoryChart
-                  rows={rows}
-                  inProgress={inProgress}
-                  replicaIds={replicaIds}
-                  colorById={colorById}
-                  nameById={nameById}
-                  startMs={data.startMs}
-                  endMs={nowMs}
-                  selectedId={selectedRow?.id}
-                  onSelect={setSelectedRowId}
+            {unrecorded && (
+              <SectionCard
+                title="Last Hydration"
+                subtitle={`${ROW_KIND_NAMES[unrecorded.hydration.kind].label} on ${unrecorded.replica.name}, ${formatDate(unrecorded.hydration.startedAt, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`}
+                subtitleHelp={{
+                  subject: ROW_KIND_NAMES[unrecorded.hydration.kind].label,
+                  label: HYDRATION_HELP[unrecorded.hydration.kind],
+                }}
+              >
+                <UnrecordedDetail
+                  replicaName={unrecorded.replica.name}
+                  hydration={unrecorded.hydration}
+                  spans={unrecorded.spans}
+                  heapLimitBytes={data.heapLimitBytesById.get(
+                    unrecorded.replica.id,
+                  )}
+                  allocation={data.allocationById.get(unrecorded.replica.id)}
                 />
-              )}
-            </SectionCard>
+              </SectionCard>
+            )}
             {selectedRow && (
               <SectionCard
-                title={
-                  isLastFinishedShown
-                    ? "Last Successful Hydration"
-                    : `${ROW_KIND_NAMES[rowKind(selectedRow)].title} on ${nameOf(selectedRow.replicaId)}`
-                }
-                subtitle={
-                  isLastFinishedShown
-                    ? `${ROW_KIND_NAMES[rowKind(selectedRow)].label} on ${nameOf(selectedRow.replicaId)}, ${formatDate(rowTime(selectedRow), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`
-                    : formatDate(
-                        rowTime(selectedRow),
-                        FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-                      )
-                }
+                title={isLastShown ? "Last Hydration" : "Selected Hydration"}
+                subtitle={`${ROW_KIND_NAMES[rowKind(selectedRow)].label} on ${nameOf(selectedRow.replicaId)}, ${formatDate(rowTime(selectedRow), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`}
+                subtitleHelp={{
+                  subject: ROW_KIND_NAMES[rowKind(selectedRow)].label,
+                  label: HYDRATION_HELP[rowKind(selectedRow)],
+                }}
               >
                 <HydrationDetail
                   clusterId={cluster.id}
@@ -456,8 +461,15 @@ const ReplicasNow = ({
   return (
     <VStack as="ul" spacing={4} alignItems="stretch" listStyleType="none">
       {replicasNow.map((replicaNow) => {
-        const { replica, state, progress, isWorking, startedAt, lastFull } =
-          replicaNow;
+        const {
+          replica,
+          state,
+          progress,
+          isWorking,
+          hasReported,
+          startedAt,
+          lastFull,
+        } = replicaNow;
         const { label, color } = stateStyles[state];
         const help = stateHelp[state];
         const share =
@@ -551,12 +563,15 @@ const ReplicasNow = ({
                     background={color}
                   />
                 </Box>
-                <LiveObjects
-                  clusterName={clusterName}
-                  replicaId={replica.id}
-                  replicaName={replica.name}
-                  nowMs={nowMs}
-                />
+                {/* It runs a dataflow on the replica, so it waits for the replica to report. */}
+                {hasReported && (
+                  <LiveObjects
+                    clusterName={clusterName}
+                    replicaId={replica.id}
+                    replicaName={replica.name}
+                    nowMs={nowMs}
+                  />
+                )}
               </>
             )}
           </VStack>

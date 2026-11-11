@@ -13,6 +13,7 @@ import {
   heapLimitBytes,
   Hydration,
   HydrationReplica,
+  latestFinishedEpisode,
   latestFullHydration,
   mergeHydrationReplicas,
   ObjectLifetime,
@@ -595,5 +596,72 @@ describe("transformObjectHydrationSpans", () => {
         workingMs: 42_000,
       },
     ]);
+  });
+});
+
+describe("latestFinishedEpisode", () => {
+  const object = (
+    globalId: string,
+    installedAt: string,
+    hydratedAt: string | null,
+  ) => ({
+    globalId,
+    objectId: globalId,
+    installedAt: at(installedAt),
+    startedAt: at(installedAt),
+    hydratedAt: hydratedAt === null ? null : at(hydratedAt),
+  });
+  const summary = (objects: Parameters<typeof latestFinishedEpisode>[0]) => {
+    const latest = latestFinishedEpisode(objects);
+    return (
+      latest && {
+        startedAt: latest.startedAt,
+        finishedAt: latest.finishedAt,
+        globalIds: latest.objects.map(({ globalId }) => globalId),
+      }
+    );
+  };
+
+  it("joins objects whose hydrations overlap, through a chain, into one episode", () => {
+    expect(
+      summary([
+        object("u3", "10:04:00", "10:08:00"),
+        object("u1", "10:00:00", "10:05:00"),
+        object("u2", "10:01:00", "10:03:00"),
+      ]),
+    ).toEqual({
+      startedAt: at("10:00:00"),
+      finishedAt: at("10:08:00"),
+      globalIds: ["u1", "u2", "u3"],
+    });
+  });
+
+  it("takes the latest episode, after a gap with nothing hydrating", () => {
+    expect(
+      summary([
+        object("u1", "10:00:00", "10:05:00"),
+        object("u2", "10:10:00", "10:11:00"),
+      ]),
+    ).toEqual({
+      startedAt: at("10:10:00"),
+      finishedAt: at("10:11:00"),
+      globalIds: ["u2"],
+    });
+  });
+
+  it("skips an episode an unhydrated object was installed during", () => {
+    expect(
+      summary([
+        object("u1", "09:00:00", "09:01:00"),
+        object("u2", "10:00:00", "10:05:00"),
+        object("u3", "10:02:00", null),
+      ]),
+    ).toMatchObject({ globalIds: ["u1"] });
+  });
+
+  it("has nothing before an object finishes", () => {
+    expect(latestFinishedEpisode([object("u1", "10:00:00", null)])).toBe(
+      undefined,
+    );
   });
 });
