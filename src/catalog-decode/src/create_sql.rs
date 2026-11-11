@@ -603,6 +603,8 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
         | ResetVariable(_)
         | Show(_)
         | StartTransaction(_)
+        | StartContinualTransaction(_)
+        | CommitContinualTransaction(_)
         | SetTransaction(_)
         | Commit(_)
         | Rollback(_)

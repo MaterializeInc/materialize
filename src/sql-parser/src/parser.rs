@@ -475,12 +475,8 @@ impl<'a> Parser<'a> {
                 // `BEGIN` is a nonstandard but common alias for the
                 // standard `START TRANSACTION` statement. It is supported
                 // by at least PostgreSQL and MySQL.
-                Token::Keyword(BEGIN) => Ok(self
-                    .parse_begin()
-                    .map_parser_err(StatementKind::StartTransaction)?),
-                Token::Keyword(COMMIT) => {
-                    Ok(self.parse_commit().map_parser_err(StatementKind::Commit)?)
-                }
+                Token::Keyword(BEGIN) => Ok(self.parse_begin()?),
+                Token::Keyword(COMMIT) => Ok(self.parse_commit()?),
                 Token::Keyword(ROLLBACK) | Token::Keyword(ABORT) => Ok(self
                     .parse_rollback()
                     .map_parser_err(StatementKind::Rollback)?),
@@ -9101,10 +9097,18 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_begin(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_begin(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        if self.parse_keyword(CONTINUAL) {
+            let _ = self.parse_one_of_keywords(&[TRANSACTION, WORK]);
+            return Ok(Statement::StartContinualTransaction(
+                StartContinualTransactionStatement {},
+            ));
+        }
         let _ = self.parse_one_of_keywords(&[TRANSACTION, WORK]);
         Ok(Statement::StartTransaction(StartTransactionStatement {
-            modes: self.parse_transaction_modes(false)?,
+            modes: self
+                .parse_transaction_modes(false)
+                .map_parser_err(StatementKind::StartTransaction)?,
         }))
     }
 
@@ -9150,9 +9154,28 @@ impl<'a> Parser<'a> {
         Ok(modes)
     }
 
-    fn parse_commit(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_commit(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        if self.parse_keyword(EVERY) {
+            let interval = self
+                .parse_interval_value()
+                .map_parser_err(StatementKind::CommitContinualTransaction)?;
+            return Ok(Statement::CommitContinualTransaction(
+                CommitContinualTransactionStatement {
+                    commit_mode: ContinualCommitMode::Every(interval),
+                },
+            ));
+        }
+        if self.parse_keyword(ASAP) {
+            return Ok(Statement::CommitContinualTransaction(
+                CommitContinualTransactionStatement {
+                    commit_mode: ContinualCommitMode::Asap,
+                },
+            ));
+        }
         Ok(Statement::Commit(CommitStatement {
-            chain: self.parse_commit_rollback_chain()?,
+            chain: self
+                .parse_commit_rollback_chain()
+                .map_parser_err(StatementKind::Commit)?,
         }))
     }
 

@@ -322,6 +322,26 @@ impl Coordinator {
                     );
                     ctx.retire(result.map(|_| ExecuteResponse::StartedTransaction))
                 }
+                Plan::StartContinualTransaction(_plan) => {
+                    let result =
+                        ctx.session_mut()
+                            .start_transaction(self.now_datetime(), None, None);
+                    match result {
+                        Ok(_) => {
+                            let ops_result = ctx.session_mut().add_transaction_ops(
+                                TransactionOps::ContinualTransaction { statements: vec![] },
+                            );
+                            match ops_result {
+                                Ok(_) => ctx.retire(Ok(ExecuteResponse::StartedTransaction)),
+                                Err(e) => ctx.retire(Err(e)),
+                            }
+                        }
+                        Err(e) => ctx.retire(Err(e)),
+                    }
+                }
+                Plan::CommitContinualTransaction(plan) => {
+                    self.sequence_commit_continual_transaction(ctx, plan).await;
+                }
                 Plan::CommitTransaction(CommitTransactionPlan {
                     ref transaction_type,
                 })

@@ -184,6 +184,24 @@ impl PeekClient {
         }
     }
 
+    /// Creates a client for background work with empty compute and oracle caches.
+    pub(crate) fn clone_for_continual_transaction(&self) -> Self {
+        Self {
+            coordinator_client: self.coordinator_client.clone(),
+            compute_instances: Default::default(),
+            storage_collections: Arc::clone(&self.storage_collections),
+            transient_id_gen: Arc::clone(&self.transient_id_gen),
+            optimizer_metrics: self.optimizer_metrics.clone(),
+            oracles: Default::default(),
+            persist_client: self.persist_client.clone(),
+            statement_logging_frontend: self.statement_logging_frontend.clone(),
+            occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
+            catalog_cache: std::sync::Weak::clone(&self.catalog_cache),
+            group_commit_notifier: self.group_commit_notifier.clone(),
+            read_only: self.read_only,
+        }
+    }
+
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,

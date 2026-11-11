@@ -1918,6 +1918,52 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
+    pub(super) async fn sequence_commit_continual_transaction(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan: plan::CommitContinualTransactionPlan,
+    ) {
+        if !matches!(
+            ctx.session().transaction().inner().map(|t| &t.ops),
+            Some(TransactionOps::ContinualTransaction { .. })
+        ) {
+            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "COMMIT ASAP/EVERY requires BEGIN CONTINUAL TRANSACTION"
+            ))));
+            return;
+        }
+        let (txn, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+        ctx.delay_response_until(retire_notify);
+        let ops = txn.into_ops();
+        let statements = match ops {
+            Some(TransactionOps::ContinualTransaction { statements }) => statements,
+            _ => {
+                ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "COMMIT ASAP/EVERY can only be used inside a BEGIN CONTINUAL TRANSACTION block"
+                ))));
+                return;
+            }
+        };
+
+        if statements.is_empty() {
+            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "continual transaction has no statements"
+            ))));
+            return;
+        }
+
+        // Store the statements and commit mode in the session for the client
+        // to consume and spawn the background task.
+        ctx.session_mut().pending_continual_transaction = Some((statements, plan.commit_mode));
+
+        let params = ctx
+            .session_mut()
+            .vars_mut()
+            .end_transaction(EndTransactionAction::Commit);
+        ctx.retire(Ok(ExecuteResponse::TransactionCommitted { params }));
+    }
+
+    #[instrument(level = "debug")]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1941,6 +1987,12 @@ impl Coordinator {
         let result = self.sequence_end_transaction_inner(&mut ctx, action).await;
 
         let (response, action) = match result {
+            Ok(Some(TransactionOps::ContinualTransaction { .. })) => (
+                Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "use COMMIT ASAP or COMMIT EVERY to start a continual transaction"
+                ))),
+                EndTransactionAction::Rollback,
+            ),
             Ok(Some(TransactionOps::DDL { commands, .. })) => {
                 self.sequence_ddl_commit(crate::coord::ddl::PendingDdlCommit::transaction(
                     PendingTxn {

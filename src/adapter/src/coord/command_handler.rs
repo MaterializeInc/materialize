@@ -641,6 +641,16 @@ impl Coordinator {
                 } => {
                     self.handle_attempt_write(attempt, target_id, target_global_id, diffs, tx);
                 }
+                Command::AttemptMultiTableTimestampedWrite {
+                    conn_id,
+                    writes,
+                    write_ts,
+                    tx,
+                } => {
+                    self.handle_attempt_multi_table_timestamped_write(
+                        conn_id, writes, write_ts, tx,
+                    );
+                }
                 Command::DropInternalSubscribe { sink_id } => {
                     self.drop_internal_subscribe(sink_id).await;
                 }
@@ -1363,6 +1373,8 @@ impl Coordinator {
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
+                    | Statement::StartContinualTransaction(_)
+                    | Statement::CommitContinualTransaction(_)
                     | Statement::Raise(_)
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainPushdown(_)

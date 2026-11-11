@@ -93,6 +93,8 @@ pub enum Statement<T: AstInfo> {
     SetTransaction(SetTransactionStatement),
     Commit(CommitStatement),
     Rollback(RollbackStatement),
+    StartContinualTransaction(StartContinualTransactionStatement),
+    CommitContinualTransaction(CommitContinualTransactionStatement),
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
     ExplainPushdown(ExplainPushdownStatement<T>),
@@ -173,6 +175,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::SetTransaction(stmt) => f.write_node(stmt),
             Statement::Commit(stmt) => f.write_node(stmt),
             Statement::Rollback(stmt) => f.write_node(stmt),
+            Statement::StartContinualTransaction(stmt) => f.write_node(stmt),
+            Statement::CommitContinualTransaction(stmt) => f.write_node(stmt),
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainPushdown(stmt) => f.write_node(stmt),
@@ -260,6 +264,8 @@ impl StatementKind {
             | Self::ResetVariable
             | Self::Show
             | Self::StartTransaction
+            | Self::StartContinualTransaction
+            | Self::CommitContinualTransaction
             | Self::SetTransaction
             | Self::Commit
             | Self::Rollback
@@ -364,6 +370,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::SetTransaction => "set_transaction",
         StatementKind::Commit => "commit",
         StatementKind::Rollback => "rollback",
+        StatementKind::StartContinualTransaction => "start_continual_transaction",
+        StatementKind::CommitContinualTransaction => "commit_continual_transaction",
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainPushdown => "explain_pushdown",
@@ -4124,6 +4132,53 @@ impl AstDisplay for RollbackStatement {
     }
 }
 impl_display!(RollbackStatement);
+
+/// `BEGIN CONTINUAL TRANSACTION`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StartContinualTransactionStatement {}
+
+impl AstDisplay for StartContinualTransactionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("BEGIN CONTINUAL TRANSACTION");
+    }
+}
+impl_display!(StartContinualTransactionStatement);
+
+/// `COMMIT EVERY '<interval>' <time_unit>` or `COMMIT ASAP`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommitContinualTransactionStatement {
+    pub commit_mode: ContinualCommitMode,
+}
+
+impl AstDisplay for CommitContinualTransactionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("COMMIT ");
+        f.write_node(&self.commit_mode);
+    }
+}
+impl_display!(CommitContinualTransactionStatement);
+
+/// The commit mode for a continual transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ContinualCommitMode {
+    Every(IntervalValue),
+    Asap,
+}
+
+impl AstDisplay for ContinualCommitMode {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ContinualCommitMode::Every(interval) => {
+                f.write_str("EVERY '");
+                f.write_node(interval);
+            }
+            ContinualCommitMode::Asap => {
+                f.write_str("ASAP");
+            }
+        }
+    }
+}
+impl_display!(ContinualCommitMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SubscribeOptionName {

@@ -171,6 +171,8 @@ pub enum Plan {
     SetTransaction(SetTransactionPlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
+    StartContinualTransaction(StartContinualTransactionPlan),
+    CommitContinualTransaction(CommitContinualTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
     Select(SelectPlan),
     Subscribe(SubscribePlan),
@@ -332,6 +334,8 @@ impl Plan {
                 PlanKind::InspectShard,
             ],
             StatementKind::StartTransaction => &[PlanKind::StartTransaction],
+            StatementKind::StartContinualTransaction => &[PlanKind::StartContinualTransaction],
+            StatementKind::CommitContinualTransaction => &[PlanKind::CommitContinualTransaction],
             StatementKind::Subscribe => &[PlanKind::Subscribe],
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
@@ -394,6 +398,8 @@ impl Plan {
             Plan::SetTransaction(_) => "set transaction",
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
+            Plan::StartContinualTransaction(_) => "start continual transaction",
+            Plan::CommitContinualTransaction(_) => "commit continual transaction",
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
@@ -547,6 +553,21 @@ impl TransactionType {
 #[derive(Debug)]
 pub struct CommitTransactionPlan {
     pub transaction_type: TransactionType,
+}
+
+#[derive(Debug)]
+pub struct StartContinualTransactionPlan {}
+
+#[derive(Debug)]
+pub struct CommitContinualTransactionPlan {
+    pub commit_mode: ContinualCommitMode,
+}
+
+/// The commit mode for a continual transaction.
+#[derive(Debug, Clone)]
+pub enum ContinualCommitMode {
+    Every(std::time::Duration),
+    Asap,
 }
 
 #[derive(Debug)]

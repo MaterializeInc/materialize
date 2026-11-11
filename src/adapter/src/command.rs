@@ -444,6 +444,14 @@ pub enum Command {
         tx: oneshot::Sender<WriteResult>,
     },
 
+    /// Atomically writes diffs to the specified table generations at `write_ts`.
+    AttemptMultiTableTimestampedWrite {
+        conn_id: ConnectionId,
+        writes: BTreeMap<CatalogItemId, (GlobalId, Vec<(Row, Diff)>)>,
+        write_ts: mz_repr::Timestamp,
+        tx: oneshot::Sender<WriteResult>,
+    },
+
     /// Drops an internal subscribe. Fire-and-forget, the caller does not wait
     /// for completion.
     DropInternalSubscribe {
@@ -511,6 +519,7 @@ impl Command {
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
+            | Command::AttemptMultiTableTimestampedWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
         }
     }
@@ -556,6 +565,7 @@ impl Command {
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
+            | Command::AttemptMultiTableTimestampedWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
         }
     }
@@ -1090,6 +1100,8 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => &[Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => &[StartedTransaction],
+            StartContinualTransaction => &[StartedTransaction],
+            CommitContinualTransaction => &[TransactionCommitted],
             SideEffectingFunc => &[SendingRowsStreaming, SendingRowsImmediate],
             ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
         }
