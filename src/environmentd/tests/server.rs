@@ -5266,7 +5266,7 @@ fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_op
 // A pending replacement whose inputs are not readable at its target's write
 // frontier gets an as-of beyond that frontier. Bootstrapping must accept that
 // as-of instead of panicking in as-of selection, and applying the replacement
-// must wait for the target to catch up.
+// afterwards must succeed.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]

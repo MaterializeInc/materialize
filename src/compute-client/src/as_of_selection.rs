@@ -99,8 +99,7 @@ use tracing::{info, warn};
 /// with the compute controller.
 ///
 /// `pending_replacements` are the exports of replacement materialized views that are not applied
-/// yet. Their storage collection reports their target's write frontier, which constrains their
-/// as-of only softly, because applying a replacement waits for its target to catch up.
+/// yet. The downstream storage constraint is soft for them.
 pub fn run(
     dataflows: &mut [LirDataflowDescription],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
@@ -139,7 +138,7 @@ pub fn run(
         ctx.prune_dropped_collections();
     }
 
-    // Apply hard constraints from upstream and downstream storage collections.
+    // Apply constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
     ctx.apply_downstream_storage_constraints(pending_replacements);
 
@@ -476,7 +475,7 @@ impl<'a> Context<'a> {
     ///
     /// Failing to apply this constraint to a collection is an error. The storage collection it
     /// exports to may have times visible to readers skipped in its output, violating correctness.
-    /// The exception are `pending_replacements`, for which the constraint is soft.
+    /// The exception is `pending_replacements`, for which the constraint is soft.
     fn apply_downstream_storage_constraints(&self, pending_replacements: &BTreeSet<GlobalId>) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
