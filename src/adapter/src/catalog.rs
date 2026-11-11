@@ -828,6 +828,31 @@ impl Catalog {
         Ok(id)
     }
 
+    /// Records a fresh shard for the storage collection `id`, as the storage
+    /// controller does for collections a test catalog creates without one.
+    #[cfg(test)]
+    pub async fn register_collection_shard(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<mz_persist_types::ShardId, Error> {
+        use mz_storage_client::controller::StorageTxn;
+
+        let shard_id = mz_persist_types::ShardId::new();
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+        txn.insert_collection_metadata([(id, shard_id)].into())
+            .expect("a fresh shard for an unregistered collection");
+        let updates = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await?;
+        drop(storage);
+        let (_builtin_updates, _catalog_updates) = self
+            .state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
+        Ok(shard_id)
+    }
+
     /// Get the next system item ID without allocating it.
     pub async fn get_next_system_item_id(&self) -> Result<u64, Error> {
         self.storage()
