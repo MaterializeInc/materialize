@@ -61,6 +61,83 @@ export const ENVIRONMENT_OPTIONS: {
   { value: "development", label: "Development" },
 ];
 
+/**
+ * Files a ticket can carry, matching the global API's limits: Intercom's
+ * default file types for customer attachments, and up to 10 files (Intercom's
+ * limit per reply), 10 MB each and 20 MB in total.
+ */
+export const ATTACHMENT_EXTENSIONS = [
+  "gif",
+  "jpeg",
+  "jpg",
+  "mov",
+  "mp4",
+  "pdf",
+  "png",
+  "txt",
+  "heic",
+  "oga",
+  "ogg",
+  "dng",
+  "mp3",
+];
+export const MAX_ATTACHMENTS = 10;
+export const MAX_ATTACHMENT_MB = 10;
+export const MAX_ATTACHMENTS_TOTAL_MB = 20;
+const MB = 1024 * 1024;
+
+/** The limits, for the attachment button's tooltip. */
+export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENT_MB} MB each and ${MAX_ATTACHMENTS_TOTAL_MB} MB in total: ${ATTACHMENT_EXTENSIONS.map(
+  (extension) => `.${extension}`,
+).join(", ")}.`;
+
+/** The value for the file input's `accept`. */
+export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.map(
+  (extension) => `.${extension}`,
+).join(",");
+
+const extensionOf = (name: string) =>
+  name.includes(".") ? name.split(".").pop()?.toLowerCase() : undefined;
+
+/** Why these files can't be attached, or undefined if they can. */
+export const attachmentError = (files: { name: string; size: number }[]) => {
+  if (files.length > MAX_ATTACHMENTS) {
+    return `Attach up to ${MAX_ATTACHMENTS} files.`;
+  }
+  const unsupported = files.find(
+    ({ name }) => !ATTACHMENT_EXTENSIONS.includes(extensionOf(name) ?? ""),
+  );
+  if (unsupported) {
+    return `${unsupported.name} can't be attached. Supported types: ${ATTACHMENT_ACCEPT.replaceAll(",", ", ")}.`;
+  }
+  const tooLarge = files.find(({ size }) => size > MAX_ATTACHMENT_MB * MB);
+  if (tooLarge) {
+    return `${tooLarge.name} is larger than ${MAX_ATTACHMENT_MB} MB.`;
+  }
+  const empty = files.find(({ size }) => size === 0);
+  if (empty) {
+    return `${empty.name} is empty.`;
+  }
+  const total = files.reduce((sum, { size }) => sum + size, 0);
+  if (total > MAX_ATTACHMENTS_TOTAL_MB * MB) {
+    return `Files can be up to ${MAX_ATTACHMENTS_TOTAL_MB} MB in total.`;
+  }
+  return undefined;
+};
+
+/** A file's contents, base64-encoded, as the global API takes them. */
+export const readAsBase64 = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      // A data URL: everything after the comma is the base64 data.
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
 /** What the description box starts with, so tickets arrive with the basics. */
 export const TICKET_TEMPLATE = `What's affected:
 When it started (with time zone):

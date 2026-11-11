@@ -34,7 +34,11 @@ import { defaultRegionId, renderComponent } from "~/test/utils";
 
 import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
-import { OUTAGE_TEMPLATE, TICKET_TEMPLATE } from "./ticketForm";
+import {
+  ATTACHMENT_LIMITS,
+  OUTAGE_TEMPLATE,
+  TICKET_TEMPLATE,
+} from "./ticketForm";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
 
@@ -1264,32 +1268,157 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
-    it("says how to share files before and after submitting", async () => {
+    const attachHandler = (onRequest: (body: unknown) => void, status = 200) =>
+      http.post(
+        `${TICKETS_URL}/:ticketId/attachments`,
+        async ({ request, params }) => {
+          const body = (await request.json()) as Record<string, unknown>;
+          onRequest({ ticketId: params.ticketId, ...body });
+          return status === 200
+            ? HttpResponse.json({ attached: 2 })
+            : HttpResponse.json({}, { status });
+        },
+      );
+
+    it("adds attached files to the ticket once it's open", async () => {
+      let attachedWith: Record<string, unknown> | undefined;
       server.use(
         ticketsHandler([]),
         createHandler(() => {}),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
       );
       const user = userEvent.setup();
       await renderComponent(<SupportPageWithIntercom />);
 
       await screen.findByTestId("support-tickets-empty");
       await user.click(screen.getByRole("button", { name: "Open a ticket" }));
-      const note = await screen.findByTestId("support-ticket-files-note");
-      expect(note).toHaveTextContent(
-        "Need to share screenshots or other files?",
+      const attach = await screen.findByRole("button", {
+        name: "Attach files",
+      });
+      // The limits are in the button's tooltip.
+      await user.hover(attach);
+      expect(await screen.findByText(ATTACHMENT_LIMITS)).toBeInTheDocument();
+
+      await user.upload(screen.getByTestId("support-ticket-file-input"), [
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+        new File(["png"], "screen.png", { type: "image/png" }),
+        new File(["extra"], "extra.txt", { type: "text/plain" }),
+      ]);
+      await user.click(
+        screen.getByRole("button", { name: "Remove extra.txt" }),
       );
-      // Intercom limits incoming email to 20 MB, attachments included.
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(
+          within(sent).getByTestId("support-ticket-attachments-status"),
+        ).toHaveTextContent("2 files added to your ticket."),
+      );
+      expect(attachedWith).toEqual({
+        ticketId: "42",
+        files: [
+          { name: "error.txt", data: window.btoa("hi") },
+          { name: "screen.png", data: window.btoa("png") },
+        ],
+      });
+      // More files can still go by email or the Help Center.
+      const note = within(sent).getByTestId("support-ticket-files-note");
       expect(note).toHaveTextContent("up to 20 MB in total");
       expect(
         within(note).getByRole("link", { name: "Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+    });
 
+    it("doesn't open a ticket with files that can't be attached", async () => {
+      let createdWith: unknown;
+      server.use(
+        ticketsHandler([]),
+        createHandler((body) => {
+          createdWith = body;
+        }),
+      );
+      // e.g. dropped in, past the file picker's filter.
+      const user = userEvent.setup({ applyAccept: false });
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["zip"], "debug.zip"),
+      );
+      expect(
+        within(screen.getByTestId("support-ticket-attachments")).getByRole(
+          "alert",
+        ),
+      ).toHaveTextContent("debug.zip can't be attached");
       await fillTicketForm(user);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      expect(createdWith).toBeUndefined();
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove debug.zip" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      await screen.findByTestId("support-ticket-sent");
+      expect(createdWith).toBeDefined();
+    });
+
+    it("keeps the ticket open when its files can't be added", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {}, 502),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
       const sent = await screen.findByTestId("support-ticket-sent");
+      expect(sent).toHaveTextContent("Ticket #4821 is open");
+      expect(await within(sent).findByRole("alert")).toHaveTextContent(
+        "Your ticket is open, but the 1 file couldn't be added.",
+      );
+      // Says how to send it instead.
       expect(
         within(sent).getByTestId("support-ticket-files-note"),
       ).toBeVisible();
+    });
+
+    it("opens a ticket without files as before", async () => {
+      let attachRequests = 0;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {
+          attachRequests++;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        within(sent).queryByTestId("support-ticket-attachments-status"),
+      ).not.toBeInTheDocument();
+      expect(attachRequests).toBe(0);
     });
 
     it("keeps a new ticket in the list before the search catches up", async () => {

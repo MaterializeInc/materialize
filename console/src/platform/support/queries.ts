@@ -18,6 +18,7 @@ import React from "react";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
 import {
+  attachSupportTicketFiles,
   createSupportTicket,
   CreateSupportTicketRequest,
   getSupportTicket,
@@ -27,6 +28,8 @@ import {
 } from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { useAuthUser } from "~/external-library-wrappers/frontegg";
+
+import { readAsBase64 } from "./ticketForm";
 
 /**
  * Tickets belong to the signed-in user, and the query cache outlives a sign
@@ -249,6 +252,31 @@ export function useCreateSupportTicket() {
           pages: [{ ...first, data: [ticket, ...first.data] }, ...rest],
         };
       });
+    },
+  });
+}
+
+/**
+ * Adds files to one of the user's tickets, as a reply from them. The files
+ * are read and base64-encoded here, as the global API takes them.
+ */
+export function useAttachSupportTicketFiles() {
+  return useMutation({
+    mutationFn: async ({
+      ticketId,
+      files,
+    }: {
+      ticketId: string;
+      files: File[];
+    }) => {
+      const encoded = await Promise.all(
+        files.map(async (file) => ({
+          name: file.name,
+          data: await readAsBase64(file),
+        })),
+      );
+      const { data } = await attachSupportTicketFiles(ticketId, encoded);
+      return data;
     },
   });
 }

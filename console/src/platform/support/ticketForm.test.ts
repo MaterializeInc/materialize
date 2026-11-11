@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 import {
+  ATTACHMENT_LIMITS,
+  attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
@@ -116,5 +118,42 @@ describe("isUnchangedTemplate", () => {
         TICKET_TEMPLATE,
       ),
     ).toBe(false);
+  });
+});
+
+describe("attachmentError", () => {
+  const file = (name: string, megabytes = 0.01) => ({
+    name,
+    size: Math.round(megabytes * 1024 * 1024),
+  });
+
+  it("allows Intercom's default file types within the limits", () => {
+    expect(
+      attachmentError([file("error.TXT"), file("screen.png", 10)]),
+    ).toBeUndefined();
+    expect(attachmentError([])).toBeUndefined();
+  });
+
+  it("explains what can't be attached", () => {
+    expect(attachmentError([file("debug.zip")])).toMatch(
+      "debug.zip can't be attached",
+    );
+    expect(attachmentError([file("README")])).toMatch("can't be attached");
+    expect(attachmentError([file("video.mp4", 10.5)])).toBe(
+      "video.mp4 is larger than 10 MB.",
+    );
+    expect(attachmentError([file("empty.txt", 0)])).toBe("empty.txt is empty.");
+    expect(
+      attachmentError([file("a.png", 9), file("b.png", 9), file("c.png", 9)]),
+    ).toBe("Files can be up to 20 MB in total.");
+    expect(
+      attachmentError(Array.from({ length: 11 }, () => file("a.txt"))),
+    ).toBe("Attach up to 10 files.");
+  });
+
+  it("lists the limits for the tooltip", () => {
+    expect(ATTACHMENT_LIMITS).toBe(
+      "Up to 10 files, 10 MB each and 20 MB in total: .gif, .jpeg, .jpg, .mov, .mp4, .pdf, .png, .txt, .heic, .oga, .ogg, .dng, .mp3.",
+    );
   });
 });

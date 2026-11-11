@@ -44,6 +44,7 @@ export type Marketplace = components["schemas"]["Marketplace"];
 export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
 export type SupportTicket = components["schemas"]["SupportTicket"];
 export type SupportRegion = components["schemas"]["SupportRegion"];
+export type SupportTicketFile = components["schemas"]["SupportTicketFile"];
 /** Global APIs older than cloud#13912's regions don't return `regions`. */
 export type SupportOrganization = Omit<
   components["schemas"]["SupportOrganization"],
@@ -364,6 +365,26 @@ export async function createSupportTicket(
       signal: requestOptions?.signal,
       headers,
       body: ticket,
+      ...options,
+    },
+  );
+  return handleOpenApiResponseWithBody(data, response);
+}
+
+/** Adds files to one of the user's tickets, as a reply from them. */
+export async function attachSupportTicketFiles(
+  ticketId: string,
+  files: SupportTicketFile[],
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const { data, response } = await getClient().POST(
+    "/api/organization/support/tickets/{ticket_id}/attachments",
+    {
+      signal: requestOptions?.signal,
+      headers,
+      params: { path: { ticket_id: ticketId } },
+      body: { files },
       ...options,
     },
   );

@@ -284,6 +284,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organization/support/tickets/{ticket_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add files to one of the signed-in user's tickets, as a reply from them. */
+        post: operations["attach_support_ticket_files"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/region/:cloud_provider/:region": {
         parameters: {
             query?: never;
@@ -558,6 +575,16 @@ export interface components {
              *     default) or another one the user belongs to.
              */
             organizationId?: string | null;
+        };
+        /** @description Files to add to a ticket. */
+        AttachSupportTicketFilesRequest: {
+            /** @description Up to 10 files: 10 MB each and 20 MB in total. */
+            files: components["schemas"]["SupportTicketFile"][];
+        };
+        /** @description Files added to a ticket. */
+        AttachedSupportTicketFiles: {
+            /** @description How many files were added. */
+            attached: number;
         };
         /** @description A newly opened ticket. */
         CreatedSupportTicket: components["schemas"]["SupportTicket"] & {
@@ -992,6 +1019,16 @@ export interface components {
         };
         /** @enum {string} */
         SupportTicketEnvironmentType: "production" | "staging" | "development";
+        /** @description A file to add to a ticket. */
+        SupportTicketFile: {
+            /**
+             * @description The file name, whose extension decides the type: gif, jpeg, jpg, mov,
+             *     mp4, pdf, png, txt, heic, oga, ogg, dng or mp3.
+             */
+            name: string;
+            /** @description The file's contents, base64-encoded. */
+            data: string;
+        };
         SupportTicketMessage: {
             id: string;
             /** @description Whether the signed-in user wrote this reply. */
@@ -1557,6 +1594,75 @@ export interface operations {
             };
             /** @description No such ticket for this user */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Support tickets are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    attach_support_ticket_files: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Intercom's ID for the ticket */
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachSupportTicketFilesRequest"];
+            };
+        };
+        responses: {
+            /** @description Files added */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachedSupportTicketFiles"];
+                };
+            };
+            /** @description Too many or too large files, or a file type that can't be attached */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No permissions to add files to support tickets */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ticket for this user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is too large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

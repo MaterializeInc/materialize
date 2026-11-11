@@ -29,6 +29,7 @@ import {
   Tag,
   Text,
   Textarea,
+  Tooltip,
   useTheme,
   VisuallyHiddenInput,
   VStack,
@@ -51,7 +52,12 @@ import {
   SUPPORT_EMAIL,
 } from "~/externalUrls";
 import { useHideIntercomLauncher } from "~/hooks/useIntercom";
-import { CheckmarkIcon, ChevronLeftIcon } from "~/icons";
+import {
+  CheckmarkIcon,
+  ChevronLeftIcon,
+  CloseIcon,
+  PaperclipIcon,
+} from "~/icons";
 import {
   currentEnvironmentState,
   currentRegionIdAtom,
@@ -59,9 +65,16 @@ import {
 import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
-import { useCreateSupportTicket, useSupportOrganizations } from "./queries";
+import {
+  useAttachSupportTicketFiles,
+  useCreateSupportTicket,
+  useSupportOrganizations,
+} from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_LIMITS,
+  attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
@@ -76,10 +89,102 @@ import {
 } from "./ticketForm";
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
+type AttachFilesMutation = ReturnType<typeof useAttachSupportTicketFiles>;
+
+const formatSize = (bytes: number) =>
+  bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 /**
- * How to share files, which the form can't take yet: Intercom's API only
- * accepts them on a reply. Incoming email is limited to 20 MB in total.
+ * Files to add to the ticket once it's open. The button's tooltip gives the
+ * limits; the global API checks them again.
+ */
+const AttachmentPicker = ({
+  files,
+  error,
+  onChange,
+}: {
+  files: File[];
+  error: string | undefined;
+  onChange: (files: File[]) => void;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const input = React.useRef<HTMLInputElement>(null);
+  return (
+    <Box data-testid="support-ticket-attachments">
+      <VisuallyHiddenInput
+        ref={input}
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        aria-label="Files to attach"
+        data-testid="support-ticket-file-input"
+        onChange={(event) => {
+          const added = Array.from(event.target.files ?? []);
+          // The same file picked twice is attached once.
+          const isNew = (file: File) =>
+            !files.some(
+              (existing) =>
+                existing.name === file.name && existing.size === file.size,
+            );
+          onChange([...files, ...added.filter(isNew)]);
+          // Lets the same file be picked again after it's removed.
+          event.target.value = "";
+        }}
+      />
+      <Tooltip label={ATTACHMENT_LIMITS} lineHeight={1.2} hasArrow>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<PaperclipIcon aria-hidden />}
+          onClick={() => input.current?.click()}
+        >
+          Attach files
+        </Button>
+      </Tooltip>
+      {files.length > 0 && (
+        <VStack as="ul" listStyleType="none" spacing="1" align="stretch" mt="2">
+          {files.map((file) => (
+            <HStack as="li" key={`${file.name}-${file.size}`} spacing="2">
+              <Text textStyle="text-small" flex="1" minWidth="0" noOfLines={1}>
+                {file.name}
+              </Text>
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                {formatSize(file.size)}
+              </Text>
+              <IconButton
+                aria-label={`Remove ${file.name}`}
+                icon={<CloseIcon />}
+                variant="ghost"
+                size="xs"
+                onClick={() => onChange(files.filter((f) => f !== file))}
+              />
+            </HStack>
+          ))}
+        </VStack>
+      )}
+      {error && (
+        <Text
+          role="alert"
+          textStyle="text-small"
+          color={colors.accent.red}
+          mt="2"
+        >
+          {error}
+        </Text>
+      )}
+      <Text textStyle="text-small" color={colors.foreground.secondary} mt="2">
+        Please make sure files don&apos;t include passwords, credentials, or
+        other sensitive data.
+      </Text>
+    </Box>
+  );
+};
+
+/**
+ * How to share files after the ticket is open: more than the form takes, or
+ * if adding them failed. Intercom limits incoming email to 20 MB in total.
  */
 const FilesNote = () => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -90,10 +195,10 @@ const FilesNote = () => {
       data-testid="support-ticket-files-note"
     >
       <Text as="span" fontWeight="600" color={colors.foreground.primary}>
-        Need to share screenshots or other files?
+        Need to share more files?
       </Text>{" "}
-      You can add them after you submit. Reply to the confirmation email (up to
-      20 MB in total) or open the ticket in the{" "}
+      Reply to the confirmation email (up to 20 MB in total) or open the ticket
+      in the{" "}
       <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
         Help Center ↗
       </TextLink>
@@ -178,6 +283,7 @@ const NewTicketForm = ({
   organizationName,
   isOutage,
   submit,
+  onOpen,
   onReportOutage,
   onClose,
 }: {
@@ -186,10 +292,14 @@ const NewTicketForm = ({
   /** The outage form: urgent and production only. */
   isOutage: boolean;
   submit: CreateTicketMutation;
+  /** Opens the ticket, then adds the files to it. */
+  onOpen: (request: CreateSupportTicketRequest, files: File[]) => void;
   onReportOutage: () => void;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const [files, setFiles] = React.useState<File[]>([]);
+  const filesError = attachmentError(files);
   const signedIn = { ...useTicketContext(), organizationId, organizationName };
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
@@ -252,8 +362,10 @@ const NewTicketForm = ({
     }
   }
 
-  const onSubmit = (values: TicketFormValues) =>
-    submit.mutate(
+  const onSubmit = (values: TicketFormValues) => {
+    // The picker shows why; the ticket waits until the files can go with it.
+    if (filesError) return;
+    onOpen(
       buildCreateTicketRequest(
         // Outages are always about production.
         isOutage
@@ -261,7 +373,9 @@ const NewTicketForm = ({
           : values,
         target,
       ),
+      files,
     );
+  };
 
   return (
     <Flex
@@ -451,7 +565,11 @@ const NewTicketForm = ({
             </Text>
           )}
 
-          <FilesNote />
+          <AttachmentPicker
+            files={files}
+            error={filesError}
+            onChange={setFiles}
+          />
 
           {sentDetails.length > 0 && (
             <Box
@@ -521,15 +639,20 @@ const TicketSent = ({
   ticket,
   request,
   signedInOrganizationId,
+  attach,
   onReportOutage,
   onClose,
 }: {
   ticket: CreatedSupportTicket;
   request: CreateSupportTicketRequest;
   signedInOrganizationId?: string;
+  /** Adding the files picked in the form, if any. */
+  attach: AttachFilesMutation;
   onReportOutage: () => void;
   onClose: () => void;
 }) => {
+  const fileCount = attach.variables?.files.length ?? 0;
+  const filesLabel = fileCount === 1 ? "1 file" : `${fileCount} files`;
   const { colors } = useTheme<MaterializeTheme>();
   const supportOrganizations = useSupportOrganizations();
   // A ticket for another organization says which one it went to.
@@ -616,6 +739,22 @@ const TicketSent = ({
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
           </OrderedList>
+          {fileCount > 0 && (
+            <Text
+              textStyle="text-small"
+              color={
+                attach.isError ? colors.accent.red : colors.foreground.secondary
+              }
+              role={attach.isError ? "alert" : undefined}
+              data-testid="support-ticket-attachments-status"
+            >
+              {attach.isError
+                ? `Your ticket is open, but the ${filesLabel} couldn't be added.`
+                : attach.isSuccess
+                  ? `${filesLabel} added to your ticket.`
+                  : `Adding ${filesLabel}\u2026`}
+            </Text>
+          )}
           <FilesNote />
         </VStack>
 
@@ -682,6 +821,18 @@ export const NewSupportTicketDrawer = ({
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
   const submit = useCreateSupportTicket();
+  const attach = useAttachSupportTicketFiles();
+  // The ticket opens first, so the files can never hold up an outage report.
+  const openTicket = (request: CreateSupportTicketRequest, files: File[]) =>
+    submit.mutate(request, {
+      onSuccess: (ticket) => {
+        if (files.length > 0) attach.mutate({ ticketId: ticket.id, files });
+      },
+    });
+  const startOver = () => {
+    submit.reset();
+    attach.reset();
+  };
   const sent =
     submit.isSuccess && submit.variables
       ? { ticket: submit.data, request: submit.variables }
@@ -692,7 +843,7 @@ export const NewSupportTicketDrawer = ({
       isOpen={isOpen}
       onClose={onClose}
       // Start over the next time it opens.
-      onCloseComplete={() => submit.reset()}
+      onCloseComplete={startOver}
       placement="right"
       size="md"
     >
@@ -728,8 +879,9 @@ export const NewSupportTicketDrawer = ({
               ticket={sent.ticket}
               request={sent.request}
               signedInOrganizationId={organizationId}
+              attach={attach}
               onReportOutage={() => {
-                submit.reset();
+                startOver();
                 onReportOutage();
               }}
               onClose={onClose}
@@ -742,8 +894,9 @@ export const NewSupportTicketDrawer = ({
               organizationName={organizationName}
               isOutage={isOutage}
               submit={submit}
+              onOpen={openTicket}
               onReportOutage={() => {
-                submit.reset();
+                startOver();
                 onReportOutage();
               }}
               onClose={onClose}
