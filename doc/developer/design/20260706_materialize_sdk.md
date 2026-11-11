@@ -1326,10 +1326,10 @@ misc/materialize-sdk/
   conformance/   vectors, shared by every package
   schema/        JSON Schemas of the values the core hands to the packages
   codegen/       generates the schemas and each package's types from the core
-  python/        package: PyO3 binding, psycopg transport, sinks
-  node/          package: WebAssembly build, node-postgres transport, sinks
-  rust/          package: protocol core directly, tokio-postgres transport, sinks
-  turbopuffer/   the turbopuffer sink
+  python/        package: PyO3 binding, psycopg transport
+  node/          package: WebAssembly build, node-postgres transport
+  rust/          package: protocol core directly, tokio-postgres transport,
+                 and the Valkey example
 test/materialize-sdk/  mzcompose end-to-end suite, run in the nightlies
 ```
 
@@ -1353,9 +1353,7 @@ install. Publishing to crates.io needs a new deploy step.
 
 Each release will publish every package at the same version, built from the same
 protocol core, so a version number means the same behavior in every language.
-Versions follow semantic versioning. Checkpoints carry a format version, so a
-checkpoint written by an older release resumes after an upgrade or fails with a
-clear error. The nightlies define which Materialize versions a release supports.
+Versions follow semantic versioning. The nightlies define which Materialize versions a release supports.
 
 ## Testing
 
