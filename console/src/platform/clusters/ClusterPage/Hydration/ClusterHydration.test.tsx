@@ -22,6 +22,8 @@ import {
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
+import { AppConfig, SelfManagedAppConfig } from "~/config/AppConfig";
+import { appConfigAtom } from "~/config/store";
 import { getStore } from "~/jotai";
 import { buildClusterServerResponse } from "~/platform/clusters/clustersTestUtils";
 import {
@@ -64,6 +66,15 @@ const ENVIRONMENT = {
   status: {
     ...healthyEnvironment.status,
     version: parseDbVersion("v26.46.0 (0000000000)"),
+  },
+};
+// A self-managed install through the operator's Helm chart, unlike the
+// emulator.
+const HELM_INSTALL_ENVIRONMENT = {
+  ...healthyEnvironment,
+  status: {
+    ...healthyEnvironment.status,
+    version: parseDbVersion("v26.46.0 (0000000000, helm chart: 26.0.0)"),
   },
 };
 const ENVIRONMENT_WITHOUT_HISTORY = {
@@ -179,6 +190,7 @@ const outOfMemory = (replicaId: string, atMs: number) => ({
 
 interface Scenario {
   environment?: typeof ENVIRONMENT;
+  appConfig?: AppConfig;
   statusRows?: object[];
   /** Hydrated and total objects per replica. */
   progress?: Record<string, [number, number]>;
@@ -239,6 +251,7 @@ const settleReplicaReads = async () => {
 
 const renderHydrationTab = async ({
   environment = ENVIRONMENT,
+  appConfig,
   statusRows = [online("u1", BOOTED_AT_MS), online("u2", BOOTED_AT_MS)],
   progress = { u1: [9, 9], u2: [9, 9] },
   progressRows,
@@ -605,8 +618,10 @@ const renderHydrationTab = async ({
     </Routes>,
     {
       initialRouterEntries: [`/u9/analytics${search}`],
-      initializeState: ({ set }) =>
-        setFakeEnvironment(set, "aws/us-east-1", environment),
+      initializeState: ({ set }) => {
+        if (appConfig) set(appConfigAtom, appConfig);
+        return setFakeEnvironment(set, "aws/us-east-1", environment);
+      },
     },
   );
 };
@@ -638,6 +653,7 @@ describe("ClusterHydration", () => {
     expect(screen.getByText(/^Additive hydration on r1, /)).toBeVisible();
     // Every replica is hydrated, so there's nothing to call out.
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Hydration in Progress" }),
     ).not.toBeInTheDocument();
@@ -1277,6 +1293,24 @@ describe("ClusterHydration", () => {
     expect(
       screen.queryByRole("heading", { name: "Hydration in Progress" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("says when the Console runs against the emulator", async () => {
+    await renderHydrationTab({ appConfig: new SelfManagedAppConfig() });
+
+    expect(await screen.findByRole("note")).toHaveTextContent(
+      /^This is the Materialize Emulator\./,
+    );
+  });
+
+  it("says nothing of the emulator on a self-managed install", async () => {
+    await renderHydrationTab({
+      appConfig: new SelfManagedAppConfig(),
+      environment: HELM_INSTALL_ENVIRONMENT,
+    });
+
+    expect(await screen.findByRole("table")).toBeVisible();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
   it("explains each kind of hydration from a tip that opens on keyboard focus", async () => {

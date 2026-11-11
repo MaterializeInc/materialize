@@ -36,6 +36,7 @@ import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "~/platform/clusters/constants";
 import { REPLICA_HYDRATION_HISTORY_MIN_VERSION } from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
+import { useIsEmulator } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { assert, pluralize } from "~/util";
 import {
@@ -162,6 +163,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     timePeriodOptions: HYDRATION_TIME_PERIODS,
   });
   const data = useClusterHydrationData({ cluster, timePeriodMinutes });
+  const isEmulator = useIsEmulator();
   const colorById = useReplicaColors(cluster.id, data.replicas);
   const [selectedRowId, setSelectedRowId] = React.useState<string>();
 
@@ -298,6 +300,14 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
             options={HYDRATION_TIME_PERIODS}
           />
         </HStack>
+        {isEmulator && (
+          <Alert
+            role="note"
+            variant="info"
+            label="This is the Materialize Emulator."
+            message="Its clusters share one container and aren't held to their sizes, so resource figures here can read above 100%."
+          />
+        )}
         {data.objectCount === 0 && cluster.replicas.length > 0 && (
           <Text textStyle="text-base" color={colors.foreground.secondary}>
             This cluster has no indexes or materialized views, so it has nothing
