@@ -77,6 +77,7 @@ def start_mz_read_only(
     system_parameter_defaults: dict[str, str] | None = None,
     system_parameter_version: MzVersion | None = None,
     force_migrations: str | None = None,
+    force_catalog_migration: bool = False,
     publish: bool | None = None,
 ) -> StartMz:
     return StartMz(
@@ -89,6 +90,7 @@ def start_mz_read_only(
         system_parameter_defaults=system_parameter_defaults,
         system_parameter_version=system_parameter_version,
         force_migrations=force_migrations,
+        force_catalog_migration=force_catalog_migration,
         publish=publish,
     )
 
@@ -505,7 +507,9 @@ class PreflightCheckContinue(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            start_mz_read_only(self, tag=None, deploy_generation=1),
+            start_mz_read_only(
+                self, tag=None, deploy_generation=1, force_catalog_migration=True
+            ),
             WaitReadyMz(),
             # KillMz above already removed the previous generation.
             PromoteMz(retire_mz_service=None),
@@ -517,6 +521,7 @@ class PreflightCheckContinue(Scenario):
                 self,
                 tag=None,
                 deploy_generation=1,
+                force_catalog_migration=True,
             ),
             Validate(self),
         ]
@@ -545,6 +550,7 @@ class PreflightCheckRollback(Scenario):
                 tag=None,
                 deploy_generation=1,
                 system_parameter_version=self.base_version(),
+                force_catalog_migration=True,
             ),
             WaitReadyMz(),
             KillMz(capture_logs=True),

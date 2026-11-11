@@ -1408,6 +1408,7 @@ impl<'a> RunnerInner<'a> {
             license_key: ValidatedLicenseKey::for_tests(),
             external_login_password_mz_system: None,
             force_builtin_schema_migration: None,
+            force_catalog_migration: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

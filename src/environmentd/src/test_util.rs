@@ -984,6 +984,7 @@ impl Listeners {
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
                 force_builtin_schema_migration: config.force_builtin_schema_migration,
+                force_catalog_migration: false,
             })
             .await?;
 

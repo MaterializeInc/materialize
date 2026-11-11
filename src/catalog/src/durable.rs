@@ -81,6 +81,8 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub default_cluster_replication_factor: u32,
     pub bootstrap_role: Option<String>,
+    /// Testing only: every open that runs migrations also applies an empty migration.
+    pub force_catalog_migration: bool,
 }
 
 pub type Epoch = NonZeroI64;
@@ -519,5 +521,6 @@ pub fn test_bootstrap_args() -> BootstrapArgs {
         default_cluster_replication_factor: 1,
         bootstrap_role: None,
         cluster_replica_size_map: ClusterReplicaSizeMap::for_tests(),
+        force_catalog_migration: false,
     }
 }

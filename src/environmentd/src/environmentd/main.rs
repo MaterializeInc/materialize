@@ -642,6 +642,10 @@ pub struct Args {
     /// should not be set in production.
     #[clap(long, value_enum, requires = "unsafe_mode")]
     unsafe_force_builtin_schema_migration: Option<String>,
+    /// Makes every catalog open that runs migrations also apply an empty one.
+    /// Testing only.
+    #[clap(long, requires = "unsafe_mode")]
+    unsafe_force_catalog_migration: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -1202,6 +1206,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Testing options.
                 now,
                 force_builtin_schema_migration,
+                force_catalog_migration: args.unsafe_force_catalog_migration,
             })
             .await
             .maybe_terminate("booting server")?;
