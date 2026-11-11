@@ -45,6 +45,8 @@ export type IntercomJwtResponse = components["schemas"]["IntercomJwtResponse"];
 export type SupportTicket = components["schemas"]["SupportTicket"];
 export type SupportRegion = components["schemas"]["SupportRegion"];
 export type SupportTicketFile = components["schemas"]["SupportTicketFile"];
+export type AttachedSupportTicketFiles =
+  components["schemas"]["AttachedSupportTicketFiles"];
 /** Global APIs older than cloud#13912's regions don't return `regions`. */
 export type SupportOrganization = Omit<
   components["schemas"]["SupportOrganization"],

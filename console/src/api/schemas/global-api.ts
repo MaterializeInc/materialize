@@ -1023,10 +1023,15 @@ export interface components {
         SupportTicketFile: {
             /**
              * @description The file name, whose extension decides the type: gif, jpeg, jpg, mov,
-             *     mp4, pdf, png, txt, heic, oga, ogg, dng or mp3.
+             *     mp4, pdf, png, txt, heic, oga, ogg, dng or mp3. It needs a name before
+             *     the extension, and can't have slashes, control characters or invisible
+             *     characters.
              */
             name: string;
-            /** @description The file's contents, base64-encoded. */
+            /**
+             * Format: byte
+             * @description The file's contents, base64-encoded with padding: 1 byte to 10 MB.
+             */
             data: string;
         };
         SupportTicketMessage: {
@@ -1668,15 +1673,22 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The support system could not be reached */
+            /** @description The support system could not be reached, or rejected the files */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Support tickets are not configured */
+            /** @description Too many uploads are running (safe to retry after `Retry-After` seconds), or support tickets are not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system didn't confirm the upload; the files may have been added, so check the ticket before retrying */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };

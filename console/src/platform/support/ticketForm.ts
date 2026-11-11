@@ -96,16 +96,101 @@ export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.map(
   (extension) => `.${extension}`,
 ).join(",");
 
+export const MAX_FILE_NAME_LENGTH = 255;
+
 const extensionOf = (name: string) =>
   name.includes(".") ? name.split(".").pop()?.toLowerCase() : undefined;
+
+/**
+ * Control characters, and characters that don't show or that change how the
+ * text around them is displayed, so a name could look like it has a
+ * different extension. The global API rejects the same ones.
+ */
+const HIDDEN_CHARACTER_RANGES: [number, number][] = [
+  [0x0000, 0x001f],
+  [0x007f, 0x009f],
+  [0x00ad, 0x00ad],
+  [0x034f, 0x034f],
+  [0x061c, 0x061c],
+  [0x115f, 0x1160],
+  [0x17b4, 0x17b5],
+  [0x180b, 0x180f],
+  [0x200b, 0x200f],
+  [0x2028, 0x202e],
+  [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+  [0xfff0, 0xfffb],
+  [0xe0000, 0xe0fff],
+];
+
+const isHiddenCharacter = (character: string) => {
+  const code = character.codePointAt(0) ?? 0;
+  return HIDDEN_CHARACTER_RANGES.some(
+    ([first, last]) => code >= first && code <= last,
+  );
+};
+
+/**
+ * Whether the global API takes this file name: a name before the extension,
+ * at most 255 characters once trimmed, and no slashes, control characters or
+ * hidden characters anywhere.
+ */
+export const isValidFileName = (name: string) => {
+  const characters = [...name];
+  if (
+    characters.some(
+      (character) =>
+        character === "/" || character === "\\" || isHiddenCharacter(character),
+    )
+  ) {
+    return false;
+  }
+  const trimmed = name.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = trimmed
+    .slice(0, Math.max(dot, 0))
+    .replace(/^\.+|\.+$/g, "")
+    .trim();
+  return dot > 0 && stem !== "" && [...trimmed].length <= MAX_FILE_NAME_LENGTH;
+};
+
+/**
+ * The files with the newly picked ones added. A file picked again (the same
+ * name, size and modification time) is only added once.
+ */
+export const addFiles = (files: File[], added: File[]) =>
+  added.reduce(
+    (all, file) =>
+      all.some(
+        (existing) =>
+          existing.name === file.name &&
+          existing.size === file.size &&
+          existing.lastModified === file.lastModified,
+      )
+        ? all
+        : [...all, file],
+    files,
+  );
 
 /** Why these files can't be attached, or undefined if they can. */
 export const attachmentError = (files: { name: string; size: number }[]) => {
   if (files.length > MAX_ATTACHMENTS) {
     return `Attach up to ${MAX_ATTACHMENTS} files.`;
   }
+  const badName = files.find(({ name }) => !isValidFileName(name));
+  if (badName) {
+    const shown = [...badName.name]
+      .filter((character) => !isHiddenCharacter(character))
+      .join("")
+      .trim();
+    return `${shown || "A file"} can't be attached: file names need a name before the extension, at most ${MAX_FILE_NAME_LENGTH} characters, and no slashes or hidden characters.`;
+  }
   const unsupported = files.find(
-    ({ name }) => !ATTACHMENT_EXTENSIONS.includes(extensionOf(name) ?? ""),
+    ({ name }) =>
+      !ATTACHMENT_EXTENSIONS.includes(extensionOf(name.trim()) ?? ""),
   );
   if (unsupported) {
     return `${unsupported.name} can't be attached. Supported types: ${ATTACHMENT_ACCEPT.replaceAll(",", ", ")}.`;

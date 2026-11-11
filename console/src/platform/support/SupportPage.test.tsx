@@ -19,6 +19,7 @@ import { SupportTicket, SupportTicketDetail } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
+import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
 import {
   HELP_CENTER_TICKETS_URL,
@@ -32,7 +33,11 @@ import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { defaultRegionId, renderComponent } from "~/test/utils";
 
-import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
+import {
+  retryWhenUploadsAreBusy,
+  supportTicketQueryKeys,
+  supportTicketsQueryOptions,
+} from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
 import {
   ATTACHMENT_LIMITS,
@@ -1414,6 +1419,105 @@ describe("SupportPage", () => {
       expect(
         within(sent).getByTestId("support-ticket-files-note"),
       ).toBeVisible();
+    });
+
+    it("adds the files even if the drawer closes before the ticket opens", async () => {
+      let openTicket = () => {};
+      const ticketOpened = new Promise<void>((resolve) => {
+        openTicket = resolve;
+      });
+      const attached: unknown[] = [];
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, async () => {
+          await ticketOpened;
+          return HttpResponse.json(
+            {
+              ...buildTicket({ title: "Sink is lagging" }),
+              pagesOnCall: false,
+            },
+            { status: 201 },
+          );
+        }),
+        attachHandler((body) => {
+          attached.push(body);
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      await user.click(
+        screen.getByRole("button", { name: "Back to help and support" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Open ticket" }),
+        ).not.toBeInTheDocument(),
+      );
+
+      openTicket();
+      await waitFor(() =>
+        expect(attached).toEqual([
+          {
+            ticketId: "42",
+            files: [{ name: "error.txt", data: window.btoa("hi") }],
+          },
+        ]),
+      );
+    });
+
+    it("says to check the ticket when the files may have been added", async () => {
+      let attachRequests = 0;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {
+          attachRequests++;
+        }, 504),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        [
+          new File(["hi"], "error.txt", { type: "text/plain" }),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ],
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(await within(sent).findByRole("alert")).toHaveTextContent(
+        "Your ticket is open, but we couldn't confirm the 2 files were added. Check the ticket in Help Center before adding them again.",
+      );
+      // Sending them again could add them twice.
+      expect(attachRequests).toBe(1);
+    });
+
+    it("only retries adding files when the server turned them away unread", () => {
+      const status = (code: number) => new OpenApiFetchError(code, {});
+      expect(retryWhenUploadsAreBusy(0, status(503))).toBe(true);
+      expect(retryWhenUploadsAreBusy(1, status(503))).toBe(true);
+      expect(retryWhenUploadsAreBusy(2, status(503))).toBe(false);
+      for (const code of [400, 404, 413, 500, 502, 504]) {
+        expect(retryWhenUploadsAreBusy(0, status(code))).toBe(false);
+      }
+      // A network error may have happened after the files arrived.
+      expect(retryWhenUploadsAreBusy(0, new TypeError("Failed to fetch"))).toBe(
+        false,
+      );
     });
 
     it("opens a ticket without files as before", async () => {

@@ -9,8 +9,11 @@
 
 import {
   infiniteQueryOptions,
+  MutationState,
+  QueryClient,
   useInfiniteQuery,
   useMutation,
+  useMutationState,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -18,6 +21,7 @@ import React from "react";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
 import {
+  AttachedSupportTicketFiles,
   attachSupportTicketFiles,
   createSupportTicket,
   CreateSupportTicketRequest,
@@ -47,6 +51,9 @@ export const supportTicketQueryKeys = {
     [...supportTicketQueryKeys.owner(owner), "detail", ticketId] as const,
   organizations: (owner: TicketOwner) =>
     [...supportTicketQueryKeys.owner(owner), "organizations"] as const,
+  /** Adding files to a new ticket. Intercom's ticket IDs are unique. */
+  attachFiles: (ticketId: string) =>
+    [...supportTicketQueryKeys.all(), "attach-files", ticketId] as const,
 };
 
 export const useTicketOwner = (): TicketOwner => {
@@ -223,15 +230,27 @@ export function useListedSupportTicket(
     .find((ticket) => ticket.id === ticketId);
 }
 
+/** A ticket to open, and the files to add once it's open. */
+export type CreateTicketVariables = {
+  request: CreateSupportTicketRequest;
+  files: File[];
+};
+
 export function useCreateSupportTicket() {
   const queryClient = useQueryClient();
   const owner = useTicketOwner();
   return useMutation({
-    mutationFn: async (ticket: CreateSupportTicketRequest) => {
-      const { data } = await createSupportTicket(ticket);
+    mutationFn: async ({ request }: CreateTicketVariables) => {
+      const { data } = await createSupportTicket(request);
       return data;
     },
-    onSuccess: ({ pagesOnCall: _, ...ticket }) => {
+    // Runs even if the form closes or unmounts before the ticket opens, unlike
+    // callbacks passed to `mutate`.
+    onSuccess: ({ pagesOnCall: _, ...ticket }, { files }) => {
+      // The ticket opens first, so files can never hold up an outage report.
+      if (files.length > 0) {
+        startAttachingFiles(queryClient, { ticketId: ticket.id, files });
+      }
       const { queryKey } = supportTicketsQueryOptions(owner);
       // Intercom's ticket search takes a few seconds to include a new ticket,
       // so a refetch now would come back without it. Add it to the loaded
@@ -256,27 +275,73 @@ export function useCreateSupportTicket() {
   });
 }
 
+export type AttachFilesVariables = { ticketId: string; files: File[] };
+
+export type AttachFilesState = MutationState<
+  AttachedSupportTicketFiles,
+  Error,
+  AttachFilesVariables
+>;
+
+/**
+ * Retries only when the global API was busy and turned the files away
+ * without reading them (503). Any other failure, a timeout above all, may
+ * have added them, and a retry could add them twice.
+ */
+export const retryWhenUploadsAreBusy = (failureCount: number, error: unknown) =>
+  failureCount < 2 &&
+  error instanceof OpenApiFetchError &&
+  error.status === 503;
+
 /**
  * Adds files to one of the user's tickets, as a reply from them. The files
  * are read and base64-encoded here, as the global API takes them.
+ *
+ * Runs in the mutation cache rather than a component, so it finishes even if
+ * the form that opened the ticket closes. `useAttachFilesState` reads how it
+ * went.
  */
-export function useAttachSupportTicketFiles() {
-  return useMutation({
-    mutationFn: async ({
-      ticketId,
-      files,
-    }: {
-      ticketId: string;
-      files: File[];
-    }) => {
-      const encoded = await Promise.all(
-        files.map(async (file) => ({
-          name: file.name,
-          data: await readAsBase64(file),
-        })),
-      );
-      const { data } = await attachSupportTicketFiles(ticketId, encoded);
-      return data;
+export function startAttachingFiles(
+  queryClient: QueryClient,
+  variables: AttachFilesVariables,
+) {
+  queryClient
+    .getMutationCache()
+    .build(
+      queryClient,
+      queryClient.defaultMutationOptions({
+        mutationKey: supportTicketQueryKeys.attachFiles(variables.ticketId),
+        mutationFn: async ({ ticketId, files }: AttachFilesVariables) => {
+          const encoded = await Promise.all(
+            files.map(async (file) => ({
+              name: file.name,
+              data: await readAsBase64(file),
+            })),
+          );
+          const { data } = await attachSupportTicketFiles(ticketId, encoded);
+          return data;
+        },
+        retry: retryWhenUploadsAreBusy,
+        // The global API asks for 5 seconds.
+        retryDelay: (failureCount) => (failureCount + 1) * 5_000,
+      }),
+    )
+    .execute(variables)
+    .catch(() => {
+      // The error stays in the mutation's state, which the confirmation shows.
+    });
+}
+
+/** How adding files to a new ticket went, if any were added. */
+export function useAttachFilesState(
+  ticketId: string,
+): AttachFilesState | undefined {
+  const states = useMutationState({
+    filters: {
+      mutationKey: supportTicketQueryKeys.attachFiles(ticketId),
+      exact: true,
     },
+    select: (mutation) => mutation.state as AttachFilesState,
   });
+  return states.at(-1);
 }

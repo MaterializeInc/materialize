@@ -8,12 +8,14 @@
 // by the Apache License, Version 2.0.
 
 import {
+  addFiles,
   ATTACHMENT_LIMITS,
   attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
   isUnchangedTemplate,
+  isValidFileName,
   TICKET_TEMPLATE,
 } from "./ticketForm";
 
@@ -151,9 +153,68 @@ describe("attachmentError", () => {
     ).toBe("Attach up to 10 files.");
   });
 
+  it("doesn't show hidden characters from a name it rejects", () => {
+    expect(attachmentError([file("invoice\u202Efdp.txt")])).toMatch(
+      /^invoicefdp\.txt can't be attached: file names need a name before the extension/,
+    );
+    expect(attachmentError([file(".txt")])).toMatch(/^\.txt can't be attached/);
+  });
+
   it("lists the limits for the tooltip", () => {
     expect(ATTACHMENT_LIMITS).toBe(
       "Up to 10 files, 10 MB each and 20 MB in total: .gif, .jpeg, .jpg, .mov, .mp4, .pdf, .png, .txt, .heic, .oga, .ogg, .dng, .mp3.",
     );
+  });
+});
+
+// The same cases as the global API's file name check.
+describe("isValidFileName", () => {
+  it.each([
+    "error.txt",
+    "error log.TXT",
+    "a.b.png",
+    "résumé.pdf",
+    "日本語.png",
+    " padded.txt ",
+    `${"a".repeat(251)}.txt`,
+  ])("accepts %j", (name) => {
+    expect(isValidFileName(name)).toBe(true);
+  });
+
+  it.each([
+    ".txt",
+    "..txt",
+    ". .png",
+    "txt",
+    "a/b.txt",
+    "a\\b.txt",
+    "a\nb.txt",
+    // Shows as "invoicetxt.pdf" but is a .txt file.
+    "invoice\u202Efdp.txt",
+    "zero\u200Bwidth.png",
+    "\uFEFF.png",
+    // Trimmed away by JavaScript, but not by the global API.
+    "name.png\uFEFF",
+    "tag\u{E0041}.png",
+    `${"a".repeat(252)}.txt`,
+  ])("rejects %j", (name) => {
+    expect(isValidFileName(name)).toBe(false);
+  });
+});
+
+describe("addFiles", () => {
+  const picked = (name: string, contents: string, lastModified: number) =>
+    new File([contents], name, { lastModified });
+
+  it("adds a file picked again once", () => {
+    const first = picked("error.txt", "hi", 1);
+    const again = picked("error.txt", "hi", 1);
+    expect(addFiles([first], [again])).toEqual([first]);
+  });
+
+  it("keeps different files with the same name and size", () => {
+    const today = picked("error.txt", "hi", 2);
+    const yesterday = picked("error.txt", "ho", 1);
+    expect(addFiles([today], [yesterday])).toEqual([today, yesterday]);
   });
 });

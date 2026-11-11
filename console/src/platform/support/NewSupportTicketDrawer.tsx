@@ -66,12 +66,13 @@ import { MaterializeTheme } from "~/theme";
 
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import {
-  useAttachSupportTicketFiles,
+  useAttachFilesState,
   useCreateSupportTicket,
   useSupportOrganizations,
 } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
+  addFiles,
   ATTACHMENT_ACCEPT,
   ATTACHMENT_LIMITS,
   attachmentError,
@@ -89,12 +90,23 @@ import {
 } from "./ticketForm";
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
-type AttachFilesMutation = ReturnType<typeof useAttachSupportTicketFiles>;
 
 const formatSize = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${Math.max(1, Math.round(bytes / 1024))} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+/** Keys for picked files, which have no ID of their own. */
+const fileKeys = new WeakMap<File, number>();
+let nextFileKey = 0;
+const fileKey = (file: File) => {
+  let key = fileKeys.get(file);
+  if (key === undefined) {
+    key = nextFileKey++;
+    fileKeys.set(file, key);
+  }
+  return key;
+};
 
 /**
  * Files to add to the ticket once it's open. The button's tooltip gives the
@@ -122,13 +134,7 @@ const AttachmentPicker = ({
         data-testid="support-ticket-file-input"
         onChange={(event) => {
           const added = Array.from(event.target.files ?? []);
-          // The same file picked twice is attached once.
-          const isNew = (file: File) =>
-            !files.some(
-              (existing) =>
-                existing.name === file.name && existing.size === file.size,
-            );
-          onChange([...files, ...added.filter(isNew)]);
+          onChange(addFiles(files, added));
           // Lets the same file be picked again after it's removed.
           event.target.value = "";
         }}
@@ -146,7 +152,7 @@ const AttachmentPicker = ({
       {files.length > 0 && (
         <VStack as="ul" listStyleType="none" spacing="1" align="stretch" mt="2">
           {files.map((file) => (
-            <HStack as="li" key={`${file.name}-${file.size}`} spacing="2">
+            <HStack as="li" key={fileKey(file)} spacing="2">
               <Text textStyle="text-small" flex="1" minWidth="0" noOfLines={1}>
                 {file.name}
               </Text>
@@ -639,20 +645,22 @@ const TicketSent = ({
   ticket,
   request,
   signedInOrganizationId,
-  attach,
   onReportOutage,
   onClose,
 }: {
   ticket: CreatedSupportTicket;
   request: CreateSupportTicketRequest;
   signedInOrganizationId?: string;
-  /** Adding the files picked in the form, if any. */
-  attach: AttachFilesMutation;
   onReportOutage: () => void;
   onClose: () => void;
 }) => {
-  const fileCount = attach.variables?.files.length ?? 0;
+  // Adding the files picked in the form, if any.
+  const attach = useAttachFilesState(ticket.id);
+  const fileCount = attach?.variables?.files.length ?? 0;
   const filesLabel = fileCount === 1 ? "1 file" : `${fileCount} files`;
+  // Without an answer, the files may have been added anyway.
+  const isUnconfirmed =
+    attach?.error instanceof OpenApiFetchError && attach.error.status === 504;
   const { colors } = useTheme<MaterializeTheme>();
   const supportOrganizations = useSupportOrganizations();
   // A ticket for another organization says which one it went to.
@@ -743,14 +751,18 @@ const TicketSent = ({
             <Text
               textStyle="text-small"
               color={
-                attach.isError ? colors.accent.red : colors.foreground.secondary
+                attach?.status === "error"
+                  ? colors.accent.red
+                  : colors.foreground.secondary
               }
-              role={attach.isError ? "alert" : undefined}
+              role={attach?.status === "error" ? "alert" : undefined}
               data-testid="support-ticket-attachments-status"
             >
-              {attach.isError
-                ? `Your ticket is open, but the ${filesLabel} couldn't be added.`
-                : attach.isSuccess
+              {attach?.status === "error"
+                ? isUnconfirmed
+                  ? `Your ticket is open, but we couldn't confirm the ${filesLabel} ${fileCount === 1 ? "was" : "were"} added. Check the ticket in Help Center before adding them again.`
+                  : `Your ticket is open, but the ${filesLabel} couldn't be added.`
+                : attach?.status === "success"
                   ? `${filesLabel} added to your ticket.`
                   : `Adding ${filesLabel}\u2026`}
             </Text>
@@ -821,21 +833,14 @@ export const NewSupportTicketDrawer = ({
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
   const submit = useCreateSupportTicket();
-  const attach = useAttachSupportTicketFiles();
-  // The ticket opens first, so the files can never hold up an outage report.
+  // The files are added once the ticket is open, even if the drawer has
+  // closed by then.
   const openTicket = (request: CreateSupportTicketRequest, files: File[]) =>
-    submit.mutate(request, {
-      onSuccess: (ticket) => {
-        if (files.length > 0) attach.mutate({ ticketId: ticket.id, files });
-      },
-    });
-  const startOver = () => {
-    submit.reset();
-    attach.reset();
-  };
+    submit.mutate({ request, files });
+  const startOver = () => submit.reset();
   const sent =
     submit.isSuccess && submit.variables
-      ? { ticket: submit.data, request: submit.variables }
+      ? { ticket: submit.data, request: submit.variables.request }
       : null;
 
   return (
@@ -879,7 +884,6 @@ export const NewSupportTicketDrawer = ({
               ticket={sent.ticket}
               request={sent.request}
               signedInOrganizationId={organizationId}
-              attach={attach}
               onReportOutage={() => {
                 startOver();
                 onReportOutage();
