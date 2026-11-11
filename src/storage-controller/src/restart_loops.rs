@@ -27,16 +27,17 @@ const RESTART_LOOP_HOLD: Duration = Duration::from_secs(5);
 /// a source or sink in a restart loop writes one row per distinct error.
 ///
 /// An ingestion and its exports restart together and form a group, headed by
-/// the ingestion. A sink is a group of its own. After the head writes
-/// `stalled`, the group's `starting` and `running` statuses are held. They are
-/// dropped if the head stalls again with the same error, and otherwise written
-/// with their original timestamps.
+/// the ingestion. A sink is a group of its own. While the head's last written
+/// status is `stalled`, `starting` and `running` statuses that repeat their
+/// object's last written status are held. They are dropped if the head stalls
+/// again with the same error. Any other status writes them first, with their
+/// original timestamps.
 #[derive(Debug, Default)]
 pub(crate) struct RestartLoops {
-    /// The error of each group whose head last wrote `stalled`, per replica.
-    stalled: BTreeMap<(GlobalId, Option<ReplicaId>), Option<String>>,
-    /// The statuses held since each group stalled, with the time the first one
-    /// arrived.
+    /// The last status and error written for each object, per replica.
+    written: BTreeMap<(GlobalId, Option<ReplicaId>), (Status, Option<String>)>,
+    /// The statuses held since each group's restart began, with the time the
+    /// first one arrived.
     held: BTreeMap<(GlobalId, Option<ReplicaId>), (EpochMillis, Vec<StatusUpdate>)>,
 }
 
@@ -51,8 +52,17 @@ impl RestartLoops {
     ) -> Vec<StatusUpdate> {
         let key = (group, update.replica_id);
         let is_head = update.id == group;
+        let head_stalled = matches!(self.written.get(&key), Some((Status::Stalled, _)));
         match update.status {
-            Status::Starting | Status::Running if self.stalled.contains_key(&key) => {
+            // The head's restart, or an export that was already up.
+            Status::Starting | Status::Running
+                if head_stalled
+                    && (is_head
+                        || matches!(
+                            self.written.get(&(update.id, update.replica_id)),
+                            Some((Status::Starting | Status::Running, _))
+                        )) =>
+            {
                 self.held
                     .entry(key)
                     .or_insert_with(|| (now, Vec::new()))
@@ -60,22 +70,21 @@ impl RestartLoops {
                     .push(update);
                 Vec::new()
             }
-            Status::Stalled if is_head => {
-                let held = self.held.remove(&key).map(|(_, held)| held);
-                let previous = self.stalled.insert(key, update.error.clone());
-                if held.is_some() && previous.as_ref() == Some(&update.error) {
-                    // The restart ended in the stall it started from.
-                    Vec::new()
-                } else {
-                    held.into_iter().flatten().chain([update]).collect()
-                }
+            Status::Stalled
+                if is_head
+                    && self.held.contains_key(&key)
+                    && matches!(
+                        self.written.get(&key),
+                        Some((Status::Stalled, error)) if *error == update.error
+                    ) =>
+            {
+                // The restart ended in the stall it started from.
+                self.held.remove(&key);
+                Vec::new()
             }
             _ => {
-                if is_head {
-                    self.stalled.remove(&key);
-                }
                 let held = self.held.remove(&key).map(|(_, held)| held);
-                held.into_iter().flatten().chain([update]).collect()
+                self.write(held.into_iter().flatten().chain([update]).collect())
             }
         }
     }
@@ -93,19 +102,29 @@ impl RestartLoops {
         let mut released = Vec::new();
         for key in expired {
             let (_, held) = self.held.remove(&key).expect("key was just listed");
-            self.stalled.remove(&key);
             released.extend(held);
         }
-        released
+        self.write(released)
     }
 
-    /// Forgets the groups whose head no longer satisfies `exists`.
+    /// Forgets the objects that no longer satisfy `exists`.
     ///
     /// The controller writes `Dropped` directly to the status history, so a
-    /// dropped object's group never sees it.
+    /// dropped object's state never sees it.
     pub(crate) fn retain_groups(&mut self, exists: impl Fn(GlobalId) -> bool) {
-        self.stalled.retain(|(group, _), _| exists(*group));
+        self.written.retain(|(id, _), _| exists(*id));
         self.held.retain(|(group, _), _| exists(*group));
+    }
+
+    /// Records `updates` as written and returns them.
+    fn write(&mut self, updates: Vec<StatusUpdate>) -> Vec<StatusUpdate> {
+        for update in &updates {
+            self.written.insert(
+                (update.id, update.replica_id),
+                (update.status, update.error.clone()),
+            );
+        }
+        updates
     }
 }
 
@@ -233,8 +252,8 @@ mod tests {
         restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
         restart(&mut loops, 5_000, None);
 
-        loops.retain_groups(|id| id != SOURCE);
-        assert!(loops.stalled.is_empty() && loops.held.is_empty());
+        loops.retain_groups(|id| id != SOURCE && id != TABLE);
+        assert!(loops.written.is_empty() && loops.held.is_empty());
     }
 
     #[mz_ore::test]
@@ -263,5 +282,52 @@ mod tests {
                 (TABLE, Status::Stalled, Some("schema change".to_string())),
             ]
         );
+
+        // The source is up again, so its next identical stall is a new one.
+        let stall = (Status::Stalled, Some("dns failure"));
+        assert_eq!(
+            restart(&mut loops, 60_000, Some(stall)),
+            full_restart(stall)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_a_new_export_writes_its_first_status() {
+        const NEW_TABLE: GlobalId = GlobalId::User(3);
+        let mut loops = RestartLoops::default();
+        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
+
+        let written: Vec<_> = [
+            status(SOURCE, Status::Starting, None),
+            status(NEW_TABLE, Status::Starting, None),
+            status(SOURCE, Status::Stalled, Some("dns failure")),
+        ]
+        .into_iter()
+        .flat_map(|update| loops.observe(SOURCE, update, 5_000))
+        .map(|update| (update.id, update.status, update.error))
+        .collect();
+        assert_eq!(
+            written,
+            vec![
+                (SOURCE, Status::Starting, None),
+                (NEW_TABLE, Status::Starting, None),
+                (SOURCE, Status::Stalled, Some("dns failure".to_string())),
+            ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_an_export_recovering_from_its_own_stall_is_written() {
+        let mut loops = RestartLoops::default();
+        let stall = (Status::Stalled, Some("dns failure"));
+        restart(&mut loops, 0, None);
+        loops.observe(
+            SOURCE,
+            status(TABLE, Status::Stalled, Some("schema change")),
+            100,
+        );
+        loops.observe(SOURCE, status(SOURCE, Status::Stalled, stall.1), 200);
+
+        assert_eq!(restart(&mut loops, 5_000, Some(stall)), full_restart(stall));
     }
 }
