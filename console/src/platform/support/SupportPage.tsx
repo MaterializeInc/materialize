@@ -11,7 +11,6 @@ import {
   Box,
   Button,
   Flex,
-  Grid,
   HStack,
   StackDivider,
   Tag,
@@ -79,7 +78,6 @@ import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { NewSupportTicketDrawer } from "./NewSupportTicketDrawer";
 import { isTicketsUnavailableError, useSupportTickets } from "./queries";
 import { SupportTicketModal, SupportTicketsTable } from "./SupportTickets";
-import { SEVERITY_OPTIONS } from "./ticketForm";
 
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 export const OUTAGE_MAILTO = `${SUPPORT_MAILTO}?subject=${encodeURIComponent(
@@ -323,62 +321,76 @@ const SupportPage = () => {
     <MainContentContainer>
       <PageHeader boxProps={{ flexWrap: "wrap", gap: "4" }}>
         <PageHeading>Help and support</PageHeading>
-        <HStack spacing="2" flexWrap="wrap">
-          {isTicketFormEnabled ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => navigate(NEW_SUPPORT_TICKET_PATH)}
-            >
-              Open a ticket
-            </Button>
-          ) : (
-            <Button
-              as="a"
-              href={SUPPORT_MAILTO}
-              onClick={preferIntercom(openIntercomNewConversation)}
-              variant="primary"
-              size="sm"
-            >
-              Open a ticket
-            </Button>
-          )}
-          {isTicketFormEnabled ? (
-            <Button
-              onClick={() => navigate(NEW_OUTAGE_TICKET_PATH)}
-              variant="outline"
-              size="sm"
-              color={colors.accent.red}
-              borderColor={colors.border.error}
-            >
-              Report a production outage
-            </Button>
-          ) : (
-            <Button
-              as="a"
-              href={outageLink.href}
-              onClick={outageLink.onClick}
-              variant="outline"
-              size="sm"
-              color={colors.accent.red}
-              borderColor={colors.border.error}
-            >
-              Report a production outage
-            </Button>
-          )}
-          <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
-            <Box
-              as="span"
-              tabIndex={0}
-              aria-label={outageHint}
-              data-testid="support-outage-hint"
-              display="inline-flex"
-              borderRadius="full"
-            >
-              <InfoIcon />
-            </Box>
-          </Tooltip>
-        </HStack>
+        <VStack
+          spacing="2"
+          align="flex-end"
+          data-testid="support-ticket-actions"
+        >
+          <HStack spacing="2" flexWrap="wrap">
+            {isTicketFormEnabled ? (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => navigate(NEW_SUPPORT_TICKET_PATH)}
+              >
+                Open a ticket
+              </Button>
+            ) : (
+              <Button
+                as="a"
+                href={SUPPORT_MAILTO}
+                onClick={preferIntercom(openIntercomNewConversation)}
+                variant="primary"
+                size="sm"
+              >
+                Open a ticket
+              </Button>
+            )}
+            {isTicketFormEnabled ? (
+              <Button
+                onClick={() => navigate(NEW_OUTAGE_TICKET_PATH)}
+                variant="outline"
+                size="sm"
+                color={colors.accent.red}
+                borderColor={colors.border.error}
+              >
+                Report a production outage
+              </Button>
+            ) : (
+              <Button
+                as="a"
+                href={outageLink.href}
+                onClick={outageLink.onClick}
+                variant="outline"
+                size="sm"
+                color={colors.accent.red}
+                borderColor={colors.border.error}
+              >
+                Report a production outage
+              </Button>
+            )}
+            <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
+              <Box
+                as="span"
+                tabIndex={0}
+                aria-label={outageHint}
+                data-testid="support-outage-hint"
+                display="inline-flex"
+                borderRadius="full"
+              >
+                <InfoIcon />
+              </Box>
+            </Tooltip>
+          </HStack>
+          <TextLink
+            href={SUPPORT_PLANS_URL}
+            isExternal
+            textStyle="text-small"
+            fontWeight="500"
+          >
+            Support plans and response times ↗
+          </TextLink>
+        </VStack>
       </PageHeader>
 
       <VStack spacing="5" align="stretch">
@@ -540,57 +552,6 @@ const SupportPage = () => {
                     </HStack>
                   </VStack>
                 )}
-              </CardContent>
-            </Card>
-
-            <Card as="section" aria-label="Before you open a ticket">
-              <CardContent>
-                <VStack spacing="2.5" align="start">
-                  <Text as="h2" textStyle="text-ui-med">
-                    Before you open a ticket
-                  </Text>
-                  <Text
-                    textStyle="text-small"
-                    color={colors.foreground.secondary}
-                  >
-                    Include your org ID, the region, and the name of the cluster
-                    or object. Then pick a severity:
-                  </Text>
-                  <Grid
-                    as="dl"
-                    templateColumns="64px minmax(0, 1fr)"
-                    columnGap="2.5"
-                    rowGap="1.5"
-                    textStyle="text-small"
-                  >
-                    {SEVERITY_OPTIONS.map(({ value, label, description }) => (
-                      <React.Fragment key={value}>
-                        <Text
-                          as="dt"
-                          fontWeight="600"
-                          color={
-                            value === "urgent" ? colors.accent.red : undefined
-                          }
-                        >
-                          {label}
-                        </Text>
-                        <Text as="dd">
-                          {value === "urgent"
-                            ? `${description}. Use the outage button.`
-                            : description}
-                        </Text>
-                      </React.Fragment>
-                    ))}
-                  </Grid>
-                  <TextLink
-                    href={SUPPORT_PLANS_URL}
-                    isExternal
-                    textStyle="text-small"
-                    fontWeight="500"
-                  >
-                    Support plans and response times ↗
-                  </TextLink>
-                </VStack>
               </CardContent>
             </Card>
           </VStack>

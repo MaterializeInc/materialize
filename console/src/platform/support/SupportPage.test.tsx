@@ -247,7 +247,7 @@ describe("SupportPage", () => {
     ).toHaveAttribute("href", SUPPORT_MAILTO);
   });
 
-  it("shows ticket guidance next to the tickets and quick answers in the sidebar", async () => {
+  it("shows quick answers in the sidebar and support plans under the ticket buttons", async () => {
     await renderComponent(<SupportPageWithIntercom />);
 
     const sidebar = await screen.findByRole("complementary", {
@@ -256,14 +256,15 @@ describe("SupportPage", () => {
     expect(
       within(sidebar).getByRole("region", { name: "Get answers now" }),
     ).toBeVisible();
+    // The form explains severities, so the page doesn't repeat them.
     expect(
-      within(sidebar).queryByRole("region", {
-        name: "Before you open a ticket",
-      }),
+      screen.queryByRole("region", { name: "Before you open a ticket" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "Before you open a ticket" }),
-    ).toBeVisible();
+      within(screen.getByTestId("support-ticket-actions")).getByRole("link", {
+        name: "Support plans and response times ↗",
+      }),
+    ).toHaveAttribute("href", SUPPORT_PLANS_URL);
   });
 
   it("opens the Messenger for tickets and outages once Intercom has booted", async () => {
