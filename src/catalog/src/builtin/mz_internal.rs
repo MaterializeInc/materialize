@@ -6883,21 +6883,29 @@ WHERE op.privilege_type = 'SELECT'
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 ),
--- Pick the right (object_id, cluster_id) for hydration: the index's id +
--- cluster when an index exists (its arrangement is what the data product
--- reads from), otherwise the materialized view's own id + cluster.
+-- Pick the (object_id, cluster_id) whose hydration governs the read: the
+-- index's when an index exists and the role has USAGE on its cluster (the
+-- read routes there and serves from the arrangement), otherwise the
+-- materialized view's own. With the index cluster hidden the read falls back
+-- to the session's cluster and serves from persist, whose freshness the
+-- view's own cluster drives (DEX-71). `cluster` stays the advertised cluster,
+-- since that is what `details_raw` joins on.
 hydration_meta AS (
     SELECT DISTINCT
         '"' || db.name || '"."' || s.name || '"."' || o.name || '"' AS object_name,
         COALESCE(c_idx.name, c_obj.name) AS cluster,
-        COALESCE(i.id, o.id) AS hydration_object_id,
-        COALESCE(i.cluster_id, o.cluster_id) AS cluster_id
+        CASE WHEN cp.name IS NOT NULL THEN COALESCE(i.id, o.id) ELSE o.id END
+            AS hydration_object_id,
+        CASE WHEN cp.name IS NOT NULL THEN COALESCE(i.cluster_id, o.cluster_id) ELSE o.cluster_id END
+            AS cluster_id
     FROM mz_objects o
     JOIN mz_schemas s ON s.id = o.schema_id
     JOIN mz_databases db ON db.id = s.database_id
     LEFT JOIN mz_indexes i ON i.on_id = o.id
     LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
     LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+    LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
+        ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
     WHERE (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
       AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 ),
@@ -6930,9 +6938,7 @@ hydration AS (
 SELECT
     d.object_name,
     -- Null the advertised cluster unless the role has USAGE on it (DEX-66),
-    -- matching mz_mcp_data_products. Hydration below still joins on the real
-    -- d.cluster, so readiness is reported accurately even when the name is
-    -- hidden.
+    -- matching mz_mcp_data_products.
     CASE WHEN EXISTS (
         SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
         WHERE cp.name = d.cluster AND cp.privilege_type = 'USAGE'
