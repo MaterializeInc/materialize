@@ -77,6 +77,32 @@ import {
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
 
+/**
+ * How to share files, which the form can't take yet: Intercom's API only
+ * accepts them on a reply. Incoming email is limited to 20 MB in total.
+ */
+const FilesNote = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Text
+      textStyle="text-small"
+      color={colors.foreground.secondary}
+      data-testid="support-ticket-files-note"
+    >
+      <Text as="span" fontWeight="600" color={colors.foreground.primary}>
+        Need to share screenshots or other files?
+      </Text>{" "}
+      You can add them after you submit. Reply to the confirmation email (up to
+      20 MB in total) or open the ticket in the{" "}
+      <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
+        Help Center ↗
+      </TextLink>
+      . Please make sure they don&apos;t include passwords, credentials, or
+      other sensitive data.
+    </Text>
+  );
+};
+
 /** Context the console knows, attached so the customer doesn't retype it. */
 const useTicketContext = () => {
   const regionId = useAtomValue(currentRegionIdAtom);
@@ -425,6 +451,8 @@ const NewTicketForm = ({
             </Text>
           )}
 
+          <FilesNote />
+
           {sentDetails.length > 0 && (
             <Box
               as="section"
@@ -588,6 +616,7 @@ const TicketSent = ({
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
           </OrderedList>
+          <FilesNote />
         </VStack>
 
         <HStack spacing="2" flexWrap="wrap">

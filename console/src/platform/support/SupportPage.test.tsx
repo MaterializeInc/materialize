@@ -1264,6 +1264,34 @@ describe("SupportPage", () => {
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
+    it("says how to share files before and after submitting", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const note = await screen.findByTestId("support-ticket-files-note");
+      expect(note).toHaveTextContent(
+        "Need to share screenshots or other files?",
+      );
+      // Intercom limits incoming email to 20 MB, attachments included.
+      expect(note).toHaveTextContent("up to 20 MB in total");
+      expect(
+        within(note).getByRole("link", { name: "Help Center ↗" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        within(sent).getByTestId("support-ticket-files-note"),
+      ).toBeVisible();
+    });
+
     it("keeps a new ticket in the list before the search catches up", async () => {
       let listRequests = 0;
       server.use(
