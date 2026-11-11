@@ -2971,10 +2971,12 @@ impl Coordinator {
         self.catalog_transact(Some(session), vec![op]).await?;
 
         Self::notice_if_startup_only(session, &name);
-        session.add_notice(AdapterNotice::VarDefaultUpdated {
-            role: None,
-            var_name: Some(name),
-        });
+        if vars::is_session_var(&name) {
+            session.add_notice(AdapterNotice::VarDefaultUpdated {
+                role: None,
+                var_name: Some(name),
+            });
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -2988,10 +2990,12 @@ impl Coordinator {
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
         Self::notice_if_startup_only(session, &name);
-        session.add_notice(AdapterNotice::VarDefaultUpdated {
-            role: None,
-            var_name: Some(name),
-        });
+        if vars::is_session_var(&name) {
+            session.add_notice(AdapterNotice::VarDefaultUpdated {
+                role: None,
+                var_name: Some(name),
+            });
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3005,6 +3009,13 @@ impl Coordinator {
         // Which parameters `RESET ALL` changes has to be read before the
         // transaction applies it, afterwards they all read as their default.
         let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
+        let session_var_changed = {
+            let config = self.catalog().system_config();
+            let defaults = config.defaults();
+            config
+                .iter_session()
+                .any(|v| defaults.get(v.name()).is_some_and(|d| d != &v.value()))
+        };
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
         for name in startup_only_changed {
@@ -3012,10 +3023,12 @@ impl Coordinator {
                 var_name: name.to_string(),
             });
         }
-        session.add_notice(AdapterNotice::VarDefaultUpdated {
-            role: None,
-            var_name: None,
-        });
+        if session_var_changed {
+            session.add_notice(AdapterNotice::VarDefaultUpdated {
+                role: None,
+                var_name: None,
+            });
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
