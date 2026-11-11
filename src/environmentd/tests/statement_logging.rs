@@ -432,21 +432,15 @@ ORDER BY mseh.began_at",
             panic!("number of results never became correct: {rows}");
         }
     };
-    // The two queries on generate_series(1,10001) execute at the maximum timestamp
-    assert_eq!(
-        sl_results
-            .iter()
-            .filter(|r| r.execution_timestamp == Some(u64::MAX))
-            .count(),
-        2
-    );
-    // The two queries that can be satisfied by envd (SELECT 1 and SELECT 1/0) have no execution timestamp
+    // The four queries without a timestamp have no execution timestamp: the two that envd
+    // satisfies (SELECT 1 and SELECT 1/0), and the two timestamp-independent ones on
+    // generate_series(1,10001), even though those execute on a cluster.
     assert_eq!(
         sl_results
             .iter()
             .filter(|r| r.execution_timestamp.is_none())
             .count(),
-        2
+        4
     );
     // All other queries have an execution timestamp, in particular, including `CREATE TABLE`.
     assert_eq!(sl_results.len(), 6);
@@ -459,10 +453,8 @@ ORDER BY mseh.began_at",
         // that is hard to get right and interferes with our logic
         // about when to flush to persist. So instead, just check that they're sane.
         if let Some(ts) = r.execution_timestamp {
-            if ts != u64::MAX {
-                let ts = to_datetime(ts);
-                assert!((ts - r.prepared_at).abs() < chrono::Duration::try_seconds(5).unwrap())
-            }
+            let ts = to_datetime(ts);
+            assert!((ts - r.prepared_at).abs() < chrono::Duration::try_seconds(5).unwrap())
         }
     }
     assert!(sl_results[0].result_size.unwrap_or(0) > 0);

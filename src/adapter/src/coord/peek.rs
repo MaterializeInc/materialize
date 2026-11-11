@@ -779,9 +779,6 @@ impl crate::coord::Coordinator {
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
-        if let Some(id) = ctx_extra.contents() {
-            self.set_statement_execution_timestamp(id, timestamp)
-        }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
