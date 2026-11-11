@@ -543,44 +543,7 @@ const SupportPage = () => {
               </CardContent>
             </Card>
 
-            <Card as="section" aria-label="Get answers now">
-              <CardTitle as="h2" fontSize="md" pb="1">
-                Get answers now
-              </CardTitle>
-              <VStack
-                spacing="0"
-                align="stretch"
-                divider={<StackDivider borderColor={colors.border.primary} />}
-              >
-                <AnswerItem
-                  title="Ask Matty"
-                  description="AI answers from the docs, any time"
-                  href={HELP_CENTER_URL}
-                  onClick={preferIntercom(openIntercomMessenger)}
-                />
-                <AnswerItem
-                  title="Documentation ↗"
-                  description="Guides, SQL reference, troubleshooting"
-                  href={docUrls["/docs/"]}
-                />
-                <AnswerItem
-                  title="Community Slack ↗"
-                  description="Ask other Materialize users"
-                  href={SUPPORT_CHAT_URL}
-                />
-              </VStack>
-            </Card>
-          </VStack>
-
-          <VStack
-            as="aside"
-            aria-label="Before you open a ticket"
-            flex="1 1 260px"
-            minW="0"
-            spacing="3"
-            align="stretch"
-          >
-            <Card>
+            <Card as="section" aria-label="Before you open a ticket">
               <CardContent>
                 <VStack spacing="2.5" align="start">
                   <Text as="h2" textStyle="text-ui-med">
@@ -629,6 +592,43 @@ const SupportPage = () => {
                   </TextLink>
                 </VStack>
               </CardContent>
+            </Card>
+          </VStack>
+
+          <VStack
+            as="aside"
+            aria-label="More ways to get help"
+            flex="1 1 260px"
+            minW="0"
+            spacing="3"
+            align="stretch"
+          >
+            <Card as="section" aria-label="Get answers now">
+              <CardTitle as="h2" fontSize="md" pb="1">
+                Get answers now
+              </CardTitle>
+              <VStack
+                spacing="0"
+                align="stretch"
+                divider={<StackDivider borderColor={colors.border.primary} />}
+              >
+                <AnswerItem
+                  title="Ask Matty"
+                  description="AI answers from the docs, any time"
+                  href={HELP_CENTER_URL}
+                  onClick={preferIntercom(openIntercomMessenger)}
+                />
+                <AnswerItem
+                  title="Documentation ↗"
+                  description="Guides, SQL reference, troubleshooting"
+                  href={docUrls["/docs/"]}
+                />
+                <AnswerItem
+                  title="Community Slack ↗"
+                  description="Ask other Materialize users"
+                  href={SUPPORT_CHAT_URL}
+                />
+              </VStack>
             </Card>
             <Card>
               <CardContent>

@@ -242,6 +242,25 @@ describe("SupportPage", () => {
     ).toHaveAttribute("href", SUPPORT_MAILTO);
   });
 
+  it("shows ticket guidance next to the tickets and quick answers in the sidebar", async () => {
+    await renderComponent(<SupportPageWithIntercom />);
+
+    const sidebar = await screen.findByRole("complementary", {
+      name: "More ways to get help",
+    });
+    expect(
+      within(sidebar).getByRole("region", { name: "Get answers now" }),
+    ).toBeVisible();
+    expect(
+      within(sidebar).queryByRole("region", {
+        name: "Before you open a ticket",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Before you open a ticket" }),
+    ).toBeVisible();
+  });
+
   it("opens the Messenger for tickets and outages once Intercom has booted", async () => {
     setIntercom("booted");
     const user = userEvent.setup();
