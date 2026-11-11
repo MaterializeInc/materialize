@@ -1150,76 +1150,43 @@ impl Catalog {
             ),
         };
         for group in groups {
-            use super::command::CatalogCommand;
-            use super::command::source_statement::SourceResolution;
+            use super::command::CommandExecution;
 
-            let (ops, mut source_check) = match group {
-                OperationGroup::Raw(ops) => (ops, None),
-                OperationGroup::Command(_, CatalogCommand::Rename(command)) => {
-                    (command.execute(&preliminary_state)?, None)
-                }
-                OperationGroup::Command(_, CatalogCommand::Description(command)) => {
-                    command.execute(&preliminary_state)?;
-                    (Vec::new(), None)
-                }
-                OperationGroup::Command(_, CatalogCommand::CatalogResult(command)) => {
-                    command.execute(&preliminary_state)?;
-                    (Vec::new(), None)
-                }
-                OperationGroup::Command(index, CatalogCommand::Source(command)) => {
-                    let command = Arc::make_mut(command);
+            let mut execution = match group {
+                OperationGroup::Raw(ops) => CommandExecution::raw(ops),
+                OperationGroup::Command(index, command) => {
                     let response = responses
                         .as_mut()
                         .and_then(|responses| responses.remove(&index));
-                    let resolution = match response {
-                        Some(response) => command.statement.finish(&preliminary_state, response)?,
-                        None => command.statement.resolve(&preliminary_state)?,
-                    };
-                    let mut compiled = match resolution {
-                        SourceResolution::Prepare(request) => {
-                            return Err(CommandExecutionError::Pending {
-                                index,
-                                work: CommandWork::Prepare(request),
-                            });
-                        }
-                        SourceResolution::Allocate(keys) => {
-                            return Err(CommandExecutionError::Pending {
-                                index,
-                                work: CommandWork::Allocate(keys),
-                            });
-                        }
-                        SourceResolution::Ready(compiled) => compiled,
-                    };
-                    if command.needs_collision_probe(&compiled) {
-                        let result = {
-                            let mut fork = tx.fork_dry_run().map_err(AdapterError::from)?;
-                            Box::pin(Self::transact_inner(
-                                TransactInnerMode::DryRun,
-                                None,
-                                oracle_write_ts,
-                                session,
-                                TransactionOperations::Raw(compiled.ops.clone()),
-                                BTreeSet::new(),
-                                &mut Vec::new(),
-                                &mut Vec::new(),
-                                &mut Vec::new(),
-                                fork.transaction_mut(),
-                                &preliminary_state,
-                            ))
-                            .await
-                            .map_err(CommandExecutionError::into_adapter_error)
-                        };
-                        let (_, outcome) = compiled.classify_result(result)?;
-                        command.check_outcome(outcome)?;
-                        if command.skipped_name().is_some() {
-                            continue;
-                        }
-                    }
-                    let ops = std::mem::take(&mut compiled.ops);
-                    (ops, Some((command, compiled)))
+                    command.compile(&preliminary_state, index, response)?
                 }
             };
-            let mut pending_ops: std::collections::VecDeque<_> = ops.into();
+            if let Some(ops) = execution.collision_probe_ops() {
+                let result = {
+                    let mut fork = tx.fork_dry_run().map_err(AdapterError::from)?;
+                    Box::pin(Self::transact_inner(
+                        TransactInnerMode::DryRun,
+                        None,
+                        oracle_write_ts,
+                        session,
+                        TransactionOperations::Raw(ops.to_vec()),
+                        BTreeSet::new(),
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                        fork.transaction_mut(),
+                        &preliminary_state,
+                    ))
+                    .await
+                    .map(|_| ())
+                    .map_err(CommandExecutionError::into_adapter_error)
+                };
+                let Some(remaining) = execution.finish_probe(result)? else {
+                    continue;
+                };
+                execution = remaining;
+            }
+            let mut pending_ops: std::collections::VecDeque<_> = execution.take_ops().into();
             while let Some(op) = pending_ops.pop_front() {
                 if let Op::RenameCommand(command) = op {
                     let compiled = command.execute(&preliminary_state)?;
@@ -1242,12 +1209,7 @@ impl Catalog {
                 )
                 .await;
                 if let Err(error) = result {
-                    if let Some((command, compiled)) = &mut source_check {
-                        if let Some(outcome) = compiled.skipped(&error) {
-                            command.check_outcome(outcome)?;
-                        }
-                    }
-                    return Err(error.into());
+                    return execution.finish(Err(error)).map_err(Into::into);
                 }
 
                 let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
@@ -1276,9 +1238,7 @@ impl Catalog {
                 }
                 updates.append(&mut op_updates);
             }
-            if let Some((command, compiled)) = source_check {
-                command.check_outcome(compiled.created())?;
-            }
+            execution.finish(Ok(()))?;
         }
 
         if !updates.is_empty() {
