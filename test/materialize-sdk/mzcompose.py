@@ -13,18 +13,22 @@ tests of each SDK package that need a running server.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from materialize import MZ_ROOT, spawn
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(
         additional_system_parameter_defaults={"enable_alter_table_add_column": "true"}
-    )
+    ),
+    Service(name="valkey", config={"image": "valkey/valkey:9.0.6", "ports": [6379]}),
 ]
 
 
@@ -35,6 +39,7 @@ def workflow_default(c: Composition) -> None:
         cargo_test(c, {}, "--skip", "before_a_restart", "--skip", "after_a_restart")
         python_test(c)
         node_test(c)
+        valkey_test(c)
         phase = {"MATERIALIZE_SDK_RESTART_STATE": state_file}
         cargo_test(
             c,
@@ -111,3 +116,83 @@ def node_test(c: Composition) -> None:
     spawn.runv(["npm", "ci", "--quiet"], cwd=package, env=env)
     spawn.runv(["npm", "run", "build"], cwd=package, env=env)
     spawn.runv(["npm", "test"], cwd=package, env=env)
+
+
+def valkey_test(c: Composition) -> None:
+    """Runs the Valkey example and checks that the hash follows the table, and
+    that a restart of the example replaces the hash with a new snapshot."""
+    sdk = MZ_ROOT / "misc" / "materialize-sdk"
+    spawn.runv(["cargo", "build", "--locked", "--example", "valkey"], cwd=sdk)
+    target = Path(os.environ.get("CARGO_TARGET_DIR", sdk / "target"))
+    c.up("valkey")
+    c.sql(
+        "DROP TABLE IF EXISTS valkey_orders;"
+        "CREATE TABLE valkey_orders (id int, item text, qty int);"
+        "INSERT INTO valkey_orders VALUES (1, 'apple', 3), (2, 'pear', NULL);"
+    )
+    env = {
+        **os.environ,
+        "MATERIALIZE_URL": "host=localhost port={} user=materialize".format(
+            c.default_port("materialized")
+        ),
+        "VALKEY_URL": f"redis://localhost:{c.default_port('valkey')}",
+        "SOURCE": "valkey_orders",
+        "KEY": "id",
+        "HASH": "orders",
+    }
+    example = [str(target / "debug" / "examples" / "valkey")]
+
+    sync = subprocess.Popen(example, env=env)
+    try:
+        wait_for_hash(
+            c,
+            {
+                '["1"]': '{"item":"apple","qty":"3"}',
+                '["2"]': '{"item":"pear","qty":null}',
+            },
+        )
+        c.sql(
+            "INSERT INTO valkey_orders VALUES (3, 'plum', 1);"
+            "UPDATE valkey_orders SET qty = 4 WHERE id = 1;"
+            "DELETE FROM valkey_orders WHERE id = 2;"
+        )
+        wait_for_hash(
+            c,
+            {
+                '["1"]': '{"item":"apple","qty":"4"}',
+                '["3"]': '{"item":"plum","qty":"1"}',
+            },
+        )
+    finally:
+        sync.kill()
+        sync.wait()
+
+    c.exec("valkey", "valkey-cli", "HSET", "orders", '["99"]', "stale")
+    c.sql("INSERT INTO valkey_orders VALUES (4, 'fig', 2)")
+    sync = subprocess.Popen(example, env=env)
+    try:
+        wait_for_hash(
+            c,
+            {
+                '["1"]': '{"item":"apple","qty":"4"}',
+                '["3"]': '{"item":"plum","qty":"1"}',
+                '["4"]': '{"item":"fig","qty":"2"}',
+            },
+        )
+    finally:
+        sync.kill()
+        sync.wait()
+
+
+def wait_for_hash(c: Composition, expected: dict[str, str]) -> None:
+    """Waits for the example's hash to equal `expected`."""
+    actual: dict[str, str] = {}
+    for _ in range(60):
+        lines = c.exec(
+            "valkey", "valkey-cli", "HGETALL", "orders", capture=True
+        ).stdout.splitlines()
+        actual = dict(zip(lines[::2], lines[1::2]))
+        if actual == expected:
+            return
+        time.sleep(1)
+    raise AssertionError(f"the hash is {actual}, not {expected}")

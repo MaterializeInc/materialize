@@ -17,5 +17,6 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tokio-postgres.workspace = true
 
 [dev-dependencies]
+redis.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
