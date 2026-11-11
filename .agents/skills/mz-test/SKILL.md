@@ -42,9 +42,9 @@ Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 
 ### Scalar function registry
 
-`cargo test -p mz-compute-types --test func_registry` snapshots every
+`cargo test -p mz-catalog --test builtin_registry` snapshots every
 `UnaryFunc`, `BinaryFunc`, and `VariadicFunc` variant's properties and
-`#[sqlfunc]` body fingerprint into `src/compute-types/tests/snapshots/`. It
+`#[sqlfunc]` body fingerprint into `src/catalog/tests/snapshots/`. It
 fails when a variant is added or removed, when a recorded property changes,
 and when a `#[sqlfunc]` declaration or body changes. It records nothing for
 the bodies of hand-written variants, so a change to one of those passes.
@@ -52,7 +52,7 @@ Removals and property changes to a shipped `LIR_VERSION` require a bump
 **before** regenerating, because a rewrite at the old version silently
 overwrites that version's digest. See the mz-commit skill for the decision
 procedure. Then regenerate with
-`REWRITE=1 cargo test -p mz-compute-types --test func_registry` and review the
+`REWRITE=1 cargo test -p mz-catalog --test builtin_registry` and review the
 JSON diff. Never edit those files by hand. A new variant whose payload carries
 data needs a `Sample` in `src/expr/src/scalar/func/registry.rs`, and the panic
 names the function to add it to.

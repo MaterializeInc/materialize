@@ -210,13 +210,13 @@ impl std::fmt::Display for LirId {
 /// Once a version has shipped, meaning a released Materialize durably stores
 /// pinned plans in it, bump this when the serialized representation of
 /// [`LirRelationExpr`] or anything it transitively contains changes, or when
-/// a scalar function's declared properties change. Whether the current
-/// version has shipped is recorded in [`LIR_VERSION_POLICY`]. Two snapshot
-/// tests key off it: the schema snapshot in `tests/lir_schema.rs` against
-/// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the function property
-/// registry in `tests/func_registry.rs` against
-/// `tests/snapshots/func_registry.json` with a per-version digest in
-/// `tests/snapshots/func_registry_digests.json`.
+/// a builtin's declared properties change. Whether the current version has
+/// shipped is recorded in [`LIR_VERSION_POLICY`]. Two snapshot tests key off
+/// it: the schema snapshot in `tests/lir_schema.rs` against
+/// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the builtin registry in
+/// `mz-catalog`'s `tests/builtin_registry.rs` against
+/// `tests/snapshots/builtin_registry.json` with a per-version digest in
+/// `tests/snapshots/builtin_registry_digests.json`.
 pub const LIR_VERSION: u64 = 1;
 
 /// What a change to the stable LIR format must do at the current

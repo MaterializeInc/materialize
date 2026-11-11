@@ -18,8 +18,8 @@
 //! serialized form.
 //!
 //! [`FuncRegistry::build`] records those properties for one representative
-//! instance of every variant, and `tests/func_registry.rs` in
-//! `mz-compute-types` compares the result against checked-in snapshots, one
+//! instance of every variant, and `tests/builtin_registry.rs` in
+//! `mz-catalog` compares the result against checked-in snapshots, one
 //! per half of [`Record`]. The module exists only under the `func-registry` feature,
 //! which that test enables. Production builds carry none of it. For `#[sqlfunc]`
 //! functions the record also carries the declaration text, the types-only

@@ -67,13 +67,13 @@ a fresh file.
 ### Scalar function changes: regenerate the function registry
 
 The schema registry sees a plan's shape, not what its functions compute.
-`func_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
+`builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
 `VariadicFunc`. Run it whenever the diff touches
 `src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
 `impls/` and `#[sqlfunc]` bodies):
 
 ```
-cargo test -p mz-compute-types --test func_registry
+cargo test -p mz-catalog --test builtin_registry
 ```
 
 * It fails when a function is added, removed, or has a changed property
@@ -81,17 +81,17 @@ cargo test -p mz-compute-types --test func_registry
   signature) or a changed `#[sqlfunc]` body. If the failure names removed or
   changed functions, or a body change that alters results, settle the
   `LIR_VERSION` question below **before** regenerating. A rewrite at the old
-  version overwrites that version's entry in `func_registry_digests.json`
+  version overwrites that version's entry in `builtin_registry_digests.json`
   instead of adding a new one, no later check catches it, and that entry is
   the only key back into git history for what the shipped version's
   functions meant. Once the version is settled, regenerate the checked-in
-  snapshots and review the diff under `src/compute-types/tests/snapshots/`:
+  snapshots and review the diff under `src/catalog/tests/snapshots/`:
 
   ```
-  REWRITE=1 cargo test -p mz-compute-types --test func_registry
+  REWRITE=1 cargo test -p mz-catalog --test builtin_registry
   ```
 
-  Never hand-edit `func_registry*.json`. The test rebuilds the registry and
+  Never hand-edit `builtin_registry*.json`. The test rebuilds the registry and
   compares it against all three files, so an edit fails it.
 * **New function with a payload** (any variant that carries data, e.g. a
   target type, a regex, a scale): the registry build panics naming the

@@ -66,8 +66,10 @@ uuid.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+hex.workspace = true
 insta.workspace = true
 mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
+mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
