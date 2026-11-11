@@ -1,0 +1,2 @@
+# The module maturin builds.
+materialize_sdk/_core.*.so
