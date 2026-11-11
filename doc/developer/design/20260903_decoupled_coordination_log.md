@@ -9,10 +9,12 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Adapt the forward-write correction-buffer pruning fixture to native candidate
-readiness and execution discovery, preserving its workload and memory bound.
-Forced-migration workflows need separate treatment: controller startup explicitly
-rejects forced migrations, so those cases are not native coverage.
+Resolve the remaining headless-driver and forced-migration boundaries before
+removing their legacy execution assumptions. The proposed headless replacement
+keeps arbitrary-plan scripts in a test-only native runtime, not a production
+maintenance socket. Its launch-interface change awaits approval.
+Controller startup explicitly rejects forced migrations, so those cases are
+not native coverage. Continue current-source preservation checks independently.
 Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
 final-preflight coverage still need the scope decisions below.
 
@@ -25,6 +27,10 @@ See `native-compatible-current/offline-candidate-verification.md`.
 The basic coexistence workflow also passes with the distinct-version pair,
 including fresh source/sink input and cursor subscriptions after predecessor
 shutdown. See `native-compatible-current/basic-verification.md`.
+Forward-write candidate correction pruning also passes with the original workload
+and memory bound. Correction records drain to zero without replica restarts.
+Anonymous-memory growth is 362.4 MiB against a 384 MiB bound, a narrow single-run
+margin. See `native-compatible-current/forward-pruning-verification.md`.
 All runtime fixtures are removed.
 
 ## Verified outcome
@@ -64,8 +70,8 @@ scoped all-target checks and independent review.
   transport, native nonleader workers and both Timely topologies. The dormant
   final-preflight hook's old-to-old coverage also remains pending a decision.
   See `native-replica-execution-boundary.md` and `final-preflight-boundary-research.md`.
-- Remaining native lifecycle callers include the forward-write pruning fixture,
-  forced-migration cases and platform/stress workflows.
+- Remaining native lifecycle callers include forced-migration cases and
+  platform/stress workflows.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
 - Current-source preservation, upsert/data-ingest/parallel stress,

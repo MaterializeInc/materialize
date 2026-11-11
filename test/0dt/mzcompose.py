@@ -3044,40 +3044,23 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
         )
 
 
-def workflow_materialized_view_read_only_correction_pruning(
+def workflow_materialized_view_candidate_correction_pruning(
     c: Composition,
 ) -> None:
-    """
-    Verify that a read-only replica's materialized-view sink consolidates its
-    correction buffer instead of retaining one record per write made during the
-    read-only window — the memory blow-up of CLU-131 (a factor in the INC-1095
-    OOM).
+    """Bound a candidate MV's correction buffer while its peer keeps writing.
 
-    During a 0dt upgrade the new generation hydrates read-only while the old
-    generation keeps writing. A read-only sink mints no batches, so the
-    `WriteBatch` path that drives `consolidate_before` forward never runs, and the
-    `desired`/`persist` pairs for each forward write are never cancelled: the
-    correction buffer grows by roughly one record per written row and stays
-    resident for the whole read-only window. The fix re-arms the forced
-    consolidation in read-only mode, so the buffer is swept per batch and stays
-    near zero. The pre-existing single-INSERT `materialized_view_correction_pruning`
-    scenario only exercises the snapshot, which the one-shot consolidation already
-    handles, so it cannot catch this; the forward writes below are what expose it.
+    Candidate adapters admit SQL writes, but their maintained Persist outputs
+    remain disabled until promotion. A non-writing sink mints no batches, so
+    WriteBatch cannot advance consolidation. Forced consolidation must cancel
+    desired/persist pairs as forward writes arrive, not just at hydration.
+    Otherwise the buffer retains roughly one record per written row (CLU-131).
 
-    The replica is unorchestrated and runs inside the mz_new container.
-    environmentd's federated /metrics does not surface it, so we scrape the
-    replica's own clusterd internal HTTP socket.
+    Scrape a candidate quickstart replica directly. Container anonymous memory
+    also covers its peers, adapter and controller, preserving the memory bound.
     """
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
-
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
 
     initial_rows = 1_000
     batch_rows = 10_000
@@ -3097,27 +3080,41 @@ def workflow_materialized_view_read_only_correction_pruning(
         service="mz_old",
     )
 
-    # Boot the new generation read-only and hydrate the MV there. It is never
-    # promoted, so it stays read-only for the whole test.
+    # The candidate is never promoted. Its SQL adapter can write, but the
+    # maintained sink stays non-writing throughout the forward-input workload.
     c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.sql("SELECT * FROM mv LIMIT 1", service="mz_new")
 
-    def replica_metrics_addr() -> str:
-        # The read-only replica is unorchestrated and runs inside the mz_new
-        # container; environmentd's federated /metrics does not surface it, so we
-        # hit the replica's own clusterd internal HTTP unix socket, whose path it
-        # logs at startup. Match any generation and take the latest.
-        logs = c.invoke("logs", "mz_new", capture=True).stdout
-        addr = None
-        for line in logs.splitlines():
-            if (
-                "cluster-u1-replica-u1-gen-" in line
-                and "mz_clusterd: serving internal HTTP server on" in line
-            ):
-                addr = line.split(" ")[-1]
-        if addr is None:
-            raise RuntimeError("no clusterd internal HTTP socket found in mz_new logs")
-        return addr
+    inventory = json.loads(
+        c.exec(
+            "mz_new",
+            "curl",
+            "--fail",
+            "--silent",
+            "--max-time",
+            "10",
+            "http://localhost:6882/api/inventory",
+            capture=True,
+        ).stdout
+    )
+    replicas = [r for r in inventory["replicas"] if r["cluster_name"] == "quickstart"]
+    assert replicas, inventory
+    replica = min(replicas, key=lambda r: int(r["replica_id"][1:]))
+    assert int(replica["generation"]) == 1, replica
+    addresses = replica["endpoints"]["internal-http"]
+    assert addresses, replica
+
+    def replica_processes() -> str:
+        processes = c.exec(
+            "mz_new", "ps", "-C", "clusterd", "-o", "pid=,lstart=", capture=True
+        ).stdout.strip()
+        assert processes, "no candidate replicas"
+        return processes
+
+    # A restart would discard the forward-write buffer and measure snapshot
+    # hydration instead. It must not count as successful incremental pruning.
+    initial_processes = replica_processes()
 
     def anon_bytes() -> int:
         # Anonymous (heap) memory of the mz_new container from the cgroup, where
@@ -3140,27 +3137,38 @@ def workflow_materialized_view_read_only_correction_pruning(
         return f"{value / 1024**2:.1f} MiB"
 
     def correction_metrics() -> tuple[int, int]:
-        resp = c.exec(
-            "mz_new",
-            "curl",
-            "-s",
-            "--unix-socket",
-            replica_metrics_addr(),
-            "http:/prof/metrics",
-            capture=True,
-        ).stdout
-
         insertions = deletions = 0
-        for line in resp.splitlines():
-            if line.startswith("#"):
-                continue
-            if line.startswith("mz_persist_sink_correction_insertions_total"):
-                insertions += int(float(line.rsplit(maxsplit=1)[-1]))
-            elif line.startswith("mz_persist_sink_correction_deletions_total"):
-                deletions += int(float(line.rsplit(maxsplit=1)[-1]))
+        for address in addresses:
+            transport = (
+                ["--unix-socket", address, "http://localhost/metrics"]
+                if address.startswith("/")
+                else [f"http://{address}/metrics"]
+            )
+            resp = c.exec(
+                "mz_new",
+                "curl",
+                "--fail",
+                "--silent",
+                "--max-time",
+                "10",
+                *transport,
+                capture=True,
+            ).stdout
+            metrics = {}
+            for line in resp.splitlines():
+                if line.startswith("#"):
+                    continue
+                name, value = line.rsplit(maxsplit=1)
+                if name in (
+                    "mz_persist_sink_correction_insertions_total",
+                    "mz_persist_sink_correction_deletions_total",
+                ):
+                    metrics[name] = int(float(value))
+            insertions += metrics["mz_persist_sink_correction_insertions_total"]
+            deletions += metrics["mz_persist_sink_correction_deletions_total"]
         return (insertions, deletions)
 
-    # Wait for the read-only generation to process and prune the initial snapshot
+    # Wait for the candidate to process and prune the initial snapshot
     # before measuring the memory baseline. The snapshot is small enough not to
     # matter for RSS, but this preserves the older test's signal.
     insertions = deletions = 0
@@ -3177,7 +3185,7 @@ def workflow_materialized_view_read_only_correction_pruning(
 
     baseline_anon = anon_bytes()
 
-    # The old generation writes meaningful volume while mz_new stays read-only.
+    # The active generation writes while the candidate sink remains non-writing.
     # Wide payloads make the retained correction buffer visible in anonymous RSS:
     # on an unfixed build the desired and persist halves retain roughly
     # `2 * forward_rows * payload_bytes`, while the fixed build keeps at most a
@@ -3195,7 +3203,7 @@ def workflow_materialized_view_read_only_correction_pruning(
         _wait_for_mz_count(c, "SELECT count(*) FROM mv", hi, "mz_old")
         time.sleep(1)
 
-    # The read-only sink must consolidate the forward writes away rather than
+    # The non-writing sink must consolidate the forward writes away rather than
     # retain one record per written row. With the fix the buffer holds at most a
     # batch or so in flight; before it, `insertions - deletions` stays near
     # `forward_rows` (CLU-131) and the wide rows push mz_new's anonymous memory
@@ -3221,11 +3229,17 @@ def workflow_materialized_view_read_only_correction_pruning(
         or settled_anon > memory_ceiling
     ):
         raise AssertionError(
-            f"read-only correction buffer did not consolidate: {insertions=}, "
+            f"candidate correction buffer did not consolidate: {insertions=}, "
             f"{deletions=}, net={net} (bound {correction_bound}, "
             f"forward_rows {forward_rows}, memory_growth={mib(memory_growth)}, "
             f"memory_bound={mib(memory_growth_bound_bytes)}); CLU-131"
         )
+
+    assert replica_processes() == initial_processes, "candidate replicas restarted"
+    print(
+        f"Candidate correction pruning: {insertions=}, {deletions=}, {net=}, "
+        f"memory_growth={mib(memory_growth)}, bound={mib(memory_growth_bound_bytes)}"
+    )
 
 
 def setup(c: Composition) -> None:
