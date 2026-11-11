@@ -15,21 +15,21 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::{MfpPlan, MirRelationExpr, OptimizedMirRelationExpr};
 
 use mz_repr::GlobalId;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::LirRelationExpr;
-use crate::plan::scalar::mfp_plan_lir_to_mir;
+use crate::plan::scalar::LirScalarExpr;
 
 impl<'a> Explain<'a> for LirDataflowDescription {
     type Context = ExplainContext<'a>;
 
-    type Text = ExplainMultiPlan<'a, LirRelationExpr>;
+    type Text = ExplainMultiPlan<'a, LirRelationExpr, MfpPlan<LirScalarExpr>>;
 
-    type Json = ExplainMultiPlan<'a, LirRelationExpr>;
+    type Json = ExplainMultiPlan<'a, LirRelationExpr, MfpPlan<LirScalarExpr>>;
 
     type Dot = UnsupportedFormat;
 
@@ -46,7 +46,7 @@ impl<'a> LirDataflowDescription {
     fn as_explain_multi_plan(
         &'a mut self,
         context: &'a ExplainContext<'a>,
-    ) -> Result<ExplainMultiPlan<'a, LirRelationExpr>, ExplainError> {
+    ) -> Result<ExplainMultiPlan<'a, LirRelationExpr, MfpPlan<LirScalarExpr>>, ExplainError> {
         let export_ids = export_ids_for(self);
         let plans = self
             .objects_to_build
@@ -73,14 +73,7 @@ impl<'a> LirDataflowDescription {
             .source_imports
             .iter_mut()
             .map(|(id, import)| {
-                // Folding the plan back is display-only, and need not
-                // reproduce the planned operators exactly. It goes through
-                // MIR because only MIR spells the bounds as `mz_now()`
-                // predicates.
-                let op = import.desc.arguments.operators.as_ref();
-                let op = op.map(|plan| {
-                    Cow::Owned(mfp_plan_lir_to_mir(plan.clone()).into_map_filter_project())
-                });
+                let op = import.desc.arguments.operators.as_ref().map(Cow::Borrowed);
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
