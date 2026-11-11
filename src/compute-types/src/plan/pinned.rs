@@ -184,8 +184,9 @@ pub enum PinnedSinkKind {
     MaterializedView {
         /// The sink's relation type as the optimizer built it: the plan's
         /// inferred nullability and keys, with the non-null assertions
-        /// applied. A builtin view declares its nullability and keys by hand
-        /// in the catalog, and those need not agree with the plan's.
+        /// applied. The catalog adds a builtin view's declared keys to the
+        /// ones it infers, so a builtin's catalog type can have keys the plan
+        /// lacks.
         typ: SqlRelationType,
     },
     /// A metric sink. Its label and the shaped description of its input come
@@ -371,8 +372,8 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
 ///////////////////////////////////////////////////////////////////////////////
 
 /// What [`PinnedDataflow::instantiate`] needs from its environment: catalog
-/// facts looked up by export id, and fresh transient ids. Each lookup returns
-/// `None` when no item of that kind exists.
+/// facts about the plan's imports and exports, looked up by id, and fresh
+/// transient ids. Each lookup returns `None` when no item of that kind exists.
 pub trait InstantiationContext {
     /// The relation type of the storage collection `id`, as the optimizer
     /// imports it.
@@ -387,7 +388,8 @@ pub trait InstantiationContext {
     fn allocate_transient_id(&self) -> GlobalId;
 }
 
-/// The catalog facts an exported index descriptor is rebuilt from.
+/// The catalog facts an index import is checked against and an index export
+/// is rebuilt from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexInfo {
     /// The object the index is on.
@@ -402,8 +404,9 @@ pub struct IndexInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterializedViewInfo {
     /// The view's description. Instantiation takes its column names from it
-    /// and checks its column types against the pinned type. Its nullability
-    /// and keys are not used.
+    /// and checks its type against the pinned type: the whole type for a user
+    /// view, and only the column types for a builtin, whose declared keys the
+    /// plan's type may lack.
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
@@ -452,7 +455,7 @@ impl fmt::Display for InstantiateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InstantiateError::MissingCatalogItem { id, kind } => {
-                write!(f, "no {kind} catalog item for export {id}")
+                write!(f, "no {kind} catalog item for {id}")
             }
             InstantiateError::ImportDrift { id, detail } => {
                 write!(f, "import {id} drifted from its pinned plan: {detail}")
@@ -480,6 +483,11 @@ impl PinnedDataflow {
     /// Fails if a catalog item an import or export was compiled for is gone,
     /// or if the catalog disagrees with the plan about what it is. Only the
     /// first problem found is reported.
+    ///
+    /// NOTE: The plan also contains the bodies of the views it inlines, and
+    /// of SQL-defined builtin functions, and nothing here verifies those. A
+    /// builtin view can change its body between releases while its id and
+    /// type stay the same.
     // TODO(mgree): the import and export checks are independent, so
     // collecting every problem into a list instead of returning at the first
     // one would be easy.
@@ -515,9 +523,8 @@ impl PinnedDataflow {
 
         // An import's id resolving is not evidence that the plan's assumptions
         // about it hold: a builtin collection keeps its id across a schema
-        // migration, and an index can be dropped and another created on the
-        // same object. So each import is checked against what the catalog
-        // says now.
+        // migration. So each import is checked against what the catalog says
+        // now.
         let mut rebuilt_source_imports = BTreeMap::new();
         for (id, import) in source_imports {
             let PinnedSourceImport {

@@ -684,9 +684,9 @@ async fn applied_replacement_instantiates_only_under_its_own_id() {
 }
 
 /// Every builtin index and materialized view, optimized as its cluster
-/// would optimize it, with the indexes that cluster has. Builtins declare
-/// keys and nullability by hand, so this is where the pinned sink type
-/// and the catalog's description disagree.
+/// would optimize it, with the indexes that cluster has. The catalog adds a
+/// builtin view's declared keys to the ones it infers, so this is where the
+/// pinned sink type and the catalog's description disagree.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn builtin_items_round_trip() {
