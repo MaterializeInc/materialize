@@ -24,7 +24,7 @@ maplit.workspace = true
 md-5.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
-mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }
+mz-ore = { path = "../ore", features = ["async", "panic", "stack", "tracing"] }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }

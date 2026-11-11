@@ -76,7 +76,6 @@ use mz_sql_parser::parser;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
@@ -1295,39 +1294,50 @@ impl<'a> RunnerInner<'a> {
         let (password_server_addr_tx, password_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
-        let server_thread = thread::spawn(move || {
-            let runtime = match Runtime::new() {
-                Ok(runtime) => runtime,
-                Err(e) => {
-                    server_addr_tx
-                        .send(Err(e.into()))
-                        .expect("receiver should not drop first");
-                    return;
-                }
-            };
-            let server = match runtime.block_on(harness.try_start()) {
-                Ok(runtime) => runtime,
-                Err(e) => {
-                    server_addr_tx
-                        .send(Err(e.into()))
-                        .expect("receiver should not drop first");
-                    return;
-                }
-            };
-            server_addr_tx
-                .send(Ok(server.inner.sql_listener_handles["external"].local_addr))
-                .expect("receiver should not drop first");
-            internal_server_addr_tx
-                .send(server.inner.sql_listener_handles["internal"].local_addr)
-                .expect("receiver should not drop first");
-            password_server_addr_tx
-                .send(server.inner.sql_listener_handles["password"].local_addr)
-                .expect("receiver should not drop first");
-            internal_http_server_addr_tx
-                .send(server.inner.http_listener_handles["internal"].local_addr)
-                .expect("receiver should not drop first");
-            runtime.block_on(shutdown_trigger_rx);
-        });
+        // Production polls startup on main threads. This fixture polls adapter
+        // startup here and controller startup on a runtime worker. Both need
+        // the in-process harness stack budget, not std's smaller default.
+        let server_thread = thread::Builder::new()
+            .name("slt-server".into())
+            .stack_size(mz_ore::stack::STACK_SIZE)
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_stack_size(mz_ore::stack::STACK_SIZE)
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        server_addr_tx
+                            .send(Err(e.into()))
+                            .expect("receiver should not drop first");
+                        return;
+                    }
+                };
+                let server = match runtime.block_on(harness.try_start()) {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        server_addr_tx
+                            .send(Err(e.into()))
+                            .expect("receiver should not drop first");
+                        return;
+                    }
+                };
+                server_addr_tx
+                    .send(Ok(server.inner.sql_listener_handles["external"].local_addr))
+                    .expect("receiver should not drop first");
+                internal_server_addr_tx
+                    .send(server.inner.sql_listener_handles["internal"].local_addr)
+                    .expect("receiver should not drop first");
+                password_server_addr_tx
+                    .send(server.inner.sql_listener_handles["password"].local_addr)
+                    .expect("receiver should not drop first");
+                internal_http_server_addr_tx
+                    .send(server.inner.http_listener_handles["internal"].local_addr)
+                    .expect("receiver should not drop first");
+                runtime.block_on(shutdown_trigger_rx);
+            })
+            .expect("failed to spawn SQL test server thread");
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
         let password_server_addr = password_server_addr_rx.await?;
