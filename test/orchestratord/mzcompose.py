@@ -5670,6 +5670,21 @@ def is_ready_to_manually_promote():
     )
 
 
+def get_operator_logs() -> str:
+    return spawn.capture(
+        [
+            "kubectl",
+            "logs",
+            "-l",
+            "app.kubernetes.io/instance=operator",
+            "-n",
+            "materialize",
+            "--tail=-1",
+        ],
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
     # Read at the stored version explicitly to avoid going through the
     # conversion webhook, which may not be ready yet during initial deployment.
@@ -5741,17 +5756,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         except subprocess.CalledProcessError:
             if expect_fail:
                 try:
-                    logs = spawn.capture(
-                        [
-                            "kubectl",
-                            "logs",
-                            "-l",
-                            "app.kubernetes.io/instance=operator",
-                            "-n",
-                            "materialize",
-                        ],
-                        stderr=subprocess.DEVNULL,
-                    )
+                    logs = get_operator_logs()
                     if (
                         f"ERROR reconciling object{{object.ref=Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment"
                         in logs
@@ -5883,17 +5888,7 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
         except subprocess.CalledProcessError:
             if expect_fail:
                 try:
-                    logs = spawn.capture(
-                        [
-                            "kubectl",
-                            "logs",
-                            "-l",
-                            "app.kubernetes.io/instance=operator",
-                            "-n",
-                            "materialize",
-                        ],
-                        stderr=subprocess.DEVNULL,
-                    )
+                    logs = get_operator_logs()
                     if (
                         f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha1.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
                         in logs

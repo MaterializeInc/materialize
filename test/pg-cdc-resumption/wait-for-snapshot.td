@@ -15,3 +15,12 @@
 
 > SELECT COUNT(*) FROM t1;
 1000000
+
+# Tables commit snapshots independently, so wait for all of them, not just t1
+> SELECT count(*) FROM mz_tables t
+  WHERE t.source_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_source_statistics s
+    WHERE s.id = t.id AND s.snapshot_committed
+  )
+0

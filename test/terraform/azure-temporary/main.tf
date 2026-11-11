@@ -95,7 +95,7 @@ resource "azurerm_resource_group" "materialize" {
 
 # 2. Create networking infrastructure
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v18.1.0"
 
   resource_group_name                = azurerm_resource_group.materialize.name
   location                           = var.location
@@ -113,7 +113,7 @@ module "networking" {
 
 # 3. Create AKS cluster with default node pool
 module "aks" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v18.1.0"
 
   resource_group_name = azurerm_resource_group.materialize.name
   kubernetes_version  = local.aks_config.kubernetes_version
@@ -143,7 +143,7 @@ module "aks" {
 }
 
 module "nodepool_generic" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nap-nodepool?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nap-nodepool?ref=v18.1.0"
 
   name        = "generic"
   location    = var.location
@@ -161,7 +161,7 @@ module "nodepool_generic" {
 }
 
 module "nodepool_materialize" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nap-nodepool?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nap-nodepool?ref=v18.1.0"
 
   name         = "materialize"
   location     = var.location
@@ -179,7 +179,7 @@ module "nodepool_materialize" {
 
 # 4. Create PostgreSQL database
 module "database" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v18.1.0"
 
   depends_on = [module.networking]
 
@@ -214,7 +214,7 @@ module "database" {
 
 # 5. Create Azure Blob Storage
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/storage?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/storage?ref=v18.1.0"
 
   resource_group_name            = azurerm_resource_group.materialize.name
   location                       = var.location
@@ -236,7 +236,7 @@ module "storage" {
 
 # 6. Install cert-manager for TLS
 module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v18.1.0"
 
   node_selector = local.generic_node_labels
 
@@ -247,7 +247,7 @@ module "cert_manager" {
 }
 
 module "self_signed_cluster_issuer" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v18.1.0"
 
   name_prefix = var.name_prefix
 
@@ -258,7 +258,7 @@ module "self_signed_cluster_issuer" {
 
 # 7. Install Materialize Operator
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v18.1.0"
 
   name_prefix = var.name_prefix
   location    = var.location
@@ -299,7 +299,7 @@ module "operator" {
 
 # 8. Deploy Materialize instance
 module "materialize_instance" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v18.0.0"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v18.1.0"
 
   instance_name        = local.materialize_instance_name
   instance_namespace   = local.materialize_instance_namespace
