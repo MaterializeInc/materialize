@@ -6608,6 +6608,7 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "futures",
+ "hex",
  "insta",
  "ipnet",
  "itertools 0.15.0",
@@ -7011,7 +7012,6 @@ dependencies = [
  "columnar",
  "differential-dataflow",
  "fail",
- "hex",
  "itertools 0.15.0",
  "mz-dyncfg",
  "mz-expr",
@@ -7022,7 +7022,6 @@ dependencies = [
  "serde",
  "serde-reflection",
  "serde_json",
- "sha2 0.11.1",
  "timely",
  "tracing",
 ]
