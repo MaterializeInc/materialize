@@ -188,7 +188,8 @@ const AttachmentPicker = ({
                   }
                 }}
                 aria-label={`Remove ${file.name}`}
-                icon={<CloseIcon />}
+                // The icon draws with a stroke, which the button doesn't set.
+                icon={<CloseIcon stroke="currentColor" />}
                 variant="ghost"
                 size="xs"
                 onClick={() => removeFile(file)}
