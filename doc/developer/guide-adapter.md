@@ -246,8 +246,15 @@ the same physical quota that catalog accounting correctly considered available.
 does not inflate every caller's connection state machine. Inline async state can
 produce multiple stack copies at each level of a poll chain, including tracing
 wrappers. A stack overflow in a leaf planner function need not mean recursive
-planning. Keep large sequencing state behind this boundary rather than increasing
-worker stack sizes or moving the allocation burden into each frontend protocol.
+planning. Keep adapter sequencing state behind this boundary rather than increasing
+worker stack sizes or moving its allocation burden into each frontend protocol.
+
+Protocol-owned statement and response state needs a separate boundary when FETCH
+nests execution. Pgwire's `one_query` boxes its body before instrumentation so
+that state does not inflate the enclosing connection futures or introduce another
+large async tracing wrapper. Boxing does not eliminate the body's native poll
+frame. Verify stack-sensitive behavior with production worker stacks, not only
+the larger stacks used by the Rust test harness in debug builds.
 
 ## Correctness Invariants
 

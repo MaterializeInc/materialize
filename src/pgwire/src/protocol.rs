@@ -1099,87 +1099,93 @@ where
     /// Note that `lifecycle_timestamps` belongs to the whole "Simple Query", because the whole
     /// Simple Query is received and parsed together. This means that if there are multiple
     /// statements in a Simple Query, then all of them have the same `lifecycle_timestamps`.
-    #[instrument(level = "debug")]
-    async fn one_query(
+    fn one_query(
         &mut self,
         stmt: Statement<Raw>,
         sql: String,
         lifecycle_timestamps: LifecycleTimestamps,
-    ) -> Result<State, io::Error> {
-        // Bind the portal. Note that this does not set the empty string prepared
-        // statement.
-        const EMPTY_PORTAL: &str = "";
-        let catalog = match self
-            .adapter_client
-            .declare_for_execution(EMPTY_PORTAL.to_string(), stmt, sql)
-            .await
-        {
-            Ok(catalog) => catalog,
-            Err(e) => {
+    ) -> BoxFuture<'_, Result<State, io::Error>> {
+        // FETCH can start another execution while this statement is still being
+        // polled. Keep its state out of the enclosing connection futures and
+        // avoid an additional large async tracing wrapper on that poll chain.
+        async move {
+            // Bind the portal. Note that this does not set the empty string prepared
+            // statement.
+            const EMPTY_PORTAL: &str = "";
+            let catalog = match self
+                .adapter_client
+                .declare_for_execution(EMPTY_PORTAL.to_string(), stmt, sql)
+                .await
+            {
+                Ok(catalog) => catalog,
+                Err(e) => {
+                    return self
+                        .send_error_and_get_state(e.into_response(Severity::Error))
+                        .await;
+                }
+            };
+            let portal = self
+                .adapter_client
+                .session()
+                .get_portal_unverified_mut(EMPTY_PORTAL)
+                .expect("unnamed portal should be present");
+
+            *portal.lifecycle_timestamps = Some(lifecycle_timestamps);
+
+            let stmt_desc = portal.desc.clone();
+            if !stmt_desc.param_types.is_empty() {
                 return self
-                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::UNDEFINED_PARAMETER,
+                        "there is no parameter $1",
+                    ))
                     .await;
             }
-        };
-        let portal = self
-            .adapter_client
-            .session()
-            .get_portal_unverified_mut(EMPTY_PORTAL)
-            .expect("unnamed portal should be present");
 
-        *portal.lifecycle_timestamps = Some(lifecycle_timestamps);
-
-        let stmt_desc = portal.desc.clone();
-        if !stmt_desc.param_types.is_empty() {
-            return self
-                .send_error_and_get_state(ErrorResponse::error(
-                    SqlState::UNDEFINED_PARAMETER,
-                    "there is no parameter $1",
-                ))
-                .await;
-        }
-
-        // Maybe send row description.
-        if let Some(relation_desc) = &stmt_desc.relation_desc {
-            if !stmt_desc.is_copy {
-                let formats = vec![Format::Text; stmt_desc.arity()];
-                self.send(BackendMessage::RowDescription(
-                    message::encode_row_description(relation_desc, &formats),
-                ))
-                .await?;
+            // Maybe send row description.
+            if let Some(relation_desc) = &stmt_desc.relation_desc {
+                if !stmt_desc.is_copy {
+                    let formats = vec![Format::Text; stmt_desc.arity()];
+                    self.send(BackendMessage::RowDescription(
+                        message::encode_row_description(relation_desc, &formats),
+                    ))
+                    .await?;
+                }
             }
-        }
 
-        let result = match self
-            .adapter_client
-            .execute_with_catalog(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), catalog)
-            .await
-        {
-            Ok((response, execute_started)) => {
-                self.send_pending_notices().await?;
-                self.send_execute_response(
-                    response,
-                    stmt_desc.relation_desc,
-                    EMPTY_PORTAL.to_string(),
-                    ExecuteCount::All,
-                    portal_exec_message,
-                    None,
-                    ExecuteTimeout::None,
-                    execute_started,
-                )
+            let result = match self
+                .adapter_client
+                .execute_with_catalog(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), catalog)
                 .await
-            }
-            Err(e) => {
-                self.send_pending_notices().await?;
-                self.send_error_and_get_state(e.into_response(Severity::Error))
+            {
+                Ok((response, execute_started)) => {
+                    self.send_pending_notices().await?;
+                    self.send_execute_response(
+                        response,
+                        stmt_desc.relation_desc,
+                        EMPTY_PORTAL.to_string(),
+                        ExecuteCount::All,
+                        portal_exec_message,
+                        None,
+                        ExecuteTimeout::None,
+                        execute_started,
+                    )
                     .await
-            }
-        };
+                }
+                Err(e) => {
+                    self.send_pending_notices().await?;
+                    self.send_error_and_get_state(e.into_response(Severity::Error))
+                        .await
+                }
+            };
 
-        // Destroy the portal.
-        self.adapter_client.session().remove_portal(EMPTY_PORTAL);
+            // Destroy the portal.
+            self.adapter_client.session().remove_portal(EMPTY_PORTAL);
 
-        result
+            result
+        }
+        .instrument(debug_span!("one_query"))
+        .boxed()
     }
 
     async fn ensure_transaction(

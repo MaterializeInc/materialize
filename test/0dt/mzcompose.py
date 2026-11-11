@@ -1340,6 +1340,60 @@ def workflow_basic(c: Composition) -> None:
         """))
 
 
+def workflow_subscribe_cursors(c: Composition) -> None:
+    """Start and resume subscription cursors through both pgwire protocols."""
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_old:6875",
+            materialize_url_internal="postgres://materialize@mz_old:6877",
+            mz_service="mz_old",
+            no_reset=True,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up("mz_old", Service("testdrive", idle=True))
+        c.testdrive("> SELECT 1\n1\n")
+
+    # Exercise the production binary's stacks, not the larger debug stacks in
+    # the Rust TestHarness. Parameter-free prepare=False uses simple Query,
+    # while prepare=True forces the extended protocol.
+    for extended in (False, True):
+        with (
+            c.sql_connection(service="mz_old") as writer,
+            c.sql_connection(
+                service="mz_old", startup_params={"statement_timeout": "30s"}
+            ) as subscriber,
+        ):
+            writer.execute("CREATE TABLE cursor_input (v int)")
+            writer.execute("CREATE DEFAULT INDEX ON cursor_input")
+            writer.execute("INSERT INTO cursor_input VALUES (1)")
+            subscriber.execute("BEGIN", prepare=extended)
+            subscriber.execute(
+                "DECLARE probe CURSOR FOR SUBSCRIBE cursor_input", prepare=extended
+            )
+
+            def fetch(expected: int) -> None:
+                deadline = time.monotonic() + 30
+                while True:
+                    rows = subscriber.execute(
+                        "FETCH ALL probe WITH (timeout='1s')", prepare=extended
+                    ).fetchall()
+                    if rows:
+                        assert [(diff, value) for _, diff, value in rows] == [
+                            (1, expected)
+                        ], rows
+                        return
+                    assert time.monotonic() < deadline, (extended, expected)
+
+            fetch(1)
+            writer.execute("INSERT INTO cursor_input VALUES (2)")
+            fetch(2)
+            subscriber.execute("CLOSE probe", prepare=extended)
+            subscriber.execute("COMMIT", prepare=extended)
+            writer.execute("DROP TABLE cursor_input")
+
+
 def workflow_index_read_protection(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
