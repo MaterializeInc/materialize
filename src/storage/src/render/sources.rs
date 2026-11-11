@@ -345,43 +345,48 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
-                            .get(storage_state.storage_configuration.config_set())
-                        {
-                            // Resolved here, at operator construction, so the
-                            // dataflow keeps one stash flavor for its whole
-                            // life even if the flag flips underneath it.
-                            let stash_flavor =
-                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
-                                    storage_state.storage_configuration.config_set(),
-                                );
-                            crate::upsert::upsert_v2(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                backpressure_metrics,
-                                stash_flavor,
-                            )
-                        } else {
-                            crate::upsert::upsert(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
-                                backpressure_metrics,
-                            )
-                        };
+                    // The chunked v2 stash spills only to swap, through the
+                    // buffer pool. On a replica that cannot swap, v1 keeps its state
+                    // in RocksDB on the scratch disk, where v2 would hold the
+                    // same state in RAM and risk OOM.
+                    let use_upsert_v2 = dyncfgs::ENABLE_UPSERT_V2
+                        .get(storage_state.storage_configuration.config_set())
+                        && !storage_state.instance_context.spill_to_disk;
+                    let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
+                    {
+                        // Resolved here, at operator construction, so the
+                        // dataflow keeps one stash flavor for its whole
+                        // life even if the flag flips underneath it.
+                        let stash_flavor =
+                            crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
+                                storage_state.storage_configuration.config_set(),
+                            );
+                        crate::upsert::upsert_v2(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            backpressure_metrics,
+                            stash_flavor,
+                        )
+                    } else {
+                        crate::upsert::upsert(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        )
+                    };
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register

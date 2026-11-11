@@ -133,6 +133,19 @@ impl ReplicaAllocation {
             None => "legacy",
         }
     }
+
+    /// Whether instances of this type spill to a scratch disk and cannot swap.
+    ///
+    /// Only an explicit nonzero `disk_limit` counts. Test and process
+    /// orchestrator sizes leave it unset, and the process orchestrator gives
+    /// their replicas a scratch directory anyway, so counting an unset limit
+    /// would treat every test replica as disk-only.
+    pub fn spills_to_disk(&self) -> bool {
+        !self.swap_enabled
+            && self
+                .disk_limit
+                .is_some_and(|limit| limit != DiskLimit::ZERO)
+    }
 }
 
 fn default_true() -> bool {
@@ -261,6 +274,20 @@ fn test_replica_allocation_family() {
         .family(),
         "legacy-special"
     );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+fn test_replica_allocation_spills_to_disk() {
+    let parse = |extra: &str| -> ReplicaAllocation {
+        let json = format!(r#"{{"scale": 1, "workers": 1, "credits_per_hour": "0"{extra}}}"#);
+        serde_json::from_str(&json).expect("deserialization from JSON succeeds")
+    };
+
+    assert!(parse(r#", "disk_limit": "100MiB""#).spills_to_disk());
+    assert!(!parse(r#", "disk_limit": "100MiB", "swap_enabled": true"#).spills_to_disk());
+    assert!(!parse(r#", "disk_limit": "0MiB""#).spills_to_disk());
+    assert!(!parse("").spills_to_disk());
 }
 
 /// Configures the location of a cluster replica.
@@ -729,6 +756,7 @@ impl Controller {
         };
         let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
 
+        let spill_to_disk = location.allocation.spills_to_disk();
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
         let mut memory_request = None;
@@ -818,6 +846,9 @@ impl Controller {
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
+                    }
+                    if spill_to_disk {
+                        args.push("--spill-to-disk".into());
                     }
 
                     // If swap is enabled, make the replica limit its own heap usage based on the

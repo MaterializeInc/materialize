@@ -152,16 +152,15 @@ pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
 /// derive from memory that can be resident and the announced limit
 /// includes swap on swap-provisioned nodes.
 ///
-/// `0.05` (5%) is a reasonable starting point: large enough that the
-/// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
-/// per worker, small enough that the merge-batcher's transient state
-/// doesn't crowd out the spine. Set lower to spill more aggressively
-/// under pressure. The computed budget is floored at 128 MiB so the
-/// no-pressure case doesn't page per chunk. Ignored when
-/// `enable_column_paged_batcher_spill` is `false`.
+/// The default of `0.20` is the budget the chunked upsert-v2 stash ran with
+/// in production on swap-provisioned replicas. Set lower to spill more
+/// aggressively under pressure. The computed budget is floored at 128 MiB so
+/// the no-pressure case doesn't page per chunk. Ignored while every spill
+/// gate ([`ENABLE_COLUMN_PAGED_BATCHER_SPILL`], [`ENABLE_CORRECTION_V2_SPILL`],
+/// and storage's `enable_upsert_paged_spill`) is off.
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
-    0.05,
+    0.2,
     "Budget fraction for chunk spilling: the buffer pool multiplies it against physical \
      RAM and the column pager's tiered policy against the announced memory limit. \
      Total pool budget = max(ram * fraction, 128 MiB).",
@@ -250,11 +249,10 @@ pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
 /// `MADV_PAGEOUT`. Zero collapses the tier: extents page out as soon as
 /// they are written.
 ///
-/// The default pairs with the 0.05 budget default to leave ~20% of RAM for
-/// the compressed tier — the same share zswap's default compressed pool
-/// takes, and roughly RAM-sized logical coverage at the measured ~5.6x
-/// ratio — while keeping three quarters of RAM for everything else in the
-/// process.
+/// With the 0.20 budget default this leaves at most 5% of RAM, less the warm
+/// cap, for the compressed tier, so most budget evictions page out to the
+/// swap device promptly. Three quarters of RAM stay available for everything
+/// else in the process.
 pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_pool_rss_target_fraction",
     0.25,

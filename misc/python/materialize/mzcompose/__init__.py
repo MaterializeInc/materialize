@@ -426,17 +426,16 @@ def get_variable_system_parameters(
             "true",
             ["true", "false"],
         ),
-        # On by default so CI exercises the chunked stash flavor, which is
-        # off in production while it earns trust. Only meaningful when
-        # enable_upsert_v2 is true.
+        # Only meaningful when enable_upsert_v2 is true.
         VariableSystemParameter(
             "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
+        # Varied so the v1 operator keeps coverage while it exists.
         VariableSystemParameter(
             "enable_upsert_v2",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(

@@ -138,6 +138,10 @@ struct Args {
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
 
+    /// Whether the replica spills to its scratch directory and cannot swap.
+    #[clap(long)]
+    spill_to_disk: bool,
+
     /// Memory limit (bytes) of the cluster replica, if known.
     ///
     /// The limit is expected to be enforced by the orchestrator. The clusterd process only uses it
@@ -448,7 +452,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             },
             SYSTEM_TIME.clone(),
             connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+            StorageInstanceContext::new(
+                args.scratch_directory,
+                args.announce_memory_limit,
+                args.spill_to_disk,
+            ),
         )
         .await?;
 
@@ -499,7 +507,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        StorageInstanceContext::new(
+            args.scratch_directory.clone(),
+            args.announce_memory_limit,
+            args.spill_to_disk,
+        ),
     )
     .await?;
     info!(

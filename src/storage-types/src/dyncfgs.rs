@@ -426,8 +426,8 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     ParameterScope::Replica,
 );
 
-/// Allow the upsert-v2 stash to spill out of RSS. Off by default; while off,
-/// the stash keeps everything resident.
+/// Allow the upsert-v2 stash to spill out of RSS. While off, the stash keeps
+/// everything resident.
 ///
 /// The spill mechanism depends on the stash flavor
 /// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
@@ -448,7 +448,7 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
 /// storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
-    false,
+    true,
     "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash \
      flavor) or the column pager (paged stash flavor).",
     ParameterScope::Replica,
@@ -456,9 +456,9 @@ pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
 
 /// Use the chunked stash flavor for the upsert-v2 operator: differential's
 /// chunk merge batcher for the source stash and a spine of chunk batches for
-/// the feedback arrangement, with a bulk-probe drain. When `false` (the
-/// default), the paged flavor is used: the paged columnar merge batcher and a
-/// `ValRowSpine`, with a cursor-based drain. See
+/// the feedback arrangement, with a bulk-probe drain. When `false`, the paged
+/// flavor is used: the paged columnar merge batcher and a `ValRowSpine`, with
+/// a cursor-based drain. See
 /// `mz_storage::upsert_continual_feedback_v2::UpsertStashFlavor` for the
 /// comparison.
 ///
@@ -467,7 +467,7 @@ pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
 /// Spilling in either flavor is gated by [`ENABLE_UPSERT_PAGED_SPILL`].
 pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
     "enable_upsert_chunked_stash",
-    false,
+    true,
     "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, \
      instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when \
      enable_upsert_v2 is true.",
@@ -503,7 +503,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
 /// Whether to use the v2 upsert operator.
 pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     "enable_upsert_v2",
-    false,
+    true,
     "Whether to use the v2 upsert operator.",
     ParameterScope::Environment,
 );
