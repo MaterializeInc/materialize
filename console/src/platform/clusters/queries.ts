@@ -892,11 +892,40 @@ export type LagMap = Map<string, LagInfo>;
  * Fetches a normalized table of an object, the lag between its direct parent, and
  * the lag between its source/table objects
  */
-export function useMaterializationLag(params: MaterializationLagParams) {
+export function useMaterializationLag(
+  params: MaterializationLagParams,
+  options?: {
+    placeholderData?: typeof keepPreviousData;
+    /**
+     * Refetch while an object is unhydrated or has no lag reading yet, first
+     * after this interval, then doubling up to once a minute. An object on a
+     * cluster with no replicas never gets a reading.
+     */
+    pollUntilFreshnessMs?: number;
+  },
+) {
   return useQuery({
     queryKey: clusterQueryKeys.materializationLag(params),
     queryFn: ({ queryKey, signal }) => {
       return fetchMaterializationLag(params, queryKey, { signal });
+    },
+    placeholderData: options?.placeholderData,
+    refetchInterval: (query) => {
+      const firstMs = options?.pollUntilFreshnessMs;
+      if (
+        firstMs === undefined ||
+        !query.state.data?.rows.some(
+          (row) => row.hydrated === false || row.lag === null,
+        )
+      ) {
+        return false;
+      }
+      // Lag history is sampled once a minute, so a faster poll can't show
+      // freshness sooner once the object has hydrated.
+      return Math.min(
+        firstMs * 2 ** (query.state.dataUpdateCount - 1),
+        millisecondsInMinute,
+      );
     },
     select: (lagData) => {
       const lagMap: LagMap = new Map();
