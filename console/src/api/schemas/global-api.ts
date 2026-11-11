@@ -232,6 +232,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organization/support/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organizations the signed-in user can open support tickets for. */
+        get: operations["list_support_organizations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/organization/support/tickets": {
         parameters: {
             query?: never;
@@ -535,6 +552,12 @@ export interface components {
             environmentVersion?: string | null;
             /** @description The cluster or object the ticket is about, if any. */
             affectedObject?: string | null;
+            /**
+             * Format: uuid
+             * @description The organization the ticket is for: the signed-in organization (the
+             *     default) or another one the user belongs to.
+             */
+            organizationId?: string | null;
         };
         /** @description A newly opened ticket. */
         CreatedSupportTicket: components["schemas"]["SupportTicket"] & {
@@ -900,6 +923,31 @@ export interface components {
             type: components["schemas"]["PlanType"];
             /** @description The marketplace the organization is billed through. */
             marketplace: components["schemas"]["Marketplace"];
+        };
+        /** @description An organization the user can open support tickets for. */
+        SupportOrganization: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * @description The regions where the organization has an active environment, so the
+             *     console can offer one choice per region.
+             */
+            regions: components["schemas"]["SupportRegion"][];
+        };
+        /** @description The organizations the user can open support tickets for, by name. */
+        SupportOrganizationList: {
+            data: components["schemas"]["SupportOrganization"][];
+        };
+        /** @description A region where an organization has an active environment. */
+        SupportRegion: {
+            /** @description The region, e.g. `aws/us-east-1`. */
+            id: string;
+            /**
+             * @description The version the environment is set to run, e.g. `v26.5.0`, when it
+             *     can be read.
+             */
+            environmentVersion?: string | null;
         };
         /** @description A support ticket, as listed on the support page. */
         SupportTicket: {
@@ -1332,6 +1380,47 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SetupIntent"];
                 };
+            };
+        };
+    };
+    list_support_organizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Organizations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportOrganizationList"];
+                };
+            };
+            /** @description No permissions to list support organizations */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Support tickets are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
