@@ -21,7 +21,7 @@ ARCH_GO=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/")
 # line until moby#51845 is fixed (Docker 29 is unstable).
 DOCKER_VERSION=28.5.2
 DOCKER_COMPOSE_VERSION=5.0.1
-NODE_VERSION=24.16.0
+NODE_VERSION=24.22.3
 NODE_ARCH=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/x64/")
 
 # Everything runs in parallel — no serial APT bottleneck.
