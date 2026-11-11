@@ -9,7 +9,7 @@
 
 //! Completion of read-only transactions whose resources belong to the session.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mz_repr::Timestamp;
 use mz_sql::session::vars::{EndTransactionAction, IsolationLevel};
@@ -41,31 +41,15 @@ pub(crate) async fn complete_read_only_transaction(
         if let Some(context) = &completion.timestamp {
             match session.vars().transaction_isolation() {
                 IsolationLevel::StrictSerializable => {
-                    let started = Instant::now();
-                    let immediately_handled =
-                        if let Some((timeline, timestamp)) = context.timestamp_to_linearize() {
-                            client
-                                .coordinator_client()
-                                .metrics()
-                                .frontend_transaction_waits
-                                .inc();
-                            let oracle = client.ensure_oracle(timeline.clone()).await?;
-                            wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?
-                        } else {
-                            client
-                                .coordinator_client()
-                                .metrics()
-                                .linearize_read_fast_path
-                                .inc();
-                            true
-                        };
-                    let metrics = client.coordinator_client().metrics();
-                    let duration = if immediately_handled {
-                        &metrics.linearize_read_immediate_seconds
-                    } else {
-                        &metrics.linearize_read_delayed_seconds
-                    };
-                    duration.observe(started.elapsed().as_secs_f64());
+                    if let Some((timeline, timestamp)) = context.timestamp_to_linearize() {
+                        client
+                            .coordinator_client()
+                            .metrics()
+                            .frontend_transaction_waits
+                            .inc();
+                        let oracle = client.ensure_oracle(timeline.clone()).await?;
+                        wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?;
+                    }
                 }
                 IsolationLevel::StrongSessionSerializable => {
                     if let Some((timeline, timestamp)) = context.timeline_timestamp() {
