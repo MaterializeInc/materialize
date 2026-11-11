@@ -8197,6 +8197,7 @@ fn test_mcp_agent_rbac() {
 /// is advertised with a null cluster. `query` must still read it when the
 /// agent omits `cluster` (DEX-71).
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mcp_agent_query_reads_null_cluster_product() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
@@ -8275,7 +8276,7 @@ fn test_mcp_agent_query_reads_null_cluster_product() {
     assert_eq!(status, StatusCode::OK);
     let error = body["error"]["message"]
         .as_str()
-        .or(body["result"]["content"][0]["text"].as_str())
+        .or_else(|| body["result"]["content"][0]["text"].as_str())
         .unwrap_or_default();
     assert!(
         error.contains("permission denied"),
