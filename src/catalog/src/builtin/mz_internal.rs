@@ -6799,7 +6799,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "hydration",
-            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry.",
+            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. When `cluster` is null, this reports the materialized view's own cluster, because reads then use the view's stored output, which that cluster keeps up to date.",
         ),
     ]),
     sql: r#"
@@ -6883,31 +6883,44 @@ WHERE op.privilege_type = 'SELECT'
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 ),
--- Pick the (object_id, cluster_id) whose hydration governs the read: the
--- index's when an index exists and the role has USAGE on its cluster (the
--- read routes there and serves from the arrangement), otherwise the
--- materialized view's own. With the index cluster hidden the read falls back
--- to the session's cluster and serves from persist, whose freshness the
--- view's own cluster drives (DEX-71). `cluster` stays the advertised cluster,
--- since that is what `details_raw` joins on.
-hydration_meta AS (
-    SELECT DISTINCT
+hydration_candidates AS (
+    SELECT
         '"' || db.name || '"."' || s.name || '"."' || o.name || '"' AS object_name,
         COALESCE(c_idx.name, c_obj.name) AS cluster,
-        CASE WHEN cp.name IS NOT NULL THEN COALESCE(i.id, o.id) ELSE o.id END
-            AS hydration_object_id,
-        CASE WHEN cp.name IS NOT NULL THEN COALESCE(i.cluster_id, o.cluster_id) ELSE o.cluster_id END
-            AS cluster_id
+        o.id AS object_id,
+        o.cluster_id AS object_cluster_id,
+        i.id AS index_id,
+        i.cluster_id AS index_cluster_id
     FROM mz_objects o
     JOIN mz_schemas s ON s.id = o.schema_id
     JOIN mz_databases db ON db.id = s.database_id
     LEFT JOIN mz_indexes i ON i.on_id = o.id
     LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
     LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
-    LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
-        ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
     WHERE (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
       AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
+),
+-- Hydration follows the index when the role can use its cluster, otherwise the
+-- view's own cluster, which keeps the persisted output a fallback read uses
+-- fresh (DEX-71). Visibility is an EXISTS over the filtered candidates, since a
+-- LEFT JOIN kept the optimizer from filtering mz_objects before the join.
+hydration_meta AS (
+    SELECT DISTINCT
+        object_name,
+        cluster,
+        CASE WHEN visible THEN COALESCE(index_id, object_id) ELSE object_id END
+            AS hydration_object_id,
+        CASE WHEN visible THEN COALESCE(index_cluster_id, object_cluster_id) ELSE object_cluster_id END
+            AS cluster_id
+    FROM (
+        SELECT
+            c.*,
+            EXISTS (
+                SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
+                WHERE cp.name = c.cluster AND cp.privilege_type = 'USAGE'
+            ) AS visible
+        FROM hydration_candidates c
+    )
 ),
 -- Dedupe by replica before counting: an MV with multiple indexes on the
 -- same cluster has multiple rows in `hydration_meta`, and joining each
