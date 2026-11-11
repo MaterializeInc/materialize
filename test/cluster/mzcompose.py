@@ -8615,8 +8615,8 @@ def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> 
 
 def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
     """
-    Restart environmentd after applying a replacement with a different refresh
-    schedule to a REFRESH MV whose first refresh has not happened yet.
+    Restart environmentd after applying replacements with a different refresh
+    schedule, before the first refresh of the new schedule.
     """
 
     c.down(destroy_volumes=True)
@@ -8636,26 +8636,39 @@ def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
         ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
         """)
 
+    # `mv_plain` refreshes on commit, so its upper moves past its as-of. The
+    # replacement's only refresh is an hour out, so at the restart the upper
+    # lies between the as-of and the first refresh.
+    c.sql("CREATE MATERIALIZED VIEW mv_plain AS SELECT a FROM t")
+    time.sleep(3)
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp_plain FOR mv_plain
+          WITH (REFRESH AT mz_now()::text::int8 + 3600000)
+          AS SELECT a + 1 AS a FROM t;
+        ALTER MATERIALIZED VIEW mv_plain APPLY REPLACEMENT rp_plain;
+        """)
+
     c.kill("materialized")
     c.up("materialized")
 
-    for _ in range(30):
-        rows = c.sql_query("""
-            SELECT r.last_completed_refresh, r.next_refresh, f.write_frontier
-            FROM mz_internal.mz_materialized_view_refreshes r
-            JOIN mz_materialized_views m ON m.id = r.materialized_view_id
-            JOIN mz_internal.mz_frontiers f ON f.object_id = r.materialized_view_id
-            WHERE m.name = 'mv'
-            """)
-        if rows:
-            break
-        time.sleep(1)
-    else:
-        raise RuntimeError("no refresh introspection for mv")
-    print(f"refresh introspection for mv: {rows}")
-    [(last_completed_refresh, next_refresh, _)] = rows
-    assert last_completed_refresh is None, rows
-    assert next_refresh is not None, rows
+    for name in ["mv", "mv_plain"]:
+        for _ in range(30):
+            rows = c.sql_query(f"""
+                SELECT r.last_completed_refresh, r.next_refresh, f.write_frontier
+                FROM mz_internal.mz_materialized_view_refreshes r
+                JOIN mz_materialized_views m ON m.id = r.materialized_view_id
+                JOIN mz_internal.mz_frontiers f ON f.object_id = r.materialized_view_id
+                WHERE m.name = '{name}'
+                """)
+            if rows:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError(f"no refresh introspection for {name}")
+        print(f"refresh introspection for {name}: {rows}")
+        [(last_completed_refresh, next_refresh, _)] = rows
+        assert last_completed_refresh is None, rows
+        assert next_refresh is not None, rows
 
 
 def workflow_test_github_10102(c: Composition) -> None:
