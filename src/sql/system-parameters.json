@@ -1148,15 +1148,6 @@
       "dyncfg": false
     },
     {
-      "name": "enable_frontend_subscribes",
-      "typeName": "boolean",
-      "default": "on",
-      "description": "Enable sending subscribes down the new frontend-peek path.",
-      "scope": "environment",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "enable_frontend_transaction_completion",
       "typeName": "boolean",
       "default": "on",

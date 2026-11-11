@@ -509,28 +509,41 @@ async fn test_empty_subscribe_notice() {
         .await
         .unwrap();
     let now = test_util::get_explain_timestamp("t", &client).await;
+    let mut expect_empty_notice = || {
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let e = match rx.try_recv() {
+                    Ok(e) => e,
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
+                    Err(_) => return Err("No notice received".to_string()),
+                };
+                if e.message().contains("guaranteed to be empty") {
+                    Ok(())
+                } else {
+                    Err(format!("wrong notice received: {e:?}"))
+                }
+            })
+            .unwrap();
+        // So that the next statement's check cannot match a leftover notice of this one.
+        while rx.try_recv().is_ok() {}
+    };
+
     client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
         .await
         .unwrap();
+    expect_empty_notice();
 
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let e = match rx.try_recv() {
-                Ok(e) => e,
-                Err(futures::channel::mpsc::TryRecvError::Closed) => {
-                    panic!("unexpected channel close")
-                }
-                Err(_) => return Err("No notice received".to_string()),
-            };
-            if e.message().contains("guaranteed to be empty") {
-                Ok(())
-            } else {
-                Err(format!("wrong notice received: {e:?}"))
-            }
-        })
+    client
+        .batch_execute(&format!(
+            "EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t AS OF {now} UP TO {now}"
+        ))
+        .await
         .unwrap();
+    expect_empty_notice();
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
