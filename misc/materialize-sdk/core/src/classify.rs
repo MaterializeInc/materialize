@@ -32,6 +32,7 @@ use crate::identity::IdentityChange;
 
 /// A class of failure, which decides how a consumer recovers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ErrorKind {
@@ -43,7 +44,7 @@ pub enum ErrorKind {
     Transient,
     /// The server refused the session's credentials, which happens when they
     /// expire and when they are wrong. Reconnect once with fresh ones, and
-    /// treat a second refusal as [`ErrorKind::Fatal`].
+    /// treat a second refusal as fatal.
     CredentialsExpired,
     /// An operator canceled the statement, or a statement timeout fired.
     Canceled,
@@ -63,7 +64,7 @@ pub enum ErrorKind {
     StreamPoisoned,
     /// An index on the subscribing cluster serves the object, so its history
     /// follows the index's retention, one second by default, instead of the
-    /// object's. See [`resolve_index_check`].
+    /// object's.
     IndexedTarget,
     /// Anything else, including authentication and SQL errors.
     Fatal,
@@ -88,6 +89,7 @@ pub enum Phase {
 /// The classification of an error, with any check that must run before it is
 /// final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "action", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Classification {
@@ -97,15 +99,15 @@ pub enum Classification {
         kind: ErrorKind,
     },
     /// The error can come from the subscribed object changing. Resolve its
-    /// name again, compare the result with the stored fingerprint, and pass
-    /// the change to [`resolve_object_check`].
+    /// name again, compare the result with the stored fingerprint, and
+    /// resolve the check with the change found.
     CheckObject {
         /// The kind if the object is unchanged.
         otherwise: ErrorKind,
     },
     /// History was lost, unless an index on the subscribing cluster now serves
     /// the object, which rejects the `AS OF` the same way. List the indexes
-    /// and pass them to [`resolve_index_check`].
+    /// to resolve the check.
     CheckIndex,
 }
 

@@ -26,6 +26,7 @@ from psycopg import generators, pq
 
 from materialize_sdk._core import Subscription
 from materialize_sdk._errors import ServerError, UsageError
+from materialize_sdk._values import Event, event_from_json
 
 
 class LiveSubscription:
@@ -67,7 +68,7 @@ class LiveSubscription:
         self._fetch = json.dumps(
             {"max_rows": str(max_rows), "timeout_ms": str(round(fetch_timeout * 1000))}
         )
-        self._events: deque[dict[str, Any]] = deque()
+        self._events: deque[Event] = deque()
         self._failed: BaseException | None = None
         self._closed = False
         try:
@@ -87,7 +88,7 @@ class LiveSubscription:
     def __iter__(self) -> LiveSubscription:
         return self
 
-    def __next__(self) -> dict[str, Any]:
+    def __next__(self) -> Event:
         if self._failed is not None:
             raise self._failed
         if self._closed:
@@ -104,7 +105,7 @@ class LiveSubscription:
             self.close()
             raise
 
-    def _next(self) -> dict[str, Any]:
+    def _next(self) -> Event:
         while not self._events:
             if self._subscription.is_finished:
                 raise StopIteration
@@ -114,7 +115,7 @@ class LiveSubscription:
                 json.dumps({"columns": columns, "rows": rows})
             )
             self._events.extend(
-                _native(event) for event in json.loads(pushed)["events"]
+                event_from_json(event) for event in json.loads(pushed)["events"]
             )
         return self._events.popleft()
 
@@ -181,16 +182,3 @@ class LiveSubscription:
             json.dumps({"sqlstate": sqlstate, "message": message})
         )
         return ServerError(message, sqlstate, json.loads(classified))
-
-
-def _native(event: dict[str, Any]) -> dict[str, Any]:
-    """Turns the decimal strings of the core's JSON form into ``int``s."""
-    for update in event["updates"]:
-        update["timestamp"] = int(update["timestamp"])
-        if "diff" in update:
-            update["diff"] = int(update["diff"])
-    if event["event"] == "batch":
-        event["upper"] = int(event["upper"])
-        if event["lower"] is not None:
-            event["lower"] = int(event["lower"])
-    return event

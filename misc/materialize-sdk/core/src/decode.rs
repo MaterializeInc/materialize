@@ -86,6 +86,7 @@ impl<'de> Deserialize<'de> for Envelope {
 
 /// A change to the subscribed relation at one timestamp.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Change {
     /// `diff` copies of `row` were added, or removed if `diff` is negative.
@@ -95,6 +96,7 @@ pub enum Change {
         row: Row,
         /// The signed multiplicity.
         #[serde(with = "wire::i64_string")]
+        #[cfg_attr(feature = "schema", schemars(with = "wire::I64"))]
         diff: i64,
     },
     /// `key` now has the value `value`.
@@ -119,9 +121,11 @@ pub enum Change {
 
 /// A change and the `mz_timestamp` it happened at.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Update {
     /// The `mz_timestamp` of the change.
     #[serde(with = "wire::u64_string")]
+    #[cfg_attr(feature = "schema", schemars(with = "wire::U64"))]
     pub timestamp: u64,
     /// The change.
     #[serde(flatten)]

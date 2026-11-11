@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { Classification } from "./values.js";
+
 /** The base of every error the SDK throws. */
 export class SdkError extends Error {
   constructor(message: string) {
@@ -35,7 +37,7 @@ export class ServerError extends SdkError {
   constructor(
     message: string,
     readonly sqlstate: string | undefined,
-    readonly classification: Record<string, unknown>,
+    readonly classification: Classification,
   ) {
     super(message);
   }
