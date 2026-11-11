@@ -103,7 +103,8 @@ impl CatalogCommand {
 /// Catalog writes and the outcome validation required before publishing them.
 ///
 /// Run any collision probe in an isolated transaction before taking the writes.
-/// Apply the writes in order, then call `finish` before executing the next command.
+/// For executions that are not skipped, apply the writes in order and call
+/// `finish` before executing the next command.
 pub(super) struct CommandExecution<'a> {
     ops: Vec<Op>,
     source: Option<(&'a mut SourceCommand, Box<SourceCompilation>)>,
@@ -122,15 +123,19 @@ impl CommandExecution<'_> {
         })
     }
 
-    /// Validates the isolated probe and returns whether to skip this command's writes.
+    /// Validates a requested collision probe, consuming skipped executions.
     pub(super) fn finish_probe(
-        &mut self,
+        mut self,
         result: Result<(), AdapterError>,
-    ) -> Result<bool, AdapterError> {
+    ) -> Result<Option<Self>, AdapterError> {
         let (command, compiled) = self.source.as_mut().expect("collision probe requested");
         let (_, outcome) = compiled.classify_result(result)?;
         command.check_outcome(outcome)?;
-        Ok(command.skipped_name().is_some())
+        if command.skipped_name().is_some() {
+            Ok(None)
+        } else {
+            Ok(Some(self))
+        }
     }
 
     pub(super) fn take_ops(&mut self) -> Vec<Op> {

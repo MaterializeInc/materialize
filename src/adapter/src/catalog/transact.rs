@@ -1181,9 +1181,10 @@ impl Catalog {
                     .map(|_| ())
                     .map_err(CommandExecutionError::into_adapter_error)
                 };
-                if execution.finish_probe(result)? {
+                let Some(remaining) = execution.finish_probe(result)? else {
                     continue;
-                }
+                };
+                execution = remaining;
             }
             let mut pending_ops: std::collections::VecDeque<_> = execution.take_ops().into();
             while let Some(op) = pending_ops.pop_front() {
