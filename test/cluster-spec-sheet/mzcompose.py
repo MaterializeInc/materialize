@@ -1953,16 +1953,18 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
-                for protocol in self.options.protocols:
-                    for concurrency in self.options.concurrencies:
-                        self.measure(
-                            runner,
-                            size,
-                            concurrency,
-                            protocol,
-                            disable_statement_logging,
-                        )
+            conditions = [
+                (disabled, protocol, concurrency)
+                for disabled in (False, True)
+                for protocol in self.options.protocols
+                for concurrency in self.options.concurrencies
+            ]
+            for round_index in (1, 2):
+                ordered = conditions if round_index == 1 else list(reversed(conditions))
+                for disabled, protocol, concurrency in ordered:
+                    self.measure(
+                        runner, size, concurrency, protocol, disabled, round_index
+                    )
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -1976,9 +1978,10 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         concurrency: int,
         protocol: str,
         disable_statement_logging: bool = False,
+        round_index: int = 1,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
-        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}_round_{round_index}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
@@ -2033,6 +2036,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
             )
         result.update(
+            benchmark_round=round_index,
             replica_cpu_peak_percent=replica_cpu,
             replica_cpu_samples=replica_samples,
             warnings=warnings,
@@ -3352,7 +3356,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+    ENVD_CPU_SCALES: list[int] = [32]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
