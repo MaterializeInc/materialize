@@ -14,7 +14,9 @@ removing their legacy execution assumptions. The proposed headless replacement
 keeps arbitrary-plan scripts in a test-only native runtime, not a production
 maintenance socket. Its launch-interface change awaits approval.
 Controller startup explicitly rejects forced migrations, so those cases are
-not native coverage. Continue current-source preservation checks independently.
+not native coverage. Continue bounded current-source preservation checks
+independently. Full upsert stress twice exceeded the local 6 GiB deployment cap.
+Do not shrink it or raise caps blindly. Scratch AWS SSO has expired.
 Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
 final-preflight coverage still need the scope decisions below.
 
@@ -74,8 +76,11 @@ scoped all-target checks and independent review.
   platform/stress workflows.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are explicitly unsupported, not reset/converted.
-- Current-source preservation, upsert/data-ingest/parallel stress,
-  randomized zippy/restore and bumped-version platform runtimes remain unverified.
+- Full upsert stress hit the old deployment's 6 GiB cgroup limit twice. Failed
+  worker cleanup was repaired and negatively tested, but stress acceptance remains
+  blocked. See `native-compatible-current/upsert-verification.md`.
+  Current-source preservation, data-ingest/parallel stress, randomized zippy/restore
+  and bumped-version platform runtimes remain unverified.
   Distinct-version DDL and sink handover are verified for the same-implementation
   prototype pair, not arbitrary release combinations.
 - An earlier index-publication stall and a 673-second source-status query remain

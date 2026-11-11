@@ -19,9 +19,10 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import SimpleQueue
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from threading import Thread
+from threading import Event, Thread
 from typing import Any
 
 import psycopg
@@ -3285,7 +3286,10 @@ def workflow_upsert_sources(c: Composition) -> None:
     mz1 = "mz_old"
     mz2 = "mz_new"
 
-    def worker(i: int) -> None:
+    stop = Event()
+    errors: SimpleQueue[Exception] = SimpleQueue()
+
+    def ingest(i: int) -> None:
         c.testdrive(dedent(f"""
             $ kafka-create-topic topic=kafka{i}
             > CREATE SOURCE kafka_source{i}
@@ -3301,58 +3305,79 @@ def workflow_upsert_sources(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW mv{i} AS SELECT * FROM kafka_source_tbl{i}
                 """))
 
-        while datetime.now(UTC) < end_time:
+        while not stop.is_set() and datetime.now(UTC) < end_time:
             try:
                 c.testdrive(dedent(f"""
                     $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka{i} repeat=10000
                     key1A,key1B:value1A,value1B
                     """))
-            except:
+            except Exception:
+                # Ingest can race deployment retirement. Setup failures below
+                # are not expected and must fail the parent workflow.
                 pass
+
+    def worker(i: int) -> None:
+        try:
+            if not stop.is_set():
+                ingest(i)
+        except Exception as error:
+            errors.put(error)
+            stop.set()
 
     threads = []
     for i in range(num_threads):
         thread = Thread(name=f"worker_{i}", target=worker, args=(i,))
         threads.append(thread)
 
-    for thread in threads:
-        thread.start()
+    try:
+        for thread in threads:
+            thread.start()
 
-    i = 1
-    while datetime.now(UTC) < end_time:
-        with c.override(
-            native_mz(
-                name=mz2,
-                sanity_restart=False,
-                deploy_generation=i,
-                system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-                restart="on-failure",
-                external_metadata_store=True,
-                default_replication_factor=2,
-            ),
-            Testdrive(
-                materialize_url=f"postgres://materialize@{mz1}:6875",
-                materialize_url_internal=f"postgres://materialize@{mz1}:6877",
-                mz_service=mz1,
-                materialize_params={"cluster": "cluster"},
-                no_consistency_checks=True,
-                no_reset=True,
-                seed=1,
-                default_timeout=DEFAULT_TIMEOUT,
-            ),
-        ):
-            c.up(mz2)
-            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz2)
-            c.promote_mz(mz2, retire_mz_service=None)
-            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz2)
-            c.retire_mz_deployment(mz2, i - 1, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
-            c.kill_fenced_mz(mz1)
+        i = 1
+        while not stop.is_set() and datetime.now(UTC) < end_time:
+            with c.override(
+                native_mz(
+                    name=mz2,
+                    sanity_restart=False,
+                    deploy_generation=i,
+                    system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+                    restart="on-failure",
+                    external_metadata_store=True,
+                    default_replication_factor=2,
+                ),
+                Testdrive(
+                    materialize_url=f"postgres://materialize@{mz1}:6875",
+                    materialize_url_internal=f"postgres://materialize@{mz1}:6877",
+                    mz_service=mz1,
+                    materialize_params={"cluster": "cluster"},
+                    no_consistency_checks=True,
+                    no_reset=True,
+                    seed=1,
+                    default_timeout=DEFAULT_TIMEOUT,
+                ),
+            ):
+                c.up(mz2)
+                c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz2)
+                c.promote_mz(mz2, retire_mz_service=None)
+                c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz2)
+                c.retire_mz_deployment(
+                    mz2, i - 1, environment_id=DEFAULT_MZ_ENVIRONMENT_ID
+                )
+                c.kill_fenced_mz(mz1)
 
-        i += 1
-        mz1, mz2 = mz2, mz1
+            i += 1
+            mz1, mz2 = mz2, mz1
 
-    for thread in threads:
-        thread.join()
+    finally:
+        # Workers share the Composition. Stop them before its owner can tear
+        # down services, or retries can recreate containers during cleanup.
+        stop.set()
+        for thread in threads:
+            if thread.ident is not None:
+                thread.join()
+
+    if not errors.empty():
+        raise errors.get()
 
 
 def workflow_ddl(c: Composition) -> None:

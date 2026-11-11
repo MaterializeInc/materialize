@@ -94,6 +94,103 @@ def test_native_deployment_overrides_keep_the_external_relay(image):
     assert "volumes" not in relay
 
 
+@pytest.mark.parametrize("failure", ["lifecycle", "interrupt", "setup"])
+def test_upsert_failure_joins_workers_before_returning(monkeypatch, failure):
+    spec = importlib.util.spec_from_file_location(
+        "native_upsert_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    started = threading.Event()
+    release = threading.Event()
+    expired = threading.Event()
+    retried_after_failure = threading.Event()
+    workers = []
+    in_flight = threading.Condition()
+    entered = []
+    now = module.datetime.now(module.UTC)
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return now + module.timedelta(seconds=201 if expired.is_set() else 0)
+
+    class Worker(threading.Thread):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            workers.append(self)
+
+        def join(self, timeout=None):
+            # Finish the outstanding fake I/O when its owner waits for it.
+            # Without shutdown ownership, the blocked worker remains live at
+            # workflow return, and the assertion below fails deterministically.
+            release.set()
+            super().join(timeout)
+
+    c = MagicMock()
+    c.override.side_effect = lambda *args: nullcontext()
+
+    def testdrive(sql):
+        if "CREATE SOURCE kafka_source" in sql:
+            if failure == "setup" and threading.current_thread().name == "worker_0":
+                expired.set()
+                started.set()
+                raise UIError("source setup failed")
+        elif "kafka-ingest" in sql:
+            if release.is_set():
+                # Fail promptly rather than spin forever under the frozen
+                # clock if cancellation stops preventing new batches.
+                retried_after_failure.set()
+                expired.set()
+            else:
+                with in_flight:
+                    entered.append(threading.current_thread())
+                    in_flight.notify_all()
+                started.set()
+                assert release.wait(10), "owner did not join its in-flight worker"
+
+    def up(*services):
+        if services == ("mz_new",):
+            assert started.wait(10), "worker did not start"
+            if failure != "setup":
+                with in_flight:
+                    assert in_flight.wait_for(
+                        lambda: len(entered) == len(workers), timeout=10
+                    ), "workers did not reach their in-flight batches"
+            if failure == "interrupt":
+                raise KeyboardInterrupt("candidate startup interrupted")
+            if failure == "lifecycle":
+                raise UIError("candidate startup failed")
+
+    c.testdrive.side_effect = testdrive
+    c.up.side_effect = up
+    monkeypatch.setattr(module, "Thread", Worker)
+    monkeypatch.setattr(module, "datetime", Clock)
+    monkeypatch.setattr(module, "setup", lambda c: None)
+    try:
+        message = (
+            "candidate startup failed"
+            if failure == "lifecycle"
+            else "source setup failed"
+        )
+        error = UIError
+        if failure == "interrupt":
+            error = KeyboardInterrupt
+            message = "candidate startup interrupted"
+        with pytest.raises(error, match=message):
+            module.workflow_upsert_sources(c)
+        assert workers and not any(worker.is_alive() for worker in workers)
+        assert not retried_after_failure.is_set()
+    finally:
+        # Also reap workers when testing the unfixed implementation.
+        expired.set()
+        release.set()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(timeout=10)
+                assert not worker.is_alive()
+
+
 @pytest.mark.parametrize("expected_host", [None, "new"])
 def test_cdc_reader_wait_requires_stable_convergence(monkeypatch, expected_host):
     spec = importlib.util.spec_from_file_location(
@@ -198,11 +295,11 @@ def test_native_retirement_checks_identity_without_cleanup(
 
 
 @pytest.mark.parametrize("outcome", ["retired", "still_writable", "retire_error"])
-def test_native_ddl_checks_retired_writer_before_cleanup(monkeypatch, outcome):
+def test_native_basic_checks_retired_writer_before_cleanup(monkeypatch, outcome):
     import psycopg
 
     spec = importlib.util.spec_from_file_location(
-        "native_ddl_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
+        "native_basic_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -214,20 +311,21 @@ def test_native_ddl_checks_retired_writer_before_cleanup(monkeypatch, outcome):
     c.attach_mock(old_session, "old_session")
 
     def execute(sql):
-        if sql == "INSERT INTO t VALUES (17, 18)" and outcome == "retired":
+        if sql == "INSERT INTO t VALUES (99, 100)" and outcome == "retired":
             raise psycopg.OperationalError("server closed the connection unexpectedly")
-        return SimpleNamespace(fetchall=lambda: [(1,)])
+        rows = [(42,)] if sql == "SELECT * FROM basic_peer" else [(1,)]
+        return SimpleNamespace(fetchall=lambda: rows)
 
     old_session.execute.side_effect = execute
     if outcome == "retire_error":
         c.retire_mz_deployment.side_effect = UIError("retirement failed")
         with pytest.raises(UIError, match="retirement failed"):
-            module.workflow_ddl(c)
+            module.workflow_basic(c)
     elif outcome == "still_writable":
         with pytest.raises(AssertionError, match="retired deployment accepted"):
-            module.workflow_ddl(c)
+            module.workflow_basic(c)
     else:
-        module.workflow_ddl(c)
+        module.workflow_basic(c)
         c.kill_fenced_mz.assert_called_once_with("mz_old")
 
     c.sql_connection.assert_called_once_with(service="mz_old")
@@ -240,7 +338,9 @@ def test_native_ddl_checks_retired_writer_before_cleanup(monkeypatch, outcome):
     promoted = events.index(
         call.await_mz_deployment_status(module.DeploymentStatus.IS_LEADER, "mz_new")
     )
-    recovered = events.index(call.sql("SELECT 1", service="mz_new"))
+    recovered = events.index(
+        call.sql("SELECT 1", service="mz_new", reuse_connection=False)
+    )
     peer_write = events.index(call.old_session.execute("INSERT INTO t VALUES (13, 14)"))
     retirement = next(
         i for i, event in enumerate(events) if event[0] == "retire_mz_deployment"
@@ -248,12 +348,21 @@ def test_native_ddl_checks_retired_writer_before_cleanup(monkeypatch, outcome):
     assert promotion < promoted < recovered < peer_write < retirement
     if outcome == "retired":
         rejected_write = events.index(
-            call.old_session.execute("INSERT INTO t VALUES (17, 18)")
+            call.old_session.execute("INSERT INTO t VALUES (99, 100)")
         )
         assert retirement < rejected_write < events.index(call.kill_fenced_mz("mz_old"))
     else:
         c.kill_fenced_mz.assert_not_called()
-    assert c.testdrive.call_count == (5 if outcome == "retired" else 4)
+    survivor_checks = [
+        i
+        for i, event in enumerate(events)
+        if event[0] == "testdrive" and "CREATE TABLE basic_survivor" in event.args[0]
+    ]
+    if outcome == "retired":
+        assert len(survivor_checks) == 1
+        assert events.index(call.kill_fenced_mz("mz_old")) < survivor_checks[0]
+    else:
+        assert not survivor_checks
 
 
 @pytest.mark.parametrize(
