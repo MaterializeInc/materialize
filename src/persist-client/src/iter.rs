@@ -34,7 +34,6 @@ use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::columnar::data_type;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
-use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
@@ -44,11 +43,6 @@ use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
-
-/// Versions prior to this had bugs in consolidation, or used a different sort. However,
-/// we can assume that consolidated parts at this version or higher were consolidated
-/// according to the current definition.
-pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 
 /// The data needed to fetch a batch part, bundled up to make it easy
 /// to send between threads.
