@@ -572,6 +572,9 @@ const NewTicketForm = ({
                 },
               })}
               placeholder={descriptionPlaceholder}
+              // Lighter than other placeholders: it's several lines, and at
+              // the usual color it reads like text already filled in.
+              _placeholder={{ color: colors.foreground.tertiary }}
               variant={errors.description ? "error" : "default"}
               rows={6}
               minH="9.5rem"

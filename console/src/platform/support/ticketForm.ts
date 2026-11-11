@@ -206,17 +206,18 @@ export const readAsBase64 = (file: Blob) =>
   });
 
 /** Placeholder prompts for a regular support ticket. */
-export const TICKET_TEMPLATE = `What's affected:
-When it started (with time zone):
-Is it still happening?
-What changed recently (upgrade, deploy, upstream change):
-Error messages, if available:`;
+export const TICKET_TEMPLATE = `Include what you can:
+• What's affected
+• When it started (with time zone), and whether it's still happening
+• What changed recently: an upgrade, deploy, or upstream change
+• Any error messages`;
 
 /** Placeholder prompts for an outage report. */
-export const OUTAGE_TEMPLATE = `What's down (whole environment, or specific clusters, sources, sinks, or queries):
-When it started (with time zone):
-What changed right before (upgrade, deploy, upstream change):
-Error messages, if available:`;
+export const OUTAGE_TEMPLATE = `Include what you can:
+• What's down: the whole environment, or specific clusters, sources, sinks, or queries
+• When it started (with time zone)
+• What changed right before: an upgrade, deploy, or upstream change
+• Any error messages`;
 
 export type TicketFormValues = {
   title: string;
