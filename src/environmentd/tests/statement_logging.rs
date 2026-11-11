@@ -1091,7 +1091,7 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
 }
 
 #[mz_ore::test]
-fn test_statement_logging_frontend_constant_insert_sets_cluster() {
+fn test_statement_logging_constant_insert_sets_cluster() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
@@ -1383,7 +1383,7 @@ WHERE mst.sql LIKE $1 AND mseh.finished_at IS NOT NULL",
 // error message.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_statement_logging_cancel_frontend_read_then_write() {
+fn test_statement_logging_cancel_read_then_write() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default(
@@ -1447,7 +1447,7 @@ fn test_statement_logging_cancel_frontend_read_then_write() {
 // error the user received, not `aborted` with no message.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_statement_logging_timeout_frontend_read_then_write() {
+fn test_statement_logging_timeout_read_then_write() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .with_system_parameter_default(
@@ -1495,7 +1495,7 @@ fn test_statement_logging_timeout_frontend_read_then_write() {
 // right after the frontend takes it over.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_statement_logging_frontend_read_then_write_transaction_error() {
+fn test_statement_logging_read_then_write_transaction_error() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
@@ -1530,7 +1530,7 @@ fn test_statement_logging_frontend_read_then_write_transaction_error() {
 // statement over.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_statement_logging_frontend_read_then_write_rbac_error() {
+fn test_statement_logging_read_then_write_rbac_error() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
 
