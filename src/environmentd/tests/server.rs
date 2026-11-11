@@ -6623,6 +6623,65 @@ fn test_mcp_developer_honors_x_materialize_user_header() {
     );
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_unified_returns_503_when_flag_is_off() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "false".to_string())
+        .start_blocking();
+    let (status, _) = mcp_post(
+        &format!("http://{}/api/mcp", server.http_local_addr()),
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// `/api/mcp` on the internal listener honors `x-materialize-user`, the same
+/// as `/api/mcp/developer` (CLO-158), and tags its sessions `mz_mcp`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_unified_honors_x_materialize_user_header() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "true".to_string())
+        .start_blocking();
+
+    let res = Client::new()
+        .post(format!(
+            "http://{}/api/mcp",
+            server.internal_http_local_addr()
+        ))
+        .header("x-materialize-user", "mz_support")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": {
+                    "cluster": "mz_catalog_server",
+                    "sql_query": "SELECT current_user, current_setting('application_name')"
+                }
+            }
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        result_text.contains("mz_support"),
+        "/api/mcp must resolve the session to the injected user, got: {body}"
+    );
+    assert!(
+        result_text.contains("mz_mcp\""),
+        "/api/mcp sessions must set application_name to mz_mcp, got: {body}"
+    );
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();

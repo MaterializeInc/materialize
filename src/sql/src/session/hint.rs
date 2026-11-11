@@ -41,6 +41,8 @@ const MZ_GRAFANA_LABEL: &str = "mz_grafana";
 const MZ_MCP_AGENT_LABEL: &str = "mz_mcp_agents";
 /// Prometheus label for [`ApplicationNameHint::MzMcpDeveloper`].
 const MZ_MCP_DEVELOPER_LABEL: &str = "mz_mcp_developer";
+/// Prometheus label for [`ApplicationNameHint::MzMcp`].
+const MZ_MCP_LABEL: &str = "mz_mcp";
 
 /// A hint for what application is making a request to the adapter.
 ///
@@ -85,6 +87,8 @@ pub enum ApplicationNameHint {
     MzMcpAgent(Private),
     /// Request came from the MCP developer endpoint.
     MzMcpDeveloper(Private),
+    /// Request came from the unified MCP endpoint.
+    MzMcp(Private),
 }
 
 impl ApplicationNameHint {
@@ -103,6 +107,7 @@ impl ApplicationNameHint {
             "mz_grafana_integration" => ApplicationNameHint::MzGrafanaIntegration(Private),
             "mz_mcp_agents" => ApplicationNameHint::MzMcpAgent(Private),
             "mz_mcp_developer" => ApplicationNameHint::MzMcpDeveloper(Private),
+            "mz_mcp" => ApplicationNameHint::MzMcp(Private),
             // Terraform provides the version as a suffix.
             x if x.starts_with("terraform-provider-materialize") => {
                 ApplicationNameHint::TerraformProviderMaterialize(Private)
@@ -137,6 +142,7 @@ impl ApplicationNameHint {
             ApplicationNameHint::MzGrafanaIntegration(_) => MZ_GRAFANA_LABEL,
             ApplicationNameHint::MzMcpAgent(_) => MZ_MCP_AGENT_LABEL,
             ApplicationNameHint::MzMcpDeveloper(_) => MZ_MCP_DEVELOPER_LABEL,
+            ApplicationNameHint::MzMcp(_) => MZ_MCP_LABEL,
             ApplicationNameHint::TerraformProviderMaterialize(_) => {
                 TERRAFORM_PROVIDER_MATERIALIZE_LABEL
             }

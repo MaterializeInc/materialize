@@ -264,6 +264,19 @@ impl Default for TestHarness {
     }
 }
 
+/// An MCP route group with the listener's `base` policy, falling back to
+/// `NormalAndInternal` if `base` is disabled (e.g. a metrics-only listener).
+fn mcp_route_group(routes: &HttpRoutesEnabled, enabled: bool) -> RouteGroup {
+    if !enabled {
+        return RouteGroup::Disabled;
+    }
+    let roles = routes
+        .base
+        .allowed_roles()
+        .unwrap_or(AllowedRoles::NormalAndInternal);
+    RouteGroup::Enabled(roles)
+}
+
 impl TestHarness {
     /// Starts a test [`TestServer`], panicking if the server could not be started.
     ///
@@ -683,23 +696,16 @@ impl TestHarness {
 
     pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
         for config in self.listeners_config.http.values_mut() {
-            // Match the MCP routes to the listener's `base` policy (falling back
-            // to `NormalAndInternal` if `base` is disabled, e.g. a metrics-only
-            // listener), then enable/disable them.
-            let roles = config
-                .routes
-                .base
-                .allowed_roles()
-                .unwrap_or(AllowedRoles::NormalAndInternal);
-            let group = |enabled| {
-                if enabled {
-                    RouteGroup::Enabled(roles)
-                } else {
-                    RouteGroup::Disabled
-                }
-            };
-            config.routes.mcp_agent = group(agent);
-            config.routes.mcp_developer = group(developer);
+            config.routes.mcp_agent = mcp_route_group(&config.routes, agent);
+            config.routes.mcp_developer = mcp_route_group(&config.routes, developer);
+        }
+        self
+    }
+
+    /// Enables the unified `/api/mcp` route on every HTTP listener.
+    pub fn with_mcp_unified_route(mut self) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            config.routes.mcp = mcp_route_group(&config.routes, true);
         }
         self
     }
