@@ -33,8 +33,17 @@ pub const STEP: Duration = Duration::from_secs(60);
 
 /// The connection to Materialize, from `MATERIALIZE_URL`.
 pub fn config() -> Config {
-    std::env::var("MATERIALIZE_URL")
-        .expect("MATERIALIZE_URL is set")
+    url("MATERIALIZE_URL")
+}
+
+/// A connection as `mz_system`, from `MATERIALIZE_SYSTEM_URL`.
+pub fn system_config() -> Config {
+    url("MATERIALIZE_SYSTEM_URL")
+}
+
+fn url(variable: &str) -> Config {
+    std::env::var(variable)
+        .unwrap_or_else(|_| panic!("{variable} is not set"))
         .parse()
         .unwrap()
 }
