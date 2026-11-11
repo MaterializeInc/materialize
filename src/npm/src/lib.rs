@@ -230,7 +230,7 @@ pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
                         "attempt {}/{} for {} failed: {:#}",
                         attempt, attempts, pkg.name, e
                     );
-                    thread::sleep(Duration::from_secs(attempt));
+                    thread::sleep(Duration::from_secs(if attempt == 1 { 5 } else { 15 }));
                     attempt += 1;
                 }
                 Err(e) => {
