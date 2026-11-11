@@ -83,7 +83,7 @@
 //! `mz-frontier` property to track progress.
 
 use std::cmp::Ordering;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
 use std::time::Instant;
@@ -103,8 +103,8 @@ use iceberg::arrow::{
     arrow_schema_to_schema, arrow_schema_to_schema_auto_assign_ids, schema_to_arrow_schema,
 };
 use iceberg::spec::{
-    DataFile, FormatVersion, NestedField, PrimitiveType, Snapshot, StructType, Type,
-    read_data_files_from_avro, write_data_files_to_avro,
+    DataFile, FormatVersion, NestedField, NestedFieldRef, PrimitiveType, Snapshot, StructType,
+    Type, read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
@@ -973,8 +973,8 @@ async fn try_commit_batch(
 
 /// Why the sink can't write into a table that already carries `current`,
 /// where `expected` is the schema the sink would create today, or `None` if it
-/// can. The reason names only the first field that differs, so it stays short
-/// however wide the schema is.
+/// can. The reason names one field, so it stays short however wide the schema
+/// is.
 ///
 /// Names and nullability have to match. Types have to match too,
 /// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
@@ -1000,22 +1000,35 @@ fn struct_mismatch(
     expected: &StructType,
 ) -> Option<String> {
     let (current, expected) = (current.fields(), expected.fields());
-    if let Some(mismatch) =
-        std::iter::zip(current, expected).find_map(|(c, e)| field_mismatch(parent, c, e))
+    // An added or removed field shifts every later position, so name it before
+    // comparing by position.
+    let names = |fields: &[NestedFieldRef]| -> BTreeSet<String> {
+        fields.iter().map(|field| field.name.clone()).collect()
+    };
+    let (current_names, expected_names) = (names(current), names(expected));
+    if let Some(missing) = expected
+        .iter()
+        .find(|field| !current_names.contains(&field.name))
     {
-        return Some(mismatch);
-    }
-    match current.len().cmp(&expected.len()) {
-        Ordering::Less => Some(format!(
+        return Some(format!(
             "the table is missing `{}`",
-            field_path(parent, &expected[current.len()].name)
-        )),
-        Ordering::Greater => Some(format!(
-            "the table has an extra field `{}`",
-            field_path(parent, &current[expected.len()].name)
-        )),
-        Ordering::Equal => None,
+            field_path(parent, &missing.name)
+        ));
     }
+    if let Some(extra) = current
+        .iter()
+        .find(|field| !expected_names.contains(&field.name))
+    {
+        return Some(format!(
+            "the table has an extra field `{}`",
+            field_path(parent, &extra.name)
+        ));
+    }
+    // Both sides hold the same names, and `Schema::build` rejects duplicates, so
+    // they have the same length.
+    std::iter::zip(current, expected).find_map(|(current_field, expected_field)| {
+        field_mismatch(parent, current_field, expected_field)
+    })
 }
 
 fn field_mismatch(
@@ -1041,17 +1054,25 @@ fn field_mismatch(
     match (&*current.field_type, &*expected.field_type) {
         // A uuid column written before uuids became strings.
         (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => None,
-        (Type::Struct(c), Type::Struct(e)) => struct_mismatch(Some(&path), c, e),
-        (Type::List(c), Type::List(e)) => {
-            field_mismatch(Some(&path), &c.element_field, &e.element_field)
+        (Type::Struct(current_struct), Type::Struct(expected_struct)) => {
+            struct_mismatch(Some(&path), current_struct, expected_struct)
         }
-        (Type::Map(c), Type::Map(e)) => field_mismatch(Some(&path), &c.key_field, &e.key_field)
-            .or_else(|| field_mismatch(Some(&path), &c.value_field, &e.value_field)),
-        (c, e) if c == e => None,
-        (c, e) => Some(format!(
+        (Type::List(current_list), Type::List(expected_list)) => field_mismatch(
+            Some(&path),
+            &current_list.element_field,
+            &expected_list.element_field,
+        ),
+        (Type::Map(current_map), Type::Map(expected_map)) => {
+            let parent = Some(path.as_str());
+            field_mismatch(parent, &current_map.key_field, &expected_map.key_field).or_else(|| {
+                field_mismatch(parent, &current_map.value_field, &expected_map.value_field)
+            })
+        }
+        (current_type, expected_type) if current_type == expected_type => None,
+        (current_type, expected_type) => Some(format!(
             "`{path}` has type {} in the table but {} in the sink",
-            type_name(c),
-            type_name(e)
+            type_name(current_type),
+            type_name(expected_type)
         )),
     }
 }
@@ -2685,6 +2706,34 @@ mod tests {
         assert_eq!(
             schema_mismatch(&wide_current, &wide_expected).as_deref(),
             Some("`column_499` has type string in the table but long in the sink")
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_schema_mismatch_names_an_added_or_removed_field() {
+        let schema = |columns: &[&str]| {
+            let mut desc = mz_repr::RelationDesc::builder();
+            for column in columns {
+                desc = desc.with_column(*column, SqlScalarType::String.nullable(true));
+            }
+            let (_, schema) = relation_desc_to_iceberg_schema(&desc.finish())
+                .expect("schema conversion should succeed");
+            schema
+        };
+        let before = schema(&["name", "address"]);
+        let after = schema(&["id", "name", "address"]);
+
+        assert_eq!(
+            schema_mismatch(&before, &after).as_deref(),
+            Some("the table is missing `id`")
+        );
+        assert_eq!(
+            schema_mismatch(&after, &before).as_deref(),
+            Some("the table has an extra field `id`")
+        );
+        assert_eq!(
+            schema_mismatch(&schema(&["address", "name"]), &before).as_deref(),
+            Some("the table has `address` where `name` is expected")
         );
     }
 
