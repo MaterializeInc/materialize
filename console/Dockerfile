@@ -9,7 +9,7 @@
 
 # Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
-FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS builder
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS builder
 
 WORKDIR /app
 

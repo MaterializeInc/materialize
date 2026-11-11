@@ -10,7 +10,7 @@
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
 FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
 
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
+FROM node:22-slim@sha256:18052396bf1d0c6e0a8c58181b5c1457da19409efbd5032a3f4d86974e74d13c
 
 # Fetch apt sources over HTTPS only.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
