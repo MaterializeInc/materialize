@@ -2537,7 +2537,7 @@ mod tests {
         CatalogItem, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
         ReconfigurationStatus, ReconfigurationTarget,
     };
-    use mz_controller::clusters::ReplicaLogging;
+    use mz_controller::clusters::{ReplicaLogging, WorkloadClass};
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2791,10 +2791,9 @@ mod tests {
         config_sizes.remove(&cluster_only);
         config_sizes.remove(&hydration);
         config_sizes.remove(&timed_out_target);
-        config_sizes
-            .get_mut(&changed)
-            .expect("test size")
-            .cpu_exclusive = true;
+        let changed_alloc = config_sizes.get_mut(&changed).expect("test size");
+        changed_alloc.cpu_exclusive = true;
+        changed_alloc.allowed_workloads = Some(BTreeSet::from([WorkloadClass::Ingest]));
         let catalog =
             Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
                 .await
