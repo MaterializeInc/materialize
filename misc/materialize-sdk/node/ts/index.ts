@@ -23,8 +23,6 @@ export {
 export {
   LiveSubscription,
   MAX_TIMESTAMP_BYTES,
-  type Event,
   type LiveOptions,
-  type Row,
-  type Update,
 } from "./live.js";
+export type * from "./values.js";
