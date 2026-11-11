@@ -9,16 +9,23 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Resolve the remaining headless-driver and forced-migration boundaries before
-removing their legacy execution assumptions. The proposed headless replacement
-keeps arbitrary-plan scripts in a test-only native runtime, not a production
-maintenance socket. Its launch-interface change awaits approval.
-Controller startup explicitly rejects forced migrations, so those cases are
-not native coverage. Continue bounded current-source preservation checks
-independently. Full upsert stress twice exceeded the local 6 GiB deployment cap.
-Do not shrink it or raise caps blindly. Scratch AWS SSO has expired.
-Do not reset or convert pre-native fixtures. Catalog-free ingress and dormant
-final-preflight coverage still need the scope decisions below.
+Resolve the debug-build subscription FETCH stack overflow, then finish the SQL
+reproduction of missing subscription frontier rows. The crash reproduces in the
+production binary with its default 3 MiB worker stacks. The pgwire Rust harness
+instead uses 16 MiB in debug builds. Do not raise runtime stacks to mask the crash.
+Minimal-symbol gdb caught catalog-item cloning at exhaustion. The actual caller
+chain remains under investigation, using the saved raw stack rather than another
+runtime. Agent 259 is analyzing
+`native-compatible-current/overflow-stack-capture/`; the capture is in
+`native-compatible-current/aj-native-subscription-stack-76a2f662/`.
+
+Subscription frontier repair must preserve query ownership and per-replica rows.
+Public transient IDs collide across adapters. Owner-qualified public IDs await a
+UX decision. See `native-subscription-frontier-assessment.md` and
+`native-progress-dependency-audit.md`. Headless launch changes and forced migrations
+remain separate decisions. Do not reset or convert pre-native fixtures.
+Full upsert stress twice exceeded the local 6 GiB deployment cap. Scratch AWS SSO
+has expired. Do not shrink that workload or raise caps blindly.
 
 The current-source distinct-version full DDL and sink-handover demonstration
 passed. Its receipts and limits are in `native-compatible-current/verification.md`.
@@ -33,7 +40,11 @@ Forward-write candidate correction pruning also passes with the original workloa
 and memory bound. Correction records drain to zero without replica restarts.
 Anonymous-memory growth is 362.4 MiB against a 384 MiB bound, a narrow single-run
 margin. See `native-compatible-current/forward-pruning-verification.md`.
-All runtime fixtures are removed.
+The current-source four-generation platform CreateTable scenario passes, including
+three promotions/retirements and validation on the final two generations. See
+`native-compatible-current/platform-tables-verification.md`. These completed
+fixtures and subscription-debugger runtimes are removed. Only offline analysis
+is running.
 
 ## Verified outcome
 
@@ -79,8 +90,8 @@ scoped all-target checks and independent review.
 - Full upsert stress hit the old deployment's 6 GiB cgroup limit twice. Failed
   worker cleanup was repaired and negatively tested, but stress acceptance remains
   blocked. See `native-compatible-current/upsert-verification.md`.
-  Current-source preservation, data-ingest/parallel stress, randomized zippy/restore
-  and bumped-version platform runtimes remain unverified.
+  Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
+  runtimes remain unverified. Current-source selected table preservation passed.
   Distinct-version DDL and sink handover are verified for the same-implementation
   prototype pair, not arbitrary release combinations.
 - An earlier index-publication stall and a 673-second source-status query remain
