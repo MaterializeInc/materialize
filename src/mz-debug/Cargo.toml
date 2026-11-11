@@ -2,6 +2,7 @@
 name = "mz-debug"
 description = "Debug tool for self-managed Materialize."
 version = "0.5.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

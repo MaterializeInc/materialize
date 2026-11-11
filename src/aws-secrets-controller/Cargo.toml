@@ -2,7 +2,7 @@
 name = "mz-aws-secrets-controller"
 version = "0.1.0"
 authors = ["Materialize, Inc."]
-license = "proprietary"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

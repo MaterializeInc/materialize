@@ -2,6 +2,7 @@
 name = "mz-build-tools"
 description = "Provides access to tools required in build scripts."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

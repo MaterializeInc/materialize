@@ -2,6 +2,7 @@
 name = "mz-secrets-loader"
 description = "Loads the secrets reader selected on the command line."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
