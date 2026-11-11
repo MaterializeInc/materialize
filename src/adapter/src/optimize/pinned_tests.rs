@@ -12,8 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView};
-use mz_compute_types::plan::pinned::{InstantiateError, PinnedDataflow};
+use mz_compute_types::plan::join::JoinPlan;
+use mz_compute_types::plan::pinned::{InstantiateError, PinError, PinnedDataflow};
+use mz_compute_types::plan::reduce::ReducePlan;
 use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_compute_types::plan::top_k::TopKPlan;
+use mz_compute_types::plan::{LirRelationExpr, LirRelationNode};
 use mz_controller_types::ClusterId;
 use mz_expr::MfpPlan;
 use mz_ore::metrics::MetricsRegistry;
@@ -183,6 +187,18 @@ async fn create_item(catalog: &mut Catalog, id: u64, name: &str, create_sql: &st
 }
 
 /// TEST FIXTURE
+/// Creates `materialize.public.tables (id text, name text)` under id 1.
+async fn create_tables(catalog: &mut Catalog) {
+    create_item(
+        catalog,
+        1,
+        "tables",
+        "CREATE TABLE \"materialize\".\"public\".\"tables\" (\"id\" text, \"name\" text)",
+    )
+    .await;
+}
+
+/// TEST FIXTURE
 /// Drops the item [`create_item`] created under `id`. The catalog does not
 /// check for dependents, so this leaves any plan reading it dangling.
 async fn drop_item(catalog: &mut Catalog, id: u64) {
@@ -218,18 +234,20 @@ fn optimizer_parts(
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn index_round_trips() {
     Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
         let CatalogItem::Index(index) = create_item(
             &mut catalog,
-            1,
+            2,
             "i",
-            "CREATE INDEX \"i\" IN CLUSTER \"quickstart\" ON \"mz_catalog\".\"mz_tables\" (\"id\")",
+            "CREATE INDEX \"i\" IN CLUSTER \"quickstart\" \
+             ON \"materialize\".\"public\".\"tables\" (\"id\")",
         )
         .await
         else {
             panic!("expected an index");
         };
         let catalog = Arc::new(catalog);
-        let name = catalog.get_entry(&CatalogItemId::User(1)).name().clone();
+        let name = catalog.get_entry(&CatalogItemId::User(2)).name().clone();
         let df_desc = optimize_index(&catalog, name, &index, BTreeSet::new());
 
         assert_round_trips(&catalog, df_desc);
@@ -241,13 +259,14 @@ async fn index_round_trips() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn materialized_view_round_trips() {
     Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
         let CatalogItem::MaterializedView(mv) = create_item(
             &mut catalog,
-            1,
+            2,
             "mv",
             "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
              IN CLUSTER \"quickstart\" WITH (ASSERT NOT NULL \"name\") \
-             AS SELECT \"id\", \"name\" FROM \"mz_catalog\".\"mz_tables\"",
+             AS SELECT \"id\", \"name\" FROM \"materialize\".\"public\".\"tables\"",
         )
         .await
         else {
@@ -269,13 +288,14 @@ async fn refresh_every_materialized_view_round_trips() {
             .system_config_mut()
             .set("enable_refresh_every_mvs", VarInput::Flat("on"))
             .expect("flag exists");
+        create_tables(&mut catalog).await;
         let CatalogItem::MaterializedView(mv) = create_item(
             &mut catalog,
-            1,
+            2,
             "mv",
             "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
              IN CLUSTER \"quickstart\" WITH (REFRESH EVERY '1 hour' ALIGNED TO 0) \
-             AS SELECT \"id\" FROM \"mz_catalog\".\"mz_tables\"",
+             AS SELECT \"id\" FROM \"materialize\".\"public\".\"tables\"",
         )
         .await
         else {
@@ -302,13 +322,14 @@ async fn refresh_every_materialized_view_round_trips() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn temporal_filter_materialized_view_round_trips() {
     Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
         let CatalogItem::MaterializedView(mv) = create_item(
             &mut catalog,
-            1,
+            2,
             "mv",
             "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
              IN CLUSTER \"quickstart\" \
-             AS SELECT \"id\" FROM \"mz_catalog\".\"mz_tables\" WHERE mz_now() >= 1000",
+             AS SELECT \"id\" FROM \"materialize\".\"public\".\"tables\" WHERE mz_now() >= 1000",
         )
         .await
         else {
@@ -332,7 +353,7 @@ async fn temporal_filter_materialized_view_round_trips() {
             .source_imports
             .values()
             .next()
-            .expect("pins the mz_tables read");
+            .expect("pins the tables read");
         let (_, lower_bounds, upper_bounds) = pinned_source
             .operators
             .clone()
@@ -509,7 +530,7 @@ async fn dropped_index_import_is_detected() {
 }
 
 /// A collection recreated under the same id with another type stands in
-/// for a builtin whose schema migrated.
+/// for a materialized view whose inferred type changed between releases.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn retyped_source_import_is_detected() {
@@ -684,12 +705,10 @@ async fn applied_replacement_instantiates_only_under_its_own_id() {
 }
 
 /// Every builtin index and materialized view, optimized as its cluster
-/// would optimize it, with the indexes that cluster has. The catalog adds a
-/// builtin view's declared keys to the ones it infers, so this is where the
-/// pinned sink type and the catalog's description disagree.
+/// would optimize it, with the indexes that cluster has.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-async fn builtin_items_round_trip() {
+async fn builtin_items_refuse_to_pin() {
     Catalog::with_debug(|catalog| async move {
         let catalog = Arc::new(catalog);
         let mut indexes_by_cluster: BTreeMap<ClusterId, BTreeSet<GlobalId>> = BTreeMap::new();
@@ -708,6 +727,15 @@ async fn builtin_items_round_trip() {
                 .unwrap_or_default()
         };
 
+        let assert_refused = |df_desc: LirDataflowDescription, name: &str| {
+            assert!(
+                matches!(
+                    PinnedDataflow::try_from(df_desc),
+                    Err(PinError::BuiltinCollection(_))
+                ),
+                "{name} refuses to pin"
+            );
+        };
         let (mut indexes, mut views) = (0, 0);
         for entry in catalog.entries() {
             if !entry.id().is_system() {
@@ -721,17 +749,17 @@ async fn builtin_items_round_trip() {
                     let mut available = cluster_indexes(index.cluster_id);
                     available.retain(|id| *id < index.global_id);
                     let df_desc = optimize_index(&catalog, entry.name().clone(), index, available);
-                    assert_round_trips(&catalog, df_desc);
+                    assert_refused(df_desc, &debug_name);
                     indexes += 1;
                 }
                 CatalogItem::MaterializedView(mv) => {
                     let df_desc = optimize_materialized_view(
                         &catalog,
                         mv,
-                        debug_name,
+                        debug_name.clone(),
                         cluster_indexes(mv.cluster_id),
                     );
-                    assert_round_trips(&catalog, df_desc);
+                    assert_refused(df_desc, &debug_name);
                     views += 1;
                 }
                 _ => {}
@@ -741,6 +769,230 @@ async fn builtin_items_round_trip() {
             indexes > 0 && views > 0,
             "the debug catalog has builtin indexes ({indexes}) and materialized views ({views})"
         );
+    })
+    .await
+}
+
+/// Labels every LIR operator in the dataflow's builds, with the join,
+/// reduce, and top-k strategy the plan chose.
+fn operators(df: &LirDataflowDescription) -> BTreeSet<&'static str> {
+    let mut seen = BTreeSet::new();
+    let mut todo: Vec<&LirRelationExpr> = df.objects_to_build.iter().map(|b| &b.plan).collect();
+    while let Some(expr) = todo.pop() {
+        seen.insert(match &expr.node {
+            LirRelationNode::Constant { .. } => "Constant",
+            LirRelationNode::Get { .. } => "Get",
+            LirRelationNode::Let { .. } => "Let",
+            LirRelationNode::LetRec { .. } => "LetRec",
+            LirRelationNode::Mfp { .. } => "Mfp",
+            LirRelationNode::FlatMap { .. } => "FlatMap",
+            LirRelationNode::Join { plan, .. } => match plan {
+                JoinPlan::Linear(_) => "Join::Linear",
+                JoinPlan::Delta(_) => "Join::Delta",
+            },
+            LirRelationNode::Reduce { plan, .. } => match plan {
+                ReducePlan::Distinct => "Reduce::Distinct",
+                ReducePlan::Accumulable(_) => "Reduce::Accumulable",
+                ReducePlan::Hierarchical(_) => "Reduce::Hierarchical",
+                ReducePlan::Basic(_) => "Reduce::Basic",
+            },
+            LirRelationNode::TopK { top_k_plan, .. } => match top_k_plan {
+                TopKPlan::MonotonicTop1(_) => "TopK::MonotonicTop1",
+                TopKPlan::MonotonicTopK(_) => "TopK::MonotonicTopK",
+                TopKPlan::Basic(_) => "TopK::Basic",
+            },
+            LirRelationNode::Negate { .. } => "Negate",
+            LirRelationNode::Threshold { .. } => "Threshold",
+            LirRelationNode::Union { .. } => "Union",
+            LirRelationNode::ArrangeBy { .. } => "ArrangeBy",
+        });
+        todo.extend(expr.node.children());
+    }
+    seen
+}
+
+/// User indexes and materialized views whose plans together contain every
+/// LIR operator, and each join, reduce, and top-k strategy, except the
+/// monotonic top-k plans, which need a monotonic input that a table is not.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn user_items_cover_every_operator() {
+    Catalog::with_debug(|mut catalog| async move {
+        let mut next_id = 0;
+        let mut create = async |catalog: &mut Catalog, name: &str, sql: String| {
+            next_id += 1;
+            let item = create_item(catalog, next_id, name, &sql).await;
+            (next_id, item)
+        };
+        for (name, columns) in [
+            ("t1", "\"a\" int, \"b\" int"),
+            ("t2", "\"a\" int, \"c\" text"),
+            ("t3", "\"a\" int, \"d\" int"),
+        ] {
+            create(
+                &mut catalog,
+                name,
+                format!("CREATE TABLE \"materialize\".\"public\".\"{name}\" ({columns})"),
+            )
+            .await;
+        }
+        // Indexes on every join key let the optimizer pick a delta join.
+        let mut indexes = BTreeSet::new();
+        for table in ["t1", "t2", "t3"] {
+            let name = format!("{table}_a");
+            let (id, _) = create(
+                &mut catalog,
+                &name,
+                format!(
+                    "CREATE INDEX \"{name}\" IN CLUSTER \"quickstart\" \
+                     ON \"materialize\".\"public\".\"{table}\" (\"a\")"
+                ),
+            )
+            .await;
+            indexes.insert(GlobalId::User(id));
+        }
+        create(
+            &mut catalog,
+            "v",
+            "CREATE VIEW \"materialize\".\"public\".\"v\" AS \
+             SELECT \"a\", sum(\"b\") AS \"s\" FROM \"materialize\".\"public\".\"t1\" \
+             GROUP BY \"a\""
+                .to_string(),
+        )
+        .await;
+        let (view_index_id, view_index) = create(
+            &mut catalog,
+            "v_a",
+            "CREATE INDEX \"v_a\" IN CLUSTER \"quickstart\" \
+             ON \"materialize\".\"public\".\"v\" (\"a\")"
+                .to_string(),
+        )
+        .await;
+        let CatalogItem::Index(view_index) = view_index else {
+            panic!("expected an index");
+        };
+
+        let views = [
+            (
+                "linear_join",
+                "SELECT t1.b, t2.c FROM materialize.public.t1 AS t1 \
+                 JOIN materialize.public.t2 AS t2 ON t1.b = t2.a",
+            ),
+            (
+                "delta_join",
+                "SELECT t1.b, t2.c, t3.d FROM materialize.public.t1 AS t1 \
+                 JOIN materialize.public.t2 AS t2 ON t1.a = t2.a \
+                 JOIN materialize.public.t3 AS t3 ON t1.a = t3.a",
+            ),
+            (
+                "accumulable",
+                "SELECT a, sum(b), count(*) FROM materialize.public.t1 AS t1 GROUP BY a",
+            ),
+            (
+                "hierarchical",
+                "SELECT a, min(b), max(b) FROM materialize.public.t1 AS t1 GROUP BY a",
+            ),
+            (
+                "basic_reduce",
+                "SELECT a, string_agg(c, ',') FROM materialize.public.t2 AS t2 GROUP BY a",
+            ),
+            (
+                "distinct",
+                "SELECT DISTINCT b FROM materialize.public.t1 AS t1",
+            ),
+            // The map on top of the top-k cannot fuse into it, so the plan
+            // has a standalone `Mfp`.
+            (
+                "top_k",
+                "SELECT a, b + 1 FROM \
+                 (SELECT a, b FROM materialize.public.t1 AS t1 ORDER BY b LIMIT 3) AS top",
+            ),
+            (
+                "except",
+                "SELECT a FROM materialize.public.t1 AS t1 \
+                 EXCEPT SELECT a FROM materialize.public.t2 AS t2",
+            ),
+            (
+                "flat_map",
+                "SELECT a, generate_series(1, b) FROM materialize.public.t1 AS t1",
+            ),
+            (
+                "shared_cte",
+                "WITH x AS (SELECT a, count(*) AS n FROM materialize.public.t1 AS t1 GROUP BY a) \
+                 SELECT x1.a, x2.n FROM x AS x1 JOIN x AS x2 ON x1.n = x2.a",
+            ),
+            (
+                "recursive",
+                "WITH MUTUALLY RECURSIVE r (n int) AS \
+                 (SELECT a FROM materialize.public.t1 AS t1 \
+                 UNION SELECT n + 1 FROM r WHERE n < 10) \
+                 SELECT n FROM r",
+            ),
+            ("constant", "SELECT 1 AS x"),
+            (
+                "through_view_index",
+                "SELECT a, s FROM materialize.public.v AS v WHERE a = 1",
+            ),
+        ];
+        let mut mvs = Vec::new();
+        for (name, query) in views {
+            let (_, item) = create(
+                &mut catalog,
+                name,
+                format!(
+                    "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"{name}\" \
+                     IN CLUSTER \"quickstart\" AS {query}"
+                ),
+            )
+            .await;
+            let CatalogItem::MaterializedView(mv) = item else {
+                panic!("expected a materialized view");
+            };
+            mvs.push((name, mv));
+        }
+
+        let catalog = Arc::new(catalog);
+        let mut seen = BTreeSet::new();
+        let view_index_name = catalog
+            .get_entry(&CatalogItemId::User(view_index_id))
+            .name()
+            .clone();
+        let df_desc = optimize_index(&catalog, view_index_name, &view_index, indexes.clone());
+        seen.extend(operators(&df_desc));
+        assert_round_trips(&catalog, df_desc);
+
+        indexes.insert(view_index.global_id);
+        let mut index_imports = 0;
+        for (name, mv) in &mvs {
+            let df_desc =
+                optimize_materialized_view(&catalog, mv, name.to_string(), indexes.clone());
+            seen.extend(operators(&df_desc));
+            index_imports += df_desc.index_imports.len();
+            assert_round_trips(&catalog, df_desc);
+        }
+
+        assert!(index_imports > 0, "some plan reads an index");
+        let expected = BTreeSet::from([
+            "ArrangeBy",
+            "Constant",
+            "FlatMap",
+            "Get",
+            "Join::Delta",
+            "Join::Linear",
+            "Let",
+            "LetRec",
+            "Mfp",
+            "Negate",
+            "Reduce::Accumulable",
+            "Reduce::Basic",
+            "Reduce::Distinct",
+            "Reduce::Hierarchical",
+            "Threshold",
+            "TopK::Basic",
+            "Union",
+        ]);
+        let missing: Vec<_> = expected.difference(&seen).collect();
+        assert!(missing.is_empty(), "no plan contains {missing:?}");
     })
     .await
 }

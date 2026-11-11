@@ -24,7 +24,6 @@ const IMPORTED_INDEX: GlobalId = GlobalId::User(2);
 const ON: GlobalId = GlobalId::User(3);
 const INDEX: GlobalId = GlobalId::User(4);
 const MV_SINK: GlobalId = GlobalId::User(5);
-const BUILTIN_MV_SINK: GlobalId = GlobalId::System(5);
 const VIEW: GlobalId = GlobalId::Transient(1);
 
 ///////////////////////////////////////////////////////////////////////////
@@ -307,29 +306,67 @@ fn materialized_view_round_trips() {
     assert_eq!(rebuilt, df);
 }
 
-/// The catalog declares a key the plan did not establish. A builtin view
-/// declares its type by hand, so the sink keeps the plan's type. A user
-/// view's catalog type is inferred like the plan's, so a difference is
-/// drift.
 #[mz_ore::test]
-fn declared_materialized_view_type_is_drift_only_for_user_views() {
-    let ctx = || {
-        Ctx::new(
-            None,
-            Some(MaterializedViewInfo {
-                desc: RelationDesc::new(asserted_mv_desc().into_typ().with_key(vec![0]), ["c"]),
-                ..mv_info()
-            }),
-        )
-    };
+fn rejects_builtin_collections() {
+    fn move_key<V>(map: &mut BTreeMap<GlobalId, V>, from: GlobalId, to: GlobalId) {
+        let value = map.remove(&from).expect("fixture has the id");
+        map.insert(to, value);
+    }
+    let builtin = GlobalId::System(1);
 
-    let mut builtin = materialized_view_dataflow();
-    let sink = builtin.sink_exports.remove(&MV_SINK).unwrap();
-    builtin.sink_exports.insert(BUILTIN_MV_SINK, sink);
-    assert_eq!(instantiate(&builtin, &ctx()), builtin);
+    let mut df = materialized_view_dataflow();
+    move_key(&mut df.source_imports, SOURCE, builtin);
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::BuiltinCollection(builtin)),
+        "a builtin source import"
+    );
 
-    let user = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
-    let detail = export_drift_detail(user.instantiate(&ctx(), "test".to_string()), MV_SINK);
+    let mut df = materialized_view_dataflow();
+    move_key(&mut df.index_imports, IMPORTED_INDEX, builtin);
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::BuiltinCollection(builtin)),
+        "a builtin index import"
+    );
+
+    let mut df = materialized_view_dataflow();
+    move_key(&mut df.sink_exports, MV_SINK, builtin);
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::BuiltinCollection(builtin)),
+        "a builtin materialized view"
+    );
+
+    let mut df = index_dataflow();
+    move_key(&mut df.index_exports, INDEX, builtin);
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::BuiltinCollection(builtin)),
+        "a builtin index"
+    );
+
+    let introspection = GlobalId::IntrospectionSourceIndex(1);
+    let mut df = materialized_view_dataflow();
+    move_key(&mut df.index_imports, IMPORTED_INDEX, introspection);
+    assert_eq!(
+        PinnedDataflow::try_from(df),
+        Err(PinError::BuiltinCollection(introspection)),
+        "an introspection index import"
+    );
+}
+
+#[mz_ore::test]
+fn materialized_view_key_drift_is_detected() {
+    let ctx = Ctx::new(
+        None,
+        Some(MaterializedViewInfo {
+            desc: RelationDesc::new(asserted_mv_desc().into_typ().with_key(vec![0]), ["c"]),
+            ..mv_info()
+        }),
+    );
+    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), MV_SINK);
     assert!(detail.contains("pinned type"), "{detail}");
 }
 

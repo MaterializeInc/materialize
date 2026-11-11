@@ -25,6 +25,11 @@
 //! identity to pin under, and the [`TryFrom`] conversion rejects them, along
 //! with a peek's transient index export and a dataflow that exports nothing.
 //!
+//! [`TryFrom`] also rejects a dataflow that imports or exports a builtin
+//! collection. Builtins keep their ids across releases while their schemas
+//! and definitions change, and the plan inlines the bodies of builtin views,
+//! which instantiation cannot check.
+//!
 //! Index keys are stored as [`LirScalarExpr`] and converted back to
 //! `MirScalarExpr` on instantiation. LIR scalars are a subset of MIR scalars,
 //! so that direction is total, and `DataflowDescription` keeps its MIR-typed
@@ -184,9 +189,7 @@ pub enum PinnedSinkKind {
     MaterializedView {
         /// The sink's relation type as the optimizer built it: the plan's
         /// inferred nullability and keys, with the non-null assertions
-        /// applied. The catalog adds a builtin view's declared keys to the
-        /// ones it infers, so a builtin's catalog type can have keys the plan
-        /// lacks.
+        /// applied.
         typ: SqlRelationType,
     },
     /// A metric sink. Its label and the shaped description of its input come
@@ -212,6 +215,8 @@ pub enum PinError {
     TransientIndexExport(GlobalId),
     /// The dataflow exports nothing, so no catalog item anchors it.
     NoExports,
+    /// The dataflow imports or exports the builtin collection under this id.
+    BuiltinCollection(GlobalId),
 }
 
 impl fmt::Display for PinError {
@@ -227,6 +232,12 @@ impl fmt::Display for PinError {
                 )
             }
             PinError::NoExports => write!(f, "a dataflow with no exports cannot be pinned"),
+            PinError::BuiltinCollection(id) => {
+                write!(
+                    f,
+                    "a dataflow that reads or writes builtin collection {id} cannot be pinned"
+                )
+            }
         }
     }
 }
@@ -262,6 +273,15 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
         );
         if index_exports.is_empty() && sink_exports.is_empty() {
             return Err(PinError::NoExports);
+        }
+        if let Some(id) = source_imports
+            .keys()
+            .chain(index_imports.keys())
+            .chain(index_exports.keys())
+            .chain(sink_exports.keys())
+            .find(|id| id.is_system())
+        {
+            return Err(PinError::BuiltinCollection(*id));
         }
 
         let source_imports = source_imports
@@ -404,9 +424,7 @@ pub struct IndexInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterializedViewInfo {
     /// The view's description. Instantiation takes its column names from it
-    /// and checks its type against the pinned type: the whole type for a user
-    /// view, and only the column types for a builtin, whose declared keys the
-    /// plan's type may lack.
+    /// and checks its type against the pinned type.
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
@@ -485,9 +503,10 @@ impl PinnedDataflow {
     /// first problem found is reported.
     ///
     /// NOTE: The plan also contains the bodies of the views it inlines, and
-    /// of SQL-defined builtin functions, and nothing here verifies those. A
-    /// builtin view can change its body between releases while its id and
-    /// type stay the same.
+    /// of SQL-defined builtin functions, and nothing here verifies those.
+    /// Pinning refuses builtin collections, which keeps out builtin views
+    /// that read one, but not a builtin view that reads no collection or a
+    /// SQL-defined function.
     // TODO(mgree): the import and export checks are independent, so
     // collecting every problem into a list instead of returning at the first
     // one would be easy.
@@ -522,9 +541,9 @@ impl PinnedDataflow {
         }
 
         // An import's id resolving is not evidence that the plan's assumptions
-        // about it hold: a builtin collection keeps its id across a schema
-        // migration. So each import is checked against what the catalog says
-        // now.
+        // about it hold: a materialized view's inferred nullability and keys
+        // can change between releases. So each import is checked against what
+        // the catalog says now.
         let mut rebuilt_source_imports = BTreeMap::new();
         for (id, import) in source_imports {
             let PinnedSourceImport {
@@ -713,12 +732,9 @@ impl PinnedDataflow {
                             });
                         }
                     }
-                    // For user objects, we expect the computed types to match exactly.
-                    // For builtins, they may not (e.g., keys are programmer assertions).
-                    //
-                    // NB we've already checked arity and scalar types, so this only
-                    // checks nullability and key information.
-                    if !id.is_system() && typ != *catalog_typ {
+                    // Arity and scalar types are checked above, so this
+                    // compares nullability and keys.
+                    if typ != *catalog_typ {
                         return Err(InstantiateError::ExportDrift {
                             id,
                             detail: format!("pinned type {typ:?}, catalog says {catalog_typ:?}"),
