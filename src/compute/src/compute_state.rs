@@ -564,8 +564,10 @@ impl ComputeState {
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
                 // The file store lives in its own subdirectory so its files
-                // cannot collide with other scratch users. It shares their
-                // space, which its capacity tracks.
+                // cannot collide with other scratch users. It sizes itself to
+                // the volume's free space, so it assumes no other writer fills
+                // the volume. lgalloc and the pager's file backend use the
+                // same directory, but are not enabled alongside the store.
                 let backend = match &scratch {
                     Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
                         ExtentBackend::File {
