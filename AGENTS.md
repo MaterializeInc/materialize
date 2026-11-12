@@ -20,9 +20,10 @@ authors to squash on merge or to keep every intermediate commit green.
 
 ## Pull requests and reviews
 
-Never mark a PR ready for review, request reviewers, or submit a review on
-someone else's PR. Open drafts and leave pending reviews. The human does the
-rest. See `doc/developer/guide-changes.md#agent-authored-changes`.
+Open PRs as drafts and leave reviews pending. Mark a PR ready, request
+reviewers, or submit a review only when the user explicitly asks. The user
+names the reviewers and chooses the review type. See
+`doc/developer/guide-changes.md#agent-authored-changes`.
 
 ## Guidance
 

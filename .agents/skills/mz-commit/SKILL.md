@@ -161,8 +161,8 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Each PR should contain one semantic change.
 * Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
 * Open PRs as drafts (`gh pr create --draft`, or `draft: true` through the GitHub MCP).
-  Never mark a PR ready for review and never request reviewers.
-  The human author does both after reading the diff, see [Agent-authored changes](/doc/developer/guide-changes.md#agent-authored-changes).
+  Mark a PR ready for review only when the user explicitly asks.
+  Request reviewers only when asked, and only the ones the user names, see [Agent-authored changes](/doc/developer/guide-changes.md#agent-authored-changes).
 
 ## Splitting large branches
 

@@ -125,17 +125,20 @@ The PR should do one thing. If it spans multiple CODEOWNERS areas (e.g. sql-pars
 Only post when the user asks. The findings go out under the user's name, so the
 user curates them, see [AI-assisted review](/doc/developer/guide-changes.md#ai-assisted-review).
 
-- Create a pending review with line comments. Never submit it, approve, or
-  request changes. The user edits and submits.
-- Post only Blocking and Strong-suggestion findings you are confident in, at
-  most 5. Leave nits in the local report.
+- Create a pending review with line comments. The user edits and submits it.
+  Submit only when the user explicitly asks, and ask first whether to approve,
+  comment, or request changes. The user chooses.
+- Rate each finding on two axes: factual accuracy and worth posting. Post only
+  Blocking and Strong-suggestion findings that rate high on both. List the
+  others in the local report with their ratings, so the user can ask for a
+  deeper investigation or check them directly. Leave nits in the local report.
 - Structure each comment as a one-line claim followed by the supporting analysis
   in a blockquote headed `Agent analysis:`. The user turns the claim into their
   own position and keeps, trims, or drops the quote.
 - Never write in the user's voice ("I think", "I'd prefer"). The claim states
   the issue, and the user adds their own stance.
 - Keep the analysis short: the failing input or state, the wrong outcome, and
-  the line that causes it.
-- Put one disclosure line in the review body. The user removes it when every
-  comment that survives carries a marked quote.
+  the line that causes it. Add a proposed fix when you have one, as a GitHub
+  suggestion block when it is small.
+- Put one line disclosing AI assistance in the review body.
 - Do not reply to existing review threads on the user's behalf.
