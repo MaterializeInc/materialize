@@ -98,6 +98,7 @@ impl Harness {
         let context = ComputeInstanceContext {
             scratch_directory: None,
             worker_core_affinity: false,
+            swap_available: true,
             connection_context: ConnectionContext::for_tests(Arc::new(
                 InMemorySecretsController::new(),
             )),

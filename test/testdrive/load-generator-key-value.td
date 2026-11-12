@@ -428,4 +428,4 @@ ALTER SYSTEM SET enable_upsert_v2 = true
 > DROP CLUSTER lg_v2_cluster CASCADE;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_upsert_v2 = false
+ALTER SYSTEM RESET enable_upsert_v2

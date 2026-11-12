@@ -942,6 +942,7 @@ impl Controller {
                     },
                 ],
                 disk_limit,
+                swap_enabled: location.allocation.swap_enabled,
                 node_selector: location.allocation.selectors,
             },
         )?;

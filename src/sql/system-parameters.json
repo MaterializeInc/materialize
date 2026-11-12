@@ -229,7 +229,7 @@
     {
       "name": "column_paged_batcher_budget_fraction",
       "typeName": "double-precision floating-point number",
-      "default": "0.05",
+      "default": "0.2",
       "description": "Budget fraction for chunk spilling: the buffer pool multiplies it against physical RAM and the column pager's tiered policy against the announced memory limit. Total pool budget = max(ram * fraction, 128 MiB).",
       "scope": "replica",
       "userVisible": false,
@@ -265,8 +265,8 @@
     {
       "name": "column_paged_batcher_spill_worker_fraction",
       "typeName": "double-precision floating-point number",
-      "default": "0.125",
-      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded up; 0 evicts inline on the caller.",
+      "default": "0.5",
+      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded down to a power of two and at least 1; 0 evicts inline on the caller.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -1780,7 +1780,7 @@
     {
       "name": "enable_upsert_chunked_stash",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when enable_upsert_v2 is true.",
       "scope": "replica",
       "userVisible": false,
@@ -1789,7 +1789,7 @@
     {
       "name": "enable_upsert_paged_spill",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash flavor) or the column pager (paged stash flavor).",
       "scope": "replica",
       "userVisible": false,
@@ -1798,7 +1798,7 @@
     {
       "name": "enable_upsert_v2",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Whether to use the v2 upsert operator.",
       "scope": "environment",
       "userVisible": false,

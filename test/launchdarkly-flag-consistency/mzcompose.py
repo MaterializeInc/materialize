@@ -519,12 +519,10 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
     "cluster_topology_spread_min_domains",
-    "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
-    "enable_upsert_paged_spill",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",
@@ -536,6 +534,11 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "persist_validate_part_bounds_on_write",
     "storage_enforce_external_addresses",
     "timely_zero_copy_limit",
+    # Production serves the compiled-in default through a build-version rule,
+    # while the fallthrough this check compares against keeps the old value for
+    # builds that predate the default.
+    "column_paged_batcher_budget_fraction",
+    "enable_upsert_chunked_stash",
     # TODO: triage. These features default *on* in the compiled-in default but
     # production cloud still serves them *off* (or vice versa). Either production
     # LaunchDarkly is stale and should be flipped, or
@@ -546,7 +549,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
     "enable_new_outer_join_lowering",
-    "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
 }

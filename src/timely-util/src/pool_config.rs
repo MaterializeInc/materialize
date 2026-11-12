@@ -29,6 +29,8 @@
 
 #![deny(missing_docs)]
 
+use mz_ore::cast::CastLossy;
+
 pub mod metrics;
 
 /// Process-wide buffer pool shared by every spill consumer in the process.
@@ -123,9 +125,52 @@ pub struct PoolPagerConfig {
     pub rss_target_bytes: usize,
 }
 
+/// Spill threads for a process with `workers` timely workers at `fraction`.
+///
+/// `floor(workers * fraction)` rounded down to a power of two, and at least
+/// one for any positive fraction. A fraction that is not positive yields
+/// zero, which evicts inline on the calling thread.
+pub fn spill_threads_for_workers(workers: usize, fraction: f64) -> usize {
+    if fraction.is_nan() || fraction <= 0.0 {
+        return 0;
+    }
+    let scaled = usize::cast_lossy((f64::cast_lossy(workers) * fraction).floor());
+    match scaled.checked_ilog2() {
+        Some(log) => 1 << log,
+        None => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn spill_threads_for_workers_steps_by_powers_of_two() {
+        let at_half = [
+            (1, 1),
+            (2, 1),
+            (4, 2),
+            (6, 2),
+            (8, 4),
+            (12, 4),
+            (16, 8),
+            (24, 8),
+            (31, 8),
+            (62, 16),
+        ];
+        for (workers, threads) in at_half {
+            assert_eq!(
+                spill_threads_for_workers(workers, 0.5),
+                threads,
+                "{workers} workers"
+            );
+        }
+        assert_eq!(spill_threads_for_workers(62, 0.0), 0);
+        assert_eq!(spill_threads_for_workers(62, -1.0), 0);
+        assert_eq!(spill_threads_for_workers(62, f64::NAN), 0);
+        assert_eq!(spill_threads_for_workers(1, 0.01), 1);
+    }
 
     /// `apply_pool_config` installs the pool: `active_pool` resolves to it
     /// afterwards, and the configured budget is visible on the instance.

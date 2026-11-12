@@ -427,14 +427,21 @@ pub struct StorageInstanceContext {
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
+    /// Whether the replica can swap.
+    pub swap_available: bool,
 }
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(scratch_directory: Option<PathBuf>, cluster_memory_limit: Option<usize>) -> Self {
+    pub fn new(
+        scratch_directory: Option<PathBuf>,
+        cluster_memory_limit: Option<usize>,
+        swap_available: bool,
+    ) -> Self {
         Self {
             scratch_directory,
             cluster_memory_limit,
+            swap_available,
         }
     }
 
