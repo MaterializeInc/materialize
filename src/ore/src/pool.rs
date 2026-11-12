@@ -1230,9 +1230,8 @@ impl Pool {
     /// effect on a swap-backed pool or one without spill threads.
     ///
     /// The store's capacity follows the volume's free space independently of
-    /// the release, re-derived by the spill threads every
-    /// [`FILE_CAPACITY_REFRESH_INTERVAL`]. Without spill threads it changes
-    /// only when the store hits `ENOSPC`.
+    /// the release, re-derived by the spill threads every second. Without
+    /// spill threads it changes only when the store hits `ENOSPC`.
     pub fn set_file_release(&self, interval: std::time::Duration, bytes_per_class: u64) {
         let mut release = self.0.file_release();
         release.interval = interval;
