@@ -14,9 +14,9 @@
 -- limitations under the License.
 
 {#
-This macro creates an unmanaged cluster by cloning the replicas of an
-existing unmanaged origin cluster. SIZE and AVAILABILITY ZONE are copied
-per replica. Internal replicas are skipped. Replicas without a SIZE
+This macro creates an unmanaged cluster by cloning the replicas and query
+policy attachment of an existing unmanaged origin cluster. SIZE and
+AVAILABILITY ZONE are copied per replica. Internal replicas are skipped. Replicas without a SIZE
 (orchestrated replicas using COMPUTECTL/STORAGECTL ADDRESSES) cannot be
 cloned and produce a compiler error.
 
@@ -91,10 +91,14 @@ cloned and produce a compiler error.
                 {% do replica_clauses.append(adapter.quote(row[0]) ~ " (" ~ parts | join(", ") ~ ")") %}
             {% endfor %}
 
+            {% set query_policy = internal_get_cluster_query_policy(origin_cluster) %}
             {% set create_cluster_ddl %}
                 CREATE CLUSTER {{ adapter.quote(deploy_cluster) }} REPLICAS (
                     {{ replica_clauses | join(",\n                    ") }}
                 )
+                {% if query_policy is not none %}
+                    , QUERY POLICY = {{ adapter.quote(query_policy | replace('"', '""')) }}
+                {% endif %}
             {% endset %}
             {{ run_query(create_cluster_ddl) }}
             {{ set_cluster_ci_tag(deploy_cluster) }}
