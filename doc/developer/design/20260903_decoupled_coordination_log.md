@@ -9,11 +9,20 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate the remaining external launchers in `test/cluster/mzcompose.py`: death
-detection, the replica-metrics preconnection fixture, and memory-limiter replica
-recreation. Preserve proxy disruption, metric assertions and limiter workloads.
-The preconnection fixture needs valid native ownership before connections are
-allowed, not a catalog-free process. Inspect that boundary before changing it.
+Migrate memory-limiter replica recreation in `test/cluster/mzcompose.py`.
+Preserve its workload and heap limits, and refresh native inventory IDs after
+each recreation. Its existing default-suite exclusion (database-issues#9502)
+remains explicit. Then continue the external-launcher inventory below.
+
+Cluster death detection and replica metrics now launch with native ownership.
+Both actual workflows pass on capped scratch with retained default-debug binaries.
+Death detection establishes query readiness and checks only post-fault logs.
+Metrics preserves zero-before-connection assertions with disabled control proxies,
+then checks workloads, metrics and keepalives after enabling them. Review's startup
+registration race is fixed without retrying unexpected nonzero values. Evidence:
+`native-driver-scratch/cluster-launcher-evidence/`. An initial metrics runner failed
+only while inspecting an unused testdrive container. The corrected runner passes
+with unchanged workflow assertions, no OOM and fixture cleanup verified.
 
 Replica-isolation is committed and passes its complete split/unified disruption
 matrices with two processes per replica. Tracing passes after establishing native

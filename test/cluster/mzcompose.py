@@ -2747,20 +2747,9 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     Regression test for https://github.com/MaterializeInc/database-issues/issues/6095
     """
 
-    with c.override(
-        Clusterd(
-            name="clusterd1",
-            environment_extra=[
-                # Disable GRPC host checking. We are connecting through a
-                # proxy, so the host in the request URI doesn't match
-                # clusterd's fqdn.
-                "CLUSTERD_GRPC_HOST=",
-            ],
-        ),
-    ):
+    with ExitStack() as stack:
         c.up(
             "materialized",
-            "clusterd1",
             "toxiproxy",
             Service("testdrive", idle=True),
         )
@@ -2792,8 +2781,43 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                     COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 1));
 
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
+            """))
+        [(cluster_id, replica_id)] = c.sql_query("""
+            SELECT c.id, r.id FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica1'
+        """)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    # The control connections arrive through the proxy, not its own host name.
+                    environment_extra=["CLUSTERD_GRPC_HOST="],
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *native_catalog_options(c),
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
+        with c.sql_cursor(
+            startup_params={
+                "cluster": "cluster1",
+                "cluster_replica": "replica1",
+                "statement_timeout": "60s",
+            }
+        ) as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM mz_introspection.mz_dataflow_operators"
+            )
+            cursor.fetchall()
 
+        fault_time = time.time()
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent("""
                 $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
                 {
                   "name": "clusterd1",
@@ -2807,10 +2831,13 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                   "type": "timeout",
                   "attributes": {"timeout": 0}
                 }
-            """))
+            """),
+        )
         # Should detect broken connection after a few seconds.
         time.sleep(10)
-        envd = c.invoke("logs", "materialized", capture=True)
+        envd = c.invoke(
+            "logs", "--since", str(fault_time), "materialized", capture=True
+        )
         print(envd.stdout)
         assert (
             "query replica connection failed: query connection lost: recv error: timed out"
@@ -2942,14 +2969,13 @@ class Metrics:
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
-    with c.override(Clusterd(name="clusterd1", workers=1)), ExitStack() as stack:
-        c.up("materialized", "clusterd1")
+    with ExitStack() as stack:
+        c.up("materialized", "toxiproxy")
 
         def fetch_metrics() -> Metrics:
-            resp = c.exec(
-                "clusterd1", "curl", "localhost:6878/metrics", capture=True
-            ).stdout
-            return Metrics(resp)
+            resp = requests.get(metrics_url, timeout=5)
+            resp.raise_for_status()
+            return Metrics(resp.text)
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2957,21 +2983,27 @@ def workflow_test_replica_metrics(c: Composition) -> None:
             user="mz_system",
         )
 
-        metrics = fetch_metrics()
-
-        # The cluster should not report the time that the last command was received
-        # as 0 until environmentd connects.
-        assert metrics.get_last_command_received("compute") == 0
-        assert metrics.get_last_command_received("storage") == 0
-
-        before_connection_time = time.time()
+        # Native replicas need inventory before launch. Block only their CTP
+        # connections so startup can proceed while the transport metrics stay zero.
+        proxy_url = f"http://localhost:{c.port('toxiproxy', 8474)}/proxies"
+        proxies = [
+            {
+                "name": f"metrics-{server}",
+                "listen": f"0.0.0.0:{port}",
+                "upstream": f"clusterd1:{port}",
+                "enabled": False,
+            }
+            for server, port in (("storage", 2100), ("compute", 2101))
+        ]
+        for proxy in proxies:
+            requests.post(proxy_url, json=proxy, timeout=10).raise_for_status()
 
         # Set up a cluster with a couple dataflows.
         c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGECTL ADDRESSES ['toxiproxy:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
@@ -2985,6 +3017,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
                 Clusterd(
                     name="clusterd1",
                     workers=1,
+                    environment_extra=["CLUSTERD_GRPC_HOST="],
                     options=[
                         f"--catalog-cluster-id={cluster_id}",
                         f"--catalog-replica-id={replica_id}",
@@ -2994,6 +3027,38 @@ def workflow_test_replica_metrics(c: Composition) -> None:
             )
         )
         c.up("clusterd1")
+        metrics_url = f"http://localhost:{c.port('clusterd1', 6878)}/metrics"
+        # HTTP starts before the transport metric series are registered. Wait for
+        # registration, but fail immediately if any connection has received bytes.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                metrics = fetch_metrics()
+            except (requests.ConnectionError, requests.Timeout):
+                pass
+            else:
+                timestamps = metrics.with_name(
+                    "mz_cluster_server_last_command_received"
+                )
+                assert all(value == 0 for value in timestamps.values()), timestamps
+                if all(
+                    any(f'server_name="{server}"' in key for key in timestamps)
+                    for server in ("compute", "storage")
+                ):
+                    break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("replica transport metrics did not become available")
+        assert metrics.get_last_command_received("compute") == 0
+        assert metrics.get_last_command_received("storage") == 0
+        before_connection_time = time.time()
+        for proxy in proxies:
+            requests.post(
+                f"{proxy_url}/{proxy['name']}",
+                json={**proxy, "enabled": True},
+                timeout=10,
+            ).raise_for_status()
+
         c.sql("""
             SET cluster = cluster1;
 
