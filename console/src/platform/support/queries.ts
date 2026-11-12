@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { createStandaloneToast } from "@chakra-ui/react";
 import {
   infiniteQueryOptions,
   MutationState,
@@ -31,6 +32,7 @@ import {
   SupportTicket,
 } from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
+import { ToastComponent } from "~/components/Toast";
 import { useAuthUser } from "~/external-library-wrappers/frontegg";
 
 import { readAsBase64 } from "./ticketForm";
@@ -249,7 +251,11 @@ export function useCreateSupportTicket() {
     onSuccess: ({ pagesOnCall: _, ...ticket }, { files }) => {
       // The ticket opens first, so files can never hold up an outage report.
       if (files.length > 0) {
-        startAttachingFiles(queryClient, { ticketId: ticket.id, files });
+        startAttachingFiles(queryClient, {
+          ticketId: ticket.id,
+          ticketNumber: ticket.number,
+          files,
+        });
       }
       const { queryKey } = supportTicketsQueryOptions(owner);
       // Intercom's ticket search takes a few seconds to include a new ticket,
@@ -275,7 +281,12 @@ export function useCreateSupportTicket() {
   });
 }
 
-export type AttachFilesVariables = { ticketId: string; files: File[] };
+export type AttachFilesVariables = {
+  ticketId: string;
+  /** For messages about the files once the confirmation has closed. */
+  ticketNumber?: string | null;
+  files: File[];
+};
 
 export type AttachFilesState = MutationState<
   AttachedSupportTicketFiles,
@@ -303,6 +314,40 @@ export const isAttachUnconfirmedError = (error: unknown) =>
     ? error.status === 504
     : error instanceof TypeError;
 
+/** How to share files that couldn't be added. */
+export const SHARE_FILES_INSTEAD =
+  "Reply to the confirmation email or open the ticket in Help Center to share them.";
+
+/** What became of a ticket's files, or nothing if it had none. */
+export function attachFilesMessage(
+  state: AttachFilesState,
+  ticket = "Your ticket",
+): string | undefined {
+  const count = state.variables?.files.length ?? 0;
+  if (count === 0) return undefined;
+  const files = count === 1 ? "1 file" : `${count} files`;
+  if (state.status === "success") return `${files} added to your ticket.`;
+  if (state.status !== "error") return `Adding ${files}\u2026`;
+  return isAttachUnconfirmedError(state.error)
+    ? `${ticket} is open, but we couldn't confirm the ${files} ${count === 1 ? "was" : "were"} added. Check the ticket in Help Center before adding them again.`
+    : `${ticket} is open, but the ${files} couldn't be added.`;
+}
+
+/**
+ * How many components show each ticket's attach status. A failure nobody
+ * sees, say after the confirmation's Done, gets a toast instead.
+ */
+const shownAttachStatuses = new Map<string, number>();
+
+/**
+ * Uploads outlive the components that start them, so their toasts go through
+ * Chakra's shared toast store, which the app's ToastProvider renders, rather
+ * than `useToast`.
+ */
+const { toast: showToast } = createStandaloneToast({
+  defaultOptions: { position: "bottom-right", render: ToastComponent },
+});
+
 /**
  * Adds files to one of the user's tickets, as a reply from them. The files
  * are read and base64-encoded here, as the global API takes them.
@@ -315,34 +360,55 @@ export function startAttachingFiles(
   queryClient: QueryClient,
   variables: AttachFilesVariables,
 ) {
-  queryClient
-    .getMutationCache()
-    .build(
-      queryClient,
-      queryClient.defaultMutationOptions({
-        mutationKey: supportTicketQueryKeys.attachFiles(variables.ticketId),
-        mutationFn: async ({ ticketId, files }: AttachFilesVariables) => {
-          const encoded = await Promise.all(
-            files.map(async (file) => ({
-              name: file.name,
-              data: await readAsBase64(file),
-            })),
-          );
-          const { data } = await attachSupportTicketFiles(ticketId, encoded);
-          return data;
-        },
-        retry: retryWhenUploadsAreBusy,
-        // The global API asks for 5 seconds.
-        retryDelay: (failureCount) => (failureCount + 1) * 5_000,
-      }),
-    )
-    .execute(variables)
-    .catch(() => {
-      // The error stays in the mutation's state, which the confirmation shows.
+  const mutation = queryClient.getMutationCache().build(
+    queryClient,
+    queryClient.defaultMutationOptions({
+      mutationKey: supportTicketQueryKeys.attachFiles(variables.ticketId),
+      mutationFn: async ({ ticketId, files }: AttachFilesVariables) => {
+        const encoded = await Promise.all(
+          files.map(async (file) => ({
+            name: file.name,
+            data: await readAsBase64(file),
+          })),
+        );
+        const { data } = await attachSupportTicketFiles(ticketId, encoded);
+        return data;
+      },
+      retry: retryWhenUploadsAreBusy,
+      // The global API asks for 5 seconds.
+      retryDelay: (failureCount) => (failureCount + 1) * 5_000,
+      // Keeps how it went, for the ticket's modal, for an hour.
+      gcTime: 60 * 60 * 1000,
+    }),
+  );
+  mutation.execute(variables).catch(() => {
+    // The error stays in the mutation's state for the confirmation and the
+    // ticket's modal. If neither is showing, say so in a toast.
+    if (shownAttachStatuses.has(variables.ticketId)) return;
+    const state = mutation.state as AttachFilesState;
+    const message = attachFilesMessage(
+      state,
+      variables.ticketNumber
+        ? `Ticket #${variables.ticketNumber}`
+        : "Your ticket",
+    );
+    if (!message) return;
+    showToast({
+      status: "error",
+      description: isAttachUnconfirmedError(state.error)
+        ? message
+        : `${message} ${SHARE_FILES_INSTEAD}`,
+      // It needs acting on, so it stays until closed.
+      duration: null,
+      isClosable: true,
     });
+  });
 }
 
-/** How adding files to a new ticket went, if any were added. */
+/**
+ * How adding files to a new ticket went, if any were added. While mounted,
+ * failures for that ticket get no toast, so show the status.
+ */
 export function useAttachFilesState(
   ticketId: string,
 ): AttachFilesState | undefined {
@@ -353,5 +419,19 @@ export function useAttachFilesState(
     },
     select: (mutation) => mutation.state as AttachFilesState,
   });
+  React.useEffect(() => {
+    shownAttachStatuses.set(
+      ticketId,
+      (shownAttachStatuses.get(ticketId) ?? 0) + 1,
+    );
+    return () => {
+      const count = (shownAttachStatuses.get(ticketId) ?? 1) - 1;
+      if (count > 0) {
+        shownAttachStatuses.set(ticketId, count);
+      } else {
+        shownAttachStatuses.delete(ticketId);
+      }
+    };
+  }, [ticketId]);
   return states.at(-1);
 }

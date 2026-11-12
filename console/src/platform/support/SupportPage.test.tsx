@@ -1570,6 +1570,127 @@ describe("SupportPage", () => {
       );
     });
 
+    it("keeps the files as they were while the ticket opens", async () => {
+      let openTicket = () => {};
+      const ticketOpened = new Promise<void>((resolve) => {
+        openTicket = resolve;
+      });
+      const attached: unknown[] = [];
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, async () => {
+          await ticketOpened;
+          return HttpResponse.json(
+            {
+              ...buildTicket({ title: "Sink is lagging" }),
+              pagesOnCall: false,
+            },
+            { status: 201 },
+          );
+        }),
+        attachHandler((body) => {
+          attached.push(body);
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        [
+          new File(["hi"], "error.txt", { type: "text/plain" }),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ],
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      // The ticket gets the files picked when it was sent.
+      expect(
+        screen.getByRole("button", { name: "Remove error.txt" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Attach files" }),
+      ).toBeDisabled();
+      expect(screen.getByTestId("support-ticket-file-input")).toBeDisabled();
+
+      openTicket();
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attached).toEqual([
+          {
+            ticketId: "42",
+            files: [
+              { name: "error.txt", data: window.btoa("hi") },
+              { name: "screen.png", data: window.btoa("png") },
+            ],
+          },
+        ]),
+      );
+    });
+
+    it("says when files fail after the confirmation closes", async () => {
+      let failUpload = () => {};
+      const uploadFailed = new Promise<void>((resolve) => {
+        failUpload = resolve;
+      });
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        http.post(`${TICKETS_URL}/:ticketId/attachments`, async () => {
+          await uploadFailed;
+          return HttpResponse.json({}, { status: 502 });
+        }),
+        ticketDetailHandler(),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent("Adding 1 file\u2026");
+      await user.click(within(sent).getByRole("button", { name: "Done" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId("support-ticket-sent"),
+        ).not.toBeInTheDocument(),
+      );
+
+      failUpload();
+      const toast = await screen.findByText(
+        "Ticket #4821 is open, but the 1 file couldn't be added. Reply to the confirmation email or open the ticket in Help Center to share them.",
+      );
+      // It stays until it's closed.
+      await user.click(
+        within(toast.closest("[role=status]") ?? document.body).getByRole(
+          "button",
+          { name: "Close" },
+        ),
+      );
+      await waitFor(() => expect(toast).not.toBeInTheDocument());
+
+      // The ticket says so too.
+      await user.click(
+        await screen.findByRole("link", { name: "Sink is lagging" }),
+      );
+      expect(
+        await screen.findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but the 1 file couldn't be added. Reply to the confirmation email or open the ticket in Help Center to share them.",
+      );
+    });
+
     it("only retries adding files when the server turned them away unread", () => {
       const status = (code: number) => new OpenApiFetchError(code, {});
       expect(retryWhenUploadsAreBusy(0, status(503))).toBe(true);

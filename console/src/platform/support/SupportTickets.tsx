@@ -46,6 +46,7 @@ import {
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
+import { AttachFilesStatus } from "./AttachFilesStatus";
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useListedSupportTicket, useSupportTicket } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
@@ -556,6 +557,11 @@ export const SupportTicketModal = ({
                 <RelativeTime date={ticket.createdAt} prefix="Opened " />
               </Text>
             </HStack>
+          )}
+          {ticketId && (
+            // Files added from the console this session, while they upload
+            // or if they didn't make it.
+            <AttachFilesStatus ticketId={ticketId} showShareInstead mb="3" />
           )}
           {isPending ? (
             <LoadingContainer />

@@ -64,13 +64,9 @@ import {
 } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { AttachFilesStatus } from "./AttachFilesStatus";
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
-import {
-  isAttachUnconfirmedError,
-  useAttachFilesState,
-  useCreateSupportTicket,
-  useSupportOrganizations,
-} from "./queries";
+import { useCreateSupportTicket, useSupportOrganizations } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
   ATTACHMENT_ACCEPT,
@@ -114,10 +110,13 @@ const fileKey = (file: File) => {
 const AttachmentPicker = ({
   files,
   error,
+  isDisabled,
   onChange,
 }: {
   files: File[];
   error: string | undefined;
+  /** While the ticket opens: the files it will get are already set. */
+  isDisabled: boolean;
   onChange: (files: File[]) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -148,6 +147,7 @@ const AttachmentPicker = ({
         multiple
         accept={ATTACHMENT_ACCEPT}
         tabIndex={-1}
+        disabled={isDisabled}
         aria-label="Files to attach"
         data-testid="support-ticket-file-input"
         onChange={(event) => {
@@ -163,6 +163,7 @@ const AttachmentPicker = ({
           variant="secondary"
           size="sm"
           leftIcon={<PaperclipIcon aria-hidden />}
+          isDisabled={isDisabled}
           onClick={() => input.current?.click()}
         >
           Attach files
@@ -192,6 +193,7 @@ const AttachmentPicker = ({
                 icon={<CloseIcon stroke="currentColor" />}
                 variant="ghost"
                 size="xs"
+                isDisabled={isDisabled}
                 onClick={() => removeFile(file)}
               />
             </HStack>
@@ -606,6 +608,7 @@ const NewTicketForm = ({
           <AttachmentPicker
             files={files}
             error={filesError}
+            isDisabled={submit.isPending}
             onChange={setFiles}
           />
 
@@ -686,13 +689,6 @@ const TicketSent = ({
   onReportOutage: () => void;
   onClose: () => void;
 }) => {
-  // Adding the files picked in the form, if any.
-  const attach = useAttachFilesState(ticket.id);
-  const fileCount = attach?.variables?.files.length ?? 0;
-  const filesLabel = fileCount === 1 ? "1 file" : `${fileCount} files`;
-  // Without an answer, the files may have been added anyway.
-  const isUnconfirmed =
-    attach?.status === "error" && isAttachUnconfirmedError(attach.error);
   const { colors } = useTheme<MaterializeTheme>();
   const supportOrganizations = useSupportOrganizations();
   // A ticket for another organization says which one it went to.
@@ -779,29 +775,7 @@ const TicketSent = ({
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
           </OrderedList>
-          {fileCount > 0 && (
-            <Text
-              textStyle="text-small"
-              color={
-                attach?.status === "error"
-                  ? colors.accent.red
-                  : colors.foreground.secondary
-              }
-              // Keep a stable role: swapping status/alert mid-update is
-              // announced unreliably by screen readers.
-              role="status"
-              aria-live={attach?.status === "error" ? "assertive" : "polite"}
-              data-testid="support-ticket-attachments-status"
-            >
-              {attach?.status === "error"
-                ? isUnconfirmed
-                  ? `Your ticket is open, but we couldn't confirm the ${filesLabel} ${fileCount === 1 ? "was" : "were"} added. Check the ticket in Help Center before adding them again.`
-                  : `Your ticket is open, but the ${filesLabel} couldn't be added.`
-                : attach?.status === "success"
-                  ? `${filesLabel} added to your ticket.`
-                  : `Adding ${filesLabel}\u2026`}
-            </Text>
-          )}
+          <AttachFilesStatus ticketId={ticket.id} />
           <FilesNote />
         </VStack>
 
