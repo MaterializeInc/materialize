@@ -9,11 +9,17 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Convert replica-isolation next. Start every process from committed inventory,
-refresh identity after drop/recreate, and replace controller-log compaction checks
-with baseline-and-advance assertions on actual replica read frontiers and Persist
-since. Preserve the disruption matrix and check its expectations against native
-protection and retention. See `native-replica-isolation-boundary.md`.
+Finish replica-isolation verification and commit its working-tree changes. The
+full unified matrix passes with native identities on both processes and actual
+compaction advancement checks. The split matrix is running on scratch under
+`native-driver-scratch/isolation-split-hard-budget-fixed.log`. The interrupted
+local run is not acceptance evidence. Review details and earlier failures are in
+`native-replica-isolation-boundary.md`.
+
+The tracing launcher is also migrated in the working tree, but needs runtime
+verification. Kafka source resumption is committed and verified with its original
+four workers, restart, offsets and continued ingestion (`20fa8635`). Evidence:
+`native-driver-scratch/aj-native-kafka-resumption-55360511/`.
 
 Production ingress removal still needs the remaining external launchers and
 multi-process nonleader coverage in both Timely topologies. The launcher inventory
@@ -23,6 +29,16 @@ Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-d
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
 instance-specific `native-driver-scratch/remote.py`. No access rules changed.
 Keep the compiled candidate and evidence before releasing the worker.
+
+Do not run heavy suites or builds on the local VM. Polling reserves did not prevent
+an overload that required a restart. Scratch test containers must share the
+`aj-native-tests.slice` hard budget: 40 GiB memory, no swap, eight CPUs. The runner
+verifies kernel limits, container membership and aggregate OOM counters. Keep the
+2 GiB RAM and 30 GiB disk reserves as additional guards, not the primary limit.
+See `native-driver-scratch/scratch-hard-budget-effective.txt` and
+`isolation_verify_capped.py`. Local interrupted fixtures were removed with logs
+preserved in `native-driver-scratch/local-restart-cleanup/`.
+
 
 ## Verified outcome
 
