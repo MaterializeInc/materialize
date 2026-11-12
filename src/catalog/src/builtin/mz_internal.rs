@@ -206,6 +206,46 @@ ON mz_internal.mz_catalog_item_metadata (id)",
     is_retained_metrics_object: false,
 };
 
+/// The catalog ids of builtin objects.
+///
+/// Builtin objects' ids come from their `GidMapping` records in the catalog.
+pub static MZ_BUILTIN_OBJECT_MAPPINGS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_builtin_object_mappings",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_BUILTIN_OBJECT_MAPPINGS_OID,
+    desc: RelationDesc::builder()
+        .with_column("schema_name", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("object_type", SqlScalarType::String.nullable(false))
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    // Although these values should never be nullable, JSONB lookup
+    // types are inferred as nullable. Thus we coalesce to infer as
+    // non-nullable.
+    sql: "
+SELECT
+    COALESCE(data->'key'->>'schema_name', '') AS schema_name,
+    COALESCE(data->'key'->>'object_name', '') AS name,
+    COALESCE(data->'key'->>'object_type', '') AS object_type,
+    COALESCE('s' || (data->'value'->>'catalog_id'), '') AS id,
+    COALESCE('s' || (data->'value'->>'global_id'), '') AS global_id
+FROM mz_internal.mz_catalog_state
+WHERE kind = 'GidMapping'",
+    access: vec![],
+    ontology: None,
+});
+
+pub const MZ_BUILTIN_OBJECT_MAPPINGS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_builtin_object_mappings_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_BUILTIN_OBJECT_MAPPINGS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_builtin_object_mappings (schema_name, name)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_postgres_sources",
