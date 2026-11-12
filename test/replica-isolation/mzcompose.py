@@ -12,23 +12,27 @@ Test replica isolation by introducing faults of various kinds in replica1 and
 then making sure that the cluster continues to operate properly
 """
 
+import argparse
+import asyncio
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any
 
-from psycopg import Cursor
+from psycopg import AsyncConnection, sql
 
 from materialize.mzcompose.composition import (
     Composition,
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import METADATA_STORE
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import selected_by_name
@@ -38,9 +42,6 @@ SERVICES = [
     SchemaRegistry(),
     Localstack(),
     Materialized(
-        additional_system_parameter_defaults={
-            "log_filter": "mz_cluster::client=debug,info",
-        },
         support_external_clusterd=True,
     ),
     Clusterd(name="clusterd_1_1"),
@@ -51,144 +52,189 @@ SERVICES = [
 ]
 
 
-class AllowCompactionCheck:
-    # replica: a string describing the SQL accessible name of the replica. Example: "cluster1.replica1"
-    # host: docker container name from which to check the log. Example: "clusterd_1_1"
-    def __init__(self, replica: str, host: str):
-        assert "." in replica
+class CompactionCheck:
+    """Observe progress after validation, not commands from an earlier execution."""
+
+    def __init__(self, replica: str):
         self.replica = replica
-        self.host = host
-        self.ids: list[str] | None = None
-        self.missing_ids: list[str] = []
-        self.satisfied = False
+        self.deadline = 0.0
+        self.replica_id: str | None = None
+        self.ids: dict[str, str] = {}
+        self.baseline: dict[str, int] | None = None
+        self.observed: dict[str, int | None] = {}
 
-    def find_ids(self, c: Composition) -> None:
+    def find_ids(self, c: Composition) -> dict[str, str]:
+        """Return catalog IDs and their physical global IDs for this check."""
         raise NotImplementedError
 
-    def print_error(self) -> None:
-        raise NotImplementedError
+    def query(
+        self,
+        c: Composition,
+        query: str | sql.Composed,
+        params: tuple = (),
+        *,
+        system: bool = False,
+    ) -> list[tuple[Any, ...]]:
+        port = c.port("materialized", 6877 if system else 6875)
 
-    def check_log(self, c: Composition) -> None:
-        self.find_ids(c)
-        assert self.ids is not None
-        log: str = c.invoke("logs", self.host, capture=True).stdout
-        self.missing_ids = []
-        self.satisfied = all([self._log_contains_id(log, x) for x in self.ids])
+        async def execute():
+            remaining = min(10, self.deadline - time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError(f"Compaction deadline expired for {self.replica}")
+            conn = await asyncio.wait_for(
+                AsyncConnection.connect(
+                    host="127.0.0.1",
+                    port=port,
+                    dbname="materialize",
+                    user="mz_system" if system else "materialize",
+                    sslmode="disable",
+                    autocommit=True,
+                    connect_timeout=10,
+                ),
+                timeout=remaining,
+            )
+            task = asyncio.create_task(conn.execute(query, params))
+            try:
+                done, _ = await asyncio.wait(
+                    [task], timeout=max(0, min(10, self.deadline - time.monotonic()))
+                )
+                if not done:
+                    raise TimeoutError(
+                        f"Compaction SQL stalled for {self.replica}: {query}"
+                    )
+                return await task.result().fetchall()
+            finally:
+                # Close before cancelling: psycopg cancellation otherwise waits
+                # for a server reply, which a blocked coordinator cannot send.
+                await conn.close()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
-    def replica_id(self, c: Composition) -> str:
-        cursor = c.sql_cursor()
+        return asyncio.run(execute())
+
+    def prepare(self, c: Composition, deadline: float) -> None:
+        self.deadline = deadline
         cluster, replica = self.replica.split(".")
-        cursor.execute(
-            f"""
-                SELECT mz_cluster_replicas.id FROM mz_clusters, mz_cluster_replicas
-                WHERE cluster_id = mz_clusters.id AND mz_clusters.name = '{cluster}'
-                AND mz_cluster_replicas.name = '{replica}'""".encode(),
+        [(self.replica_id,)] = self.query(
+            c,
+            """SELECT r.id FROM mz_cluster_replicas r
+               JOIN mz_clusters c ON c.id = r.cluster_id
+               WHERE c.name = %s AND r.name = %s""",
+            (cluster, replica),
         )
-        return str(get_single_value_from_cursor(cursor))
+        self.ids = self.find_ids(c)
+        assert self.ids, f"No objects found for {type(self).__name__} on {self.replica}"
+        assert all(self.ids.values()), f"Missing global ID mappings: {self.ids}"
+        self.baseline = None
+        self.observed = {}
 
-    def cluster_id(self, c: Composition) -> str:
-        cursor = c.sql_cursor()
-        cluster = self.replica.split(".")[0]
-        cursor.execute(
-            f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'".encode(),
+    def replica_frontiers(self, c: Composition, frontier: str) -> dict[str, int | None]:
+        assert frontier in ("read", "write")
+        observed: dict[str, int | None] = dict.fromkeys(self.ids.values())
+        # Require all current observations to be known and nonempty. Missing
+        # rows and completed frontiers must not masquerade as live progress.
+        rows = self.query(
+            c,
+            f"""SELECT object_id,
+                   bool_and({frontier}_known AND {frontier}_frontier IS NOT NULL),
+                   min({frontier}_frontier)
+               FROM mz_internal.mz_current_replica_frontiers
+               WHERE replica_id = %s AND object_id = ANY(%s::text[])
+               GROUP BY object_id""",
+            (self.replica_id, list(self.ids.values())),
         )
-        return str(get_single_value_from_cursor(cursor))
+        for object_id, known, value in rows:
+            if known:
+                observed[object_id] = int(value)
+        return observed
 
-    def _log_contains_id(self, log: str, the_id: str) -> bool:
-        for line in [
-            x for x in log.splitlines() if "ClusterClient send=AllowCompaction" in x
-        ]:
-            if the_id in line:
-                return True
-        self.missing_ids.append(the_id)
-        return False
+    def sample(self, c: Composition) -> dict[str, int | None]:
+        return self.replica_frontiers(c, "read")
+
+    def check(self, c: Composition) -> bool:
+        self.observed = self.sample(c)
+        if self.baseline is None:
+            if all(value is not None for value in self.observed.values()):
+                self.baseline = {
+                    key: value
+                    for key, value in self.observed.items()
+                    if value is not None
+                }
+            return False
+        return all(
+            self.observed[key] is not None and self.observed[key] > value
+            for key, value in self.baseline.items()
+        )
 
     @staticmethod
-    def _format_id(iid: str) -> str:
-        if iid.startswith("si"):
-            return "IntrospectionSourceIndex(" + iid[2:] + ")"
-        elif iid.startswith("s"):
-            return "System(" + iid[1:] + ")"
-        elif iid.startswith("u"):
-            return "User(" + iid[1:] + ")"
-        raise RuntimeError(f"Unexpected iid: {iid}")
-
-    @staticmethod
-    def all_checks(replica: str, host: str) -> list["AllowCompactionCheck"]:
+    def all_checks(replica: str) -> list["CompactionCheck"]:
         return [
-            MaterializedView(replica, host),
-            ArrangedIntro(replica, host),
-            ArrangedIndex(replica, host),
+            MaterializedView(replica),
+            ArrangedIntro(replica),
+            ArrangedIndex(replica),
         ]
 
 
-class MaterializedView(AllowCompactionCheck):
-    """
-    Checks that clusterd receives AllowCompaction commands for materialized views.
+class MaterializedView(CompactionCheck):
+    """Check applied shared shard compaction and this replica's MV execution."""
 
-    For materialized views we hold back compaction until slow replicas have caught
-    up. Hence we dont expect these messages if there is another failing replica in
-    the cluster.
-    """
+    def find_ids(self, c: Composition) -> dict[str, str]:
+        rows = self.query(
+            c,
+            """
+            SELECT m.id, g.global_id FROM mz_materialized_views m
+            LEFT JOIN mz_internal.mz_object_global_ids g ON g.id = m.id
+            WHERE m.name = 'v3'
+        """,
+        )
+        assert len(rows) == 1, rows
+        return dict(rows)
 
-    def find_ids(self, c: Composition) -> None:
-        cursor = c.sql_cursor()
-        cursor.execute("""
-                SELECT id,shard_id from mz_internal.mz_storage_shards, mz_catalog.mz_materialized_views
-                WHERE object_id = id AND name = 'v3';
-            """)
-        self.ids = [self._format_id(get_single_value_from_cursor(cursor))]
+    def sample(self, c: Composition) -> dict[str, int | None]:
+        observed = self.replica_frontiers(c, "write")
+        for item_id in self.ids:
+            [(state,)] = self.query(
+                c, sql.SQL("INSPECT SHARD {}").format(sql.Literal(item_id)), system=True
+            )
+            since = state["since"]
+            assert len(since) <= 1, since
+            observed[f"{item_id}/persist-since"] = int(since[0]) if since else None
+        return observed
 
-    def print_error(self) -> None:
-        print(
-            f"!! AllowCompaction not found for materialized view with ids {self.missing_ids}"
+
+class ArrangedIntro(CompactionCheck):
+    """Check installed logging trace compaction independently of failing peers."""
+
+    def find_ids(self, c: Composition) -> dict[str, str]:
+        cluster = self.replica.split(".")[0]
+        return dict(
+            self.query(
+                c,
+                """SELECT idx.id, g.global_id FROM mz_sources src
+               JOIN mz_indexes idx ON idx.on_id = src.id
+               JOIN mz_clusters c ON c.id = idx.cluster_id
+               LEFT JOIN mz_internal.mz_object_global_ids g ON g.id = idx.id
+               WHERE c.name = %s""",
+                (cluster,),
+            )
         )
 
 
-class ArrangedIntro(AllowCompactionCheck):
-    """
-    Checks that clusterd receives AllowCompaction commands for introspection sources.
+class ArrangedIndex(CompactionCheck):
+    """Check installed user-index trace compaction under committed protection."""
 
-    This is purely per replica property. Other failing replicas in the same cluster should
-    not influence the result of this test.
-    """
-
-    def find_ids(self, c: Composition) -> None:
-        cluster_id = self.cluster_id(c)
-        cursor = c.sql_cursor()
-        cursor.execute(
-            f"""
-                SELECT idx.id from mz_catalog.mz_sources AS src, mz_catalog.mz_indexes AS idx
-                WHERE src.id = idx.on_id AND idx.cluster_id = '{cluster_id}'""".encode()
+    def find_ids(self, c: Composition) -> dict[str, str]:
+        rows = self.query(
+            c,
+            """
+            SELECT idx.id, g.global_id FROM mz_views v
+            JOIN mz_indexes idx ON idx.on_id = v.id
+            LEFT JOIN mz_internal.mz_object_global_ids g ON g.id = idx.id
+            WHERE v.name = 'ct1'
+        """,
         )
-        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
-
-    def print_error(self) -> None:
-        print(
-            f"!! AllowCompaction not found for introspection with ids {self.missing_ids}"
-        )
-
-
-class ArrangedIndex(AllowCompactionCheck):
-    """
-    Checks that the arrangement of an index receive AllowCompaction.
-
-    For arrangements, we hold back compaction until all replicas have caught up. Thus, a failing
-    replica will not guarantee these messages anymore.
-    """
-
-    def find_ids(self, c: Composition) -> None:
-        cursor = c.sql_cursor()
-        cursor.execute("""
-                SELECT idx.id FROM mz_catalog.mz_views AS views, mz_catalog.mz_indexes AS idx
-                WHERE views.name = 'ct1' AND views.id = idx.on_id
-            """)
-        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
-
-    def print_error(self) -> None:
-        print(
-            f"!! AllowCompaction not found for index arrangement with ids {self.missing_ids}"
-        )
+        assert len(rows) == 1, rows
+        return dict(rows)
 
 
 def populate(c: Composition) -> None:
@@ -235,7 +281,7 @@ def restart_environmentd(c: Composition) -> None:
     c.up("materialized")
 
 
-def drop_create_replica(c: Composition) -> None:
+def drop_create_replica(c: Composition, stack: ExitStack, unified: bool) -> None:
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -251,6 +297,15 @@ def drop_create_replica(c: Composition) -> None:
               COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
               COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             """))
+
+    c.kill("clusterd_1_1", "clusterd_1_2")
+    start_replica(c, stack, "replica3", ["clusterd_1_1", "clusterd_1_2"], unified)
+    c.testdrive(dedent("""
+        > SET cluster_replica = replica3;
+        > SELECT * FROM ct1;
+        10
+        > RESET cluster_replica;
+    """))
 
 
 def create_invalid_replica(c: Composition) -> None:
@@ -317,105 +372,103 @@ def validate(c: Composition) -> None:
 
 
 def validate_introspection_compaction(
-    c: Composition, checks: list[AllowCompactionCheck]
+    c: Composition, checks: list[CompactionCheck]
 ) -> None:
-    # Validate that the AllowCompaction commands arrive at the corresponding replicas.
-    # Allow up to 10 seconds for the compaction the command to appear
-    start = time.time()
-    while time.time() < start + 5:
-        for check in checks:
-            check.check_log(c)
-
-        if all([check.satisfied for check in checks]):
-            return
-
+    deadline = time.monotonic() + 300
     for check in checks:
-        if not check.satisfied:
-            check.print_error()
-    assert all([check.satisfied for check in checks])
+        check.prepare(c, deadline)
+    # Publication and Persist critical-since application are asynchronous. Keep
+    # their production settings, and require advancement beyond a known baseline
+    # rather than accepting the initial dataflow as_of as proof of compaction.
+    pending = list(checks)
+    while pending and time.monotonic() < deadline:
+        pending = [check for check in pending if not check.check(c)]
+        if pending:
+            time.sleep(1)
+    assert not pending, [
+        (type(check).__name__, check.replica, check.baseline, check.observed)
+        for check in pending
+    ]
 
 
 @dataclass
 class Disruption:
     name: str
-    disruption: Callable
-    compaction_checks: list[AllowCompactionCheck]
+    disruption: Callable[[Composition, ExitStack, bool], None]
+    compaction_checks: list[CompactionCheck]
 
 
 disruptions = [
     Disruption(
         name="none",
-        disruption=lambda c: None,
-        compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "clusterd_1_1"
-        )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
+        disruption=lambda c, _stack, _unified: None,
+        compaction_checks=CompactionCheck.all_checks("cluster1.replica1")
+        + CompactionCheck.all_checks("cluster1.replica2"),
     ),
     Disruption(
         name="drop-create-replica",
-        disruption=lambda c: drop_create_replica(c),
+        disruption=drop_create_replica,
         compaction_checks=[
-            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2"),
         ],
     ),
     Disruption(
         name="create-invalid-replica",
-        disruption=lambda c: create_invalid_replica(c),
+        disruption=lambda c, _stack, _unified: create_invalid_replica(c),
         compaction_checks=[
-            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2"),
         ],
     ),
     Disruption(
         name="restart-replica",
-        disruption=lambda c: restart_replica(c),
-        compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "clusterd_1_1"
-        )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
+        disruption=lambda c, _stack, _unified: restart_replica(c),
+        compaction_checks=CompactionCheck.all_checks("cluster1.replica1")
+        + CompactionCheck.all_checks("cluster1.replica2"),
     ),
     Disruption(
         name="pause-one-clusterd",
-        disruption=lambda c: c.pause("clusterd_1_1"),
+        disruption=lambda c, _stack, _unified: c.pause("clusterd_1_1"),
         compaction_checks=[
-            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2"),
         ],
     ),
     Disruption(
         name="kill-replica",
-        disruption=lambda c: c.kill("clusterd_1_1", "clusterd_1_2"),
+        disruption=lambda c, _stack, _unified: c.kill("clusterd_1_1", "clusterd_1_2"),
         compaction_checks=[
-            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2"),
         ],
     ),
     Disruption(
         name="drop-replica",
-        disruption=lambda c: c.testdrive("> DROP CLUSTER REPLICA cluster1.replica1"),
-        compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica2", "clusterd_2_1"
+        disruption=lambda c, _stack, _unified: c.testdrive(
+            "> DROP CLUSTER REPLICA cluster1.replica1"
         ),
+        compaction_checks=CompactionCheck.all_checks("cluster1.replica2"),
     ),
     Disruption(
         name="restart-environmentd",
-        disruption=restart_environmentd,
-        compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "clusterd_1_1"
-        )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
+        disruption=lambda c, _stack, _unified: restart_environmentd(c),
+        compaction_checks=CompactionCheck.all_checks("cluster1.replica1")
+        + CompactionCheck.all_checks("cluster1.replica2"),
     ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--unified-cluster", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
     args = parser.parse_args()
 
     c.up("kafka", "schema-registry", "localstack")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
-        run_test(c, disruption, id)
+        run_test(c, disruption, id, args.unified_cluster)
 
 
-def run_test(c: Composition, disruption: Disruption, id: int) -> None:
+def run_test(c: Composition, disruption: Disruption, id: int, unified: bool) -> None:
     # Cleanup here instead of at the end of the test to make sure we keep state
     # and logs in case something goes wrong
     cleanup_list = [
@@ -426,6 +479,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         "clusterd_2_1",
         "clusterd_2_2",
     ]
+    # Fresh controller state requires fresh metadata too. Remove only the
+    # composition-owned store, never a separately supplied database endpoint.
+    if METADATA_STORE in c.compose["services"]:
+        cleanup_list.append(METADATA_STORE)
     try:
         c.kill(*cleanup_list)
     except:
@@ -440,38 +497,18 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         pass
     print(f"+++ Running disruption scenario {disruption.name}")
 
-    with c.override(
-        Testdrive(
-            no_reset=True,
-            materialize_params={"cluster": "cluster1"},
-            seed=id,
-            default_timeout="300s",
-        ),
-        Clusterd(
-            name="clusterd_1_1",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_2",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_1",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_2",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
-    ):
-        c.up(
-            "materialized",
-            "clusterd_1_1",
-            "clusterd_1_2",
-            "clusterd_2_1",
-            "clusterd_2_2",
-            Service("testdrive", idle=True),
+    with ExitStack() as stack:
+        stack.enter_context(
+            c.override(
+                Testdrive(
+                    no_reset=True,
+                    materialize_params={"cluster": "cluster1"},
+                    seed=id,
+                    default_timeout="300s",
+                )
+            )
         )
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -516,16 +553,42 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             )
             """)
 
+        start_replica(c, stack, "replica1", ["clusterd_1_1", "clusterd_1_2"], unified)
+        start_replica(c, stack, "replica2", ["clusterd_2_1", "clusterd_2_2"], unified)
         populate(c)
 
         # Disrupt replica1 by some means
-        disruption.disruption(c)
+        disruption.disruption(c, stack, unified)
 
         validate(c)
         validate_introspection_compaction(c, disruption.compaction_checks)
 
 
-def get_single_value_from_cursor(cursor: Cursor) -> Any:
-    result = cursor.fetchone()
-    assert result is not None
-    return result[0]
+def start_replica(
+    c: Composition, stack: ExitStack, replica: str, processes: list[str], unified: bool
+) -> None:
+    with c.sql_cursor() as cursor:
+        cursor.execute(
+            """SELECT c.id, r.id FROM mz_clusters c
+               JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name = 'cluster1' AND r.name = %s""",
+            (replica,),
+        )
+        [(cluster_id, replica_id)] = cursor.fetchall()
+    options = native_catalog_options(c)
+    for process in processes:
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name=process,
+                    process_names=processes,
+                    unified_cluster=unified,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *options,
+                    ],
+                )
+            )
+        )
+    c.up(*processes)
