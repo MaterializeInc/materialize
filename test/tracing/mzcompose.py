@@ -15,7 +15,7 @@ import time
 import requests
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 
@@ -154,8 +154,7 @@ def workflow_basic(c: Composition) -> None:
 
 
 def workflow_clusterd(c: Composition) -> None:
-    c.up("materialized", "clusterd")
-    port = c.port("clusterd", 6878)
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -173,34 +172,65 @@ def workflow_clusterd(c: Composition) -> None:
         ))
     """)
 
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    [(cluster_id, replica_id)] = c.sql_query("""
+        SELECT c.id, r.id FROM mz_clusters c
+        JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'c' AND r.name = 'r1'
+    """)
+    with c.override(
+        Clusterd(
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *native_catalog_options(c),
+            ]
+        )
+    ):
+        c.up("clusterd")
+        port = c.port("clusterd", 6878)
 
-    start = time.time()
-    timeout = 10
-    is_debug = False
+        # HTTP availability precedes native catalog bootstrap. Establish that
+        # this replica can serve its logging indexes before timing a config change.
+        with c.sql_cursor(
+            startup_params={
+                "cluster": "c",
+                "cluster_replica": "r1",
+                "statement_timeout": "60s",
+            }
+        ) as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM mz_introspection.mz_dataflow_operators"
+            )
+            cursor.fetchall()
 
-    # the updated configuration is sent to clusterd asynchronously,
-    # spin here until the new tracing level is observed.
-    while time.time() - start < timeout:
+        c.sql(
+            "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        start = time.time()
+        timeout = 10
+        is_debug = False
+
+        # the updated configuration is sent to clusterd asynchronously,
+        # spin here until the new tracing level is observed.
+        while time.time() - start < timeout:
+            info = requests.get(f"http://localhost:{port}/api/tracing").json()
+            if info["current_level_filter"] == "debug":
+                is_debug = True
+                break
+
+        assert is_debug
+
+        # Reset
+        c.sql(
+            "ALTER SYSTEM SET log_filter = 'info'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+        port = c.port("materialized", 6878)
         info = requests.get(f"http://localhost:{port}/api/tracing").json()
-        if info["current_level_filter"] == "debug":
-            is_debug = True
-            break
-
-    assert is_debug
-
-    # Reset
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
-    port = c.port("materialized", 6878)
-    info = requests.get(f"http://localhost:{port}/api/tracing").json()
-    assert info["current_level_filter"] == "info"
+        assert info["current_level_filter"] == "info"
