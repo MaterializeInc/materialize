@@ -41,7 +41,9 @@ pub(crate) async fn complete_read_only_transaction(
         if let Some(context) = &completion.timestamp {
             match session.vars().transaction_isolation() {
                 IsolationLevel::StrictSerializable => {
-                    let started = Instant::now();
+                    // Diagnostic-only switch: compare accounting on the same binary and pod.
+                    let record_metrics = session.vars().application_name() != "qps_metrics_off";
+                    let started = record_metrics.then(Instant::now);
                     let immediately_handled =
                         if let Some((timeline, timestamp)) = context.timestamp_to_linearize() {
                             client
@@ -52,20 +54,24 @@ pub(crate) async fn complete_read_only_transaction(
                             let oracle = client.ensure_oracle(timeline.clone()).await?;
                             wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?
                         } else {
-                            client
-                                .coordinator_client()
-                                .metrics()
-                                .linearize_read_fast_path
-                                .inc();
+                            if record_metrics {
+                                client
+                                    .coordinator_client()
+                                    .metrics()
+                                    .linearize_read_fast_path
+                                    .inc();
+                            }
                             true
                         };
-                    let metrics = client.coordinator_client().metrics();
-                    let duration = if immediately_handled {
-                        &metrics.linearize_read_immediate_seconds
-                    } else {
-                        &metrics.linearize_read_delayed_seconds
-                    };
-                    duration.observe(started.elapsed().as_secs_f64());
+                    if let Some(started) = started {
+                        let metrics = client.coordinator_client().metrics();
+                        let duration = if immediately_handled {
+                            &metrics.linearize_read_immediate_seconds
+                        } else {
+                            &metrics.linearize_read_delayed_seconds
+                        };
+                        duration.observe(started.elapsed().as_secs_f64());
+                    }
                 }
                 IsolationLevel::StrongSessionSerializable => {
                     if let Some((timeline, timestamp)) = context.timeline_timestamp() {
