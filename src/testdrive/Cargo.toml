@@ -20,6 +20,7 @@ aws-types.workspace = true
 arrow.workspace = true
 byteorder.workspace = true
 bytes.workspace = true
+bzip2.workspace = true
 chrono.workspace = true
 clap.workspace = true
 duckdb.workspace = true
@@ -88,3 +89,7 @@ tonic-prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+
+[package.metadata.unused-deps]
+# Only enables bzip2's `bzip2-sys` backend, see the root Cargo.toml.
+ignore = ["bzip2"]

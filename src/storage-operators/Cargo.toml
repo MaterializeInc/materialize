@@ -19,6 +19,7 @@ aws-types.workspace = true
 aws-smithy-types.workspace = true
 aws-sdk-s3.workspace = true
 bytes.workspace = true
+bzip2.workspace = true
 columnar.workspace = true
 columnation.workspace = true
 csv-async.workspace = true
@@ -59,3 +60,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
+
+[package.metadata.unused-deps]
+# Only enables bzip2's `bzip2-sys` backend, see the root Cargo.toml.
+ignore = ["bzip2"]
