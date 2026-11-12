@@ -561,8 +561,7 @@ pub enum Command {
         /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
         timeout_secs: Option<u64>,
     },
-    /// Send `CreateInstance`, opening the compute instance (and the reconciliation
-    /// window). The settable [`InstanceConfig`] knobs default to the values a plain
+    /// Initialize the native compute instance exactly once. The settable [`InstanceConfig`] knobs default to the values a plain
     /// `create-instance` supplies; the peek-stash location is always the host's, and
     /// the peek-response stash is force-disabled (see `Driver::create_instance`).
     ///
@@ -588,11 +587,7 @@ pub enum Command {
         #[serde(default)]
         updates: Vec<ConfigSetting>,
     },
-    /// Drop the current connection and reconnect, sending only `Hello`. Re-issue
-    /// `create_instance`, replay the dataflows the replica should keep, then
-    /// `initialization_complete` to close the reconciliation window.
-    Reconnect,
-    /// Send `InitializationComplete`, closing the reconciliation window.
+    /// Finish initial native instance setup and release waiting queries.
     InitializationComplete,
 }
 
@@ -686,10 +681,14 @@ impl ScriptState {
     }
 
     /// Allocate a fresh ephemeral global id for an internally-built dataflow.
-    fn alloc_internal(&mut self) -> GlobalId {
+    fn alloc_internal(&mut self, transient: bool) -> GlobalId {
         let id = self.next_internal;
         self.next_internal += 1;
-        GlobalId::User(id)
+        if transient {
+            GlobalId::Transient(id)
+        } else {
+            GlobalId::User(id)
+        }
     }
 
     /// Count the rows of a registered index at `ts` by running a `count(*)`
@@ -704,8 +703,8 @@ impl ScriptState {
         let key = entry.key.clone();
         let on_type = entry.on_type.clone();
 
-        let reduce_id = self.alloc_internal();
-        let out_index_id = self.alloc_internal();
+        let reduce_id = self.alloc_internal(index_id.is_transient());
+        let out_index_id = self.alloc_internal(index_id.is_transient());
         let df = count_over_index(
             index_id,
             on_id,
@@ -715,7 +714,7 @@ impl ScriptState {
             out_index_id,
             Timestamp::from(ts),
         )?;
-        self.driver.submit_dataflow(df)?;
+        self.driver.submit_dataflow(df).await?;
         self.driver.schedule(out_index_id)?;
         // The count is final once the output frontier passes `ts`.
         self.driver
@@ -1025,7 +1024,7 @@ impl ScriptState {
                     Timestamp::from(as_of),
                     Timestamp::from(upper),
                 )?;
-                self.driver.submit_dataflow(df)?;
+                self.driver.submit_dataflow(df).await?;
                 // Register only after a successful submit, so a rejected index is
                 // not later importable or countable.
                 self.indexes.insert(
@@ -1104,7 +1103,7 @@ impl ScriptState {
                 let (builder, registrations) =
                     self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
                 let df = builder.finish()?;
-                self.driver.submit_dataflow(df)?;
+                self.driver.submit_dataflow(df).await?;
                 // Register only after a successful submit, so a rejected dataflow
                 // leaves no dangling index entry or subscribe buffer.
                 for (index_id, entry) in registrations.indexes {
@@ -1224,10 +1223,6 @@ impl ScriptState {
                     );
                 }
                 self.driver.update_configuration(dyncfg_updates)?;
-                Ok("ok".to_string())
-            }
-            Command::Reconnect => {
-                self.driver.reconnect().await?;
                 Ok("ok".to_string())
             }
             Command::InitializationComplete => {

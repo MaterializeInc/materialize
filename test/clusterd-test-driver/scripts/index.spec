@@ -40,6 +40,10 @@ await-frontier id=1001 ts=1
 ----
 ok
 
+count id=1001 ts=0
+----
+5000
+
 # Tick phase: 5 batches of 1000 rows at ts 1..5. Each uses a disjoint id range
 # (start = 5000 + (t-1)*1000) so rows never consolidate and the count accumulates.
 write-single-ts shard=data ts=1 start=5000 count=1000

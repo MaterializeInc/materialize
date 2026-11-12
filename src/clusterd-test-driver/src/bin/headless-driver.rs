@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Headless driver entry point for `mzcompose`. Connects to a running `clusterd`,
-//! hosts persist PubSub, and runs a JSON command script against it (see
+//! Headless driver entry point for `mzcompose`. Hosts a native compute runtime,
+//! persist PubSub, and runs a command script against it (see
 //! [`mz_clusterd_test_driver::script`]), exiting non-zero on assertion failure.
 //!
 //! The script source is the file named by `DRIVER_SCRIPT`, or stdin when that is
-//! unset. Connection and persist configuration come from the environment:
-//! `CLUSTERD_COMPUTE_ADDR`, `PERSIST_BLOB_URL`, `PERSIST_CONSENSUS_URL`, and
-//! `DRIVER_PUBSUB_BIND`.
+//! unset. Configuration comes from `DRIVER_WORKERS`, `DRIVER_UNIFIED`,
+//! `PERSIST_BLOB_URL`, `PERSIST_CONSENSUS_URL`, and `DRIVER_PUBSUB_BIND`.
 
 use std::net::SocketAddr;
 
@@ -27,12 +26,14 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist_types::PersistLocation;
 use tokio::io::AsyncReadExt;
 
-/// Connect to `clusterd` and host persist PubSub, reading configuration from the
-/// environment. Returns the persist location (for dataflow imports) and a
-/// connected [`Driver`].
+/// Start the isolated native runtime and its Persist infrastructure.
 async fn setup() -> anyhow::Result<(PersistLocation, Driver)> {
-    let compute_addr =
-        std::env::var("CLUSTERD_COMPUTE_ADDR").unwrap_or_else(|_| "clusterd:2101".to_string());
+    let workers = std::env::var("DRIVER_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()?;
+    let unified = std::env::var("DRIVER_UNIFIED")
+        .unwrap_or_else(|_| "true".into())
+        .parse()?;
     let blob = std::env::var("PERSIST_BLOB_URL").expect("PERSIST_BLOB_URL");
     let consensus = std::env::var("PERSIST_CONSENSUS_URL").expect("PERSIST_CONSENSUS_URL");
     let pubsub_bind: SocketAddr = std::env::var("DRIVER_PUBSUB_BIND")
@@ -44,12 +45,30 @@ async fn setup() -> anyhow::Result<(PersistLocation, Driver)> {
         consensus_uri: consensus.parse()?,
     };
     let host = PersistHost::start_on(pubsub_bind, loc.clone()).await?;
-    let driver = Driver::connect(host, &compute_addr).await?;
+    let driver = Driver::start(host, workers, unified).await?;
     Ok((loc, driver))
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
+    // Native workers live until process exit. Do not unwind or shut Tokio down
+    // into destructors that join these workers, including on assertion failures.
+    let panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        panic_hook(info);
+        std::process::exit(1);
+    }));
+    let code = match run().await {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error:#}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
+async fn run() -> anyhow::Result<()> {
     // Configure tracing so the driver emits structured logs like the real
     // Materialize binaries.
     let _tracing_handle = TracingCliArgs::default()

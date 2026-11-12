@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 
 /// Hosts persist infrastructure for the driver: a PubSub server plus a client
-/// cache configured to use it. `clusterd` connects to `pubsub_url()`.
+/// cache shared with the native runtime.
 pub struct PersistHost {
     cache: Arc<PersistClientCache>,
     pubsub_port: u16,
@@ -31,6 +31,10 @@ pub struct PersistHost {
 }
 
 impl PersistHost {
+    pub(crate) fn cache(&self) -> Arc<PersistClientCache> {
+        Arc::clone(&self.cache)
+    }
+
     /// Starts a PubSub server on an ephemeral localhost port (for unit tests).
     pub async fn start(location: PersistLocation) -> anyhow::Result<Self> {
         Self::start_on(
@@ -46,9 +50,10 @@ impl PersistHost {
     /// with the driver's PubSub URL at its own startup.
     pub async fn start_on(bind: SocketAddr, location: PersistLocation) -> anyhow::Result<Self> {
         let registry = MetricsRegistry::new();
-        let persist_cfg = PersistConfig::new_default_configs(
+        let persist_cfg = PersistConfig::new(
             &mz_persist_client::BUILD_INFO,
             mz_ore::now::SYSTEM_TIME.clone(),
+            mz_dyncfgs::all_dyncfgs(),
         );
 
         let server = PersistGrpcPubSubServer::new(&persist_cfg, &registry);

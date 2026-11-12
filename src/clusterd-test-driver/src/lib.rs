@@ -11,12 +11,11 @@
 //!
 //! See `doc/developer/design/20260612_headless_clusterd_test_driver.md`.
 
-pub mod ctp;
 pub mod data;
 pub mod dataflow;
 pub mod driver;
+mod native;
 pub mod persist_host;
 pub mod responses;
 pub mod script;
-pub mod target;
 pub mod text;

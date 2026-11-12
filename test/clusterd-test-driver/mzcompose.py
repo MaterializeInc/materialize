@@ -7,15 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Headless compute driver: build an index over a persist shard via a real
-clusterd, with no environmentd. The driver hosts persist PubSub; clusterd is
-pointed at it via `mz_service`."""
+"""Programmable compute renderer tests hosted in isolated native runtimes."""
 
 from materialize import ui
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.composition import Service as ServiceName
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     metadata_store_companions,
@@ -47,7 +43,7 @@ class HeadlessDriver(Service):
             config={
                 "mzbuild": "clusterd-test-driver",
                 "environment": [
-                    "CLUSTERD_COMPUTE_ADDR=clusterd:2101",
+                    "DRIVER_WORKERS=2",
                     f"PERSIST_BLOB_URL={minio_blob_uri()}",
                     f"PERSIST_CONSENSUS_URL={CONSENSUS_URI}",
                     "DRIVER_PUBSUB_BIND=0.0.0.0:6879",
@@ -56,7 +52,6 @@ class HeadlessDriver(Service):
                 # /workdir/scripts (the convention testdrive uses for its files);
                 # the driver reads the file named by DRIVER_SCRIPT.
                 "volumes": [".:/workdir"],
-                "ports": [6879],
             },
         )
 
@@ -70,8 +65,6 @@ SERVICES = [
     # persist consensus, so the companion must materialize regardless.
     *metadata_store_companions(external_metadata_store=True),
     Minio(setup_materialize=True),
-    # Point clusterd's persist PubSub at the driver, which hosts it.
-    Clusterd(mz_service="headless-driver"),
     HeadlessDriver(),
 ]
 
@@ -84,7 +77,7 @@ SCRIPTS = [
     "deep_history.spec",
     "side_effects.spec",
     "multi_dataflow.spec",
-    "reconciliation.spec",
+    "custom_schema.spec",
     "error_behavior.spec",
     "reduce.spec",
     "materialized_view.spec",
@@ -96,20 +89,16 @@ SCRIPTS = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
-    for i, script in enumerate(SCRIPTS):
-        # Buildkite collapsible section per scenario.
-        ui.section(f"Running scenario {script}")
-        # Restart clusterd between scenarios for a clean compute state; the
-        # scripts reuse GlobalIds and would otherwise collide.
-        if i > 0:
-            c.kill("clusterd")
-        c.up("clusterd")
-        # Run the driver to completion; it exits non-zero on assertion failure.
-        # use_aliases gives the run container the `headless-driver` network
-        # alias so clusterd can reach the PubSub server it hosts.
-        c.run(
-            "headless-driver",
-            env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
-            use_aliases=True,
-        )
+    c.up(METADATA_STORE, "minio")
+    for unified in (False, True):
+        for script in SCRIPTS:
+            ui.section(f"Running scenario {script} (unified={unified})")
+            # Each invocation owns a fresh process-lifetime native runtime.
+            # Script GlobalIds can therefore repeat without cross-test state.
+            c.run(
+                "headless-driver",
+                env_extra={
+                    "DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}",
+                    "DRIVER_UNIFIED": str(unified).lower(),
+                },
+            )

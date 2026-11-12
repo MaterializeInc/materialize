@@ -12,9 +12,12 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures.workspace = true
+mz-cluster-client = { path = "../cluster-client" }
+mz-compute = { path = "../compute" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
+mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 # The repo's MIR-from-text parser (the `.spec` test syntax), so `define`
 # authors MIR in the readable pretty form rather than a hand-rolled JSON
@@ -38,8 +41,12 @@ mz-ore = { path = "../ore", default-features = false, features = [
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
+mz-storage = { path = "../storage" }
+mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
+mz-txn-wal = { path = "../txn-wal" }
 # Optional MIR dataflow optimizer, run only by `create-dataflow ... optimize`.
 # Needed for shapes that don't lower from raw MIR (notably joins, whose
 # `implementation` defaults to `Unimplemented`); the default path lowers faithfully

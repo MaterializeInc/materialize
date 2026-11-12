@@ -41,23 +41,47 @@ write-rows shard=s schema=kv ts=1
 ----
 wrote 1
 
+# Exports with different owners cannot share a dataflow. Reject the plan rather
+# than silently splitting it or installing a transient sink on the native owner.
+create-dataflow as-of=0
+  import source=1000 shard=s schema=kv upper=2
+  build id=3000
+    Get u1000
+  export kind=index index=3001 on=3000 key=[0]
+  export kind=subscribe sink=t3002 on=3000 schema=kv up-to=2
+----
+error: a dataflow cannot mix maintained and transient exports
+
 # Import the source and subscribe to it. `up-to=2` makes the subscribe complete
 # once it has streamed everything in `[0, 2)`.
 create-dataflow name=sub as-of=0
   import source=1000 shard=s schema=kv upper=2
   build id=2000
     Get u1000
-  export kind=subscribe sink=2001 on=2000 schema=kv up-to=2
+  export kind=subscribe sink=t2001 on=2000 schema=kv up-to=2
+  export kind=index index=t2002 on=2000 key=[0]
 ----
 ok
 
-schedule id=2001
+schedule id=t2001
+----
+ok
+
+# Both exports share the dataflow start token.
+schedule id=t2002
 ----
 ok
 
 # The snapshot lands at ts 0; the ts-1 insert streams as its own update.
-await-subscribe id=2001 up-to=2
+await-subscribe id=t2001 up-to=2
 ----
 0 1 1 "alpha"
 0 1 2 "beta"
 1 1 3 "gamma"
+
+
+# A transient index and subscription can share one query-owned plan. Counting
+# the index must build its reduce in that same query scope, not on the owner.
+count id=t2002 ts=1
+----
+3

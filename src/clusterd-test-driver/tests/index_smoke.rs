@@ -7,95 +7,65 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! End-to-end smoke test: import a small persist shard and arrange it into an
-//! index, then peek the result.
-//!
-//! This test only runs when `CLUSTERD_COMPUTE_ADDR` is set (see
-//! [`mz_clusterd_test_driver::target::e2e_enabled`]); otherwise it returns early so
-//! that it compiles and passes by skipping. It is exercised against real infra by
-//! the mzcompose stack.
+//! Exercise the kept incremental index scenario through native runtimes in both
+//! Timely topologies. Each child owns its workers until process exit.
 
-use std::net::SocketAddr;
+use std::process::Stdio;
 use std::time::Duration;
 
-use mz_clusterd_test_driver::data::{sample_desc, sample_rows, write_rows_single_ts};
-use mz_clusterd_test_driver::dataflow::index_dataflow;
-use mz_clusterd_test_driver::driver::Driver;
-use mz_clusterd_test_driver::persist_host::PersistHost;
-use mz_clusterd_test_driver::target;
-use mz_compute_client::protocol::command::PeekTarget;
-use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{GlobalId, Timestamp};
+use mz_persist_types::PersistLocation;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn index_over_small_shard() {
-    if !target::e2e_enabled() {
-        return;
+async fn native_renderer_scenarios() {
+    for (unified, script) in [false, true]
+        .into_iter()
+        .flat_map(|unified| ["index.spec", "subscribe.spec"].map(|script| (unified, script)))
+    {
+        let location = PersistLocation::new_in_mem();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_headless-driver"))
+            .env("PERSIST_BLOB_URL", location.blob_uri.as_str())
+            .env("PERSIST_CONSENSUS_URL", location.consensus_uri.as_str())
+            .env("DRIVER_PUBSUB_BIND", "127.0.0.1:0")
+            .env("DRIVER_WORKERS", "2")
+            .env("DRIVER_UNIFIED", unified.to_string())
+            .env(
+                "DRIVER_SCRIPT",
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../test/clusterd-test-driver/scripts")
+                    .join(script),
+            )
+            .env_remove("REWRITE")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("start native driver");
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let (status, read_out, read_err) = tokio::join!(
+            async {
+                match tokio::time::timeout(Duration::from_secs(120), child.wait()).await {
+                    Ok(status) => status.map_err(|e| e.to_string()),
+                    Err(_) => {
+                        child.kill().await.unwrap();
+                        Err("native driver timed out".into())
+                    }
+                }
+            },
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err),
+        );
+        read_out.unwrap();
+        read_err.unwrap();
+        assert!(
+            matches!(&status, Ok(status) if status.success()),
+            "unified={unified}, script={script}: {status:?}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(&err)
+        );
     }
-    let consensus = std::env::var("COCKROACH_URL").expect("COCKROACH_URL for e2e");
-    let blob = std::env::var("PERSIST_BLOB_URL").unwrap_or_else(|_| {
-        let dir = tempfile::tempdir().unwrap();
-        let p = format!("file://{}", dir.path().display());
-        std::mem::forget(dir); // e2e only; OK to leak for the test process lifetime
-        p
-    });
-    let loc = PersistLocation {
-        blob_uri: blob.parse().unwrap(),
-        consensus_uri: consensus.parse().unwrap(),
-    };
-    let bind: SocketAddr = std::env::var("DRIVER_PUBSUB_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:6879".to_string())
-        .parse()
-        .unwrap();
-    let host = PersistHost::start_on(bind, loc.clone())
-        .await
-        .expect("host");
-    let client = host.client().await.expect("client");
-
-    let shard = ShardId::new();
-    let desc = sample_desc();
-    let rows = sample_rows(10_000, 16);
-    write_rows_single_ts(&client, shard, &desc, &rows, Timestamp::from(0))
-        .await
-        .expect("write");
-
-    let driver = Driver::connect(host, &target::compute_addr())
-        .await
-        .expect("connect");
-    // `connect` only sends `Hello`; drive the controller handshake explicitly.
-    // `create_instance` also force-disables the peek-response stash, so peeks
-    // return their rows inline.
-    driver
-        .create_instance(None, false, Default::default())
-        .expect("create instance");
-    driver
-        .send(mz_compute_client::protocol::command::ComputeCommand::InitializationComplete)
-        .expect("init complete");
-
-    let source_id = GlobalId::User(1000);
-    let index_id = GlobalId::User(1001);
-    let df = index_dataflow(
-        source_id,
-        index_id,
-        shard,
-        loc.clone(),
-        desc.clone(),
-        vec![0],
-        Timestamp::from(0),
-        Timestamp::from(1),
-    )
-    .expect("build index dataflow");
-    driver.submit_dataflow(df).expect("submit");
-    driver.schedule(index_id).expect("schedule");
-
-    driver
-        .expect_frontier(index_id, Timestamp::from(1), Duration::from_secs(60))
-        .await
-        .expect("frontier");
-    let n = driver
-        .peek_count(PeekTarget::Index { id: index_id }, desc, Timestamp::from(0))
-        .await
-        .expect("peek");
-    assert_eq!(n, 10_000);
 }

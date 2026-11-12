@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Owns the receive side of the CTP connection: a background task that pumps
+//! Drains native owner and query responses in a background task that pumps
 //! `ComputeResponse`s into per-id frontier watches, per-uuid peek channels, and
 //! a raw broadcast. The mechanism does not curate which responses or which
 //! frontier fields a use case may observe: frontier watches keep the full
@@ -21,11 +21,10 @@ use mz_compute_client::protocol::response::{
     ComputeResponse, FrontiersResponse, PeekResponse, SubscribeResponse,
 };
 use mz_repr::{GlobalId, Row, Timestamp};
-use mz_service::client::GenericClient;
 use timely::progress::Antichain;
 use tokio::sync::{broadcast, oneshot, watch};
 
-use crate::ctp::ComputeCtpClient;
+use crate::native::NativeCompute;
 
 type FrontierTx = watch::Sender<FrontiersResponse>;
 type FrontierRx = watch::Receiver<FrontiersResponse>;
@@ -56,6 +55,7 @@ impl SubscribeState {
 struct Shared {
     frontiers: BTreeMap<GlobalId, FrontierTx>,
     peeks: BTreeMap<uuid::Uuid, oneshot::Sender<PeekResponse>>,
+    dataflows: BTreeMap<uuid::Uuid, oneshot::Sender<Result<(), String>>>,
     subscribes: BTreeMap<GlobalId, SubscribeState>,
     raw: broadcast::Sender<ComputeResponse>,
 }
@@ -69,41 +69,45 @@ pub struct Responses {
 
 impl Responses {
     /// Spawns the pump task that owns the client's receive half.
-    pub fn spawn(mut client: ComputeCtpClient) -> (Self, ComputeSender) {
+    pub(crate) fn spawn(client: NativeCompute) -> (Self, ComputeSender) {
+        // These owners have process lifetime. Dropping a failed/cancelled pump
+        // must not join native workers that intentionally never return.
+        let mut client = std::mem::ManuallyDrop::new(client);
         let (raw_tx, _) = broadcast::channel(1024);
         let shared = Arc::new(Mutex::new(Shared {
             frontiers: BTreeMap::new(),
             peeks: BTreeMap::new(),
+            dataflows: BTreeMap::new(),
             subscribes: BTreeMap::new(),
             raw: raw_tx,
         }));
         let pump_shared = Arc::clone(&shared);
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ComputeCommand>();
         mz_ore::task::spawn(|| "compute_response_pump", async move {
+            let mut commands_open = true;
             loop {
                 tokio::select! {
-                    cmd = cmd_rx.recv() => match cmd {
+                    cmd = cmd_rx.recv(), if commands_open => match cmd {
                         // Log a send failure: callers waiting on frontiers/peeks
                         // would otherwise see only a misleading timeout.
                         Some(cmd) => {
                             if let Err(e) = client.send(cmd).await {
-                                tracing::error!("compute command send failed: {e}");
-                                break;
+                                mz_ore::halt!("native driver command failed: {e}");
                             }
                         }
-                        None => break,
+                        // Native owners live until process exit, not until the
+                        // last query/script sender closes. Keep draining progress.
+                        None => commands_open = false,
                     },
                     resp = client.recv() => match resp {
                         Ok(Some(resp)) => Self::dispatch(&pump_shared, resp),
                         // Distinguish a clean EOF from a transport error so that
                         // an e2e hang has a breadcrumb rather than silent death.
                         Ok(None) => {
-                            tracing::warn!("clusterd closed the compute connection");
-                            break;
+                            mz_ore::halt!("native driver lost its compute connection");
                         }
                         Err(e) => {
-                            tracing::error!("compute response recv failed: {e}");
-                            break;
+                            mz_ore::halt!("native driver response failed: {e}");
                         }
                     },
                 }
@@ -116,6 +120,11 @@ impl Responses {
         let mut g = shared.lock().expect("lock");
         let _ = g.raw.send(resp.clone());
         match resp {
+            ComputeResponse::QueryDataflowResponse { request_id, error } => {
+                if let Some(tx) = g.dataflows.remove(&request_id) {
+                    let _ = tx.send(error.map_or(Ok(()), Err));
+                }
+            }
             ComputeResponse::Frontiers(id, f) => {
                 let tx = g
                     .frontiers
@@ -131,7 +140,7 @@ impl Responses {
                 if f.output_frontier.is_some() {
                     cur.output_frontier = f.output_frontier;
                 }
-                let _ = tx.send(cur);
+                tx.send_replace(cur);
             }
             ComputeResponse::PeekResponse(uuid, pr, _otel) => {
                 if let Some(tx) = g.peeks.remove(&uuid) {
@@ -168,7 +177,7 @@ impl Responses {
                     // as the final upper so a waiter unblocks.
                     SubscribeResponse::DroppedAt(frontier) => frontier,
                 };
-                let _ = state.upper_tx.send(upper);
+                state.upper_tx.send_replace(upper);
             }
             _ => {}
         }
@@ -193,6 +202,20 @@ impl Responses {
     pub fn register_peek(&self, uuid: uuid::Uuid) -> oneshot::Receiver<PeekResponse> {
         let (tx, rx) = oneshot::channel();
         self.shared.lock().expect("lock").peeks.insert(uuid, tx);
+        rx
+    }
+
+    /// Register admission before sending the query dataflow to the runtime.
+    pub fn register_dataflow(
+        &self,
+        request_id: uuid::Uuid,
+    ) -> oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = oneshot::channel();
+        self.shared
+            .lock()
+            .expect("lock")
+            .dataflows
+            .insert(request_id, tx);
         rx
     }
 
@@ -251,6 +274,7 @@ mod tests {
         Arc::new(Mutex::new(Shared {
             frontiers: BTreeMap::new(),
             peeks: BTreeMap::new(),
+            dataflows: BTreeMap::new(),
             subscribes: BTreeMap::new(),
             raw,
         }))
@@ -301,5 +325,37 @@ mod tests {
             Some(Antichain::from_elem(Timestamp::from(3)))
         );
         assert!(raw_rx.try_recv().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn progress_survives_gaps_between_waiters() {
+        let shared = empty_shared();
+        let responses = Responses {
+            shared: Arc::clone(&shared),
+        };
+        let id = GlobalId::Transient(1);
+        for timestamp in [5, 7] {
+            Responses::dispatch(
+                &shared,
+                ComputeResponse::Frontiers(
+                    id,
+                    FrontiersResponse {
+                        output_frontier: Some(Antichain::from_elem(Timestamp::from(timestamp))),
+                        ..Default::default()
+                    },
+                ),
+            );
+            // The previous receiver is gone before the next update arrives.
+            assert_eq!(
+                responses.frontier(id).borrow().output_frontier,
+                Some(Antichain::from_elem(Timestamp::from(timestamp)))
+            );
+        }
+        drop(responses.ensure_subscribe(id));
+        Responses::dispatch(
+            &shared,
+            ComputeResponse::SubscribeResponse(id, SubscribeResponse::DroppedAt(Antichain::new())),
+        );
+        assert!(responses.ensure_subscribe(id).borrow().is_empty());
     }
 }

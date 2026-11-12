@@ -25,52 +25,32 @@ use mz_repr::{GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, Timesta
 use mz_storage_types::controller::CollectionMetadata;
 use timely::progress::Antichain;
 
-use crate::ctp::connect_and_hello;
+use crate::native::NativeCompute;
 use crate::persist_host::PersistHost;
 use crate::responses::{ComputeSender, Responses};
 
 /// Headless frontend to a clusterd replica.
 pub struct Driver {
     pub host: PersistHost,
-    compute_addr: String,
     sender: ComputeSender,
     responses: Responses,
 }
 
 impl Driver {
-    /// Connects to `compute_addr`, sends `Hello`, and starts the response pump.
-    /// `host` provides persist + pubsub. The controller handshake proper
-    /// (`create_instance`, `update_configuration`, `InitializationComplete`) is
-    /// driven by the caller — see the script commands of the same name.
-    pub async fn connect(host: PersistHost, compute_addr: &str) -> anyhow::Result<Self> {
-        let client = connect_and_hello(compute_addr).await?;
+    /// Starts an isolated native runtime. The caller initializes its instance
+    /// exactly once, then drives arbitrary renderer plans through the native owner.
+    /// Workers live until process exit, so use a separate process for each script.
+    pub async fn start(host: PersistHost, workers: usize, unified: bool) -> anyhow::Result<Self> {
+        let client = NativeCompute::start(&host, workers, unified).await?;
         let (responses, sender) = Responses::spawn(client);
         Ok(Driver {
             host,
-            compute_addr: compute_addr.to_string(),
             sender,
             responses,
         })
     }
 
-    /// Drops the current connection and opens a new one, sending only `Hello`, so
-    /// the caller can re-`create_instance`, replay the dataflows it expects the
-    /// replica to be running, and then send `InitializationComplete` to close the
-    /// reconciliation window.
-    ///
-    /// Replacing `sender` drops the previous [`ComputeSender`]; with no other
-    /// clones, the old pump task's command channel closes and the pump exits,
-    /// dropping the old CTP client and closing the old connection.
-    pub async fn reconnect(&mut self) -> anyhow::Result<()> {
-        let client = connect_and_hello(&self.compute_addr).await?;
-        let (responses, sender) = Responses::spawn(client);
-        self.responses = responses;
-        self.sender = sender;
-        Ok(())
-    }
-
-    /// Sends `CreateInstance`, opening the compute instance (and the reconciliation
-    /// window).
+    /// Initializes the native compute instance exactly once.
     ///
     /// `expiration_offset`, `arrangement_dictionary_compression`, and `initial_config` are the
     /// caller-settable [`InstanceConfig`] knobs; `logging` is left at its default
@@ -130,11 +110,33 @@ impl Driver {
 
     /// Submits a dataflow. Does NOT schedule it — the caller decides when to
     /// `schedule`, so side-effect timing stays under test control.
-    pub fn submit_dataflow(
+    pub async fn submit_dataflow(
         &self,
         df: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) -> anyhow::Result<()> {
-        self.send(ComputeCommand::CreateDataflow(Box::new(df)))
+        if df.export_ids().any(|id| id.is_transient()) {
+            anyhow::ensure!(
+                df.export_ids().all(|id| id.is_transient()),
+                "a dataflow cannot mix maintained and transient exports"
+            );
+            let request_id = uuid::Uuid::new_v4();
+            let admitted = self.responses.register_dataflow(request_id);
+            self.send(ComputeCommand::CreateQueryDataflow {
+                request_id,
+                catalog_position: None,
+                subscription_incarnation: None,
+                dataflow: Box::new(df),
+            })?;
+            // Scheduling before admission is intentionally ignored by native
+            // workers. Wait here, not in the pump that must drain the response.
+            admitted.await?.map_err(anyhow::Error::msg)
+        } else {
+            anyhow::ensure!(
+                df.subscribe_ids().next().is_none() && df.copy_to_ids().next().is_none(),
+                "subscribe and copy-to sinks require transient exports"
+            );
+            self.send(ComputeCommand::CreateDataflow(Box::new(df)))
+        }
     }
 
     /// Schedules a previously-submitted collection, allowing it to make progress.

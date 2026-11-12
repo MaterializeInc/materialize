@@ -622,7 +622,6 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
         "update-configuration" => Command::UpdateConfiguration {
             updates: settings_from_body(body)?,
         },
-        "reconnect" => Command::Reconnect,
         "initialization-complete" => Command::InitializationComplete,
         other => bail!("unknown command `{other}`"),
     };

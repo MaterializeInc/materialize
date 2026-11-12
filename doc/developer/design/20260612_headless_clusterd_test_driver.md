@@ -2,9 +2,9 @@
 
 ## Summary
 
-This document designs a headless test driver for `clusterd`.
-The driver is a generic alternate frontend that replaces `environmentd`'s controller for scripted compute and storage tests.
-It hosts the persist infrastructure, drives the cluster command and response protocol over the wire, accesses persist directly, and asserts on responses.
+The headless driver hosts a test-only native runtime for programmable compute tests.
+It owns raw dataflows through the native replica endpoint, uses a query-only connection for peeks, hosts Persist infrastructure and asserts on responses.
+It is not an alternate production execution owner or a catalog emulator.
 The design separates two layers.
 The mechanism is the generic headless frontend and stays free of any particular workload.
 A use case is a test written on top of the mechanism, such as building an index over a large shard, and lives outside the core.
@@ -13,14 +13,14 @@ A use case is a test written on top of the mechanism, such as building an index 
 
 `environmentd` couples the cluster protocol to the full SQL and catalog stack, which makes targeted compute and storage experiments slow to set up and hard to control.
 A test that wants to drive a specific dataflow against specific shard contents must currently go through SQL, the catalog, the optimizer, and the controller's timestamp and read-hold machinery.
-A headless driver removes that coupling by speaking the cluster protocol directly, so a test controls the exact persist state, the exact commands the replica receives, and the exact timestamps.
-This gives a faithful exercise of the real worker process and protocol while keeping the test deterministic and scriptable.
-The same crate runs both as a `cargo test` for a fast local loop and as an `mzcompose` workflow against a real `clusterd`.
+A headless driver removes that coupling through the in-process native owner, so a test controls the exact persist state, the exact commands the replica receives, and the exact timestamps.
+This exercises the real renderer and native worker machinery while keeping the test deterministic and scriptable.
+The same crate runs through isolated subprocesses in `cargo test` and `mzcompose`. Production catalog admission and external transport have separate integration coverage.
 
 ## Layering
 
 The central constraint is that the mechanism is generic and the use cases are not.
-The mechanism knows how to host persist, connect to a replica, send any command, read or write any shard, and observe responses.
+The mechanism knows how to host Persist and a native runtime, submit raw dataflows, read or write any shard, and observe responses.
 It does not know about index building, data sizes, or timestamp distributions.
 A use case composes those primitives into a workload and its assertions.
 This keeps the mechanism reusable for compute and storage tests that have nothing to do with the motivating index scenario.
@@ -33,7 +33,7 @@ graph TB
   end
   subgraph mech[mechanism: Driver]
     PA[persist access + hosted PubSub]
-    CH[CTP command channel + handshake]
+    CH[native owner + query connection]
     SUB[generic command and dataflow submission]
     AS[assertion primitives]
   end
@@ -46,8 +46,8 @@ graph TB
 
 * Host the persist PubSub server, as `environmentd` does, so the replica's persist clients receive push notifications.
 * Provide a persist client for direct shard access: open shards, write batches, read snapshots, downgrade `since`, observe `upper`.
-* Connect to a real `clusterd` over the compute Cluster Transport Protocol (CTP) and replicate the controller handshake.
-* Send arbitrary `ComputeCommand`s, including hand-assembled `CreateDataflow`s, and optionally `StorageCommand`s.
+* Own native compute and storage endpoints in a process-isolated test runtime. Preserve split and unified Timely topologies.
+* Submit arbitrary renderer plans and explicitly schedule, compact and configure them. Query commands use query-only ingress.
 * Demultiplex responses: track per-id frontiers, route peek responses, surface status.
 * Provide assertion primitives: wait for a frontier to advance within a timeout, peek an index, read a shard snapshot, and count rows.
 * Run as a `cargo test` and as an `mzcompose` workflow.
@@ -73,30 +73,16 @@ graph TB
 
 ## Architecture
 
-```mermaid
-graph LR
-  subgraph driver[headless driver process: mechanism]
-    T[use-case test: Rust builder API]
-    W[persist access]
-    C[CTP command channel]
-    PS[persist PubSub server]
-  end
-  subgraph cd[clusterd process: real]
-    SRV[compute server :2101]
-    WK[timely workers]
-    PC[persist clients]
-  end
-  P[(persist: blob + consensus)]
-  T --> W --> P
-  T --> C -->|ComputeCommand| SRV --> WK
-  WK -->|read or write shard| P
-  WK -->|ComputeResponse| C
-  PC -.subscribe.-> PS
-  W -.notify.-> PS
-```
+The script, native workers and Persist clients share one process. The script owns
+native execution endpoints and drains their progress independently of query
+connections. Peeks carry an applied test position ordered after the script's
+owner commands. This marker is not a durable catalog or a test of production
+read protection.
 
-The driver and `clusterd` share a persist blob store and consensus, configured in `mzcompose` via the environment-selected metadata store (CockroachDB or Postgres) and an object store.
-The driver hosts the persist PubSub server so the replica's persist clients receive low-latency notifications, matching the `environmentd` deployment.
+Persist blob and consensus storage are configured independently. The composition
+uses the selected metadata store and object store. The integration test uses
+in-memory Persist. The driver and workers share the PubSub-enabled client cache.
+
 A use case drives the flow: it writes or arranges persist state through the mechanism, submits commands, and asserts on responses.
 
 ## Mechanism
@@ -105,21 +91,29 @@ The mechanism lives in a new crate, `src/clusterd-test-driver`, exposing a libra
 
 ### Persist access and PubSub host
 
-* The driver starts the persist PubSub gRPC server, the same server `environmentd` hosts, and configures both the replica and its own client with that URL.
+* The driver hosts Persist PubSub and shares its client cache with native workers.
 * It exposes a persist client for generic shard access, not a workload-specific writer.
 * Primitives: open a writer or reader for a shard given a schema, append a batch at a chosen `[lower, upper)`, read a snapshot at a timestamp, downgrade `since`, and inspect `upper`.
 * Schema choices, encodings, and the contents of batches are caller concerns.
 
-### CTP command channel
+### Native command and response paths
 
-* It uses `transport::Client<ComputeCommand, ComputeResponse>` directly, because `ReplicaClient` and `SequentialHydration` are `pub(super)` and unavailable to an external crate.
-* Connecting sends only `Hello { nonce }` (the transport/version step). The rest of the controller handshake — `CreateInstance(InstanceConfig)`, `UpdateConfiguration`, `InitializationComplete` — is driven by explicit script commands (`create-instance`, `update-configuration`, `initialization-complete`), so a script controls the instance config, arbitrary dyncfg, and exactly when the reconciliation window opens and closes. `create-instance` carries the settable `InstanceConfig` knobs (`expiration-offset`, `arrangement-dictionary-compression`); it also force-disables the peek-response stash (so peeks return inline), patched in the driver rather than exposed, since a stashed peek would break `peek`/`count`.
-* The protocol version is `BUILDINFO.semver_version()`.
-* A background receive loop demultiplexes responses.
-  `Frontiers` updates a per-id output-frontier watch.
-  `PeekResponse` is routed to a pending peek by `uuid`.
-  `Status` is surfaced for diagnostics.
-* The storage CTP channel is structurally the same and is added when a use case needs it; the compute channel is the first cut.
+The test owns `ReplicaCompute` and initializes it exactly once. Scripts retain
+create-time instance settings, arbitrary dynamic configuration and explicit
+initialization completion. Peeks and cancellation use a query-only connection.
+A background pump continuously drains owner and query responses into frontier
+watches, peek result channels and subscription buffers.
+
+Transient exports use query admission, including subscriptions. Submission waits
+for admission before a script can schedule the dataflow. Index/MV mixed exports
+remain on the native owner. Transient index/subscription mixed exports share a
+query scope. A plan mixing maintained and transient exports is rejected, not
+silently split. Subscription identity and deployment lifetime also have separate
+production integration coverage.
+
+Native workers live until process exit. Each script runs in a separate process,
+and assertion failures exit that process rather than joining immortal workers.
+There is no reconnect/replay maintenance protocol.
 
 ### Command and dataflow submission
 
@@ -190,7 +184,7 @@ Use cases are tests and examples built on the mechanism, kept out of the core cr
   Drive the side-effecting commands the controller normally issues automatically, on the test's own schedule: when `Schedule` fires, when and how far `AllowCompaction` advances `since`, and when `UpdateConfiguration` changes parameters.
   This lets a test hold a frontier, delay compaction, or reconfigure mid-flight to observe the replica's response deterministically.
 
-These scenarios, and the motivating one above, are implemented as text command scripts under `test/clusterd-test-driver/scripts/` (`index.spec`, `deep_history.spec`, `side_effects.spec`, `multi_dataflow.spec`, `reconciliation.spec`, `error_behavior.spec`, `reduce.spec`, `materialized_view.spec`, `subscribe.spec`, `join.spec`, `index_and_mv.spec`; `custom_schema.spec` demonstrates `define-schema`) and run by the driver's script runner, not as compiled Rust scenarios.
+These scenarios, and the motivating one above, are implemented as text command scripts under `test/clusterd-test-driver/scripts/` (`index.spec`, `deep_history.spec`, `side_effects.spec`, `multi_dataflow.spec`, `error_behavior.spec`, `reduce.spec`, `materialized_view.spec`, `subscribe.spec`, `join.spec`, `index_and_mv.spec`; `custom_schema.spec` demonstrates `define-schema`) and run by the driver's script runner, not as compiled Rust scenarios.
 The scripting layer below is the mechanism they share.
 
 ### RenderPlan assembly for the index (resolved)
@@ -202,42 +196,40 @@ The scripting layer below is the mechanism they share.
   `LirId`s and topological order come from production code, not hand-rolling.
 * This was verified end to end: the `mzcompose` workflow built the index over a persist shard, the index hydrated, and a peek returned the expected row count.
 
-## mzcompose integration
+## mzcompose integration and testing
 
-A composition runs the environment-selected metadata store for consensus, an object store for blob, a real `clusterd`, and the driver binary as a workflow.
-The metadata store is pulled in via `metadata_store_companions()` rather than hardcoded, so it dispatches to whichever DB the environment configures (default Postgres, or `EXTERNAL_METADATA_STORE`); the consensus URI is derived from its name.
+The composition runs the selected metadata store, object store and one isolated
+headless-driver process per scenario. Each scenario runs with two workers in
+both split and unified Timely topologies. Scripts are mounted at `/workdir` and
+selected by `DRIVER_SCRIPT`. Their `----` blocks remain assertions, not static
+replacement plans.
 
-* `clusterd` is configured with the compute controller listen address on `:2101` and the driver's PubSub URL.
-* The driver binary connects to `:2101`, hosts PubSub, runs a text command script, and exits non-zero on assertion failure.
-* The composition directory is mounted at `/workdir` (the convention `testdrive` uses), so the scripts under `scripts/` are readable in the container; each run is pointed at one via `DRIVER_SCRIPT`.
-* Without `environmentd`, the driver is the sole PubSub host, so the replica's persist notifications flow through it.
+Crate tests retain direct Persist writes, response demultiplexing and generative
+plan construction. `tests/index_smoke.rs` runs the kept incremental index script
+in isolated native subprocesses for both topologies, without an external cluster.
+The former reconciliation scenario's initial hydration assertion is retained in
+`index.spec`. Only its obsolete owner reconnect/replay sequence is removed.
 
-## Testing
-
-* The driver never spawns `clusterd`; `mzcompose` brings up the full stack (the metadata store, an object store, `clusterd`, and the driver image) and is the faithful end-to-end path that CI runs.
-  `workflow_default` runs every scenario script in turn, restarting `clusterd` between them for a clean compute state. Each command's output is compared to its `----` golden block, failing the run on a mismatch: `index.spec`, `deep_history.spec`, `side_effects.spec`, and `reconciliation.spec` assert counts; `reduce.spec` asserts a reduce's output via `peek`; `materialized_view.spec` reads a sink's output shard back through a persist `peek`; `subscribe.spec` asserts the streamed updates; `join.spec` joins two sources (using `optimize`) and counts the result; `index_and_mv.spec` exports both an index and a materialized view over one binding in a single dataflow and peeks each; `error_behavior.spec` asserts a set of error messages; `multi_dataflow.spec` reproduces a current limitation and stays deterministic via `allow-timeout`'s fixed `awaited` output.
-* Crate-level `cargo test` covers the infra-free units (direct persist write round-trip via `mem://`, spread-timestamp write, response demux merge, dataflow structure).
-  The end-to-end integration test (`tests/index_smoke.rs`) skips unless `CLUSTERD_COMPUTE_ADDR` is set, so `cargo test` stays green without a running stack.
+`multi_dataflow.spec` still uses `allow-timeout`, which does not establish
+successful hydration. It must not be reported as a passing hydration check.
 
 ## Local runs and profiling
 
-`bin/pyactivate test/clusterd-test-driver/run-local.py` runs the whole thing on the host without docker images.
-It reuses or starts a CockroachDB container for consensus, uses a `file://` blob directory, builds and launches a local `clusterd`, and runs the `headless-driver` against it.
-Because every process is on localhost, one PubSub address (`127.0.0.1:6879`) and one persist location serve both the driver and `clusterd`, so none of the container-networking caveats apply.
-It is a Python script so it can reuse Materialize's mzcompose helpers; in particular it builds the timely config via the same `timely_config` and `DEFAULT_*_EXERT_PROPORTIONALITY` constants as the `Clusterd` service, so the arrangement merge effort stays in sync with CI defaults. Configuration is via environment variables (`SCRIPT`, `WRAPPER`, `PROFILE`, …).
+`bin/pyactivate test/clusterd-test-driver/run-local.py` builds and runs the native
+driver. It reuses or starts CockroachDB unless `PERSIST_CONSENSUS_URL` is supplied.
+`PERSIST_BLOB_URL` overrides the default file-backed blob directory.
 
-`SCRIPT` selects the command script to run (default `scripts/index.spec`), passed to the driver via `DRIVER_SCRIPT`; `REWRITE=1` regenerates the script's golden blocks in place. Run duration is governed by the row counts in the script; for a heavier profiling run, point `SCRIPT` at a script with larger `count`s.
+`SCRIPT` selects a script. `REWRITE=1` regenerates its expected results.
+`DRIVER_WORKERS` and `DRIVER_UNIFIED` select worker count and topology.
+`PROFILE` defaults to `optimized`; use `PROFILE=dev` for the development build.
 
-To profile `clusterd` (heaptrack, perf, samply), set `WRAPPER` to a command the runner prepends to the `clusterd` invocation, e.g. `WRAPPER="heaptrack" bin/pyactivate test/clusterd-test-driver/run-local.py` or `WRAPPER="perf record -g --" …`.
-On exit the script terminates the inner `clusterd` rather than the wrapper, so the profiler observes its child exit and flushes its output before exiting on its own.
-For `heaptrack` the script builds `clusterd` with `--no-default-features`, since the default `mz-alloc-default` feature uses jemalloc, which bypasses the system allocator heaptrack hooks; force this for other tools with `CLUSTERD_NO_DEFAULT_FEATURES=1`.
-For full manual control instead, launch `clusterd` yourself using the command the script prints under "clusterd command:", then run with `RUN_CLUSTERD=0` so the script only drives the already-running `clusterd`.
-The script builds with the `optimized` cargo profile by default (release-like but with debug symbols), so the numbers are representative; override with `PROFILE=dev` for a quicker unoptimized build.
+`WRAPPER` profiles the driver process that owns compute, for example
+`WRAPPER="heaptrack"` or `WRAPPER="perf record -g --"`. The driver uses the system
+allocator. On interruption the runner reaps only its own process group.
+Connecting this driver to a separately launched catalog-free clusterd is unsupported.
 
 ## Interoperability notes
 
-* **Protocol version.** The CTP handshake checks the client version against the replica's.
-  The driver uses `mz_persist_client::BUILD_INFO` (a release-versioned crate, synced by `bin/bump-version`) rather than its own crate version, which is `0.0.0` and would fail the check.
 * **Peek stash.** The replica stashes large peek results in persist by default (above a 10 KB threshold).
   `create-instance` force-disables `enable_compute_peek_response_stash` so peeks return their rows inline; it is patched in the driver rather than left to `update-configuration`, since the driver only reads inline peeks.
 * **Read-only mode.** Every dataflow starts read-only; indexes, subscribes, and peeks work regardless, but a materialized-view sink withholds all persist writes until `AllowWrites`. The `allow-writes` command sends it for a sink id, so a materialized-view scenario does `create-dataflow` → `schedule` → `allow-writes` → `peek`.
@@ -256,16 +248,15 @@ The script format is a hand-writable, `datadriven`-style text file (the `text` m
 Each stanza is a command — a directive line plus an optional indentation-structured body — followed by a `----` separator and the expected output.
 The expected block is the assertion, and `REWRITE=1` regenerates it in place; a `#` at column 0 is a comment, and comments and blank lines survive a rewrite.
 
-The driver is solely a script runner (the `script` module), not a one-shot scenario binary: it parses the file named by `DRIVER_SCRIPT` (or stdin), executes each command against `clusterd`, and compares its output to the expected block, returning non-zero on any mismatch.
+The driver is solely a script runner (the `script` module), not a one-shot scenario binary: it parses the file named by `DRIVER_SCRIPT` (or stdin), executes each command against its native runtime, and compares its output to the expected block, returning non-zero on any mismatch.
 A command that fails renders as `error: <message>`, so an expected failure is asserted by its golden block rather than a special command.
 The command set is the `Driver` and `DataflowBuilder` surface; the original Rust scenarios are fully replaced by scripts, with nothing scenario-specific in the binary.
-The orchestration verbs (`create-instance`, `update-configuration`, `initialization-complete`, `define-schema`, `write-single-ts`, `write-spread`, `write-rows`, `define-index`, `create-dataflow`, `schedule`, `allow-compaction`, `allow-writes`, `await-frontier`, `count`, `peek`, `await-subscribe`, `reconnect`) map directly to `Driver`/`DataflowBuilder` calls; shards are named by a string alias allocated on first use, and object ids are raw `u64`s.
-The handshake is explicit: a script opens with `create-instance` and `initialization-complete` (and an optional `update-configuration` between them) before its workload.
+The orchestration verbs (`create-instance`, `update-configuration`, `initialization-complete`, `define-schema`, `write-single-ts`, `write-spread`, `write-rows`, `define-index`, `create-dataflow`, `schedule`, `allow-compaction`, `allow-writes`, `await-frontier`, `count`, `peek`, `await-subscribe`) map directly to `Driver`/`DataflowBuilder` calls; shards are named by a string alias allocated on first use, and object IDs accept bare user IDs or explicit prefixes, such as `t2001` for a transient export.
+Instance initialization is explicit: a script opens with `create-instance` and `initialization-complete` (and an optional `update-configuration` between them) before its workload.
 `create-instance` carries the settable `InstanceConfig` knobs (`expiration-offset`, `arrangement-dictionary-compression`) and force-disables the peek-response stash so peeks return inline; `update-configuration` applies an arbitrary table of `name type value` dyncfg updates.
 Assertions are level-triggered waits on monotonic frontiers, so the order in which a script waits across objects — and the real-time interleaving of the dataflows — does not change the result; the golden output is deterministic.
 `await-frontier` takes an `allow-timeout` flag that emits a fixed `awaited` token regardless of outcome, so a reproduction like `multi_dataflow`, whose hydration is nondeterministic, still has stable golden output.
 Synthetic writes take a `start` offset so successive batches use disjoint id ranges that accumulate rather than consolidate, which the `index` tick phase relies on.
-`reconnect` drops the connection and re-sends only `Hello`; the script then re-issues `create-instance` (reopening the reconciliation window), replays the dataflows the replica should keep, and sends `initialization-complete` to close it, so `reconciliation.spec` exercises reconcile-and-keep rather than rehydrate.
 `error_behavior.spec` covers bad input (unknown schema, wrong arity or type, out-of-range index key) and replica behavior (an unscheduled dataflow's frontier never advancing), each command's error message being its golden output.
 The builder's `finish`/`augment` path returns errors instead of panicking on malformed input (see `DataflowBuilder` above), and `define_index` validates key columns against the schema's arity up front, so those errors are clean.
 
