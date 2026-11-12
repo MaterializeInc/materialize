@@ -12,6 +12,7 @@ import {
   SupportOrganization,
   SupportTicketEnvironmentType,
 } from "~/api/cloudGlobalApi";
+import { formatBytesShort } from "~/utils/format";
 
 /**
  * Severities shown in the form. The global API opens urgent tickets as
@@ -76,19 +77,18 @@ export const ATTACHMENT_EXTENSIONS = [
   "txt",
 ];
 export const MAX_ATTACHMENTS = 10;
-export const MAX_ATTACHMENT_MB = 5;
-export const MAX_ATTACHMENTS_TOTAL_MB = 5;
-const MB = 1024 * 1024;
+/** The most a ticket's files can add up to, and so the most for one file. */
+export const MAX_ATTACHMENTS_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS_SIZE = formatBytesShort(BigInt(MAX_ATTACHMENTS_BYTES));
+const DOTTED_EXTENSIONS = ATTACHMENT_EXTENSIONS.map(
+  (extension) => `.${extension}`,
+);
 
 /** The limits, for the attachment button's tooltip. */
-export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENTS_TOTAL_MB} MB in total: ${ATTACHMENT_EXTENSIONS.map(
-  (extension) => `.${extension}`,
-).join(", ")}.`;
+export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENTS_SIZE} in total: ${DOTTED_EXTENSIONS.join(", ")}.`;
 
 /** The value for the file input's `accept`. */
-export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.map(
-  (extension) => `.${extension}`,
-).join(",");
+export const ATTACHMENT_ACCEPT = DOTTED_EXTENSIONS.join(",");
 
 export const MAX_FILE_NAME_LENGTH = 255;
 
@@ -98,7 +98,8 @@ const extensionOf = (name: string) =>
 /**
  * Control characters, and characters that don't show or that change how the
  * text around them is displayed, so a name could look like it has a
- * different extension. The global API rejects the same ones.
+ * different extension. The global API rejects the same ones: keep this in
+ * sync with `is_invisible` in cloud's `src/sync/src/support_tickets.rs`.
  */
 const HIDDEN_CHARACTER_RANGES: [number, number][] = [
   [0x0000, 0x001f],
@@ -169,19 +170,19 @@ export const attachmentError = (files: { name: string; size: number }[]) => {
       !ATTACHMENT_EXTENSIONS.includes(extensionOf(name.trim()) ?? ""),
   );
   if (unsupported) {
-    return `${unsupported.name} can't be attached. Supported types: ${ATTACHMENT_ACCEPT.replaceAll(",", ", ")}.`;
+    return `${unsupported.name} can't be attached. Supported types: ${DOTTED_EXTENSIONS.join(", ")}.`;
   }
-  const tooLarge = files.find(({ size }) => size > MAX_ATTACHMENT_MB * MB);
+  const tooLarge = files.find(({ size }) => size > MAX_ATTACHMENTS_BYTES);
   if (tooLarge) {
-    return `${tooLarge.name} is larger than ${MAX_ATTACHMENT_MB} MB.`;
+    return `${tooLarge.name} is larger than ${MAX_ATTACHMENTS_SIZE}.`;
   }
   const empty = files.find(({ size }) => size === 0);
   if (empty) {
     return `${empty.name} is empty.`;
   }
   const total = files.reduce((sum, { size }) => sum + size, 0);
-  if (total > MAX_ATTACHMENTS_TOTAL_MB * MB) {
-    return `Files can be up to ${MAX_ATTACHMENTS_TOTAL_MB} MB in total.`;
+  if (total > MAX_ATTACHMENTS_BYTES) {
+    return `Files can be up to ${MAX_ATTACHMENTS_SIZE} in total.`;
   }
   return undefined;
 };

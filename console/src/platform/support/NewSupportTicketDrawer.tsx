@@ -29,7 +29,6 @@ import {
   Tag,
   Text,
   Textarea,
-  Tooltip,
   useTheme,
   VisuallyHiddenInput,
   VStack,
@@ -52,12 +51,7 @@ import {
   SUPPORT_EMAIL,
 } from "~/externalUrls";
 import { useHideIntercomLauncher } from "~/hooks/useIntercom";
-import {
-  CheckmarkIcon,
-  ChevronLeftIcon,
-  CloseIcon,
-  PaperclipIcon,
-} from "~/icons";
+import { CheckmarkIcon, ChevronLeftIcon } from "~/icons";
 import {
   currentEnvironmentState,
   currentRegionIdAtom,
@@ -65,12 +59,11 @@ import {
 import { MaterializeTheme } from "~/theme";
 
 import { AttachFilesStatus } from "./AttachFilesStatus";
+import { AttachmentPicker, PickedFile } from "./AttachmentPicker";
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket, useSupportOrganizations } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
-  ATTACHMENT_ACCEPT,
-  ATTACHMENT_LIMITS,
   attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
@@ -85,138 +78,6 @@ import {
 } from "./ticketForm";
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
-
-const formatSize = (bytes: number) =>
-  bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-
-/** Keys for picked files, which have no ID of their own. */
-const fileKeys = new WeakMap<File, number>();
-let nextFileKey = 0;
-const fileKey = (file: File) => {
-  let key = fileKeys.get(file);
-  if (key === undefined) {
-    key = nextFileKey++;
-    fileKeys.set(file, key);
-  }
-  return key;
-};
-
-/**
- * Files to add to the ticket once it's open. The button's tooltip gives the
- * limits; the global API checks them again.
- */
-const AttachmentPicker = ({
-  files,
-  error,
-  isDisabled,
-  onChange,
-}: {
-  files: File[];
-  error: string | undefined;
-  /** While the ticket opens: the files it will get are already set. */
-  isDisabled: boolean;
-  onChange: (files: File[]) => void;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const input = React.useRef<HTMLInputElement>(null);
-  const attachButton = React.useRef<HTMLButtonElement>(null);
-  const removeButtons = React.useRef(new Map<number, HTMLButtonElement>());
-
-  const removeFile = (file: File) => {
-    const index = files.indexOf(file);
-    const remaining = files.filter((f) => f !== file);
-    onChange(remaining);
-    // Keep keyboard focus in the picker after the removed control unmounts.
-    queueMicrotask(() => {
-      const next = remaining[index] ?? remaining[index - 1];
-      if (next) {
-        removeButtons.current.get(fileKey(next))?.focus();
-      } else {
-        attachButton.current?.focus();
-      }
-    });
-  };
-
-  return (
-    <Box data-testid="support-ticket-attachments">
-      <VisuallyHiddenInput
-        ref={input}
-        type="file"
-        multiple
-        accept={ATTACHMENT_ACCEPT}
-        tabIndex={-1}
-        disabled={isDisabled}
-        aria-label="Files to attach"
-        data-testid="support-ticket-file-input"
-        onChange={(event) => {
-          const added = Array.from(event.target.files ?? []);
-          onChange([...files, ...added]);
-          // Lets the same file be picked again after it's removed.
-          event.target.value = "";
-        }}
-      />
-      <Tooltip label={ATTACHMENT_LIMITS} lineHeight={1.2} hasArrow>
-        <Button
-          ref={attachButton}
-          variant="secondary"
-          size="sm"
-          leftIcon={<PaperclipIcon aria-hidden />}
-          isDisabled={isDisabled}
-          onClick={() => input.current?.click()}
-        >
-          Attach files
-        </Button>
-      </Tooltip>
-      {files.length > 0 && (
-        <VStack as="ul" listStyleType="none" spacing="1" align="stretch" mt="2">
-          {files.map((file) => (
-            <HStack as="li" key={fileKey(file)} spacing="2">
-              <Text textStyle="text-small" flex="1" minWidth="0" noOfLines={1}>
-                {file.name}
-              </Text>
-              <Text textStyle="text-small" color={colors.foreground.secondary}>
-                {formatSize(file.size)}
-              </Text>
-              <IconButton
-                ref={(node) => {
-                  const key = fileKey(file);
-                  if (node) {
-                    removeButtons.current.set(key, node);
-                  } else {
-                    removeButtons.current.delete(key);
-                  }
-                }}
-                aria-label={`Remove ${file.name}`}
-                // The icon draws with a stroke, which the button doesn't set.
-                icon={<CloseIcon stroke="currentColor" />}
-                variant="ghost"
-                size="xs"
-                isDisabled={isDisabled}
-                onClick={() => removeFile(file)}
-              />
-            </HStack>
-          ))}
-        </VStack>
-      )}
-      {error && (
-        <Text
-          role="alert"
-          textStyle="text-small"
-          color={colors.accent.red}
-          mt="2"
-        >
-          {error}
-        </Text>
-      )}
-      <Text textStyle="text-small" color={colors.foreground.secondary} mt="2">
-        Please make sure files don&apos;t include passwords, credentials, or
-        other sensitive data.
-      </Text>
-    </Box>
-  );
-};
 
 /**
  * How to share files after the ticket is open: more than the form takes, or
@@ -319,7 +180,6 @@ const NewTicketForm = ({
   organizationName,
   isOutage,
   submit,
-  onOpen,
   onReportOutage,
   onClose,
 }: {
@@ -328,14 +188,12 @@ const NewTicketForm = ({
   /** The outage form: urgent and production only. */
   isOutage: boolean;
   submit: CreateTicketMutation;
-  /** Opens the ticket, then adds the files to it. */
-  onOpen: (request: CreateSupportTicketRequest, files: File[]) => void;
   onReportOutage: () => void;
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const [files, setFiles] = React.useState<File[]>([]);
-  const filesError = attachmentError(files);
+  const [files, setFiles] = React.useState<PickedFile[]>([]);
+  const filesError = attachmentError(files.map(({ file }) => file));
   const signedIn = { ...useTicketContext(), organizationId, organizationName };
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
@@ -401,16 +259,18 @@ const NewTicketForm = ({
   const onSubmit = (values: TicketFormValues) => {
     // The picker shows why; the ticket waits until the files can go with it.
     if (filesError) return;
-    onOpen(
-      buildCreateTicketRequest(
+    // The files are added once the ticket is open, even if the drawer has
+    // closed by then.
+    submit.mutate({
+      request: buildCreateTicketRequest(
         // Outages are always about production.
         isOutage
           ? { ...values, severity: "urgent", environmentType: "production" }
           : values,
         target,
       ),
-      files,
-    );
+      files: files.map(({ file }) => file),
+    });
   };
 
   return (
@@ -574,9 +434,6 @@ const NewTicketForm = ({
                 },
               })}
               placeholder={descriptionPlaceholder}
-              // Lighter than other placeholders: it's several lines, and at
-              // the usual color it reads like text already filled in.
-              _placeholder={{ color: colors.foreground.tertiary }}
               variant={errors.description ? "error" : "default"}
               rows={6}
               minH="9.5rem"
@@ -842,10 +699,6 @@ export const NewSupportTicketDrawer = ({
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
   const submit = useCreateSupportTicket();
-  // The files are added once the ticket is open, even if the drawer has
-  // closed by then.
-  const openTicket = (request: CreateSupportTicketRequest, files: File[]) =>
-    submit.mutate({ request, files });
   const startOver = () => submit.reset();
   const sent =
     submit.isSuccess && submit.variables
@@ -907,7 +760,6 @@ export const NewSupportTicketDrawer = ({
               organizationName={organizationName}
               isOutage={isOutage}
               submit={submit}
-              onOpen={openTicket}
               onReportOutage={() => {
                 startOver();
                 onReportOutage();

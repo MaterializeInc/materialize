@@ -18,6 +18,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { millisecondsInHour, millisecondsInSecond } from "date-fns/constants";
 import React from "react";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
@@ -32,8 +33,9 @@ import {
   SupportTicket,
 } from "~/api/cloudGlobalApi";
 import { OpenApiFetchError } from "~/api/OpenApiFetchError";
-import { ToastComponent } from "~/components/Toast";
 import { useAuthUser } from "~/external-library-wrappers/frontegg";
+import { TOAST_DEFAULTS } from "~/hooks/useToast";
+import { pluralize } from "~/util";
 
 import { readAsBase64 } from "./ticketForm";
 
@@ -253,7 +255,7 @@ export function useCreateSupportTicket() {
       if (files.length > 0) {
         startAttachingFiles(queryClient, {
           ticketId: ticket.id,
-          ticketNumber: ticket.number,
+          ticketNumber: ticket.number ?? null,
           files,
         });
       }
@@ -284,7 +286,7 @@ export function useCreateSupportTicket() {
 export type AttachFilesVariables = {
   ticketId: string;
   /** For messages about the files once the confirmation has closed. */
-  ticketNumber?: string | null;
+  ticketNumber: string | null;
   files: File[];
 };
 
@@ -321,16 +323,16 @@ export const SHARE_FILES_INSTEAD =
 /** What became of a ticket's files, or nothing if it had none. */
 export function attachFilesMessage(
   state: AttachFilesState,
-  ticket = "Your ticket",
+  ticketLabel = "Your ticket",
 ): string | undefined {
   const count = state.variables?.files.length ?? 0;
   if (count === 0) return undefined;
-  const files = count === 1 ? "1 file" : `${count} files`;
+  const files = `${count} ${pluralize(count, "file", "files")}`;
   if (state.status === "success") return `${files} added to your ticket.`;
   if (state.status !== "error") return `Adding ${files}\u2026`;
   return isAttachUnconfirmedError(state.error)
-    ? `${ticket} is open, but we couldn't confirm the ${files} ${count === 1 ? "was" : "were"} added. Check the ticket in Help Center before adding them again.`
-    : `${ticket} is open, but the ${files} couldn't be added.`;
+    ? `${ticketLabel} is open, but we couldn't confirm the ${files} ${pluralize(count, "was", "were")} added. Check the ticket in Help Center before adding them again.`
+    : `${ticketLabel} is open, but the ${files} couldn't be added.`;
 }
 
 /**
@@ -345,7 +347,7 @@ const shownAttachStatuses = new Map<string, number>();
  * than `useToast`.
  */
 const { toast: showToast } = createStandaloneToast({
-  defaultOptions: { position: "bottom-right", render: ToastComponent },
+  defaultOptions: TOAST_DEFAULTS,
 });
 
 /**
@@ -376,9 +378,11 @@ export function startAttachingFiles(
       },
       retry: retryWhenUploadsAreBusy,
       // The global API asks for 5 seconds.
-      retryDelay: (failureCount) => (failureCount + 1) * 5_000,
-      // Keeps how it went, for the ticket's modal, for an hour.
-      gcTime: 60 * 60 * 1000,
+      retryDelay: (failureCount) =>
+        (failureCount + 1) * 5 * millisecondsInSecond,
+      // Keeps how it went, for the ticket's modal, for up to an hour (in
+      // memory, so not across a page reload).
+      gcTime: millisecondsInHour,
     }),
   );
   mutation.execute(variables).catch(() => {
