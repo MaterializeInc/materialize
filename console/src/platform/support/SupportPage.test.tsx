@@ -1404,11 +1404,37 @@ describe("SupportPage", () => {
         new File(["png"], "screen.png", { type: "image/png" }),
       ]);
 
-      expect(
-        screen
-          .getAllByRole("button", { name: /^Remove / })
-          .map((button) => button.getAttribute("aria-label")),
-      ).toEqual(["Remove error.txt", "Remove screen.png"]);
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole("button", { name: /^Remove / })
+            .map((button) => button.getAttribute("aria-label")),
+        ).toEqual(["Remove error.txt", "Remove screen.png"]),
+      );
+    });
+
+    it("keeps different files that share a name, size and date", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      // Same-named logs from different folders.
+      const log = (contents: string) =>
+        new File([contents], "error.txt", {
+          type: "text/plain",
+          lastModified: 1,
+        });
+      await user.upload(input, log("worker A failed"));
+      await user.upload(input, log("worker B failed"));
+
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole("button", { name: "Remove error.txt" }),
+        ).toHaveLength(2),
+      );
     });
 
     it("sends file names without hidden characters", async () => {

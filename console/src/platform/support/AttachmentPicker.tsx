@@ -29,10 +29,52 @@ import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_LIMITS,
   attachmentFileName,
+  MAX_ATTACHMENTS_BYTES,
 } from "./ticketForm";
 
-/** Identifies a picked file, so picking it again doesn't add it twice. */
+/** Files with the same metadata may be the same file picked again. */
 const fileId = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+
+const readBytes = (file: Blob) =>
+  new Promise<Uint8Array>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+
+/**
+ * Whether two files with the same metadata also have the same contents.
+ * Same-named logs from different folders can share a size and timestamp.
+ */
+const isSameFile = async (a: File, b: File) => {
+  if (a === b) return true;
+  // Too large to attach anyway, so not worth reading: keep both and let the
+  // form say why.
+  if (a.size > MAX_ATTACHMENTS_BYTES) return false;
+  try {
+    const [left, right] = await Promise.all([readBytes(a), readBytes(b)]);
+    return left.every((byte, i) => byte === right[i]);
+  } catch {
+    // Keep both rather than drop a file that may be different.
+    return false;
+  }
+};
+
+/** The files of `picked` that aren't already in `files`. */
+const newFiles = async (files: File[], picked: File[]) => {
+  const added: File[] = [];
+  for (const file of picked) {
+    const sameMetadata = [...files, ...added].filter(
+      (other) => fileId(other) === fileId(file),
+    );
+    const repeats = await Promise.all(
+      sameMetadata.map((other) => isSameFile(other, file)),
+    );
+    if (!repeats.some(Boolean)) added.push(file);
+  }
+  return added;
+};
 
 /**
  * Files to add to the ticket once it's open. The button's tooltip gives the
@@ -54,6 +96,11 @@ export const AttachmentPicker = ({
   const input = React.useRef<HTMLInputElement>(null);
   const attachButton = React.useRef<HTMLButtonElement>(null);
   const list = React.useRef<HTMLUListElement>(null);
+  // Comparing contents takes a moment, and files can be removed meanwhile.
+  const latestFiles = React.useRef(files);
+  React.useEffect(() => {
+    latestFiles.current = files;
+  });
 
   const removeFile = (index: number) => {
     onChange(files.filter((_, i) => i !== index));
@@ -79,16 +126,26 @@ export const AttachmentPicker = ({
         aria-label="Files to attach"
         data-testid="support-ticket-file-input"
         onChange={(event) => {
-          const picked = new Set(files.map(fileId));
-          const added = Array.from(event.target.files ?? []).filter((file) => {
-            const id = fileId(file);
-            if (picked.has(id)) return false;
-            picked.add(id);
-            return true;
-          });
-          onChange([...files, ...added]);
+          const picked = Array.from(event.target.files ?? []);
           // Lets the same file be picked again after it's removed.
           event.target.value = "";
+          const ids = new Set(files.map(fileId));
+          const mayRepeat = picked.some((file) => {
+            const id = fileId(file);
+            if (ids.has(id)) return true;
+            ids.add(id);
+            return false;
+          });
+          if (mayRepeat) {
+            // Only files that share metadata need their contents compared.
+            void newFiles(files, picked).then((added) => {
+              if (added.length > 0) {
+                onChange([...latestFiles.current, ...added]);
+              }
+            });
+          } else {
+            onChange([...files, ...picked]);
+          }
         }}
       />
       <Tooltip label={ATTACHMENT_LIMITS} lineHeight={1.2} hasArrow>
@@ -113,7 +170,16 @@ export const AttachmentPicker = ({
           mt="2"
         >
           {files.map((file, index) => (
-            <HStack as="li" key={fileId(file)} spacing="2">
+            <HStack
+              as="li"
+              // Different files can share metadata, so count earlier ones.
+              key={`${fileId(file)}#${
+                files
+                  .slice(0, index)
+                  .filter((earlier) => fileId(earlier) === fileId(file)).length
+              }`}
+              spacing="2"
+            >
               {/* The name it's sent with: hidden characters are left out. */}
               <Text textStyle="text-small" flex="1" minWidth="0" noOfLines={1}>
                 {attachmentFileName(file.name)}
