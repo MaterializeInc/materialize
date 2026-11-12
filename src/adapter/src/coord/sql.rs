@@ -417,7 +417,19 @@ impl Coordinator {
                             // would block the coordinator loop. Callers that expose the
                             // retirement wait on the notify off the coordinator loop
                             // before responding.
-                            self.builtin_table_update().defer(vec![update])
+                            let mut updates = vec![update];
+                            updates.extend(active_subscribe.published_frontiers.iter().map(
+                                |row| {
+                                    self.catalog().state().resolve_builtin_table_update(
+                                        mz_catalog::catalog::BuiltinTableUpdate::row(
+                                            &*mz_catalog::builtin::MZ_SUBSCRIPTION_FRONTIERS_RAW,
+                                            row.clone(),
+                                            Diff::MINUS_ONE,
+                                        ),
+                                    )
+                                },
+                            ));
+                            self.builtin_table_update().defer(updates)
                         }
                     }
                 }

@@ -116,6 +116,10 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
 
         let active_subscribe = ActiveSubscribe {
+            physical_dependencies: df_desc.import_ids().collect(),
+            published_frontiers: Default::default(),
+            replica_frontiers: Default::default(),
+            merged_frontier: None,
             query_execution: None,
             owner,
             channel: tx,

@@ -111,6 +111,7 @@ impl Harness {
         self.command(
             nonce,
             ComputeCommand::CreateQueryDataflow {
+                subscription_incarnation: None,
                 request_id: A,
                 catalog_position: None,
                 dataflow: Box::new(alias(as_of)),
@@ -214,6 +215,11 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
     use mz_storage_types::sources::SourceData;
     use mz_timely_util::columnar::Column;
 
+    let subscription_id = mz_repr::SubscriptionId {
+        client_incarnation: 7,
+        local_id: 1,
+    };
+    let public_id = logging::compute::CollectionId::Subscription(subscription_id);
     const MAINTAINED: GlobalId = GlobalId::User(2);
     let mut h = Harness::new();
     let events = Rc::new(RefCell::new(Vec::new()));
@@ -293,13 +299,14 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
             compute_state: &mut h.state,
             response_tx: &mut h.sender,
         };
-        active.handle_create_dataflow(source_dataflow(metadata, MAINTAINED));
+        active.handle_create_dataflow(source_dataflow(metadata, MAINTAINED), None);
         active.handle_schedule(MAINTAINED);
     }
     h.open(A);
     h.command(
         A,
         ComputeCommand::CreateQueryDataflow {
+            subscription_incarnation: Some(subscription_id.client_incarnation),
             request_id: B,
             catalog_position: None,
             dataflow: Box::new(subscribe),
@@ -307,7 +314,7 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
     );
     h.command(A, ComputeCommand::Schedule(EXPORT));
     let initial = drain();
-    for id in [MAINTAINED, EXPORT] {
+    for id in [MAINTAINED.into(), public_id] {
         assert!(
             initial
                 .iter()
@@ -342,7 +349,7 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
             progress.extend(drain());
             let advanced =
                 |id| frontier_events(&progress, id).contains(&(Timestamp::from(upper), 1));
-            if advanced(MAINTAINED) && (lower != 0 || advanced(EXPORT)) {
+            if advanced(MAINTAINED.into()) && (lower != 0 || advanced(public_id)) {
                 break;
             }
             assert!(
@@ -352,34 +359,32 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
             tokio::task::yield_now().await;
         }
         assert_eq!(
-            frontier_events(&progress, MAINTAINED),
+            frontier_events(&progress, MAINTAINED.into()),
             vec![(Timestamp::from(lower), -1), (Timestamp::from(upper), 1)]
         );
         if lower == 0 {
             assert_eq!(
-                frontier_events(&progress, EXPORT),
-                frontier_events(&progress, MAINTAINED)
+                frontier_events(&progress, public_id),
+                frontier_events(&progress, MAINTAINED.into())
             );
             h.state
                 .handle_query_command(&mut h.worker, None, A, &mut h.sender);
             let dropped = drain();
             assert_eq!(
-                frontier_events(&dropped, EXPORT),
+                frontier_events(&dropped, public_id),
                 vec![(Timestamp::from(upper), -1)]
             );
             assert!(
-                dropped
-                    .iter()
-                    .any(|e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == EXPORT))
-            );
-            assert!(frontier_events(&dropped, MAINTAINED).is_empty());
-            assert!(
-                !dropped.iter().any(
-                    |e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == MAINTAINED)
+                dropped.iter().any(
+                    |e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == public_id)
                 )
             );
+            assert!(frontier_events(&dropped, MAINTAINED.into()).is_empty());
+            assert!(!dropped.iter().any(
+                |e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == MAINTAINED.into())
+            ));
         } else {
-            assert!(frontier_events(&progress, EXPORT).is_empty());
+            assert!(frontier_events(&progress, public_id).is_empty());
         }
     }
 }
@@ -391,6 +396,7 @@ async fn drop_before_reader_acquisition_resolves_creation_once() {
     h.command(
         A,
         ComputeCommand::CreateQueryDataflow {
+            subscription_incarnation: None,
             request_id: B,
             catalog_position: None,
             dataflow: Box::new(source_dataflow(source_metadata(), EXPORT)),
@@ -514,9 +520,9 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
             compute_state: &mut h.state,
             response_tx: &mut h.sender,
         };
-        active.handle_create_dataflow(source_dataflow(metadata, UPSTREAM));
+        active.handle_create_dataflow(source_dataflow(metadata, UPSTREAM), None);
         active.handle_schedule(UPSTREAM);
-        active.handle_create_dataflow(maintained);
+        active.handle_create_dataflow(maintained, None);
         active.handle_schedule(CATALOG);
     }
     h.open(A);

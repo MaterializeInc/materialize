@@ -84,7 +84,13 @@ impl QueryDataflows {
     /// Receive merged sink responses. Cancel safe. A replica failure is terminal
     /// only when no pending or installed replica can still answer. Execution
     /// errors remain in their original SUBSCRIBE/COPY response variants.
-    pub(crate) async fn recv(&mut self) -> Option<Result<DataflowResponse, AdapterError>> {
+    /// Reports replica uppers before merging, including redundant batches.
+    /// `None` withdraws an execution observation, while an empty upper denotes
+    /// completion. The callback can run even when this receive remains pending.
+    pub(crate) async fn recv_with_progress(
+        &mut self,
+        mut progress: impl FnMut(GlobalId, ReplicaId, Option<Antichain<Timestamp>>),
+    ) -> Option<Result<DataflowResponse, AdapterError>> {
         loop {
             if self.subscribes.is_empty() && self.copies.is_empty() {
                 return None;
@@ -108,14 +114,41 @@ impl QueryDataflows {
             }
             match self.events.recv().await? {
                 Event::Created => {}
-                Event::Failed(replica, error) => self.failed(replica, error),
+                Event::Failed(replica, error) => {
+                    for (id, subscribe) in &self.subscribes {
+                        if subscribe.replicas.contains(&replica) {
+                            progress(*id, replica, None);
+                        }
+                    }
+                    self.failed(replica, error);
+                }
                 Event::Response(replica, response) => {
+                    // Observe each execution before merging away redundant
+                    // batches. A missing execution is not a completed upper.
+                    if let DataflowResponse::Subscribe(id, response) = &response {
+                        if self
+                            .subscribes
+                            .get(id)
+                            .is_some_and(|subscribe| subscribe.replicas.contains(&replica))
+                        {
+                            let upper = match response {
+                                SubscribeResponse::Batch(batch) => Some(batch.upper.clone()),
+                                SubscribeResponse::DroppedAt(_) => None,
+                            };
+                            progress(*id, replica, upper);
+                        }
+                    }
                     if let Some(response) = self.merge(replica, response) {
                         return Some(Ok(response));
                     }
                 }
             }
         }
+    }
+
+    #[cfg(test)]
+    async fn recv(&mut self) -> Option<Result<DataflowResponse, AdapterError>> {
+        self.recv_with_progress(|_, _, _| {}).await
     }
 
     fn failed(&mut self, replica: ReplicaId, error: AdapterError) {
@@ -241,6 +274,10 @@ impl QueryClient {
         }
         let catalog_position = catalog.planning_position();
         let dataflow = self.enrich_dataflow(&catalog, dataflow).await?;
+        let subscription_incarnation = dataflow
+            .subscribe_ids()
+            .next()
+            .map(|_| self.protection.incarnation());
         let (events, receiver) = mpsc::unbounded_channel();
         let (clients, client_rx) = watch::channel(BTreeMap::new());
         let mut result = QueryDataflows {
@@ -297,7 +334,7 @@ impl QueryClient {
                         // SDK registration precedes creation. The returned guard owns
                         // both exports and early responses, and lives through recv.
                         let mut handle = client
-                            .create_dataflow(dataflow, catalog_position)
+                            .create_dataflow(dataflow, catalog_position, subscription_incarnation)
                             .await
                             .map_err(query_error)?;
                         drop(holds);
@@ -512,6 +549,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn subscribe_trims_overlap_and_ignores_nonadvancing_batches() {
         let (mut stream, events) = stream();
+        let mut observations = Vec::new();
         events
             .send(Event::Response(A, batch(0, 5, &[1, 4])))
             .expect("query dataflow event receiver should remain open");
@@ -521,19 +559,29 @@ mod tests {
         events
             .send(Event::Response(B, batch(3, 7, &[4, 5, 6])))
             .expect("query dataflow event receiver should remain open");
-        let Some(Ok(DataflowResponse::Subscribe(_, SubscribeResponse::Batch(first)))) =
-            stream.recv().await
+        let Some(Ok(DataflowResponse::Subscribe(_, SubscribeResponse::Batch(first)))) = stream
+            .recv_with_progress(|id, replica, upper| observations.push((id, replica, upper)))
+            .await
         else {
             panic!("expected first batch");
         };
         assert_eq!(first.upper, Antichain::from_elem(5.into()));
-        let Some(Ok(DataflowResponse::Subscribe(_, SubscribeResponse::Batch(next)))) =
-            stream.recv().await
+        let Some(Ok(DataflowResponse::Subscribe(_, SubscribeResponse::Batch(next)))) = stream
+            .recv_with_progress(|id, replica, upper| observations.push((id, replica, upper)))
+            .await
         else {
             panic!("expected advancing batch");
         };
         assert_eq!(next.lower, first.upper);
         assert_eq!(next.upper, Antichain::from_elem(7.into()));
+        assert_eq!(
+            observations,
+            vec![
+                (SINK, A, Some(Antichain::from_elem(5.into()))),
+                (SINK, B, Some(Antichain::from_elem(3.into()))),
+                (SINK, B, Some(Antichain::from_elem(7.into()))),
+            ]
+        );
         assert_eq!(
             next.updates
                 .expect("advancing batch should contain successful updates")[0]
@@ -603,6 +651,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn dropped_subscribe_waits_for_alternatives_but_not_failed_ones() {
         let (mut stream, events) = stream();
+        let mut observations = Vec::new();
         events
             .send(Event::Response(
                 A,
@@ -612,17 +661,26 @@ mod tests {
                 ),
             ))
             .expect("query dataflow event receiver should remain open");
-        assert!(futures::poll!(Box::pin(stream.recv())).is_pending());
+        assert!(
+            futures::poll!(Box::pin(stream.recv_with_progress(|id, replica, upper| {
+                observations.push((id, replica, upper));
+            })))
+            .is_pending()
+        );
+        assert_eq!(observations, vec![(SINK, A, None)]);
         events
             .send(Event::Failed(B, rejected("second creation failed")))
             .expect("query dataflow event receiver should remain open");
         assert!(matches!(
-            stream.recv().await,
+            stream
+                .recv_with_progress(|id, replica, upper| observations.push((id, replica, upper)))
+                .await,
             Some(Ok(DataflowResponse::Subscribe(
                 SINK,
                 SubscribeResponse::DroppedAt(_)
             )))
         ));
+        assert_eq!(observations, vec![(SINK, A, None), (SINK, B, None)]);
         assert!(stream.recv().await.is_none());
     }
 }

@@ -55,6 +55,40 @@ pub enum GlobalId {
 // fails, then there isn't any correctness issues just potential performance issues.
 static_assertions::assert_eq_size!(GlobalId, [u8; 16]);
 
+/// Public identity of a subscription owned by one adapter execution.
+///
+/// This is introspection metadata, not an execution or routing key. The local
+/// transient ID remains unchanged inside the query's execution scope.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Columnar
+)]
+pub struct SubscriptionId {
+    pub client_incarnation: u64,
+    pub local_id: u64,
+}
+
+impl SubscriptionId {
+    pub fn global_id(self) -> GlobalId {
+        GlobalId::Transient(self.local_id)
+    }
+}
+
+impl fmt::Display for SubscriptionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "t{}@a{}", self.local_id, self.client_incarnation)
+    }
+}
+
 impl GlobalId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
@@ -139,6 +173,23 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn subscription_identity_qualifies_execution_without_remapping() {
+        let first = SubscriptionId {
+            client_incarnation: 7,
+            local_id: 1,
+        };
+        let second = SubscriptionId {
+            client_incarnation: 8,
+            ..first
+        };
+        assert_eq!(first.to_string(), "t1@a7");
+        assert_eq!(second.to_string(), "t1@a8");
+        assert_eq!(first.global_id(), second.global_id());
+        assert_eq!(first.global_id(), GlobalId::Transient(1));
+        assert!(first.to_string().parse::<GlobalId>().is_err());
+    }
 
     #[mz_ore::test]
     fn proptest_global_id_roundtrips() {

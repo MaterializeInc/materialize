@@ -363,11 +363,12 @@ fn split_command(
                 request_id,
                 dataflow,
                 catalog_position,
+                subscription_incarnation,
             }),
             origin,
         ) => (
             UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
-            Some((request_id, catalog_position)),
+            Some((request_id, catalog_position, subscription_incarnation)),
         ),
         command => (command, None),
     };
@@ -422,11 +423,12 @@ fn split_command(
         .into_iter()
         .map(move |command| match (&query_context, command) {
             (
-                Some((request_id, catalog_position)),
+                Some((request_id, catalog_position, subscription_incarnation)),
                 UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
             ) => UnifiedCommand::Compute(
                 Some(ComputeCommand::CreateQueryDataflow {
                     request_id: *request_id,
+                    subscription_incarnation: *subscription_incarnation,
                     catalog_position: catalog_position.clone(),
                     dataflow,
                 }),

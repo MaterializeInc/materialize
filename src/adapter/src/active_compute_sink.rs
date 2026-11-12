@@ -10,13 +10,13 @@
 //! Coordinator bookkeeping for active compute sinks.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
@@ -174,6 +174,14 @@ pub enum ActiveSubscribeOwner {
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
+    /// Imports of the selected physical dataflow, distinct from logical dependencies.
+    pub physical_dependencies: BTreeSet<GlobalId>,
+    /// Last frontier rows queued for publication, retained for exact retraction.
+    pub published_frontiers: BTreeSet<Row>,
+    /// Query-owned observations, retained independently of redundant batch merging.
+    pub replica_frontiers: BTreeMap<ReplicaId, Antichain<Timestamp>>,
+    /// Greatest delivered upper. Losing a replica must not regress this frontier.
+    pub merged_frontier: Option<Antichain<Timestamp>>,
     /// Owns query-local creation and execution, canceled when the sink is dropped.
     pub query_execution: Option<AbortOnDropHandle<()>>,
     /// The owner responsible for retiring the subscribe.

@@ -327,6 +327,11 @@ pub struct ArrangementSizeRecord {
 pub enum Message {
     Command(OpenTelemetryContext, Command),
     QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
+    QuerySubscriptionReplicaProgress {
+        id: GlobalId,
+        replica: ReplicaId,
+        upper: Option<Antichain<Timestamp>>,
+    },
     QueryWatchSetReady(WatchSetId, Result<(), AdapterError>),
     ClientReadProtectionReady(Box<read_protection::PendingReadProtection>),
     StorageReady,
@@ -518,6 +523,9 @@ impl Message {
             },
             Message::StorageReady => "controller_ready(storage)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
+            Message::QuerySubscriptionReplicaProgress { .. } => {
+                "query_subscription_replica_progress"
+            }
             Message::QueryWatchSetReady(..) => "query_watch_set_ready",
             Message::ClientReadProtectionReady(..) => "client_read_protection_ready",
             Message::ExecuteCatalogReady { .. } => "execute_catalog_ready",
@@ -4725,6 +4733,7 @@ impl Coordinator {
                     // Polling the pinned Sleep is cancellation-safe. Snapshot
                     // observations, not permissions or controller installation.
                     _ = frontier_timer.as_mut() => {
+                        self.update_subscription_frontiers();
                         self.update_native_frontier_introspection();
                         frontier_timer.set(tokio::time::sleep(Duration::from_secs(1)));
                     },

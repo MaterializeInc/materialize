@@ -23,7 +23,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, SubscriptionId, Timestamp};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
@@ -50,11 +50,33 @@ use mz_row_spine::RowRowBuilder;
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
 pub type ComputeEventBuilder = ColumnBuilder<(Duration, ComputeEvent)>;
 
+/// Public identity in compute logging, independent of execution and routing IDs.
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Columnar)]
+pub enum CollectionId {
+    Global(GlobalId),
+    Subscription(SubscriptionId),
+}
+
+impl From<GlobalId> for CollectionId {
+    fn from(id: GlobalId) -> Self {
+        Self::Global(id)
+    }
+}
+
+impl Display for CollectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Global(id) => Display::fmt(id, f),
+            Self::Subscription(id) => Display::fmt(id, f),
+        }
+    }
+}
+
 /// A dataflow exports a global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Export {
     /// Identifier of the export.
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
     /// Worker-local index of the exporting dataflow.
     pub dataflow_index: usize,
 }
@@ -65,7 +87,7 @@ pub struct ExportDropped {
     /// Worker-local index of the exporting dataflow.
     pub dataflow_index: usize,
     /// Identifier of the export.
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
 }
 
 /// A peek event with a [`PeekType`], and an installation status.
@@ -87,7 +109,7 @@ pub struct PeekEvent {
 /// Frontier change event.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Frontier {
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
     pub time: Timestamp,
     pub diff: i8,
 }
@@ -96,7 +118,7 @@ pub struct Frontier {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ImportFrontier {
     pub import_id: GlobalId,
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
     pub time: Timestamp,
     pub diff: i8,
 }
@@ -168,7 +190,7 @@ pub struct HydrationStart {
     /// Worker-local index of the exporting dataflow.
     pub dataflow_index: usize,
     /// Identifier of the export.
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
 }
 
 /// An export is hydrated.
@@ -177,7 +199,7 @@ pub struct Hydration {
     /// Worker-local index of the exporting dataflow.
     pub dataflow_index: usize,
     /// Identifier of the export.
-    pub export_id: GlobalId,
+    pub export_id: CollectionId,
 }
 
 /// An operator's hydration status changed.
@@ -517,7 +539,7 @@ struct DemuxState {
     /// State tracked per export instance. Transient global IDs can repeat across
     /// query scopes and maintained dataflows. The worker-unique dataflow index
     /// distinguishes their lifetimes, including events arriving after a drop.
-    exports: BTreeMap<(usize, GlobalId), ExportState>,
+    exports: BTreeMap<(usize, CollectionId), ExportState>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash.
@@ -629,7 +651,11 @@ impl DemuxState {
     }
 
     /// Pack an error count update key-value for the given export ID and count.
-    fn pack_error_count_update(&mut self, export_id: GlobalId, count: Diff) -> (&RowRef, &RowRef) {
+    fn pack_error_count_update(
+        &mut self,
+        export_id: CollectionId,
+        count: Diff,
+    ) -> (&RowRef, &RowRef) {
         // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
         // per-worker error count might be negative and at the SQL level having negative multiplicities
         // is treated as an error.
@@ -643,7 +669,7 @@ impl DemuxState {
     /// Pack an export update key-value for the given export ID and dataflow index.
     fn pack_export_update(
         &mut self,
-        export_id: GlobalId,
+        export_id: CollectionId,
         dataflow_index: usize,
     ) -> (&RowRef, &RowRef) {
         self.export_packer.pack_slice(&[
@@ -657,7 +683,7 @@ impl DemuxState {
     /// hydration lifecycle timestamps.
     fn pack_hydration_time_update(
         &mut self,
-        export_id: GlobalId,
+        export_id: CollectionId,
         time_ns: Option<u64>,
         timestamps: &HydrationTimestamps,
     ) -> (&RowRef, &RowRef) {
@@ -678,7 +704,7 @@ impl DemuxState {
     /// Pack an import frontier update key-value for the given export ID and dataflow index.
     fn pack_import_frontier_update(
         &mut self,
-        export_id: GlobalId,
+        export_id: CollectionId,
         import_id: GlobalId,
         time: Timestamp,
     ) -> (&RowRef, &RowRef) {
@@ -716,7 +742,7 @@ impl DemuxState {
     /// hydration status.
     fn pack_operator_hydration_status_update(
         &mut self,
-        export_id: GlobalId,
+        export_id: CollectionId,
         lir_id: LirId,
         hydrated: bool,
     ) -> (&RowRef, &RowRef) {
@@ -759,7 +785,11 @@ impl DemuxState {
     }
 
     /// Pack a frontier update key-value for the given export ID and time.
-    fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
+    fn pack_frontier_update(
+        &mut self,
+        export_id: CollectionId,
+        time: Timestamp,
+    ) -> (&RowRef, &RowRef) {
         self.frontier_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
@@ -1039,7 +1069,7 @@ impl DemuxHandler<'_, '_, '_> {
         }: Ref<'_, ErrorCount>,
     ) {
         let ts = self.ts();
-        let export_id = Columnar::into_owned(export_id);
+        let export_id = CollectionId::Global(Columnar::into_owned(export_id));
 
         let Some(export) = self.state.exports.get_mut(&(dataflow_index, export_id)) else {
             // The export might have already been dropped, in which case we are no longer
@@ -1165,7 +1195,7 @@ impl DemuxHandler<'_, '_, '_> {
         }: Ref<'_, OperatorHydration>,
     ) {
         let ts = self.ts();
-        let export_id = Columnar::into_owned(export_id);
+        let export_id = CollectionId::Global(Columnar::into_owned(export_id));
         let lir_id = Columnar::into_owned(lir_id);
         let hydrated = Columnar::into_owned(hydrated);
 
@@ -1469,7 +1499,7 @@ impl DemuxHandler<'_, '_, '_> {
 /// This type is used to produce appropriate log events in response to changes of logged collection
 /// state, e.g. frontiers, and to produce cleanup events when a collection is dropped.
 pub struct CollectionLogging {
-    export_id: GlobalId,
+    export_id: CollectionId,
     dataflow_index: usize,
     logger: Logger,
 
@@ -1480,7 +1510,7 @@ pub struct CollectionLogging {
 impl CollectionLogging {
     /// Create new logging state for the identified collection and emit initial logging events.
     pub fn new(
-        export_id: GlobalId,
+        export_id: CollectionId,
         logger: Logger,
         dataflow_index: usize,
         import_ids: impl Iterator<Item = GlobalId>,
@@ -1583,8 +1613,8 @@ impl CollectionLogging {
         }));
     }
 
-    /// The export global ID of this collection.
-    pub fn export_id(&self) -> GlobalId {
+    /// The public logging identity of this collection.
+    pub fn export_id(&self) -> CollectionId {
         self.export_id
     }
 }

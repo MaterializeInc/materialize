@@ -770,7 +770,7 @@ occurred_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠eve
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
 ----
-id  text  The␠ID␠of␠the␠subscription.
+id  text  The␠execution-qualified␠ID␠of␠the␠subscription,␠formatted␠as␠t<local_id>@a<adapter_execution>.␠Stable␠for␠its␠lifetime,␠including␠promotion.
 session_id  uuid  The␠ID␠of␠the␠session␠that␠runs␠the␠subscription.␠Corresponds␠to␠`mz_sessions.id`.
 cluster_id  text  The␠ID␠of␠the␠cluster␠on␠which␠the␠subscription␠is␠running.␠Corresponds␠to␠`mz_clusters.id`.
 created_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠subscription␠was␠created.
@@ -867,6 +867,7 @@ mz_index_advice
 mz_internal_cluster_replicas
 mz_kafka_source_tables
 mz_license_keys
+mz_maintained_compute_dependencies
 mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
@@ -968,6 +969,8 @@ mz_storage_frontier_observations
 mz_storage_shards
 mz_storage_statuses_raw
 mz_storage_usage_by_shard
+mz_subscription_frontiers
+mz_subscription_frontiers_raw
 mz_subscriptions
 mz_subscriptions_raw
 mz_type_pg_metadata

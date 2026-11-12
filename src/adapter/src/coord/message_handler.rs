@@ -83,6 +83,22 @@ impl Coordinator {
             Message::ClientReadProtectionReady(pending) => {
                 Box::pin(self.resume_client_read_protection(*pending)).await;
             }
+            Message::QuerySubscriptionReplicaProgress { id, replica, upper } => {
+                if let Some(ActiveComputeSink::Subscribe(subscribe)) =
+                    self.active_compute_sinks.get_mut(&id)
+                {
+                    if let Some(upper) = upper {
+                        use differential_dataflow::lattice::Lattice;
+                        subscribe
+                            .replica_frontiers
+                            .entry(replica)
+                            .and_modify(|frontier| frontier.join_assign(&upper))
+                            .or_insert(upper);
+                    } else {
+                        subscribe.replica_frontiers.remove(&replica);
+                    }
+                }
+            }
             Message::QueryDataflowResponse(response) => {
                 use crate::query_client::compute::DataflowResponse;
                 use mz_compute_client::protocol::response::{
@@ -764,6 +780,11 @@ impl Coordinator {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
                     self.active_compute_sinks.get_mut(&sink_id)
                 {
+                    use differential_dataflow::lattice::Lattice;
+                    active_subscribe
+                        .merged_frontier
+                        .get_or_insert_with(|| response.upper.clone())
+                        .join_assign(&response.upper);
                     let finished = active_subscribe.process_response(response);
                     // Read the backlog into a `Copy` local so the mutable borrow
                     // of `active_subscribe` (and the accounting lock) ends before

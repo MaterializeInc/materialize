@@ -35,7 +35,8 @@ fn rows(h: &mut Harness, id: GlobalId, log: ComputeLog) -> BTreeMap<Row, Diff> {
             for (column, datum) in value.iter().zip_eq(cursor.val(&storage)) {
                 datums[*column] = datum;
             }
-            if datums[0] == Datum::String("t1") {
+            if matches!(datums[0], Datum::String(id) if id == "t1" || id.starts_with("t1@a") || id.starts_with("t2@a"))
+            {
                 let mut diff = Diff::ZERO;
                 cursor.map_times(&storage, |_, d| diff += d);
                 if diff != Diff::ZERO {
@@ -114,7 +115,7 @@ async fn colliding_export_instances_retract_only_their_own_logging_rows() {
                     compute_state: &mut h.state,
                     response_tx: &mut h.sender,
                 };
-                active.handle_create_dataflow(alias(Timestamp::MIN));
+                active.handle_create_dataflow(alias(Timestamp::MIN), None);
                 active.handle_schedule(EXPORT);
             } else {
                 h.open(A);
@@ -199,4 +200,195 @@ async fn colliding_export_instances_retract_only_their_own_logging_rows() {
             .await;
         }
     }
+}
+
+fn subscription() -> DataflowDescription<RenderPlan, CollectionMetadata> {
+    use mz_compute_types::sinks::{
+        ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+    };
+    let mut dataflow = alias(Timestamp::MIN);
+    dataflow.index_exports.clear();
+    dataflow.sink_exports.insert(
+        EXPORT,
+        ComputeSinkDesc {
+            from: EXPORT,
+            from_desc: source_metadata().relation_desc,
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                output: vec![],
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+        },
+    );
+    dataflow
+}
+
+// Both connections use execution IDs t1 and t2. Every public logging relation must join
+// on the qualified identity, and dropping either connection must leave the other.
+#[mz_ore::test(tokio::test)]
+async fn qualified_subscriptions_join_and_retract_independently() {
+    const FRONTIER: GlobalId = GlobalId::System(3);
+    const IMPORT: GlobalId = GlobalId::System(4);
+    let logs = [
+        (CURRENT, ComputeLog::DataflowCurrent),
+        (HYDRATION, ComputeLog::HydrationTime),
+        (FRONTIER, ComputeLog::FrontierCurrent),
+        (IMPORT, ComputeLog::ImportFrontierCurrent),
+    ];
+    for schedule in [false, true] {
+        for drop_first in [A, B] {
+            let mut h = Harness::new();
+            ActiveComputeState {
+                timely_worker: &mut h.worker,
+                compute_state: &mut h.state,
+                response_tx: &mut h.sender,
+            }
+            .initialize_logging(LoggingConfig {
+                interval: Duration::from_millis(1),
+                enable_logging: true,
+                log_logging: false,
+                index_logs: logs.iter().map(|(id, log)| ((*log).into(), *id)).collect(),
+            });
+            h.state
+                .traces
+                .set(CATALOG, trace_bundle(&wide_ok_rows(1), vec![]));
+            for (nonce, client_incarnation) in [(A, 1), (B, 2)] {
+                let mut dataflow = subscription();
+                dataflow.sink_exports.insert(
+                    GlobalId::Transient(2),
+                    dataflow.sink_exports[&EXPORT].clone(),
+                );
+                h.open(nonce);
+                h.command(
+                    nonce,
+                    ComputeCommand::CreateQueryDataflow {
+                        request_id: A,
+                        catalog_position: None,
+                        subscription_incarnation: Some(client_incarnation),
+                        dataflow: Box::new(dataflow),
+                    },
+                );
+            }
+            let identities = |rows: BTreeMap<Row, Diff>| -> BTreeSet<String> {
+                rows.into_iter()
+                    .map(|(row, diff)| {
+                        assert_eq!(diff, Diff::ONE);
+                        row.iter().next().unwrap().unwrap_str().to_owned()
+                    })
+                    .collect()
+            };
+            let both: BTreeSet<_> = ["t1@a1", "t2@a1", "t1@a2", "t2@a2"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect();
+            await_logs(&mut h, |h| {
+                logs.iter()
+                    .all(|(id, log)| identities(rows(h, *id, *log)) == both)
+            })
+            .await;
+            let frontier_rows = rows(&mut h, FRONTIER, ComputeLog::FrontierCurrent);
+            assert_eq!(frontier_rows.len(), 4);
+            for row in frontier_rows.keys() {
+                assert_eq!(
+                    row.iter().collect::<Vec<_>>()[1..],
+                    [Datum::UInt64(0), Datum::MzTimestamp(Timestamp::MIN)]
+                );
+            }
+            let import_rows = rows(&mut h, IMPORT, ComputeLog::ImportFrontierCurrent);
+            assert_eq!(import_rows.len(), 4);
+            for row in import_rows.keys() {
+                assert_eq!(
+                    row.iter().collect::<Vec<_>>()[1..],
+                    [
+                        Datum::String("u1"),
+                        Datum::UInt64(0),
+                        Datum::MzTimestamp(Timestamp::MIN),
+                    ]
+                );
+            }
+            if schedule {
+                for nonce in [A, B] {
+                    for id in [EXPORT, GlobalId::Transient(2)] {
+                        h.command(nonce, ComputeCommand::Schedule(id));
+                    }
+                }
+                await_logs(&mut h, |h| {
+                    hydrated(&rows(h, HYDRATION, ComputeLog::HydrationTime), 4)
+                        && rows(h, FRONTIER, ComputeLog::FrontierCurrent).is_empty()
+                        && rows(h, IMPORT, ComputeLog::ImportFrontierCurrent).is_empty()
+                })
+                .await;
+            }
+            let survivor = if drop_first == A { "@a2" } else { "@a1" };
+            // Capture exact surviving rows, including timestamps, before either drop.
+            let expected: Vec<_> = logs
+                .iter()
+                .map(|(id, log)| {
+                    rows(&mut h, *id, *log)
+                        .into_iter()
+                        .filter(|(row, _)| {
+                            row.iter().next().unwrap().unwrap_str().ends_with(survivor)
+                        })
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .collect();
+            h.state
+                .handle_query_command(&mut h.worker, None, drop_first, &mut h.sender);
+            await_logs(&mut h, |h| {
+                logs.iter()
+                    .zip(&expected)
+                    .all(|((id, log), expected)| rows(h, *id, *log) == *expected)
+            })
+            .await;
+            let other = if drop_first == A { B } else { A };
+            h.state
+                .handle_query_command(&mut h.worker, None, other, &mut h.sender);
+            await_logs(&mut h, |h| {
+                logs.iter().all(|(id, log)| rows(h, *id, *log).is_empty())
+            })
+            .await;
+        }
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn subscription_incarnation_does_not_qualify_index_exports() {
+    let mut h = Harness::new();
+    ActiveComputeState {
+        timely_worker: &mut h.worker,
+        compute_state: &mut h.state,
+        response_tx: &mut h.sender,
+    }
+    .initialize_logging(LoggingConfig {
+        interval: Duration::from_millis(1),
+        enable_logging: true,
+        log_logging: false,
+        index_logs: BTreeMap::from([
+            (ComputeLog::DataflowCurrent.into(), CURRENT),
+            (ComputeLog::HydrationTime.into(), HYDRATION),
+        ]),
+    });
+    h.state
+        .traces
+        .set(CATALOG, trace_bundle(&wide_ok_rows(1), vec![]));
+    h.open(A);
+    h.command(
+        A,
+        ComputeCommand::CreateQueryDataflow {
+            request_id: B,
+            catalog_position: None,
+            subscription_incarnation: Some(1),
+            dataflow: Box::new(alias(Timestamp::MIN)),
+        },
+    );
+    await_logs(&mut h, |h| {
+        let current = rows(h, CURRENT, ComputeLog::DataflowCurrent);
+        current.len() == 1
+            && current.iter().all(|(row, diff)| {
+                row.iter().next() == Some(Datum::String("t1")) && *diff == Diff::ONE
+            })
+    })
+    .await;
 }

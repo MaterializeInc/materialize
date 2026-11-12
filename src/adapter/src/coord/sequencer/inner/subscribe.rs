@@ -638,6 +638,10 @@ impl Coordinator {
         let max_buffered_bytes =
             SUBSCRIBE_MAX_BUFFERED_BYTES.get(catalog.system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
+            physical_dependencies: df_desc.import_ids().collect(),
+            published_frontiers: Default::default(),
+            replica_frontiers: Default::default(),
+            merged_frontier: None,
             query_execution: None,
             owner: ActiveSubscribeOwner::Session {
                 conn_id: conn_id.clone(),

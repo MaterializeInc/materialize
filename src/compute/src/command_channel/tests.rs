@@ -117,3 +117,39 @@ fn sequencer_all_workers_observe_one_order() {
         assert_eq!(producer_order, expected, "producer {producer} reordered");
     }
 }
+
+#[mz_ore::test]
+fn split_query_dataflow_preserves_subscription_incarnation() {
+    let nonce = Uuid::from_u128(1);
+    let request_id = Uuid::from_u128(2);
+    for subscription_incarnation in [None, Some(42)] {
+        let command = UnifiedCommand::Compute(
+            Some(ComputeCommand::CreateQueryDataflow {
+                request_id,
+                catalog_position: None,
+                subscription_incarnation,
+                dataflow: Box::new(DataflowDescription::new("split test".into())),
+            }),
+            Origin::Query(nonce),
+        );
+        let parts: Vec<_> = split_command(command, 3).collect();
+        assert_eq!(parts.len(), 3);
+        for (worker, (index, command)) in parts.into_iter().enumerate() {
+            assert_eq!(index, worker);
+            let UnifiedCommand::Compute(
+                Some(ComputeCommand::CreateQueryDataflow {
+                    request_id: actual_request,
+                    subscription_incarnation: actual_subscription,
+                    ..
+                }),
+                Origin::Query(actual_nonce),
+            ) = command
+            else {
+                panic!("unexpected split command: {command:?}");
+            };
+            assert_eq!(actual_request, request_id);
+            assert_eq!(actual_subscription, subscription_incarnation);
+            assert_eq!(actual_nonce, nonce);
+        }
+    }
+}

@@ -54,6 +54,11 @@ pub enum ComputeCommand {
         /// Validated catalog context. Native replicas require this position.
         /// Boxed to keep the shared command enum small.
         catalog_position: Option<Box<mz_cluster_client::CatalogPosition>>,
+        /// Client incarnation qualifying every Subscribe export for introspection.
+        /// Ignored for other exports, including dataflows without Subscribe exports.
+        /// Omitted incarnations deserialize as None in self-describing formats.
+        #[serde(default)]
+        subscription_incarnation: Option<u64>,
         /// Dataflow to admit and render.
         dataflow: Box<DataflowDescription<RenderPlan, CollectionMetadata>>,
     },

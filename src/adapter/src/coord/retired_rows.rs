@@ -12,7 +12,8 @@
 use std::sync::Arc;
 
 use mz_catalog::builtin::{
-    BuiltinTable, MZ_SESSIONS_RAW, MZ_STORAGE_STATUSES_RAW, MZ_SUBSCRIPTIONS_RAW,
+    BuiltinTable, MZ_SESSIONS_RAW, MZ_STORAGE_STATUSES_RAW, MZ_SUBSCRIPTION_FRONTIERS_RAW,
+    MZ_SUBSCRIPTIONS_RAW,
 };
 use mz_catalog::durable::ClientIncarnationRetirement;
 use mz_ore::task;
@@ -68,7 +69,11 @@ impl Coordinator {
                 if let Err(error) = result {
                     tracing::warn!(%error, "unable to collect retired current-status rows");
                 }
-                for table in [&*MZ_SESSIONS_RAW, &*MZ_SUBSCRIPTIONS_RAW] {
+                for table in [
+                    &*MZ_SESSIONS_RAW,
+                    &*MZ_SUBSCRIPTIONS_RAW,
+                    &*MZ_SUBSCRIPTION_FRONTIERS_RAW,
+                ] {
                     let result = collect_session_rows(
                         &catalog,
                         &client,

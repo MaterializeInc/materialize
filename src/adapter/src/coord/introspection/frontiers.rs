@@ -37,6 +37,64 @@ pub(crate) struct NativeFrontiers {
 }
 
 impl Coordinator {
+    pub(crate) fn update_subscription_frontiers(&mut self) {
+        use crate::active_compute_sink::ActiveComputeSink;
+        use mz_catalog::builtin::MZ_SUBSCRIPTION_FRONTIERS_RAW;
+        use mz_catalog::catalog::BuiltinTableUpdate;
+
+        let Some(client) = &self.query_client else {
+            return;
+        };
+        let incarnation = client.protection.incarnation();
+        let mut updates = Vec::new();
+        for (id, sink) in &mut self.active_compute_sinks {
+            let ActiveComputeSink::Subscribe(subscribe) = sink else {
+                continue;
+            };
+            if subscribe.introspection_session_uuid().is_none() {
+                continue;
+            }
+            let GlobalId::Transient(local_id) = *id else {
+                unreachable!("subscription export must be transient");
+            };
+            let public_id = mz_repr::SubscriptionId {
+                client_incarnation: incarnation,
+                local_id,
+            }
+            .to_string();
+            let rows = subscribe
+                .replica_frontiers
+                .iter()
+                .map(|(replica, upper)| (Some(*replica), upper))
+                .chain(subscribe.merged_frontier.iter().map(|upper| (None, upper)))
+                .map(|(replica, upper)| {
+                    Row::pack_slice(&[
+                        Datum::String(&public_id),
+                        Datum::from(replica.map(|id| id.to_string()).as_deref()),
+                        Datum::from(upper.as_option().copied()),
+                        Datum::UInt64(incarnation),
+                    ])
+                })
+                .collect();
+            updates.extend(
+                replace_rows(&mut subscribe.published_frontiers, rows)
+                    .into_iter()
+                    .map(|(row, diff)| {
+                        BuiltinTableUpdate::row(&*MZ_SUBSCRIPTION_FRONTIERS_RAW, row, diff)
+                    }),
+            );
+        }
+        if !updates.is_empty() {
+            let updates = self
+                .catalog()
+                .state()
+                .resolve_builtin_table_updates(updates);
+            // Progress piggybacks on the existing group commit. It does not
+            // advance the write cadence or grant any execution authority.
+            let _ = self.builtin_table_update().background(updates);
+        }
+    }
+
     pub(crate) fn update_native_frontier_introspection(&mut self) {
         let Some(client) = &self.query_client else {
             return;

@@ -53,7 +53,7 @@ pub use crate::adapter_id::AdapterId;
 pub use crate::catalog_item_id::CatalogItemId;
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
-pub use crate::global_id::GlobalId;
+pub use crate::global_id::{GlobalId, SubscriptionId};
 pub use crate::relation::{
     ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,

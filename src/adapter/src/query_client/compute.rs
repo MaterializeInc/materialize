@@ -249,6 +249,7 @@ impl ReplicaQueryClient {
         &self,
         dataflow: Dataflow,
         catalog_position: Option<mz_cluster_client::CatalogPosition>,
+        subscription_incarnation: Option<u64>,
     ) -> Result<QueryDataflow, QueryError> {
         let request_id = Uuid::new_v4();
         let (reply, waiting) = oneshot::channel();
@@ -257,6 +258,7 @@ impl ReplicaQueryClient {
             request_id,
             dataflow: Box::new(dataflow),
             catalog_position: catalog_position.map(Box::new),
+            subscription_incarnation,
             reply,
             responses,
         })?;
@@ -314,6 +316,7 @@ enum Request {
         request_id: Uuid,
         dataflow: Box<Dataflow>,
         catalog_position: Option<Box<mz_cluster_client::CatalogPosition>>,
+        subscription_incarnation: Option<u64>,
         reply: Reply<()>,
         responses: mpsc::UnboundedSender<Result<DataflowResponse, QueryError>>,
     },
@@ -411,6 +414,7 @@ impl Actor {
                 request_id,
                 dataflow,
                 catalog_position,
+                subscription_incarnation,
                 reply,
                 responses,
             } => {
@@ -443,6 +447,7 @@ impl Actor {
                         request_id,
                         dataflow,
                         catalog_position,
+                        subscription_incarnation,
                     })
                     .await?;
             }
@@ -814,7 +819,7 @@ pub(super) mod tests {
             read_frontier: Some(Antichain::from_elem(Timestamp::from(1))),
             ..Default::default()
         };
-        let mut survivor = Box::pin(client.create_dataflow(subscribe(live), None));
+        let mut survivor = Box::pin(client.create_dataflow(subscribe(live), None, None));
         assert!(futures::poll!(&mut survivor).is_pending());
         assert!(matches!(
             peer.command().await,
@@ -827,7 +832,7 @@ pub(super) mod tests {
         // without reconnecting. A separate pending request must retain its state.
         for cycle in 0..30 {
             let id = GlobalId::Transient(cycle + 2);
-            let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
+            let mut creating = Box::pin(client.create_dataflow(subscribe(id), None, None));
             assert!(futures::poll!(&mut creating).is_pending());
             let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await
             else {
@@ -990,7 +995,7 @@ pub(super) mod tests {
     async fn creation_buffers_early_responses_and_schedules_only_after_ack() {
         let (client, mut peer) = connect().await;
         let id = GlobalId::Transient(1);
-        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
+        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None, None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1028,7 +1033,7 @@ pub(super) mod tests {
     async fn abandoned_creation_drops_exports_without_waiting_for_ack() {
         let (client, mut peer) = connect().await;
         let id = GlobalId::Transient(1);
-        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
+        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None, None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1100,8 +1105,8 @@ pub(super) mod tests {
         let (client, mut peer) = connect().await;
         let first = GlobalId::Transient(1);
         let second = GlobalId::Transient(2);
-        let mut creating_first = Box::pin(client.create_dataflow(subscribe(first), None));
-        let mut creating_second = Box::pin(client.create_dataflow(subscribe(second), None));
+        let mut creating_first = Box::pin(client.create_dataflow(subscribe(first), None, None));
+        let mut creating_second = Box::pin(client.create_dataflow(subscribe(second), None, None));
         assert!(futures::poll!(&mut creating_first).is_pending());
         assert!(futures::poll!(&mut creating_second).is_pending());
         let mut requests = vec![];
@@ -1142,7 +1147,8 @@ pub(super) mod tests {
         let (client, mut peer) = connect().await;
         let held = client.clone();
         let (sibling, mut sibling_peer) = connect().await;
-        let mut creating = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(1)), None));
+        let mut creating =
+            Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(1)), None, None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1154,7 +1160,8 @@ pub(super) mod tests {
         let mut installed = bounded(creating).await.expect("creation ACK");
         assert!(matches!(peer.command().await, ComputeCommand::Schedule(_)));
 
-        let mut pending = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(2)), None));
+        let mut pending =
+            Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(2)), None, None));
         assert!(futures::poll!(&mut pending).is_pending());
         assert!(matches!(
             peer.command().await,

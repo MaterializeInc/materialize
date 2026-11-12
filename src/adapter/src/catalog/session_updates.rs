@@ -22,6 +22,13 @@ pub(crate) fn pack_subscribe_update(
 ) -> BuiltinTableUpdate<&'static BuiltinTable> {
     let mut row = Row::default();
     let mut packer = row.packer();
+    let GlobalId::Transient(local_id) = id else {
+        unreachable!("subscription export must be transient");
+    };
+    let id = mz_repr::SubscriptionId {
+        client_incarnation: client_incarnation.expect("subscription has an adapter execution"),
+        local_id,
+    };
     packer.push(Datum::String(&id.to_string()));
     packer.push(Datum::Uuid(session_uuid));
     packer.push(Datum::String(&subscribe.cluster_id.to_string()));
@@ -36,6 +43,12 @@ pub(crate) fn pack_subscribe_update(
         .collect();
     packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
     packer.push(Datum::from(client_incarnation));
+    let physical_dependencies: Vec<_> = subscribe
+        .physical_dependencies
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    packer.push_list(physical_dependencies.iter().map(|id| Datum::String(id)));
 
     BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS_RAW, row, diff)
 }

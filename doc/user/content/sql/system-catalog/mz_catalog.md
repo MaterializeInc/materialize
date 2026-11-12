@@ -20,6 +20,8 @@ Views that directly reference these objects cannot include `NATURAL JOIN` or
 to `USING` joins.
 {{< /warning >}}
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_adapters -->
+
 ### `mz_array_types`
 
 The `mz_array_types` table contains a row for each array type in the system.

@@ -3119,7 +3119,10 @@ SELECT s.object_id, r.id AS replica_id, s.write_frontier
 FROM mz_internal.mz_current_storage_frontiers s
 JOIN mz_internal.mz_frontier_object_placement p ON p.object_id = s.object_id
 JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id = p.cluster_id
-WHERE NOT p.replica_owned AND s.write_known",
+WHERE NOT p.replica_owned AND s.write_known
+UNION ALL
+SELECT object_id, replica_id, write_frontier
+FROM mz_internal.mz_subscription_frontiers WHERE replica_id IS NOT NULL",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

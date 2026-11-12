@@ -514,26 +514,19 @@ WHERE
     }
 });
 
-pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
-    data_source: IntrospectionType::ComputeDependencies.into(),
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column("dependency_id", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions.id`.",
-        ),
-        (
-            "dependency_id",
-            "The ID of a compute dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
+    oid: oid::VIEW_MZ_COMPUTE_DEPENDENCIES_OID,
+    desc: MZ_MAINTAINED_COMPUTE_DEPENDENCIES.desc.clone(),
+    column_comments: MZ_MAINTAINED_COMPUTE_DEPENDENCIES.column_comments.clone(),
+    sql: "SELECT object_id, dependency_id FROM mz_internal.mz_maintained_compute_dependencies
+UNION ALL
+SELECT runtime.id, dependency_id
+FROM mz_internal.mz_subscriptions_raw runtime,
+     unnest(runtime.physical_dependency_ids) AS dependencies(dependency_id)
+WHERE dependency_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM mz_internal.mz_subscriptions live WHERE live.id = runtime.id)",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "compute_dependency",
@@ -569,6 +562,32 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
             ]
         },
     }),
+});
+
+pub static MZ_MAINTAINED_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
+        name: "mz_maintained_compute_dependencies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
+        data_source: IntrospectionType::ComputeDependencies.into(),
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("dependency_id", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions.id`.",
+            ),
+            (
+                "dependency_id",
+                "The ID of a compute dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
 });
 
 pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
@@ -3136,8 +3155,7 @@ FROM placement p JOIN mz_internal.mz_object_global_ids g ON g.id = p.id
 WHERE p.compute_global OR NOT p.replica_owned OR NOT EXISTS (
     SELECT 1 FROM writers w WHERE w.id = p.id AND w.global_id <> g.global_id
 )
-UNION ALL
-SELECT id, cluster_id, true, true, NULL::text FROM mz_internal.mz_subscriptions",
+",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
@@ -3239,7 +3257,14 @@ SELECT object_id,
 FROM mz_internal.mz_current_replica_frontiers
 WHERE compute_global
 GROUP BY object_id
-HAVING bool_or(read_known) AND bool_or(write_known)",
+HAVING bool_or(read_known) AND bool_or(write_known)
+UNION ALL
+SELECT object_id,
+       CASE WHEN write_frontier IS NULL THEN NULL
+            WHEN write_frontier = 0::mz_timestamp THEN 0::mz_timestamp
+            ELSE (write_frontier::text::numeric - 1)::mz_timestamp END,
+       write_frontier
+FROM mz_internal.mz_subscription_frontiers WHERE replica_id IS NULL",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "frontier",
@@ -3577,6 +3602,40 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::n
     }
 });
 
+/// Adapter-owned subscription progress. NULL replica identifies merged progress.
+/// Absence means unknown or withdrawn, while NULL write_frontier means complete.
+pub static MZ_SUBSCRIPTION_FRONTIERS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_subscription_frontiers_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SUBSCRIPTION_FRONTIERS_RAW_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
+        .with_column("client_incarnation", SqlScalarType::UInt64.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    is_retained_metrics_object: false,
+    access: vec![],
+    ontology: None,
+});
+
+pub static MZ_SUBSCRIPTION_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_subscription_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SUBSCRIPTION_FRONTIERS_OID,
+    desc: MZ_SUBSCRIPTION_FRONTIERS_RAW.desc.clone(),
+    column_comments: BTreeMap::new(),
+    sql: "SELECT f.* FROM mz_internal.mz_subscription_frontiers_raw f
+WHERE EXISTS (SELECT 1 FROM mz_internal.mz_subscriptions s WHERE s.id = f.object_id)
+  AND EXISTS (SELECT 1 FROM mz_internal.mz_catalog_shared c
+      WHERE c.data->>'kind' = 'ClientIncarnation'
+        AND (c.data->'key'->>'id')::uint8 = f.client_incarnation
+        AND c.data->'value'->'realization'->'Adapter' IS NOT NULL)",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_SUBSCRIPTIONS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_subscriptions_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3584,6 +3643,14 @@ pub static MZ_SUBSCRIPTIONS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     desc: MZ_SUBSCRIPTIONS.desc.clone().concat(
         RelationDesc::builder()
             .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
+            .with_column(
+                "physical_dependency_ids",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
             .finish(),
     ),
     column_comments: BTreeMap::from_iter([(
@@ -3617,7 +3684,10 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
         )
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the subscription."),
+        (
+            "id",
+            "The execution-qualified ID of the subscription, formatted as t<local_id>@a<adapter_execution>. Stable for its lifetime, including promotion.",
+        ),
         (
             "session_id",
             "The ID of the session that runs the subscription. Corresponds to `mz_sessions.id`.",

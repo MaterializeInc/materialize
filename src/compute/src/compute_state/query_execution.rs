@@ -154,8 +154,14 @@ impl ComputeState {
                         request_id,
                         dataflow,
                         catalog_position: _,
+                        subscription_incarnation,
                     }) => {
-                        active.create_query_dataflow(query, request_id, *dataflow);
+                        active.create_query_dataflow(
+                            query,
+                            request_id,
+                            *dataflow,
+                            subscription_incarnation,
+                        );
                     }
                     Some(ComputeCommand::Peek(peek)) => {
                         let error = match &peek.target {
@@ -477,6 +483,7 @@ impl ActiveComputeState<'_> {
         query: &mut QueryState,
         request_id: Uuid,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
+        subscription_incarnation: Option<u64>,
     ) {
         let validate = |active: &mut Self| -> Result<(), String> {
             if query.flows.contains_key(&request_id) {
@@ -548,7 +555,7 @@ impl ActiveComputeState<'_> {
         let subscribes = dataflow.subscribe_ids().collect();
         let copies = dataflow.copy_to_ids().collect();
         self.compute_state.query_admission = Some(Rc::clone(&admission));
-        self.handle_create_dataflow(dataflow);
+        self.handle_create_dataflow(dataflow, subscription_incarnation);
         self.compute_state.query_admission = None;
         query.flows.insert(
             request_id,

@@ -215,6 +215,7 @@ fn catalog_peek(uuid: Uuid, position: Option<CatalogPosition>) -> ComputeCommand
 
 fn catalog_dataflow(request_id: Uuid, position: Option<CatalogPosition>) -> ComputeCommand {
     ComputeCommand::CreateQueryDataflow {
+        subscription_incarnation: None,
         request_id,
         catalog_position: position.map(Box::new),
         dataflow: Box::new(constant_dataflow(GlobalId::Transient(1))),

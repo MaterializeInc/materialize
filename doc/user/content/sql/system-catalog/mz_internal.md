@@ -22,6 +22,15 @@ Backwards-incompatible changes to these objects may be made at any time.
 reference these objects is not allowed.
 {{< /warning >}}
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_adapter_endpoints -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_adapter_statuses -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_deployment_authority -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_current_replica_frontiers -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_current_storage_frontiers -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_frontier_object_placement -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_replica_frontier_observations -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_frontier_observations -->
+
 ## `mz_object_global_ids`
 
 The `mz_object_global_ids` materialized view maps Materialize catalog item
@@ -400,11 +409,13 @@ The `mz_comments` table stores optional comments (i.e., descriptions) for object
 | `object_sub_id`| [`integer`] | For a comment on a column of a relation, the column number. `NULL` for other object types.   |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_maintained_compute_dependencies -->
+
 ## `mz_compute_dependencies`
 
-The `mz_compute_dependencies` table describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
+The `mz_compute_dependencies` view describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
 
-In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this table only lists dependencies in the compute layer.
+In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this view only lists dependencies in the compute layer.
 SQL objects that don't exist in the compute layer (such as views) are omitted.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
@@ -1579,16 +1590,24 @@ it is set by the operator.
 | `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_subscriptions_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_subscription_frontiers_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_subscription_frontiers -->
 
 ## `mz_subscriptions`
 
 The `mz_subscriptions` view describes all active [`SUBSCRIBE`](/sql/subscribe)
 operations in the system.
 
+Subscription IDs have the form `t<local_id>@a<adapter_execution>`. The execution
+qualifier distinguishes subscriptions whose adapters allocate the same local ID.
+The ID remains unchanged for the subscription's lifetime, including deployment
+promotion. Related compute logging, frontier and dependency relations use the
+same qualified ID.
+
 <!-- RELATION_SPEC mz_internal.mz_subscriptions -->
 | Field                    | Type                         | Meaning                                                                                                                    |
 | ------------------------ |------------------------------| --------                                                                                                                   |
-| `id`                     | [`text`]                     | The ID of the subscription.                                                                                                |
+| `id`                     | [`text`]                     | The execution-qualified ID of the subscription, formatted as t<local_id>@a<adapter_execution>. Stable for its lifetime, including promotion.                                                                                                |
 | `session_id`             | [`uuid`]                     | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
 | `cluster_id`             | [`text`]                     | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |

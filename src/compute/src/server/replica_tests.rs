@@ -158,6 +158,7 @@ async fn replica_progress_outlives_query_factory() {
         .unwrap();
     query
         .send(ComputeCommand::CreateQueryDataflow {
+            subscription_incarnation: None,
             request_id,
             catalog_position: Some(Box::new(position)),
             dataflow: Box::new(super::query_wire_tests::constant_dataflow(export)),

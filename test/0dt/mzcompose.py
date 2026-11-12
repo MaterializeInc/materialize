@@ -1394,6 +1394,364 @@ def workflow_subscribe_cursors(c: Composition) -> None:
             writer.execute("DROP TABLE cursor_input")
 
 
+def workflow_subscribe_execution_identity(c: Composition) -> None:
+    """Colliding adapter-local subscriptions retain independent public progress."""
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    connections = []
+    active: dict[str, dict[str, Any]] = {}
+
+    def connect(service: str) -> Any:
+        conn = c.sql_connection(
+            service=service, startup_params={"statement_timeout": "30s"}
+        )
+        connections.append(conn)
+        return conn
+
+    def pump() -> None:
+        # Normal FETCH keeps both transactions alive during allocator alignment
+        # and asynchronous publication. Retain data consumed by these keepalives.
+        for sub in active.values():
+            rows = (
+                sub["conn"].execute("FETCH ALL probe WITH (timeout='100ms')").fetchall()
+            )
+            for timestamp, progress, diff, value in rows:
+                if not progress:
+                    assert diff == 1 and value not in sub["seen"], rows
+                    sub["seen"][value] = int(timestamp)
+
+    def until(check: Callable[[], bool], label: str) -> None:
+        deadline = time.monotonic() + 300
+        while True:
+            pump()
+            if check():
+                return
+            assert time.monotonic() < deadline, label
+            time.sleep(0.2)
+
+    try:
+        old_writer = connect("mz_old")
+        old_writer.execute(
+            "CREATE CLUSTER subscription_probe SIZE 'scale=1,workers=1', "
+            "REPLICATION FACTOR 2"
+        )
+        for name in ("old", "new"):
+            old_writer.execute(f"CREATE TABLE subscription_{name} (v int)")
+            old_writer.execute(
+                f"CREATE INDEX subscription_{name}_idx IN CLUSTER subscription_probe "
+                f"ON subscription_{name} (v)"
+            )
+            old_writer.execute(f"INSERT INTO subscription_{name} VALUES (1)")
+        c.up("mz_new", wait=False)
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        observers = {service: connect(service) for service in ("mz_old", "mz_new")}
+        writers = {"mz_old": old_writer, "mz_new": connect("mz_new")}
+        imports = dict(old_writer.execute("""
+            SELECT o.name, g.global_id FROM mz_catalog.mz_indexes o
+            JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+            WHERE o.name IN ('subscription_old_idx', 'subscription_new_idx')
+        """).fetchall())
+        assert len(imports) == 2, imports
+
+        def start(service: str) -> None:
+            conn = connect(service)
+            conn.execute("SET cluster = subscription_probe")
+            # mz_session_id() identifies the adapter process, not this SQL
+            # session. Resolve the session row using its wire connection ID.
+            sessions = conn.execute(
+                "SELECT id FROM mz_internal.mz_sessions "
+                "WHERE connection_id = pg_backend_pid()"
+            ).fetchall()
+            assert len(sessions) == 1, sessions
+            session = sessions[0][0]
+            name = "old" if service == "mz_old" else "new"
+            conn.execute("BEGIN")
+            conn.execute(
+                f"DECLARE probe CURSOR FOR SUBSCRIBE subscription_{name} WITH (PROGRESS)"
+            )
+            sub = {"conn": conn, "seen": {}, "session": session, "name": name}
+            active[service] = sub
+
+            def identified() -> bool:
+                rows = (
+                    observers[service]
+                    .execute(
+                        "SELECT id FROM mz_internal.mz_subscriptions WHERE session_id = %s",
+                        (session,),
+                    )
+                    .fetchall()
+                )
+                if not rows:
+                    return False
+                assert len(rows) == 1, rows
+                sid = rows[0][0]
+                match = re.fullmatch(r"t(\d+)@a(\d+)", sid)
+                assert match, sid
+                sub.update(id=sid, local=int(match[1]), incarnation=match[2])
+                return True
+
+            until(identified, f"subscription not published: {service}, {session}")
+
+        def stop(service: str, *, disconnect: bool = False) -> str:
+            sub = active.pop(service)
+            if not disconnect:
+                sub["conn"].execute("CLOSE probe")
+                sub["conn"].execute("COMMIT")
+            sub["conn"].close()
+            return sub["id"]
+
+        def absent(sid: str, service: str, *, logs: bool = True) -> None:
+            # A join through mz_subscriptions would hide orphaned rows.
+            for observer in observers.values():
+                for relation, column in (
+                    ("mz_internal.mz_subscriptions", "id"),
+                    ("mz_internal.mz_compute_dependencies", "object_id"),
+                    ("mz_internal.mz_frontiers", "object_id"),
+                    ("mz_catalog.mz_cluster_replica_frontiers", "object_id"),
+                ):
+                    until(
+                        lambda: observer.execute(
+                            f"SELECT count(*) FROM {relation} WHERE {column} = %s",
+                            (sid,),
+                        ).fetchone()
+                        == (0,),
+                        f"orphaned {relation}: {sid}",
+                    )
+            with c.sql_connection(
+                service=service, user="mz_system", port=6877
+            ) as system:
+                for relation, column in (
+                    ("mz_internal.mz_subscriptions_raw", "id"),
+                    ("mz_internal.mz_subscription_frontiers_raw", "object_id"),
+                ):
+                    until(
+                        lambda: system.execute(
+                            f"SELECT count(*) FROM {relation} WHERE {column} = %s",
+                            (sid,),
+                        ).fetchone()
+                        == (0,),
+                        f"unreclaimed owner rows in {relation}: {sid}",
+                    )
+            if not logs:
+                return
+            observer = observers[service]
+            observer.execute("SET cluster = subscription_probe")
+            replicas = observer.execute("""
+                SELECT r.name FROM mz_catalog.mz_cluster_replicas r
+                JOIN mz_catalog.mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'subscription_probe'
+            """).fetchall()
+            assert len(replicas) == 2, replicas
+            observer.execute("SET auto_route_catalog_queries = false")
+            try:
+                for (replica,) in replicas:
+                    observer.execute(
+                        SQL("SET cluster_replica = {}").format(Identifier(replica))
+                    )
+                    for log in (
+                        "exports",
+                        "frontiers",
+                        "import_frontiers",
+                        "hydration_times",
+                    ):
+                        until(
+                            lambda: observer.execute(
+                                f"SELECT count(*) FROM mz_introspection.mz_compute_{log}_per_worker "
+                                "WHERE export_id = %s",
+                                (sid,),
+                            ).fetchone()
+                            == (0,),
+                            f"orphaned {service}/{replica}/{log}: {sid}",
+                        )
+            finally:
+                observer.execute("RESET cluster_replica")
+                observer.execute("RESET auto_route_catalog_queries")
+
+        start("mz_old")
+        start("mz_new")
+        attempts = []
+        for _ in range(256):
+            old, new = active["mz_old"], active["mz_new"]
+            attempts.append((old["id"], new["id"]))
+            if old["local"] == new["local"]:
+                break
+            lagging = "mz_old" if old["local"] < new["local"] else "mz_new"
+            if lagging == "mz_old":
+                # SELECT/SUBSCRIBE allocate IDs in pairs. Vary one adapter's
+                # stride with a real, non-mutating single-index plan so the
+                # two sequences need not remain in disjoint residue classes.
+                old_writer.execute(
+                    "EXPLAIN PHYSICAL PLAN FOR CREATE INDEX subscription_alignment "
+                    "IN CLUSTER subscription_probe ON subscription_old (v + 1)"
+                ).fetchall()
+            stop(lagging)
+            start(lagging)
+        else:
+            raise AssertionError(
+                f"Could not align actual local subscription IDs: {attempts}"
+            )
+        assert old["id"] != new["id"] and old["incarnation"] != new["incarnation"]
+
+        def progress(service: str, value: int) -> None:
+            sub = active[service]
+            sid = sub["id"]
+            until(lambda: value in sub["seen"], f"missing {service} update {value}")
+            timestamp = sub["seen"][value]
+            dependency = imports[f"subscription_{sub['name']}_idx"]
+            for observer in observers.values():
+
+                def visible() -> bool:
+                    rows = observer.execute(
+                        """
+                        SELECT s.session_id, d.dependency_id,
+                               f.read_frontier::text::numeric, f.write_frontier::text::numeric
+                        FROM mz_internal.mz_subscriptions s
+                        JOIN mz_internal.mz_compute_dependencies d ON d.object_id = s.id
+                        JOIN mz_internal.mz_frontiers f ON f.object_id = s.id
+                        WHERE s.id = %s
+                    """,
+                        (sid,),
+                    ).fetchall()
+                    if not rows:
+                        return False
+                    assert len(rows) == 1, rows
+                    session, dep, read, write = rows[0]
+                    assert (session, dep) == (sub["session"], dependency), rows
+                    return (
+                        read is not None
+                        and write is not None
+                        and read >= timestamp
+                        and write > timestamp
+                    )
+
+                until(visible, f"merged progress/join: {sid}, {timestamp}")
+
+                def replicas_advanced() -> bool:
+                    rows = observer.execute(
+                        """
+                        SELECT replica_id, write_frontier::text::numeric
+                        FROM mz_catalog.mz_cluster_replica_frontiers WHERE object_id = %s
+                    """,
+                        (sid,),
+                    ).fetchall()
+                    assert len(rows) <= 2, rows
+                    return len({rid for rid, _ in rows}) == 2 and all(
+                        frontier is not None and frontier > timestamp
+                        for _, frontier in rows
+                    )
+
+                until(replicas_advanced, f"per-replica progress: {sid}, {timestamp}")
+
+            observer = observers[service]
+            observer.execute("SET cluster = subscription_probe")
+            observer.execute("SET auto_route_catalog_queries = false")
+            replicas = observer.execute("""
+                SELECT r.name FROM mz_catalog.mz_cluster_replicas r
+                JOIN mz_catalog.mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'subscription_probe'
+            """).fetchall()
+            assert len(replicas) == 2, replicas
+            try:
+                for (replica,) in replicas:
+                    observer.execute(
+                        SQL("SET cluster_replica = {}").format(Identifier(replica))
+                    )
+
+                    def logged() -> bool:
+                        rows = observer.execute(
+                            """
+                            SELECT e.worker_id::int8, i.import_id, f.time::text::numeric, i.time::text::numeric,
+                                   h.hydrated_at IS NOT NULL
+                            FROM mz_introspection.mz_compute_exports_per_worker e
+                            JOIN mz_introspection.mz_compute_frontiers_per_worker f
+                              USING (export_id, worker_id)
+                            JOIN mz_introspection.mz_compute_import_frontiers_per_worker i
+                              USING (export_id, worker_id)
+                            JOIN mz_introspection.mz_compute_hydration_times_per_worker h
+                              USING (export_id, worker_id)
+                            WHERE e.export_id = %s
+                        """,
+                            (sid,),
+                        ).fetchall()
+                        if not rows:
+                            return False
+                        assert len(rows) == 1 and rows[0][:2] == (0, dependency), rows
+                        return (
+                            rows[0][2] > timestamp
+                            and rows[0][3] > timestamp
+                            and rows[0][4]
+                        )
+
+                    until(logged, f"log joins/progress: {service}, {replica}, {sid}")
+            finally:
+                observer.execute("RESET cluster_replica")
+                observer.execute("RESET auto_route_catalog_queries")
+
+        for value in (1, 2):
+            for service, writer in writers.items():
+                if value != 1:
+                    writer.execute(
+                        f"INSERT INTO subscription_{active[service]['name']} VALUES ({value})"
+                    )
+                progress(service, value)
+
+        # CLOSE must not remove the colliding predecessor's rows.
+        removed = stop("mz_new")
+        absent(removed, "mz_new")
+        old_writer.execute("INSERT INTO subscription_old VALUES (3)")
+        progress("mz_old", 3)
+        start("mz_new")
+        removed = stop("mz_new", disconnect=True)
+        absent(removed, "mz_new")
+        old_writer.execute("INSERT INTO subscription_old VALUES (4)")
+        progress("mz_old", 4)
+
+        # Candidate connections may restart. The predecessor remains the same
+        # session and execution across promotion, not a recreated subscription.
+        observers["mz_new"].close()
+        writers["mz_new"].close()
+        pump()
+        c.promote_mz("mz_new", retire_mz_service=None)
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+        observers["mz_new"] = connect("mz_new")
+        writers["mz_new"] = connect("mz_new")
+        start("mz_new")
+        writers["mz_new"].execute("INSERT INTO subscription_old VALUES (5)")
+        old_writer.execute("INSERT INTO subscription_new VALUES (5)")
+        progress("mz_old", 5)
+        progress("mz_new", 5)
+        removed = stop("mz_old", disconnect=True)
+        absent(removed, "mz_old")
+        writers["mz_new"].execute("INSERT INTO subscription_new VALUES (6)")
+        progress("mz_new", 6)
+        # Retire an execution with a live subscription, rather than relying on
+        # normal session cleanup to make the retirement case vacuous.
+        start("mz_old")
+        progress("mz_old", 5)
+        retiring = active.pop("mz_old")
+        c.retire_mz_deployment("mz_new", 0, environment_id=DEFAULT_MZ_ENVIRONMENT_ID)
+        try:
+            retiring["conn"].execute("FETCH ALL probe WITH (timeout='1s')")
+        except psycopg.Error as error:
+            assert isinstance(error, OperationalError) or "has been retired" in str(
+                error
+            ), error
+        else:
+            raise AssertionError("retired subscription execution still serves FETCH")
+        c.kill_fenced_mz("mz_old")
+        observers.pop("mz_old").close()
+        # Retired replicas cannot serve log queries. The surviving deployment
+        # must reclaim durable owner rows and keep its own subscription intact.
+        absent(retiring["id"], "mz_new", logs=False)
+        writers["mz_new"].execute("INSERT INTO subscription_new VALUES (7)")
+        progress("mz_new", 7)
+        removed = stop("mz_new")
+        absent(removed, "mz_new")
+    finally:
+        for conn in reversed(connections):
+            conn.close()
+
+
 def workflow_index_read_protection(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

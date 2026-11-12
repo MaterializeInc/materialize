@@ -732,7 +732,7 @@ impl<'a> ActiveComputeState<'a> {
                 self.compute_state.catalog_position = Some(*position);
                 self.compute_state.catalog_catchup_requested = false;
             }
-            CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow),
+            CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow, None),
             Schedule(id) => self.handle_schedule(id),
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
@@ -825,6 +825,7 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_create_dataflow(
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
+        subscription_incarnation: Option<u64>,
     ) {
         let as_of = dataflow.as_of.clone().unwrap();
         if self.compute_state.active_query.is_none() && as_of.is_empty() {
@@ -922,7 +923,17 @@ impl<'a> ActiveComputeState<'a> {
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
-                    object_id,
+                    match (subscription_incarnation, object_id) {
+                        (Some(client_incarnation), GlobalId::Transient(local_id))
+                            if dataflow.subscribe_ids().any(|id| id == object_id) =>
+                        {
+                            logging::compute::CollectionId::Subscription(mz_repr::SubscriptionId {
+                                client_incarnation,
+                                local_id,
+                            })
+                        }
+                        _ => logging::compute::CollectionId::Global(object_id),
+                    },
                     logger,
                     *dataflow_index,
                     dataflow.import_ids(),
@@ -1182,8 +1193,12 @@ impl<'a> ActiveComputeState<'a> {
                 metrics,
             );
 
-            let logging =
-                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            let logging = CollectionLogging::new(
+                id.into(),
+                logger.clone(),
+                *dataflow_index,
+                std::iter::empty(),
+            );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
             // start here, or they would sit permanently in the illegal state of being hydrated

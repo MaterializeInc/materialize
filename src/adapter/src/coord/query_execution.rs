@@ -110,7 +110,16 @@ impl Coordinator {
                     let mut dataflows = client
                         .create_dataflow(catalog, cluster, target, dataflow, creation_holds)
                         .await?;
-                    while let Some(response) = dataflows.recv().await {
+                    while let Some(response) = dataflows
+                        .recv_with_progress(|id, replica, upper| {
+                            let _ = tx.send(Message::QuerySubscriptionReplicaProgress {
+                                id,
+                                replica,
+                                upper,
+                            });
+                        })
+                        .await
+                    {
                         let response = response?;
                         if let DataflowResponse::Subscribe(id, SubscribeResponse::Batch(batch)) =
                             &response

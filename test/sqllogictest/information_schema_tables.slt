@@ -394,7 +394,7 @@ MATERIALIZED VIEW
 materialize
 mz_internal
 mz_compute_dependencies
-SOURCE
+VIEW
 materialize
 mz_internal
 mz_compute_error_counts_by_deployment
@@ -479,6 +479,10 @@ materialize
 mz_internal
 mz_license_keys
 BASE TABLE
+materialize
+mz_internal
+mz_maintained_compute_dependencies
+SOURCE
 materialize
 mz_internal
 mz_materialization_dependencies
@@ -882,6 +886,14 @@ SOURCE
 materialize
 mz_internal
 mz_storage_usage_by_shard
+BASE TABLE
+materialize
+mz_internal
+mz_subscription_frontiers
+VIEW
+materialize
+mz_internal
+mz_subscription_frontiers_raw
 BASE TABLE
 materialize
 mz_internal

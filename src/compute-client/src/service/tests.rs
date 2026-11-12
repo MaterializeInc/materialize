@@ -52,6 +52,7 @@ fn catalog_markers_broadcast_and_catchup_comes_from_worker_zero() {
     for command in [
         ComputeCommand::CreateQueryDataflow {
             request_id: Uuid::new_v4(),
+            subscription_incarnation: None,
             catalog_position: Some(Box::new(position)),
             dataflow: Box::new(mz_compute_types::dataflows::DataflowDescription::new(
                 "query".into(),
