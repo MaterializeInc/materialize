@@ -169,22 +169,26 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
 
 /// Buffer-pool spill threads performing eviction I/O (lz4 compression plus
 /// the synchronous-reclaim `MADV_PAGEOUT`) off the threads that trip the
-/// budget, as a fraction of the process's timely workers. The thread count is
-/// `ceil(workers * fraction)`, so any positive fraction spawns at least one
-/// thread. Zero evicts inline on the calling thread, which measurably convoys
-/// workers behind eviction I/O at hydration eviction rates.
+/// budget, as a fraction of the process's timely workers, rounded down to a
+/// power of two (`mz_timely_util::pool_config::spill_threads_for_workers`).
+/// Any positive fraction spawns at least one thread. Zero evicts inline on the
+/// calling thread, which measurably convoys workers behind eviction I/O at
+/// hydration eviction rates.
 ///
-/// The default of `0.125` comes from hydration sweeps on a 62-worker replica,
-/// where 2 and 4 threads convoyed all workers and the knee was at 8.
+/// The default of `0.5` gives 1 thread below 4 workers, then 2, 4, 8 and 16
+/// threads from 4, 8, 16 and 32 workers. These are the per-size counts
+/// production ran the chunked upsert-v2 stash with. Hydration sweeps on a
+/// 62-worker replica convoyed all workers at 2 and 4 threads.
 ///
 /// Thread spawning is once per process: raising the value later has no effect
 /// beyond re-enabling, and lowering it to zero falls back to inline eviction
 /// while spawned threads idle.
 pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_spill_worker_fraction",
-    0.125,
+    0.5,
     "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's \
-     timely workers, rounded up; 0 evicts inline on the caller.",
+     timely workers, rounded down to a power of two and at least 1; 0 evicts inline on the \
+     caller.",
     ParameterScope::Replica,
 );
 

@@ -265,8 +265,8 @@
     {
       "name": "column_paged_batcher_spill_worker_fraction",
       "typeName": "double-precision floating-point number",
-      "default": "0.125",
-      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded up; 0 evicts inline on the caller.",
+      "default": "0.5",
+      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded down to a power of two and at least 1; 0 evicts inline on the caller.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true

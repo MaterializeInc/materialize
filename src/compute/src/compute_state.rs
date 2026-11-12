@@ -520,7 +520,9 @@ impl ComputeState {
         // the full dyncfg aggregate, which is what makes the storage flag
         // readable here.
         {
-            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
+            use mz_timely_util::pool_config::{
+                PoolPagerConfig, apply_pool_config, spill_threads_for_workers,
+            };
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
@@ -532,9 +534,8 @@ impl ComputeState {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
                 let spill_fraction = COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION.get(config);
-                let spill_threads = usize::cast_lossy(
-                    (f64::cast_lossy(self.workers_per_process) * spill_fraction.max(0.0)).ceil(),
-                );
+                let spill_threads =
+                    spill_threads_for_workers(self.workers_per_process, spill_fraction);
                 let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
 
                 // Budget derivation: fraction of physical RAM, with a 128 MiB
