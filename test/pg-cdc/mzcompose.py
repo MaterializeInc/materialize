@@ -229,15 +229,11 @@ def workflow_replication_slot_failover(
             SELECT s.name, p.replication_slot
             FROM mz_sources s JOIN mz_internal.mz_postgres_sources p USING (id)
             """)
-        for _ in range(60):
-            failover = dict(
-                pg_conn.execute(
-                    "SELECT slot_name, failover FROM pg_replication_slots"
-                ).fetchall()
-            )
-            if len(failover) == len(expected):
-                break
-            time.sleep(1)
+        failover = dict(
+            pg_conn.execute(
+                "SELECT slot_name, failover FROM pg_replication_slots"
+            ).fetchall()
+        )
         actual = {name: failover.get(slot) for name, slot in slots}
         assert actual == expected, f"expected {expected}, found {actual}"
 

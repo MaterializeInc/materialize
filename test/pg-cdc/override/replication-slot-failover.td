@@ -48,17 +48,26 @@ ALTER SYSTEM SET enable_postgres_source_failover = true
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = true);
 > CREATE SOURCE explicit_false
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = false);
-> CREATE TABLE pk_table FROM SOURCE implied (REFERENCE pk_table);
 
-> SELECT count(*) FROM mz_internal.mz_postgres_sources
-3
-
-> SELECT * FROM pk_table
-1 one
+# A source only creates its slot once it ingests a table.
+> CREATE TABLE implied_t FROM SOURCE implied (REFERENCE pk_table);
+> CREATE TABLE explicit_true_t FROM SOURCE explicit_true (REFERENCE pk_table);
+> CREATE TABLE explicit_false_t FROM SOURCE explicit_false (REFERENCE pk_table);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO pk_table VALUES (2, 'two');
 
-> SELECT * FROM pk_table
+> SELECT * FROM implied_t
 1 one
 2 two
+
+> SELECT * FROM explicit_true_t
+1 one
+2 two
+
+> SELECT * FROM explicit_false_t
+1 one
+2 two
+
+> SELECT count(*) FROM mz_internal.mz_postgres_sources
+3
