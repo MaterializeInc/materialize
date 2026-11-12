@@ -10,6 +10,7 @@
 import {
   ATTACHMENT_LIMITS,
   attachmentError,
+  attachmentFileName,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
@@ -139,11 +140,17 @@ describe("attachmentError", () => {
     ).toBe("Attach up to 10 files.");
   });
 
-  it("doesn't show hidden characters from a name it rejects", () => {
-    expect(attachmentError([file("invoice\u202Efdp.txt")])).toMatch(
-      /^invoicefdp\.txt can't be attached: file names need a name before the extension/,
+  it("takes names with hidden characters, which are left out", () => {
+    expect(attachmentFileName("invoice\u202Efdp.txt")).toBe("invoicefdp.txt");
+    expect(attachmentFileName("name.png\uFEFF")).toBe("name.png");
+    expect(attachmentError([file("invoice\u202Efdp.txt")])).toBeUndefined();
+    // Without them, the name still needs a name before the extension.
+    expect(attachmentError([file("\u200B.txt")])).toMatch(
+      /^\.txt can't be attached: file names need a name before the extension/,
     );
-    expect(attachmentError([file(".txt")])).toMatch(/^\.txt can't be attached/);
+    expect(attachmentError([file("a/b.txt")])).toMatch(
+      "a/b.txt can't be attached",
+    );
   });
 
   it("lists the limits for the tooltip", () => {

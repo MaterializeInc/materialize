@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Text, TextProps, useTheme } from "@chakra-ui/react";
+import { Spinner, Text, TextProps, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";
@@ -40,6 +40,8 @@ export const AttachFilesStatus = ({
 
   return (
     <Text
+      // A div, so the spinner (also a div) can sit inside it.
+      as="div"
       textStyle="text-small"
       color={isError ? colors.accent.red : colors.foreground.secondary}
       // Keep a stable role: swapping status/alert mid-update is announced
@@ -49,6 +51,10 @@ export const AttachFilesStatus = ({
       data-testid="support-ticket-attachments-status"
       {...props}
     >
+      {attach.status === "pending" && (
+        // Shows the upload is still going, like `StatusPill`.
+        <Spinner width="12px" height="12px" speed="0.75s" mr="2" label="" />
+      )}
       {showShareInstead && isError && !isAttachUnconfirmedError(attach.error)
         ? `${message} ${SHARE_FILES_INSTEAD}`
         : message}

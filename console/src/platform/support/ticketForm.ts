@@ -152,31 +152,40 @@ export const isValidFileName = (name: string) => {
   return dot > 0 && stem !== "" && [...trimmed].length <= MAX_FILE_NAME_LENGTH;
 };
 
+/**
+ * The name a file is sent with: without hidden characters, which the global
+ * API rejects, so `invoice\u202Efdp.txt` goes as `invoicefdp.txt`.
+ */
+export const attachmentFileName = (name: string) =>
+  [...name]
+    .filter((character) => !isHiddenCharacter(character))
+    .join("")
+    .trim();
+
 /** Why these files can't be attached, or undefined if they can. */
 export const attachmentError = (files: { name: string; size: number }[]) => {
   if (files.length > MAX_ATTACHMENTS) {
     return `Attach up to ${MAX_ATTACHMENTS} files.`;
   }
-  const badName = files.find(({ name }) => !isValidFileName(name));
+  const named = files.map((file) => ({
+    name: attachmentFileName(file.name),
+    size: file.size,
+  }));
+  const badName = named.find(({ name }) => !isValidFileName(name));
   if (badName) {
-    const shown = [...badName.name]
-      .filter((character) => !isHiddenCharacter(character))
-      .join("")
-      .trim();
-    return `${shown || "A file"} can't be attached: file names need a name before the extension, at most ${MAX_FILE_NAME_LENGTH} characters, and no slashes or hidden characters.`;
+    return `${badName.name || "A file"} can't be attached: file names need a name before the extension, at most ${MAX_FILE_NAME_LENGTH} characters, and no slashes.`;
   }
-  const unsupported = files.find(
-    ({ name }) =>
-      !ATTACHMENT_EXTENSIONS.includes(extensionOf(name.trim()) ?? ""),
+  const unsupported = named.find(
+    ({ name }) => !ATTACHMENT_EXTENSIONS.includes(extensionOf(name) ?? ""),
   );
   if (unsupported) {
     return `${unsupported.name} can't be attached. Supported types: ${DOTTED_EXTENSIONS.join(", ")}.`;
   }
-  const tooLarge = files.find(({ size }) => size > MAX_ATTACHMENTS_BYTES);
+  const tooLarge = named.find(({ size }) => size > MAX_ATTACHMENTS_BYTES);
   if (tooLarge) {
     return `${tooLarge.name} is larger than ${MAX_ATTACHMENTS_SIZE}.`;
   }
-  const empty = files.find(({ size }) => size === 0);
+  const empty = named.find(({ size }) => size === 0);
   if (empty) {
     return `${empty.name} is empty.`;
   }
@@ -221,6 +230,8 @@ export type TicketFormValues = {
   description: string;
   /** The `key` of the chosen `TicketTarget`. */
   target: string;
+  /** Files to add once the ticket is open. */
+  files: File[];
 };
 
 /** An organization, and one of its regions, that a ticket can be about. */
@@ -314,7 +325,7 @@ export const defaultTicketTarget = (
  * login and adds the org ID and their email to the description.
  */
 export const buildCreateTicketRequest = (
-  values: Omit<TicketFormValues, "target">,
+  values: Omit<TicketFormValues, "target" | "files">,
   target: TicketTarget | undefined,
 ): CreateSupportTicketRequest => ({
   title: values.title.trim(),

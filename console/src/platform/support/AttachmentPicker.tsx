@@ -25,10 +25,14 @@ import { PaperclipIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 import { formatBytesShort } from "~/utils/format";
 
-import { ATTACHMENT_ACCEPT, ATTACHMENT_LIMITS } from "./ticketForm";
+import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_LIMITS,
+  attachmentFileName,
+} from "./ticketForm";
 
-/** A picked file, with an ID to key it by: files have none of their own. */
-export type PickedFile = { id: number; file: File };
+/** Identifies a picked file, so picking it again doesn't add it twice. */
+const fileId = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
 
 /**
  * Files to add to the ticket once it's open. The button's tooltip gives the
@@ -40,30 +44,26 @@ export const AttachmentPicker = ({
   isDisabled,
   onChange,
 }: {
-  files: PickedFile[];
+  files: File[];
   error: string | undefined;
   /** While the ticket opens: the files it will get are already set. */
   isDisabled: boolean;
-  onChange: (files: PickedFile[]) => void;
+  onChange: (files: File[]) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const input = React.useRef<HTMLInputElement>(null);
   const attachButton = React.useRef<HTMLButtonElement>(null);
-  const removeButtons = React.useRef(new Map<number, HTMLButtonElement>());
-  const nextId = React.useRef(0);
+  const list = React.useRef<HTMLUListElement>(null);
 
-  const removeFile = (id: number) => {
-    const index = files.findIndex((picked) => picked.id === id);
-    const remaining = files.filter((picked) => picked.id !== id);
-    onChange(remaining);
-    // Keep keyboard focus in the picker after the removed control unmounts.
+  const removeFile = (index: number) => {
+    onChange(files.filter((_, i) => i !== index));
+    // Keep keyboard focus in the picker after the removed control unmounts:
+    // on the next file's remove button, else the last one, else Attach files.
     queueMicrotask(() => {
-      const next = remaining[index] ?? remaining[index - 1];
-      if (next) {
-        removeButtons.current.get(next.id)?.focus();
-      } else {
-        attachButton.current?.focus();
-      }
+      const buttons =
+        list.current?.querySelectorAll<HTMLButtonElement>("[data-remove-file]");
+      const next = buttons?.[Math.min(index, buttons.length - 1)];
+      (next ?? attachButton.current)?.focus();
     });
   };
 
@@ -79,10 +79,13 @@ export const AttachmentPicker = ({
         aria-label="Files to attach"
         data-testid="support-ticket-file-input"
         onChange={(event) => {
-          const added = Array.from(event.target.files ?? [], (file) => ({
-            id: nextId.current++,
-            file,
-          }));
+          const picked = new Set(files.map(fileId));
+          const added = Array.from(event.target.files ?? []).filter((file) => {
+            const id = fileId(file);
+            if (picked.has(id)) return false;
+            picked.add(id);
+            return true;
+          });
           onChange([...files, ...added]);
           // Lets the same file be picked again after it's removed.
           event.target.value = "";
@@ -101,29 +104,31 @@ export const AttachmentPicker = ({
         </Button>
       </Tooltip>
       {files.length > 0 && (
-        <VStack as="ul" listStyleType="none" spacing="1" align="stretch" mt="2">
-          {files.map(({ id, file }) => (
-            <HStack as="li" key={id} spacing="2">
+        <VStack
+          ref={list}
+          as="ul"
+          listStyleType="none"
+          spacing="1"
+          align="stretch"
+          mt="2"
+        >
+          {files.map((file, index) => (
+            <HStack as="li" key={fileId(file)} spacing="2">
+              {/* The name it's sent with: hidden characters are left out. */}
               <Text textStyle="text-small" flex="1" minWidth="0" noOfLines={1}>
-                {file.name}
+                {attachmentFileName(file.name)}
               </Text>
               <Text textStyle="text-small" color={colors.foreground.secondary}>
                 {formatBytesShort(BigInt(file.size))}
               </Text>
               <IconButton
-                ref={(node) => {
-                  if (node) {
-                    removeButtons.current.set(id, node);
-                  } else {
-                    removeButtons.current.delete(id);
-                  }
-                }}
-                aria-label={`Remove ${file.name}`}
+                data-remove-file
+                aria-label={`Remove ${attachmentFileName(file.name)}`}
                 icon={<CloseIcon boxSize={3} />}
                 variant="ghost"
                 size="xs"
                 isDisabled={isDisabled}
-                onClick={() => removeFile(id)}
+                onClick={() => removeFile(index)}
               />
             </HStack>
           ))}

@@ -37,7 +37,7 @@ import { useAuthUser } from "~/external-library-wrappers/frontegg";
 import { TOAST_DEFAULTS } from "~/hooks/useToast";
 import { pluralize } from "~/util";
 
-import { readAsBase64 } from "./ticketForm";
+import { attachmentFileName, readAsBase64 } from "./ticketForm";
 
 /**
  * Tickets belong to the signed-in user, and the query cache outlives a sign
@@ -336,12 +336,6 @@ export function attachFilesMessage(
 }
 
 /**
- * How many components show each ticket's attach status. A failure nobody
- * sees, say after the confirmation's Done, gets a toast instead.
- */
-const shownAttachStatuses = new Map<string, number>();
-
-/**
  * Uploads outlive the components that start them, so their toasts go through
  * Chakra's shared toast store, which the app's ToastProvider renders, rather
  * than `useToast`.
@@ -369,7 +363,7 @@ export function startAttachingFiles(
       mutationFn: async ({ ticketId, files }: AttachFilesVariables) => {
         const encoded = await Promise.all(
           files.map(async (file) => ({
-            name: file.name,
+            name: attachmentFileName(file.name),
             data: await readAsBase64(file),
           })),
         );
@@ -386,9 +380,8 @@ export function startAttachingFiles(
     }),
   );
   mutation.execute(variables).catch(() => {
-    // The error stays in the mutation's state for the confirmation and the
-    // ticket's modal. If neither is showing, say so in a toast.
-    if (shownAttachStatuses.has(variables.ticketId)) return;
+    // The confirmation and the ticket's modal show the error too, but they
+    // may have closed by now.
     const state = mutation.state as AttachFilesState;
     const message = attachFilesMessage(
       state,
@@ -409,33 +402,15 @@ export function startAttachingFiles(
   });
 }
 
-/**
- * How adding files to a new ticket went, if any were added. While mounted,
- * failures for that ticket get no toast, so show the status.
- */
+/** How adding files to a new ticket went, if any were added. */
 export function useAttachFilesState(
   ticketId: string,
 ): AttachFilesState | undefined {
-  const states = useMutationState({
+  return useMutationState({
     filters: {
       mutationKey: supportTicketQueryKeys.attachFiles(ticketId),
       exact: true,
     },
     select: (mutation) => mutation.state as AttachFilesState,
-  });
-  React.useEffect(() => {
-    shownAttachStatuses.set(
-      ticketId,
-      (shownAttachStatuses.get(ticketId) ?? 0) + 1,
-    );
-    return () => {
-      const count = (shownAttachStatuses.get(ticketId) ?? 1) - 1;
-      if (count > 0) {
-        shownAttachStatuses.set(ticketId, count);
-      } else {
-        shownAttachStatuses.delete(ticketId);
-      }
-    };
-  }, [ticketId]);
-  return states.at(-1);
+  }).at(-1);
 }

@@ -1389,6 +1389,63 @@ describe("SupportPage", () => {
       );
     });
 
+    it("doesn't add the same file twice", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      const file = new File(["hi"], "error.txt", { type: "text/plain" });
+      await user.upload(input, file);
+      await user.upload(input, [
+        file,
+        new File(["png"], "screen.png", { type: "image/png" }),
+      ]);
+
+      expect(
+        screen
+          .getAllByRole("button", { name: /^Remove / })
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(["Remove error.txt", "Remove screen.png"]);
+    });
+
+    it("sends file names without hidden characters", async () => {
+      let attachedWith: Record<string, unknown> | undefined;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        // Shows as "invoicetxt.pdf" but is a .txt file.
+        new File(["hi"], "invoice\u202Efdp.txt", { type: "text/plain" }),
+      );
+      // Listed with the name it's sent with.
+      expect(
+        screen.getByRole("button", { name: "Remove invoicefdp.txt" }),
+      ).toBeVisible();
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attachedWith).toEqual({
+          ticketId: "42",
+          files: [{ name: "invoicefdp.txt", data: window.btoa("hi") }],
+        }),
+      );
+    });
+
     it("doesn't open a ticket with files that can't be attached", async () => {
       let createdWith: unknown;
       server.use(
@@ -1660,6 +1717,12 @@ describe("SupportPage", () => {
       expect(
         await within(sent).findByTestId("support-ticket-attachments-status"),
       ).toHaveTextContent("Adding 1 file\u2026");
+      // A spinner shows the upload is still going.
+      expect(
+        within(sent)
+          .getByTestId("support-ticket-attachments-status")
+          .querySelector(".chakra-spinner"),
+      ).not.toBeNull();
       await user.click(within(sent).getByRole("button", { name: "Done" }));
       await waitFor(() =>
         expect(

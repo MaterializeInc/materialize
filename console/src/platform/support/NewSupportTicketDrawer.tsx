@@ -35,7 +35,7 @@ import {
 } from "@chakra-ui/react";
 import { useAtomValue } from "jotai";
 import React from "react";
-import { useForm, UseFormRegisterReturn } from "react-hook-form";
+import { useController, useForm, UseFormRegisterReturn } from "react-hook-form";
 
 import {
   CreatedSupportTicket,
@@ -59,7 +59,7 @@ import {
 import { MaterializeTheme } from "~/theme";
 
 import { AttachFilesStatus } from "./AttachFilesStatus";
-import { AttachmentPicker, PickedFile } from "./AttachmentPicker";
+import { AttachmentPicker } from "./AttachmentPicker";
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket, useSupportOrganizations } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
@@ -192,14 +192,12 @@ const NewTicketForm = ({
   onClose: () => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const [files, setFiles] = React.useState<PickedFile[]>([]);
-  const filesError = attachmentError(files.map(({ file }) => file));
   const signedIn = { ...useTicketContext(), organizationId, organizationName };
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
   const targets = buildTicketTargets(supportOrganizations.data ?? [], signedIn);
   const descriptionPlaceholder = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
-  const { register, handleSubmit, formState, watch } =
+  const { register, handleSubmit, formState, watch, control, setValue } =
     useForm<TicketFormValues>({
       mode: "onTouched",
       defaultValues: {
@@ -208,9 +206,17 @@ const NewTicketForm = ({
         environmentType: "production",
         description: "",
         target: defaultTicketTarget(targets, signedIn)?.key ?? "",
+        files: [],
       },
     });
   const { errors } = formState;
+  // Checked like the other fields, so the ticket waits until the files can go
+  // with it.
+  const filesField = useController({
+    control,
+    name: "files",
+    rules: { validate: (files) => attachmentError(files) ?? true },
+  });
   const severity = watch("severity");
   const environmentType = watch("environmentType");
   const targetKey = watch("target");
@@ -256,9 +262,7 @@ const NewTicketForm = ({
     }
   }
 
-  const onSubmit = (values: TicketFormValues) => {
-    // The picker shows why; the ticket waits until the files can go with it.
-    if (filesError) return;
+  const onSubmit = ({ files, ...values }: TicketFormValues) => {
     // The files are added once the ticket is open, even if the drawer has
     // closed by then.
     submit.mutate({
@@ -269,7 +273,7 @@ const NewTicketForm = ({
           : values,
         target,
       ),
-      files: files.map(({ file }) => file),
+      files,
     });
   };
 
@@ -463,10 +467,13 @@ const NewTicketForm = ({
           )}
 
           <AttachmentPicker
-            files={files}
-            error={filesError}
+            files={filesField.field.value}
+            error={errors.files?.message}
             isDisabled={submit.isPending}
-            onChange={setFiles}
+            // The hidden input is never touched, so check on every change.
+            onChange={(files) =>
+              setValue("files", files, { shouldValidate: true })
+            }
           />
 
           {sentDetails.length > 0 && (
