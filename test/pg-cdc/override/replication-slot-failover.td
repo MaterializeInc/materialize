@@ -25,6 +25,7 @@ DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (1, 'one');
 
 $ postgres-execute connection=mz_system
