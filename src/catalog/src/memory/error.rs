@@ -43,6 +43,10 @@ pub enum ErrorKind {
     ReservedNetworkPolicyName(String),
     #[error("system network policy '{0}' cannot be modified")]
     ReadOnlyNetworkPolicy(String),
+    #[error("query policy name {} is reserved", .0.quoted())]
+    ReservedQueryPolicyName(String),
+    #[error("system query policy '{0}' cannot be modified")]
+    ReadOnlyQueryPolicy(String),
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]

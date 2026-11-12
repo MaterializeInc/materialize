@@ -52,7 +52,8 @@ use crate::durable::{
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
     SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction,
     USER_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_QUERY_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -274,6 +275,10 @@ pub(crate) async fn initialize(
             SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string(),
             DEFAULT_ALLOCATOR_ID,
         ),
+        (
+            USER_QUERY_POLICY_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (STORAGE_USAGE_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (OID_ALLOC_KEY.to_string(), FIRST_USER_OID.into()),
@@ -407,6 +412,7 @@ pub(crate) async fn initialize(
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
             ObjectType::NetworkPolicy => mz_audit_log::ObjectType::NetworkPolicy,
+            ObjectType::QueryPolicy => mz_audit_log::ObjectType::QueryPolicy,
         };
         audit_events.push((
             mz_audit_log::EventType::Grant,
@@ -808,6 +814,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
             burst: None,
         }),
         workload_class: None,
+        query_policy: None,
     })
 }
 

@@ -455,6 +455,7 @@ async fn source_command_preserves_only_observed_outcomes() {
             config: mz_catalog::memory::objects::ClusterConfig {
                 variant: mz_catalog::memory::objects::ClusterVariant::Unmanaged,
                 workload_class: None,
+                query_policy: None,
             },
         }]).await.expect("create source cluster");
         let mut session = Session::dummy();

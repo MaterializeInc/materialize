@@ -381,7 +381,7 @@ metric-sink  true
 # Things that deliberately don't work. `COMMENT ON` has no metric-sink variant
 # in the grammar at all.
 
-statement error Expected one of TABLE or VIEW or COLUMN or MATERIALIZED or SOURCE or SINK or INDEX or FUNCTION or CONNECTION or TYPE or SECRET or ROLE or DATABASE or SCHEMA or CLUSTER or NETWORK, found METRIC
+statement error Expected one of TABLE or VIEW or COLUMN or MATERIALIZED or SOURCE or SINK or INDEX or FUNCTION or CONNECTION or TYPE or SECRET or ROLE or DATABASE or SCHEMA or CLUSTER or NETWORK or QUERY, found METRIC
 COMMENT ON METRIC SINK ms IS 'nope'
 
 # Default privileges never reach the planner: the grammar has no METRIC SINKS

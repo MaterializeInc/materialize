@@ -67,6 +67,7 @@ pub enum CollectionType {
     Item,
     ItemColumns,
     NetworkPolicy,
+    QueryPolicy,
     Role,
     RoleAuth,
     Schema,
@@ -238,6 +239,14 @@ collection_impl!({
     update: StateUpdateKind::NetworkPolicy,
 });
 collection_impl!({
+    name: QueryPolicyCollection,
+    key: proto::QueryPolicyKey,
+    value: proto::QueryPolicyValue,
+    collection_type: CollectionType::QueryPolicy,
+    trace_field: query_policies,
+    update: StateUpdateKind::QueryPolicy,
+});
+collection_impl!({
     name: RoleCollection,
     key: proto::RoleKey,
     value: proto::RoleValue,
@@ -387,6 +396,7 @@ pub struct Trace {
     pub item_columns: CollectionTrace<ItemColumnsCollection>,
     pub index_columns: CollectionTrace<IndexColumnsCollection>,
     pub network_policies: CollectionTrace<NetworkPolicyCollection>,
+    pub query_policies: CollectionTrace<QueryPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
     pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
@@ -419,6 +429,7 @@ impl Trace {
             item_columns: CollectionTrace::new(),
             index_columns: CollectionTrace::new(),
             network_policies: CollectionTrace::new(),
+            query_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
             role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
@@ -451,6 +462,7 @@ impl Trace {
             item_columns,
             index_columns,
             network_policies,
+            query_policies,
             roles,
             role_auth,
             schemas,
@@ -479,6 +491,7 @@ impl Trace {
         item_columns.sort();
         index_columns.sort();
         network_policies.sort();
+        query_policies.sort();
         roles.sort();
         role_auth.sort();
         schemas.sort();
