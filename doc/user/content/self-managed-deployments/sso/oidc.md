@@ -512,7 +512,10 @@ requirements:
    fail during registration (in Okta, with HTTP 403 `E0000005`). Instead, create
    or reuse a public OIDC client with PKCE, add
    `http://localhost:<port>/callback` as a sign-in redirect URI, and configure
-   the MCP client with the client ID explicitly.
+   the MCP client with the client ID explicitly. With the [advanced SSO
+   stack](/self-managed-deployments/sso/advanced/), Hydra can allow
+   registration instead; see [Connect MCP
+   clients](/self-managed-deployments/sso/advanced/operations/#connect-mcp-clients).
 
 1. **Include the authentication claim in access tokens.** IdPs typically include
    claims like `email` only in ID tokens. If `oidc_authentication_claim` is set

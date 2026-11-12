@@ -35,9 +35,14 @@ spec:
     - "https://my-app.example.com/auth/callback"
   secretName: my-internal-app-credentials
   tokenEndpointAuthMethod: "client_secret_basic"
-  # Keep skipConsent: false. The consent handler injects the identity's email
-  # and groups claims; skipping it issues tokens Materialize rejects.
-  skipConsent: false
+  # Marks the client as operator-managed. Without it, the client is treated
+  # like one that registered itself: its audience is limited and it can't
+  # use the client_credentials grant.
+  metadata:
+    materialize_managed: true
+  # Trusted internal apps can skip the consent screen. The user's email and
+  # groups are added to every token either way.
+  skipConsent: true
 ```
 
 Hydra Maester watches for these resources and registers the client with
@@ -52,6 +57,37 @@ kubectl get secret my-internal-app-credentials -n ory \
 kubectl get secret my-internal-app-credentials -n ory \
   -o jsonpath='{.data.CLIENT_SECRET}' | base64 -d
 ```
+
+## Connect MCP clients
+
+MCP clients such as Claude Code can sign in to Materialize's MCP
+endpoint through the Ory stack. They register themselves with Hydra
+through Dynamic Client Registration ([RFC
+7591](https://datatracker.ietf.org/doc/html/rfc7591)), which is off by
+default. To turn it on, set in tfvars:
+
+```hcl
+ory_enable_dynamic_client_registration = true
+```
+
+and bump `force_rollout` so Materialize picks up the new audience. This:
+
+- turns on registration in Hydra and advertises its endpoint in Hydra's
+  discovery document;
+- gives self-registered clients `https://<materialize_console_fqdn>/api/mcp`
+  as their token audience, and no other;
+- adds that URL to Materialize's `oidc_audience`.
+
+Then connect the client to `https://<materialize_console_fqdn>/api/mcp/developer`
+(or `/api/mcp/agent`). On first use it registers, opens the browser for
+sign-in and a consent screen, and stores its token.
+
+{{< note >}}
+Anyone who can reach Hydra's public endpoint can register a client.
+Registered clients still need a user to sign in, and they can only get
+the MCP audience. If Hydra is reachable from the internet, put a rate
+limit in front of it.
+{{</ note >}}
 
 ## Rotate the license key
 
@@ -104,6 +140,10 @@ curl -X PATCH http://localhost:4434/admin/identities/<id> \
   -H "Content-Type: application/json-patch+json" \
   -d '[{"op": "replace", "path": "/state", "value": "inactive"}]'
 ```
+
+An inactive identity can't sign in, and its refresh tokens stop working
+at the next refresh, because the selfservice UI checks the identity on
+every token issuance.
 
 See the [Kratos admin API
 reference](https://www.ory.sh/docs/kratos/reference/api) for the full
@@ -228,8 +268,10 @@ new user, from OIDC or SAML, while users who already signed in keep
 working.
 {{< /warning >}}
 
-Anyone your identity provider lets sign in to the Materialize app gets
-an account. Control that in the IdP:
+Each provider only signs in emails in its `allowed_email_domains` (see
+[Sign-in checks](/self-managed-deployments/sso/advanced/identity-providers/#sign-in-checks)).
+Within those domains, anyone your identity provider lets sign in to the
+Materialize app gets an account. Control that in the IdP:
 
 - **Okta**: Okta enforces app assignment. Assign the app to the users or
   groups who should have access, not to **Everyone**.
@@ -243,6 +285,48 @@ an account. Control that in the IdP:
 To remove a user's access, unassign them in the IdP and
 [lock their Kratos identity](#manage-kratos-identities). Their
 Materialize role isn't dropped automatically.
+
+## Upgrade from kratos-selfservice-ui-node
+
+Before v19.0.0 of the Terraform modules, the stack ran Ory's
+`kratos-selfservice-ui-node` as its selfservice UI. From v19.0.0 it runs
+[`materialize/ory-selfservice`](https://github.com/MaterializeInc/ory-selfservice),
+which also enforces stricter sign-in rules. To upgrade an existing
+deployment:
+
+1. Before applying, set the new inputs:
+   - `allowed_email_domains` on every entry in
+     `upstream_identity_providers` and `saml_providers`.
+   - `require_email_verified = false` on OIDC providers that don't send
+     `email_verified`, such as Microsoft Entra ID.
+   - `ory_kratos_cookie_domain`. It used to be derived from the Kratos
+     hostname. Use the narrowest domain that covers the Kratos and
+     selfservice UI hostnames.
+2. Run `terraform apply`. On AWS, the Hydra and Polis database passwords
+   rotate, and the pods restart with the new credentials.
+3. Have everyone sign in again through the IdP. Tokens now take the
+   user's email and groups from data the IdP writes at sign-in, so until
+   a user signs in again, their tokens can't be refreshed. End every
+   session so the next sign-in goes to the IdP:
+
+   ```bash
+   kubectl -n ory port-forward svc/kratos-admin 4434 &
+   kubectl -n ory port-forward svc/hydra-admin 4445 &
+   # Past 500 identities, repeat with the page_token from the Link header.
+   for id in $(curl -s 'localhost:4434/admin/identities?page_size=500' | jq -r '.[].id'); do
+     curl -s -X PATCH "localhost:4434/admin/identities/$id" -H 'content-type: application/json' \
+       -d '[{"op":"remove","path":"/traits/groups"}]' >/dev/null
+     curl -s -X DELETE "localhost:4434/admin/identities/$id/sessions"
+     curl -s -X DELETE "localhost:4445/admin/oauth2/auth/sessions/login?subject=$id"
+   done
+   ```
+
+   The `PATCH` removes the old `groups` trait, which the identity schema
+   no longer allows. It fails harmlessly for identities without one.
+
+Identities, OAuth2 clients, and Materialize roles carry over unchanged.
+The full list of changes is in the module's
+[UPGRADING.md](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/ory-selfservice-ui/UPGRADING.md).
 
 ## Back up the Ory PostgreSQL database
 

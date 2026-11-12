@@ -30,6 +30,11 @@ kubectl logs -n ory deploy/hydra-hydra-maester -f
 For login-time issues, tail Kratos, Hydra, and Polis simultaneously so
 you can see which component rejected the flow.
 
+The selfservice UI logs every consent, logout, and token hook decision
+with its reason. It hashes emails and groups in its logs by default. To
+see them while debugging, set `selfservice_ui_log_redact_pii = false` on
+the `ory-stack` module, and set it back afterwards.
+
 ## Symptom table
 
 | Symptom | Likely cause | Fix |
@@ -41,7 +46,11 @@ you can see which component rejected the flow.
 | Polis logs `OAuth server not configured correctly for openid flow, check if JWT signing keys are loaded` | `OPENID_RSA_PRIVATE_KEY` and `OPENID_RSA_PUBLIC_KEY` missing | Module auto-generates and injects them; re-run `terraform apply` |
 | Polis logs `"pkcs8" must be PKCS#8 formatted string` | RSA private key was PKCS#1 | Module uses the PKCS#8 form; re-run `terraform apply` |
 | Terraform apply fails on the Polis Helm release with `failed to create patch: The order in patch list ... doesn't match $setElementOrder list` | The live Polis Deployment has a duplicated environment variable (older module versions set `OPENID_REDIRECT_EXACT_MATCH` twice), which Kubernetes can't patch once the list changes | Delete the Deployment (`kubectl -n ory delete deployment polis`) and re-run `terraform apply`, which recreates it; Polis's data lives in its database, so nothing is lost |
-| First login fails with `no matching authentication claim found in the JWT` | Hydra issued a token without identity claims. Common causes: the OAuth2 client has `skipConsent: true`, or a `kratos_helm_values` override dropped the module's `oidc`/`saml` registration `session` hooks | Keep `skipConsent: false` on the Materialize client (the module default). The consent handler injects the email and groups claims. If you override `kratos_helm_values`, keep the registration `after` hooks for `oidc` and `saml` |
+| First login fails with `no matching authentication claim found in the JWT` | Hydra issued a token without identity claims. Common causes: a `kratos_helm_values` override dropped the module's `oidc`/`saml` registration `session` hooks, or the identity has no email in `metadata_public` because the user hasn't signed in through the IdP since an upgrade | If you override `kratos_helm_values`, keep the registration `after` hooks for `oidc` and `saml`. Otherwise have the user sign in again through the IdP, which writes the email and groups |
+| Sign-in ends on an error page: `This email domain may not sign in through this identity provider` | The user's email domain isn't in the provider's `allowed_email_domains` | Add the domain to `allowed_email_domains` on that provider and re-apply. Domains match exactly, so list subdomains separately |
+| Sign-in ends on an error page: `The identity provider did not mark this email address as verified` | The OIDC provider doesn't send `email_verified: true`. Microsoft Entra ID doesn't send it by default | Set `require_email_verified = false` on that provider and rely on `allowed_email_domains` |
+| Sign-in ends on an error page: `The identity provider did not send a valid email address` | The IdP doesn't send an `email` claim, or it isn't a valid address | Add `email` to the provider's `scope`, or for SAML, check the `email` attribute statement |
+| Signed-in users must sign in again after about a week, even while active | Expected. The token hook refuses refresh tokens once the user hasn't signed in through the IdP for the max auth age (7 days by default), so groups removed at the IdP don't live on | Change `selfservice_ui_token_hook_max_auth_age_seconds` on the `ory-stack` module if needed |
 | `"Couldn't fetch XML data"` when registering a Polis SAML connection | The IdP's metadata URL is gated by API auth | Post `rawMetadata=<XML>` to Polis instead of `metadataUrl=...` |
 | "Sign in via SAML" button missing on Kratos login | Cached login flow from before the polis provider was added | Hard refresh or open a new incognito session |
 | Materialize Console reaches the login screen but balancerd times out | DNS or cert SAN mismatch | Confirm the balancerd hostname A record resolves and is in the cert SAN list (`balancerd_extra_dns_names`) |
@@ -78,13 +87,14 @@ Check Hydra Maester logs:
 kubectl logs -n ory deploy/hydra-hydra-maester --tail=100
 ```
 
-### Kratos selfservice UI shows a blank login page
+### Selfservice UI shows a blank login page
 
-Almost always a TLS or DNS issue between the browser and Kratos. Open
-your browser's network tab and inspect the requests:
+The sign-in pages call Kratos through the UI's own hostname, under
+`/.ory/`. Open your browser's network tab and inspect the requests:
 
-- 502/504 on `/self-service/login/browser` → Kratos isn't reachable
-  from the UI pod. Check Kratos pod status.
+- 502/504 on `/.ory/self-service/login/browser` → Kratos isn't
+  reachable from the UI pod. Check the Kratos pods, and the UI logs for
+  the upstream error.
 - TLS error on the redirect target → cert not provisioned yet, or the
   hostname DNS record isn't propagated. Run `kubectl get certificate -A`
   and confirm `kratos-tls` is `READY=True`.
@@ -159,19 +169,28 @@ default even when the IdP token clearly contains `groups`. Read from
 ```jsonnet
 local claims = std.extVar('claims');
 local raw = if std.objectHas(claims, 'raw_claims') then claims.raw_claims else {};
-local groups_from(src) = if std.objectHas(src, 'groups') then src.groups else [];
+local groups_claim =
+  if std.objectHas(claims, 'groups') then claims.groups
+  else if std.objectHas(raw, 'groups') then raw.groups
+  else [];
 {
   identity: {
     traits: {
       email: claims.email,
-      groups: if std.length(groups_from(claims)) > 0 then groups_from(claims) else groups_from(raw),
+    },
+    metadata_public: {
+      email: claims.email,
+      groups: groups_claim,
     },
   },
 }
 ```
 
-This is the pattern the module ships. When adding new IdP-specific custom
-claims to the mapper, always check `raw_claims` first.
+This is a simplified version of the mapper the module generates for each
+provider, which also applies the [sign-in checks](/self-managed-deployments/sso/advanced/identity-providers/#sign-in-checks).
+Write the email and groups to `metadata_public`: that's where the tokens
+take them from, and users can't edit it. When adding new IdP-specific
+custom claims to the mapper, always check `raw_claims` first.
 
 ### Okta reports "Invalid Base URL for the SCIM Connector"
 
