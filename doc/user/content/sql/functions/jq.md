@@ -11,7 +11,8 @@ menu:
 `jq` applies a [jq program](https://jqlang.org/manual/) to a
 [`jsonb`](/sql/types/jsonb/) value and returns the result as `jsonb`. Use it to
 write per-row logic, such as sorting, filtering, or deduplicating a list, that
-would otherwise require subqueries. For a walkthrough, see [Write functions
+would otherwise require subqueries. Using `jq` can be more memory efficient
+than expressing the same logic in SQL. For a walkthrough, see [Write functions
 with jq](/transform-data/user-defined-functions/jq/).
 
 ## Syntax
