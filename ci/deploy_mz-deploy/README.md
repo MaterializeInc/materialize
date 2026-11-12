@@ -7,8 +7,8 @@ its release tarballs are built and uploaded by the `deploy-mz-deploy` pipeline
 asynchronously whenever a `vX.Y.Z` tag is pushed, so a slow or failing tarball
 build never holds up release qualification.
 
-**There is nothing to do to cut an mz-deploy release.** It goes out with the
-database.
+**There is nothing to do to cut an mz-deploy release**, except bumping the
+Homebrew tap by hand on GA releases (see [Homebrew](#homebrew)).
 
 Tarballs land in the materialize-binaries S3 bucket, served at
 <https://binaries.materialize.com>:
