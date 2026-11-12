@@ -980,6 +980,9 @@ impl Pool {
         };
         self.0.spill_process(&meta, SpillKind::Evict);
         self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+        // The spill loop's trim, so tests observe deterministic post-commit
+        // states.
+        self.0.enforce_compressed_cap();
         true
     }
 
@@ -1222,15 +1225,23 @@ impl PoolInner {
         // page release. The youngest band is reached only when the deeper
         // bands cannot satisfy the budget, keeping young data's
         // die-before-write chance longest.
+        //
+        // The pass evicts at most the overage it saw on entry. Inserts that
+        // land during the pass are left to the pass their own enforcement
+        // request reruns (see `enforce_pending`), so one call does not chase
+        // every other thread's inserts.
+        let mut quota = self
+            .evictable_bytes()
+            .saturating_sub(self.budget_bytes.load(Ordering::Relaxed));
         for band in (0..DEPTH_BANDS).rev() {
-            if self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
+            if quota == 0 || self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
                 return;
             }
-            self.enforce_budget_band(band);
+            self.enforce_budget_band(band, &mut quota);
         }
     }
 
-    fn enforce_budget_band(&self, band: usize) {
+    fn enforce_budget_band(&self, band: usize, quota: &mut u64) {
         // The queue holds resident chunks only (entries for evicted chunks
         // are dropped on visit and never re-added), so a full pass is
         // proportional to the resident set. Visit each queued chunk at most
@@ -1239,7 +1250,10 @@ impl PoolInner {
         // guaranteed to evict every chunk it saw. The bound keeps contended
         // and in-flight entries from spinning this loop forever.
         let mut remaining = self.queue(band).len().saturating_mul(2);
-        while remaining > 0 && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed) {
+        while remaining > 0
+            && *quota > 0
+            && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed)
+        {
             remaining -= 1;
             let popped = self.queue(band).pop_front();
             let Some(weak) = popped else {
@@ -1248,6 +1262,7 @@ impl PoolInner {
             let Some(meta) = weak.upgrade() else {
                 continue;
             };
+            let mut inline = false;
             let requeue = {
                 // `try_lock`: a chunk mid-eviction or mid-read holds its
                 // lock for milliseconds; skipping it beats convoying every
@@ -1265,20 +1280,39 @@ impl PoolInner {
                     // the resident set rather than accumulating every chunk
                     // ever evicted.
                     false
+                } else if state.residency == Residency::WriteInFlight {
+                    // Already handed off, by this pass or an earlier one,
+                    // and charged then. Charging it again would end the pass
+                    // before it reaches the overage it saw.
+                    true
                 } else if state.touched {
                     state.touched = false;
                     true
                 } else if self.spill_handoff(&meta, &mut state) {
+                    *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
                     // Stays queued while in flight; once the spill commits to
                     // `Evicted`, the next visit drops the entry.
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
-                    state.residency != Residency::Evicted
+                    let evicted = state.residency == Residency::Evicted;
+                    if evicted {
+                        *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
+                        inline = true;
+                    }
+                    !evicted
                 }
             };
             if requeue {
                 self.queue(band).push_back(weak);
+            }
+            // An inline eviction grows the compressed tier by one extent. A
+            // single pass can evict a whole budget's worth when other threads
+            // keep inserting, so the tier is trimmed between evictions, not
+            // after the pass. Enforcement takes chunk locks itself, so this
+            // runs after the victim's lock is released.
+            if inline {
+                self.enforce_or_defer_compressed_cap();
             }
         }
     }
@@ -1522,11 +1556,9 @@ impl PoolInner {
                 state.residency = Residency::Evicted;
             }
         };
-        drop(state);
-        // Counted a fresh resident extent: the tier may need trimming. Kept
-        // here (rather than relying on the spill loop alone) so the
-        // threadless test hooks observe deterministic post-commit states.
-        self.enforce_compressed_cap();
+        // The fresh resident extent may put the tier over its cap. The spill
+        // loop trims once per iteration. A trim here as well would trim
+        // twice per eviction, with `in_flight` still counting this job.
     }
 
     /// Releases whichever resident form the chunk holds, its slot or its
@@ -3868,6 +3900,82 @@ mod tests {
         }
         let len = pool.queue_len();
         assert!(len <= 32, "queue holds {len} entries for zero live chunks");
+    }
+
+    #[mz_ore::test]
+    fn budget_pass_charges_each_hand_off_once() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let handles: Vec<_> = (0..16)
+            .map(|seed| insert(&pool, &mut payload(SMALL, 500 + seed)))
+            .collect();
+        // The first sweep hands off the 12 untouched chunks and spends the
+        // 4 touched chunks' second chance. The second sweep revisits the
+        // handed-off entries before it reaches the touched ones, and
+        // charging those again would exhaust the quota first.
+        for handle in &handles[12..] {
+            let _ = read(handle);
+        }
+        pool.set_budget(0);
+        for handle in &handles {
+            assert_eq!(
+                handle.residency(),
+                Residency::WriteInFlight,
+                "the pass hands off the whole overage it saw",
+            );
+        }
+        while pool.spill_step() {}
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 500 + u64::cast_from(i)));
+        }
+    }
+
+    #[mz_ore::test]
+    fn budget_pass_trims_the_tier_between_evictions() {
+        const CHUNKS: u64 = 32;
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let handles: Vec<_> = (0..CHUNKS)
+            .map(|seed| insert(&pool, &mut payload(SMALL, 600 + seed)))
+            .collect();
+        // The largest extent a chunk evicts to, measured on a probe chunk.
+        let extent = {
+            let probe = insert(&pool, &mut payload(SMALL, 600));
+            pool.evict(&probe);
+            pool.stats().extent_resident_bytes
+        };
+        assert!(extent > 0);
+        let cap = extent + extent / 2;
+        // Spill threads that exist but take no hand-off: the backstop then
+        // applies to inline passes, and nothing else pages out.
+        pool.0.spill.threads.store(1, Ordering::Relaxed);
+        // With a zero budget the slot budget, insertion slack, and warm cap
+        // are all zero, so the whole target is tier capacity.
+        pool.set_rss_target(usize::cast_from(cap));
+
+        // Shrinking the budget evicts every chunk inline in one pass. The
+        // hook fires after the evicting pass and before the trim that
+        // follows it, so it observes the tier the pass left behind.
+        let after_pass = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = std::rc::Rc::clone(&after_pass);
+        let inner = Arc::clone(&pool.0);
+        ENFORCE_BUDGET_HOOK.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(move || {
+                observed.set(inner.counters.extent_resident_bytes.load(Ordering::Relaxed));
+            }));
+        });
+        pool.set_budget(0);
+        assert_eq!(pool.0.compressed_cap(), cap);
+        assert!(
+            after_pass.get() <= 2 * cap + extent,
+            "tier {} after the pass exceeds the backstop {} plus one extent {}",
+            after_pass.get(),
+            2 * cap,
+            extent,
+        );
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 600 + u64::cast_from(i)));
+        }
     }
 
     #[mz_ore::test]
