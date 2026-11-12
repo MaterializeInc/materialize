@@ -9,17 +9,17 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Repair the confirmed subscription-frontier gap through query-owned publication
-and its SQL dependencies without restoring the adapter publisher for
-maintained objects. Preserve per-replica frontier rows. Public transient IDs
-collide across adapters. Owner-qualified public subscription IDs await a UX
-decision. See `native-subscription-frontier-assessment.md` and
-`native-progress-dependency-audit.md`.
+Replace the catalog-free replica driver with the approved test-only native
+runtime, then remove the remaining production transport-owned execution path. Preserve programmable MIR/LIR coverage,
+shared query transport, native nonleader workers and split/unified Timely
+topologies. Retire only obsolete controller-replay assertions.
+See `native-replica-execution-boundary.md` for the boundary and concrete callers.
 
-The SQL reproduction is complete: a live cursor delivers data, but global and
-per-replica subscription frontiers are absent while maintained index frontiers
-advance. See `native-compatible-current/subscription-frontier-reproduction.md`.
-The default-debug FETCH crash is fixed and verified. No runtimes are running.
+The subscription repair and harness correction are committed. The final SQL
+runner is preserved locally with its verified checksum in
+`native-compatible-current/subscription-harness-host-stack-aligned/`. All runtime
+fixtures are removed and owned scratch worker `i-04e2dcc55223c6916` is terminated.
+Receipt: `subscription-scratch-final-state.json`.
 
 ## Verified outcome
 
@@ -35,6 +35,16 @@ Temporary objects retain session visibility and execution ownership. Promotion
 preserves them. Disconnect, confirmed replacement and retirement reclaim them.
 Format 97 requires fresh experimental state, with no ownership backfill.
 
+Subscription IDs are execution-qualified across public observations, compute
+logging and physical-dependency joins. Two-adapter default-dev coverage verifies
+colliding local IDs, per-replica and merged progress, independent cleanup,
+promotion survival and explicit retirement. Cold native SLT startup and targeted
+catalog SQL checks pass with the existing test-harness stack budget on both
+hosting contexts. Production stacks, Persist and publication settings are unchanged.
+Commits: `8c9e18f0d7` (subscriptions), `917c98e010` (SLT harness).
+Evidence and review dispositions: `native-subscription-frontier-assessment.md`.
+These checks used mounted candidate binaries, not rebuilt-image CI.
+
 The pinned 26.46/26.47 prototype pair shares implementation and plan encoding,
 not arbitrary release compatibility. Its lifecycle runs precede the isolated
 pgwire stack fix. That fix separately passes initial and resumed subscription
@@ -43,11 +53,8 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
 
 ## Live blockers and decisions
 
-- Subscription frontier publication is missing in the runtime reproduction.
-  Its public-ID decision is above. Keep missing observations distinct from
-  completed frontiers and preserve surviving deployments' queries.
 - Catalog-free replica ingress remains. Replacing headless programmable coverage
-  with a test-only native runtime needs scope approval. Preserve shared query
+  with a test-only native runtime is approved. Preserve shared query
   transport, native nonleader workers and both Timely topologies. The dormant
   final-preflight hook's old-to-old coverage also needs a decision. See
   `native-replica-execution-boundary.md` and `final-preflight-boundary-research.md`.
@@ -56,8 +63,8 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
   Pre-native-to-native upgrades are unsupported, not reset or converted.
 - Full upsert stress exceeded the local deployment memory cap. Worker cleanup is
   repaired, but full-stress acceptance remains blocked. Do not shrink the workload
-  or raise caps blindly. Scratch SSO was expired on the last checks. Local work
-  does not depend on it.
+  or raise caps blindly. The full workload still needs a measured retry, not a
+  smaller substitute.
 - Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
   runtime acceptance remain incomplete. Selected same-build table preservation
   passed. An earlier index-publication stall and a 673-second source-status query
@@ -97,8 +104,10 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   cleanup's performance impact.
 
 All owned fixtures are removed. Obsolete 26.47 demo binaries were reclaimed,
-with their manifests and evidence retained. The fixed candidate and 26.46 negative
-control remain. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB available-memory
-reserves, and use one low-priority Cargo job. Preserve baseline artifacts,
+with their manifests and evidence retained. The stack-fixed frontier-bug baseline
+and upstream baselines remain. The identity-fixed production candidate is preserved
+locally with matching source and binary manifests. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB
+available-memory reserves, and use one low-priority Cargo job. Preserve baseline
+artifacts,
 third-party caches, the persist-traffic worktree and unrelated
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.
