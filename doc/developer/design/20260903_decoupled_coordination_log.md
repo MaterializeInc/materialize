@@ -9,12 +9,15 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate remaining external replica launchers before making production catalog
-context mandatory. Start with feature-benchmark startup ordering, shared
-environment identity and exact inventory IDs, while preserving historical-only
-comparisons. See `native-external-launcher-audit.md` and
-`native-replica-execution-boundary.md`. Production ingress removal also needs
-multi-process nonleader coverage in both Timely topologies.
+Convert replica-isolation next. Start every process from committed inventory,
+refresh identity after drop/recreate, and replace controller-log compaction checks
+with baseline-and-advance assertions on actual replica read frontiers and Persist
+since. Preserve the disruption matrix and check its expectations against native
+protection and retention. See `native-replica-isolation-boundary.md`.
+
+Production ingress removal still needs the remaining external launchers and
+multi-process nonleader coverage in both Timely topologies. The launcher inventory
+is in `native-external-launcher-audit.md` and `native-replica-execution-boundary.md`.
 
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
@@ -45,13 +48,14 @@ Commits: `8c9e18f0d7` (subscriptions), `917c98e010` (SLT harness).
 Evidence and review dispositions: `native-subscription-frontier-assessment.md`.
 These checks used mounted candidate binaries, not rebuilt-image CI.
 
-The programmable driver now owns native endpoints and admits transient plans
-through query connections (`4b7ce262`). Dynamic plans and within-owner mixed
-exports remain. Default-build subprocess tests, crate tests, all-target checks
-and the kept scripts pass in split and unified topologies. The PostgreSQL/MinIO
-composition also passes and its fixture is removed. This proves one process with
-multiple workers, not multi-process ingress or rebuilt-image CI. Evidence:
-`native-driver-scratch/verified/`, including `aj-native-driver-24356554/`.
+Native programmable renderer scripts preserve dynamic plans and within-owner
+mixed exports. Their default-build tests and PostgreSQL/MinIO composition pass
+in both Timely topologies. External benchmark launch/restart checks also pass in
+both topologies for native and historical v26.30 environments, preserving table
+contents and continued writes. Native checks use retained default-debug binaries.
+This covers actual launcher/executor methods, not the full benchmark workflow,
+multi-process ingress or rebuilt-image CI. Fixtures are removed. Evidence:
+`native-driver-scratch/verified/` and `native-driver-scratch/benchmark-verified/`.
 
 The pinned 26.46/26.47 prototype pair shares implementation and plan encoding,
 not arbitrary release compatibility. Its lifecycle runs precede the isolated
