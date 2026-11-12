@@ -205,6 +205,35 @@ def workflow_slot_creation_timeout(
         c.run_testdrive_files("--no-reset", "override/slot-creation-timeout-part-2.td")
 
 
+def workflow_replication_slot_failover(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that pg_source_replication_slot_failover creates the replication slot
+    with failover enabled on PostgreSQL 17+, and that the source still works on
+    older versions, which have no such slots.
+    """
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(create_postgres(pg_version=pg_version)):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("override/replication-slot-failover.td")
+
+        pg_conn = psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT current_setting('server_version_num')::int >= 170000")
+            if cur.fetchall()[0][0]:
+                cur.execute("SELECT failover FROM pg_replication_slots")
+                failover = cur.fetchall()
+                assert failover == [
+                    (True,)
+                ], f"expected one failover slot, found {failover}"
+
+
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
     pg_version = get_targeted_pg_version(parser)
     for wal_level in ["replica", "minimal"]:

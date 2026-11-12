@@ -657,6 +657,15 @@ def get_variable_system_parameters(
             if version >= MzVersion.parse_mz("v26.44.0-dev")
             else []
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "pg_source_replication_slot_failover", "true", ["true", "false"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.47.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),

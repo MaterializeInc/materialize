@@ -384,6 +384,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_use_critical_since_txn
     persist_write_combine_inline_writes
     pg_source_connect_timeout
+    pg_source_replication_slot_failover
     pg_source_snapshot_statement_timeout
     pg_source_tcp_configure_server
     pg_source_tcp_keepalives_idle
