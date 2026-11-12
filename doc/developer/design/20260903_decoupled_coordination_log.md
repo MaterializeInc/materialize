@@ -9,7 +9,15 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Tighten production native ingress after the remaining upsert launcher migration.
+Finish verification of the uncommitted native startup boundary. Clusterd now
+requires complete catalog arguments on every process, provisioning inputs are
+nonoptional, and process zero requires both native endpoints. Parser coverage
+checks omitted and partial context on leaders and nonleaders. The reconciliation
+fixture also checks generated native arguments for both processes. Formatting
+passes, but Rust compilation/tests and runtime verification are not yet run.
+Independent static review found no blocking issues. The upsert fixture has finished and cleaned up. Run the targeted Rust checks
+on scratch before committing the startup boundary. Public Rust ownership selectors and their attached legacy
+branches remain the next removal, not a completed outcome.
 The limits launchers now declare inventory before starting every process and
 refresh IDs after catalog resets. Generator definitions and counts are unchanged.
 Unit checks cover ordering, missing inventory, nonleader context and fresh IDs.
@@ -25,17 +33,22 @@ Historical launches and the unsupported-upgrade guard remain unchanged. This is
 not full platform-scenario acceptance. Evidence:
 `native-driver-scratch/platform-action-evidence/aj-native-cluster-dfe8ab86/`.
 
-The separate upsert load-test launcher still needs migration. Its scenario list
-combines two cases into one malformed tuple. Approval to split that tuple was
-requested before expanding scope. Other launcher work can proceed meanwhile.
+The upsert load-test launcher migration passes its boundary test and independent
+review. The unchanged full input, initial ingestion and reachable rehydration
+scenarios passed on scratch. The workflow then failed at the pre-existing
+four-element scenario tuple. Approval to split it remains pending. Do not call
+this full-workflow acceptance. Source, original SQL payload, unchanged OOM
+counters and teardown receipts are preserved in
+`native-driver-scratch/upsert-load-evidence/aj-native-cluster-f8933d08/`.
 See `native-external-launcher-audit.md`, `native-replica-execution-boundary.md`
-and `final-preflight-boundary-research.md` for the remaining boundaries.
+and `final-preflight-boundary-research.md` for the remaining boundaries. The current
+production-ingress caller audit is `native-ingress-current-audit.md`.
 
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
 instance-specific `native-driver-scratch/remote.py`. No access rules changed.
-Completed runtime fixtures are removed. Keep the compiled candidate and evidence
-before releasing the worker.
+Completed runtime fixtures, including the upsert load test, are removed.
+Keep the compiled candidate and evidence before releasing the worker.
 
 Do not run heavy suites or builds on the local VM. Polling reserves did not prevent
 an overload that required a restart. Scratch test containers must share the

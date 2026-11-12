@@ -14,6 +14,7 @@
 Test Kafka Upsert sources using Testdrive.
 """
 
+from contextlib import ExitStack
 from textwrap import dedent
 
 from materialize import MZ_ROOT, ci_util
@@ -537,30 +538,52 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     backpressure_bytes = 50 * 1024 * 1024  # 50MB
 
     c.down(destroy_volumes=True)
-    c.up("redpanda", "materialized", "clusterd1")
+    c.up("redpanda", "materialized")
     # initial hydration
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"),
-        Materialized(
-            options=[
-                "--orchestrator-process-scratch-directory=/scratch",
-            ],
-            additional_system_parameter_defaults={
-                # Force backpressure to be enabled.
-                "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
-                "storage_dataflow_max_inflight_bytes_disk_only": "true",
-            },
-            environment_extra=materialized_environment_extra,
-            default_replication_factor=2,
-            support_external_clusterd=True,
+    with (
+        c.override(
+            Testdrive(
+                no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"
+            ),
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                },
+                environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
+                support_external_clusterd=True,
+            ),
         ),
-        Clusterd(
-            name="clusterd1",
-        ),
+        ExitStack() as replica,
     ):
+
         c.rm("testdrive")
         c.up(Service("testdrive", idle=True))
         c.exec("testdrive", "load-test/setup.td")
+        [(cluster_id, replica_id)] = c.sql_query("""
+            SELECT c.id, r.id FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'c1' AND r.name = 'r1'
+        """)
+        replica.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *native_catalog_options(c),
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
+        c.exec("testdrive", "load-test/source.td")
         c.testdrive(dedent("""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "AAA":"START MARKER"
