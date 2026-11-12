@@ -284,7 +284,6 @@ async fn start_runtime(
     let mut compute = mz_compute::server::serve(
         timely.clone(),
         ComputeRuntimeRole::Solo,
-        true,
         &registry,
         Arc::clone(&clients),
         TxnsContext::default(),
@@ -299,7 +298,6 @@ async fn start_runtime(
     .unwrap();
     let mut storage = mz_storage::server::serve_with_replica(
         timely,
-        true,
         &registry,
         Arc::clone(&clients),
         TxnsContext::default(),

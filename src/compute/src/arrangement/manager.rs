@@ -15,14 +15,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use timely::PartialOrder;
-use timely::dataflow::Scope;
-use timely::dataflow::operators::CapabilitySet;
-use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
@@ -105,149 +99,22 @@ impl TraceManager {
     }
 }
 
-/// Handle to a trace that can be padded.
-///
-/// A padded trace contains empty data for all times greater than or equal to its `padded_since`
-/// and less than the logical compaction frontier of the inner `trace`.
-///
-/// This type is intentionally limited to only work with `mz_repr::Timestamp` times, because that
-/// is all that's required by `TraceManager`. It can be made to be more generic, at the cost of
-/// more complicated reasoning about the correct management of the involved frontiers.
-#[derive(Clone)]
-pub struct PaddedTrace<Tr>
-where
-    Tr: TraceReader,
-{
-    /// The wrapped trace.
-    trace: Tr,
-    /// The frontier from which the trace is padded, or `None` if it is not padded.
-    ///
-    /// Invariant: The contained frontier is less than the logical compaction frontier of `trace`.
-    ///
-    /// All methods of `PaddedTrace` are written to uphold this invariant. In particular,
-    /// `set_logical_compaction_frontier`  sets the `padded_since` to `None` if the new compaction
-    /// frontier is >= the previous compaction frontier of `trace`.
-    padded_since: Option<Antichain<Tr::Time>>,
-}
-
-impl<Tr> From<Tr> for PaddedTrace<Tr>
-where
-    Tr: TraceReader,
-{
-    fn from(trace: Tr) -> Self {
-        Self {
-            trace,
-            padded_since: None,
-        }
-    }
-}
-
-impl<Tr> PaddedTrace<Tr>
-where
-    Tr: TraceReader,
-{
-    /// Turns this trace into a padded version that reports empty data for all times less than the
-    /// trace's current logical compaction frontier.
-    fn into_padded(mut self) -> Self {
-        let trace_since = self.trace.get_logical_compaction();
-        let minimum_frontier = Antichain::from_elem(Tr::Time::minimum());
-        if PartialOrder::less_than(&minimum_frontier.borrow(), &trace_since) {
-            self.padded_since = Some(minimum_frontier);
-        }
-        self
-    }
-}
-
-impl<Tr> TraceReader for PaddedTrace<Tr>
-where
-    Tr: TraceReader,
-{
-    type Time = Tr::Time;
-    type Batch = Tr::Batch;
-
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
-        self.trace.batches_through(upper)
-    }
-
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
-        let Some(padded_since) = &mut self.padded_since else {
-            self.trace.set_logical_compaction(frontier);
-            return;
-        };
-
-        // If a padded trace is compacted to some frontier less than the inner trace's compaction
-        // frontier, advance the `padded_since`. Otherwise discard the padding and apply the
-        // compaction to the inner trace instead.
-        let trace_since = self.trace.get_logical_compaction();
-        if PartialOrder::less_than(&frontier, &trace_since) {
-            if PartialOrder::less_than(&padded_since.borrow(), &frontier) {
-                *padded_since = frontier.to_owned();
-            }
-        } else {
-            self.padded_since = None;
-            self.trace.set_logical_compaction(frontier);
-        }
-    }
-
-    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        match &self.padded_since {
-            Some(since) => since.borrow(),
-            None => self.trace.get_logical_compaction(),
-        }
-    }
-
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
-        self.trace.set_physical_compaction(frontier);
-    }
-
-    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.trace.get_physical_compaction()
-    }
-
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
-        self.trace.map_batches(f)
-    }
-}
-
-impl<Tr> PaddedTrace<TraceAgent<Tr>>
-where
-    Tr: TraceReader<Time = Timestamp> + 'static,
-{
-    /// Import a trace restricted to a specific time interval `[since, until)`.
-    pub fn import_frontier_core<'scope>(
-        &mut self,
-        scope: Scope<'scope, Tr::Time>,
-        name: &str,
-        since: Antichain<Tr::Time>,
-        until: Antichain<Tr::Time>,
-    ) -> (
-        Arranged<'scope, TraceFrontier<TraceAgent<Tr>>>,
-        ShutdownButton<CapabilitySet<Tr::Time>>,
-    ) {
-        self.trace.import_frontier_core(scope, name, since, until)
-    }
-}
-
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-    errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
+    oks: RowRowAgent<Timestamp, Diff>,
+    errs: ErrAgent<Timestamp, Diff>,
     to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new<O, E>(oks: O, errs: E) -> TraceBundle
-    where
-        O: Into<PaddedTrace<RowRowAgent<Timestamp, Diff>>>,
-        E: Into<PaddedTrace<ErrAgent<Timestamp, Diff>>>,
-    {
+    pub fn new(oks: RowRowAgent<Timestamp, Diff>, errs: ErrAgent<Timestamp, Diff>) -> TraceBundle {
         TraceBundle {
-            oks: oks.into(),
-            errs: errs.into(),
+            oks,
+            errs,
             to_drop: None,
         }
     }
@@ -264,12 +131,12 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+    pub fn oks_mut(&mut self) -> &mut RowRowAgent<Timestamp, Diff> {
         &mut self.oks
     }
 
     /// Returns a mutable reference to the `errs` trace.
-    pub fn errs_mut(&mut self) -> &mut PaddedTrace<ErrAgent<Timestamp, Diff>> {
+    pub fn errs_mut(&mut self) -> &mut ErrAgent<Timestamp, Diff> {
         &mut self.errs
     }
 
@@ -281,8 +148,8 @@ impl TraceBundle {
     pub fn oks_errs_mut(
         &mut self,
     ) -> (
-        &mut PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-        &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
+        &mut RowRowAgent<Timestamp, Diff>,
+        &mut ErrAgent<Timestamp, Diff>,
     ) {
         (&mut self.oks, &mut self.errs)
     }
@@ -298,19 +165,5 @@ impl TraceBundle {
             &self.oks.get_logical_compaction(),
             &self.errs.get_logical_compaction(),
         )
-    }
-
-    /// Turns this trace bundle into a padded version that reports empty data for all times less
-    /// than the traces' current logical compaction frontier.
-    ///
-    /// Note that the padded bundle represents a different TVC than the original one, it is unsound
-    /// to use it to "uncompact" an existing TVC. The only valid use of the padded bundle is to
-    /// initializa a new TVC.
-    pub fn into_padded(self) -> Self {
-        Self {
-            oks: self.oks.into_padded(),
-            errs: self.errs.into_padded(),
-            to_drop: self.to_drop,
-        }
     }
 }

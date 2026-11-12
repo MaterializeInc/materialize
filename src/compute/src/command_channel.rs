@@ -65,7 +65,6 @@ pub enum UnifiedCommand {
 /// Origin carried through worker 0's common command order.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Origin {
-    Lifecycle(Uuid),
     Query(Uuid),
     /// Runtime-owned maintained commands, independent of transport connections.
     Replica,

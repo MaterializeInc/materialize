@@ -40,7 +40,6 @@ use crate::storage_state::{StorageInstanceContext, Worker};
 /// Dropping the last owner joins the worker threads.
 pub struct StorageServer {
     runtime: Arc<Mutex<TimelyContainer<Config>>>,
-    replica_owned: bool,
     replica: Option<ReplicaStorage>,
 }
 
@@ -48,21 +47,15 @@ impl StorageServer {
     /// Creates a connection factory retaining this runtime.
     pub fn client_builder(&self) -> impl Fn() -> Box<dyn StorageClient> + use<> {
         let runtime = Arc::clone(&self.runtime);
-        let replica_owned = self.replica_owned;
         move || -> Box<dyn StorageClient> {
             let client = mz_storage_client::client::RoleClient::new(ClusterClient::new(
                 Arc::clone(&runtime),
             ));
-            if replica_owned {
-                Box::new(QueryOnly(client))
-            } else {
-                Box::new(client)
-            }
+            Box::new(QueryOnly(client))
         }
     }
 
-    /// Takes the unique maintained endpoint, present only on process zero of a
-    /// replica-owned runtime.
+    /// Takes the unique maintained endpoint, present only on process zero.
     pub fn take_replica(&mut self) -> Option<ReplicaStorage> {
         self.replica.take()
     }
@@ -298,15 +291,10 @@ impl ReplicaStorageBuilder {
 /// Applies storage role validation and retains the Timely host for a guest connection.
 pub fn guest_client<C: StorageClient + 'static>(
     client: C,
-    replica_owned: bool,
     runtime: Arc<impl Send + Sync + 'static>,
 ) -> Box<dyn StorageClient> {
     let client = mz_storage_client::client::RoleClient::new(client);
-    let inner: Box<dyn StorageClient> = if replica_owned {
-        Box::new(QueryOnly(client))
-    } else {
-        Box::new(client)
-    };
+    let inner: Box<dyn StorageClient> = Box::new(QueryOnly(client));
     Box::new(GuestClient {
         inner,
         _runtime: runtime,
@@ -364,7 +352,6 @@ impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for QueryO
 /// Configures a dataflow server.
 #[derive(Clone)]
 struct Config {
-    replica_owned: bool,
     replica_ready: Arc<Mutex<Option<oneshot::Sender<ReplicaChannels>>>>,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
@@ -385,12 +372,10 @@ struct Config {
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
-/// Starts the storage runtime with optional native maintained control.
-/// Native ownership must agree across all processes. It disables lifecycle
-/// transport and exposes the maintained endpoint only on process zero.
+/// Starts a native storage runtime accepting only query connections.
+/// The maintained endpoint is exposed only on process zero.
 pub async fn serve_with_replica(
     timely_config: TimelyConfig,
-    replica_owned: bool,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -399,14 +384,13 @@ pub async fn serve_with_replica(
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
 ) -> Result<StorageServer, anyhow::Error> {
-    let (ready_tx, ready_rx) = if replica_owned && timely_config.process == 0 {
+    let (ready_tx, ready_rx) = if timely_config.process == 0 {
         let (tx, rx) = oneshot::channel();
         (Some(tx), Some(rx))
     } else {
         (None, None)
     };
     let config = Config {
-        replica_owned,
         replica_ready: Arc::new(Mutex::new(ready_tx)),
         persist_clients,
         txns_ctx,
@@ -437,7 +421,6 @@ pub async fn serve_with_replica(
     };
     Ok(StorageServer {
         runtime: timely_container,
-        replica_owned,
         replica,
     })
 }
@@ -469,22 +452,20 @@ impl ClusterSpec for Config {
             Arc::clone(&self.tracing_handle),
             self.shared_rocksdb_write_buffer_manager.clone(),
         );
-        if self.replica_owned {
-            let (commands, responses) = worker.enable_replica();
-            if worker.timely_worker.index() == 0 {
-                self.replica_ready
-                    .lock()
-                    .expect("poisoned")
-                    .take()
-                    .expect("replica owner registered")
-                    .send((
-                        commands,
-                        std::thread::current(),
-                        responses,
-                        worker.timely_worker.peers(),
-                    ))
-                    .unwrap_or_else(|_| panic!("replica owner lost during startup"));
-            }
+        let (commands, responses) = worker.enable_replica();
+        if worker.timely_worker.index() == 0 {
+            self.replica_ready
+                .lock()
+                .expect("poisoned")
+                .take()
+                .expect("replica owner registered")
+                .send((
+                    commands,
+                    std::thread::current(),
+                    responses,
+                    worker.timely_worker.peers(),
+                ))
+                .unwrap_or_else(|_| panic!("replica owner lost during startup"));
         }
         worker.run();
     }

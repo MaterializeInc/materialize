@@ -22,7 +22,7 @@ use timely::communication::Allocator;
 use tokio::sync::mpsc;
 
 use crate::metrics::ComputeMetrics;
-use crate::server::{ComputeRuntimeRole, ResponseEvent};
+use crate::server::ComputeRuntimeRole;
 
 use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
@@ -85,7 +85,8 @@ struct Harness {
     state: ComputeState,
     timely_worker: TimelyWorker,
     response_tx: ResponseSender,
-    responses: mpsc::UnboundedReceiver<ResponseEvent>,
+    _query_responses: mpsc::UnboundedReceiver<crate::server::ResponseEvent>,
+    responses: mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
 }
 
 impl Harness {
@@ -120,21 +121,22 @@ impl Harness {
         configure(&mut updates);
         updates.apply(&state.worker_config);
 
-        let timely_worker = TimelyWorker::new(
+        let mut timely_worker = TimelyWorker::new(
             WorkerConfig::default(),
             Allocator::Thread(Default::default()),
             Some(Instant::now()),
         );
 
-        let (response_tx, responses) = mpsc::unbounded_channel();
-        let mut response_tx = ResponseSender::new(response_tx, 0);
-        response_tx.set_nonce(Uuid::nil());
+        let (response_tx, query_responses) = mpsc::unbounded_channel();
+        let (progress_tx, responses) = crate::replica_progress::render(&mut timely_worker);
+        let response_tx = ResponseSender::new(response_tx, 0, progress_tx);
 
         Self {
             state,
             timely_worker,
             response_tx,
             responses,
+            _query_responses: query_responses,
         }
     }
 
@@ -201,18 +203,23 @@ impl Harness {
     /// The peek responses sent since this was last called, in the order they were sent.
     fn peek_responses(&mut self) -> Vec<(Uuid, PeekResponse)> {
         let mut responses = Vec::new();
-        while let Ok(event) = self.responses.try_recv() {
-            let ResponseEvent::Response(response, _nonce) = event else {
-                continue;
-            };
-            match response {
-                ComputeResponse::PeekResponse(uuid, response, _otel_ctx) => {
-                    responses.push((uuid, response))
+        // A FIFO marker makes negative assertions independent of Timely scheduling.
+        self.response_tx.send(ComputeResponse::QueryReady).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.timely_worker.step();
+            while let Ok((worker, response)) = self.responses.try_recv() {
+                assert_eq!(worker, 0);
+                match response {
+                    ComputeResponse::QueryReady => return responses,
+                    ComputeResponse::PeekResponse(uuid, response, _) => {
+                        responses.push((uuid, response));
+                    }
+                    other => panic!("a peek sweep sent {other:?}"),
                 }
-                other => panic!("a peek sweep sent {other:?}"),
             }
+            assert!(Instant::now() < deadline, "native progress stalled");
         }
-        responses
     }
 
     /// The walks each substrate has driven to an outcome, as `(inline, offloaded)`.
@@ -353,10 +360,9 @@ fn walk_cost(keys: &[Row]) -> usize {
 ///
 /// The commands a worker has queued are drained in full before it sweeps its pending peeks,
 /// and `handle_peek` runs a peek's first slice as the peek arrives. On a fresh replica that
-/// drain is the controller's whole history: the `CreateInstance` that builds this state, the
-/// `UpdateConfiguration` that turns the offload on, and then every peek the controller
-/// re-sends. A budget armed only where an activation begins would grant each of those peeks
-/// unbounded fuel, and unbounded fuel never suspends, so each would walk to its answer on a
+/// drain can include `CreateInstance`, the `UpdateConfiguration` that turns the offload
+/// on, and a burst of peeks. A budget armed only where an activation begins would grant each
+/// of those peeks unbounded fuel, and unbounded fuel never suspends, so each would walk to its answer on a
 /// worker that is hydrating and holding the largest backlog it will ever hold.
 #[mz_ore::test(tokio::test)]
 async fn a_peek_arriving_before_any_sweep_is_granted_a_bounded_slice() {
@@ -415,9 +421,8 @@ async fn an_idle_activation_refills_the_aggregate() {
 
 /// An activation that finds nothing pending reports no peek awaiting a turn.
 ///
-/// Cancellation removes a deferred peek from the queue, and `reconcile` empties the queue
-/// wholesale. Left set on a replica whose peeks all answer inline, the flag would make the
-/// worker ask for an extra iteration for every peek the replica ever serves.
+/// Cancellation can remove the last deferred peek from the queue. Left set on a replica
+/// whose peeks all answer inline, the flag would make the worker ask for an extra iteration for every peek the replica ever serves.
 #[mz_ore::test(tokio::test)]
 async fn an_idle_activation_reports_no_peek_awaiting_a_turn() {
     let mut harness = Harness::new(|updates| {
@@ -780,7 +785,7 @@ async fn cancelling_a_passed_over_peek_leaves_the_rest_in_turn() {
 /// worker from parking on it.
 ///
 /// `handle_peek` runs a peek's first slice as the peek arrives, and a peek that finds the
-/// activation's budget spent is left pending there with no sweep to follow. `run_client` reads
+/// activation's budget spent is left pending there with no sweep to follow. `run_commands` reads
 /// this before it parks, and would otherwise park indefinitely at a zero maintenance interval:
 /// the peeks that spent the budget were answered or offloaded, and neither leaves an activation
 /// behind.

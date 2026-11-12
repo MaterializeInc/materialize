@@ -69,7 +69,6 @@ impl NativeCompute {
             let (server, storage, _factory) = mz_compute::server::serve_unified(
                 timely,
                 ComputeRuntimeRole::Solo,
-                true,
                 &registry,
                 persist,
                 txns,
@@ -84,7 +83,6 @@ impl NativeCompute {
         } else {
             let mut storage = mz_storage::server::serve_with_replica(
                 timely.clone(),
-                true,
                 &registry,
                 Arc::clone(&persist),
                 txns.clone(),
@@ -97,7 +95,6 @@ impl NativeCompute {
             let server = mz_compute::server::serve(
                 timely,
                 ComputeRuntimeRole::Solo,
-                true,
                 &registry,
                 persist,
                 txns,

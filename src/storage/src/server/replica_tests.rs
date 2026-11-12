@@ -153,7 +153,6 @@ async fn native_storage_outlives_queries() {
             addresses: vec!["127.0.0.1:0".into()],
             ..Default::default()
         },
-        true,
         &registry,
         Arc::new(PersistClientCache::new_no_metrics()),
         TxnsContext::default(),

@@ -43,14 +43,13 @@ fn sequencer_all_workers_observe_one_order() {
         };
         let (compute_tx, rx) = render(worker, Some(lane_input));
 
-        // Worker 0 broadcasts compute commands, as the sole connection to the compute
-        // controller. Every worker injects its own uniquely tagged storage-internal commands.
-        let nonce = Uuid::from_u128(1);
+        // Worker 0 broadcasts maintained compute commands. Every worker injects
+        // its own uniquely tagged storage-internal commands.
         if worker_id == 0 {
             for _ in 0..COMPUTE_COMMANDS {
                 compute_tx.send((
                     Some(ComputeCommand::InitializationComplete),
-                    Origin::Lifecycle(nonce),
+                    Origin::Replica,
                 ));
             }
         }

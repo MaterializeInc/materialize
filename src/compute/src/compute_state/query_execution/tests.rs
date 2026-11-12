@@ -35,6 +35,8 @@ struct Harness {
     worker: TimelyWorker,
     sender: ResponseSender,
     responses: mpsc::UnboundedReceiver<ResponseEvent>,
+    progress: mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
+    progress_dataflow: usize,
 }
 
 impl Harness {
@@ -56,19 +58,22 @@ impl Harness {
             1,
             Arc::new(PeekPermits::new(1)),
         );
-        let worker = TimelyWorker::new(
+        let mut worker = TimelyWorker::new(
             WorkerConfig::default(),
             Allocator::Thread(Default::default()),
             Some(Instant::now()),
         );
         let (sender, responses) = mpsc::unbounded_channel();
-        let mut sender = ResponseSender::new(sender, 0);
-        sender.set_nonce(Uuid::nil());
+        let progress_dataflow = worker.next_dataflow_index();
+        let (progress_tx, progress) = crate::replica_progress::render(&mut worker);
+        let sender = ResponseSender::new(sender, 0, progress_tx);
         Self {
             state,
             worker,
             sender,
             responses,
+            progress,
+            progress_dataflow,
         }
     }
 
@@ -105,6 +110,24 @@ impl Harness {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Drain the native FIFO through a marker without polling query execution.
+    fn drain_progress(&mut self) -> Vec<ComputeResponse> {
+        self.sender.send(ComputeResponse::QueryReady).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut responses = Vec::new();
+        loop {
+            self.worker.step();
+            while let Ok((worker, response)) = self.progress.try_recv() {
+                assert_eq!(worker, 0);
+                if response == ComputeResponse::QueryReady {
+                    return responses;
+                }
+                responses.push(response);
+            }
+            assert!(Instant::now() < deadline, "native progress stalled");
+        }
     }
 
     fn create(&mut self, nonce: Uuid, as_of: Timestamp) {
@@ -435,7 +458,7 @@ async fn drop_before_reader_acquisition_resolves_creation_once() {
     assert!(results[0].2.is_some());
     assert!(h.state.queries[&A].flows.is_empty());
     assert!(h.state.queries[&A].collections.is_empty());
-    assert!(h.worker.installed_dataflows().is_empty());
+    assert_eq!(h.worker.installed_dataflows(), vec![h.progress_dataflow]);
 }
 
 #[mz_ore::test(tokio::test)]
@@ -451,7 +474,7 @@ async fn busy_query_scopes_share_budget_without_starvation() {
     for nonce in [A, B] {
         h.open(nonce);
     }
-    // Arrivals queue behind an exhausted activation. Only the lifecycle sweep
+    // Arrivals queue behind an exhausted activation. Only the worker sweep
     // starts the next activation, not connection entry or query polling.
     assert!(h.state.peek_budget.grant().is_some());
     h.state.peek_budget.charge(1);
@@ -482,7 +505,7 @@ async fn busy_query_scopes_share_budget_without_starvation() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn maintained_import_chain_progresses_after_lifecycle_drops() {
+async fn maintained_import_chain_progresses_after_export_drops() {
     use mz_persist_client::Diagnostics;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_storage_types::sources::SourceData;
@@ -536,18 +559,17 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
         }
         .drop_collection(id);
     }
-    let dropped = h.drain();
+    let dropped = h.drain_progress();
     assert!(
-        dropped.iter().any(|(response, nonce)| {
-            *nonce == Uuid::nil()
-                && matches!(response, ComputeResponse::Frontiers(id, frontiers)
+        dropped.iter().any(|response| {
+            matches!(response, ComputeResponse::Frontiers(id, frontiers)
                 if *id == UPSTREAM
                     && frontiers.read_frontier.as_ref().is_some_and(|f| f.is_empty())
                     && !frontiers.input_frontier.as_ref().is_some_and(|f| f.is_empty()))
         }),
         "DROP must retire admission without claiming that retained execution has stopped"
     );
-    // Write only after lifecycle deletion. A saved snapshot cannot satisfy this read.
+    // Write only after export deletion. A saved snapshot cannot satisfy this read.
     let row = crate::compute_state::index_peek_tests::ok_row(42);
     writer
         .compare_and_append(
@@ -579,9 +601,12 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
                 ComputeResponse::PeekResponse(id, response, _) if nonce == A && id == B => {
                     peek_response = Some(response);
                 }
-                ComputeResponse::Frontiers(id, frontiers)
-                    if nonce == Uuid::nil() && id == UPSTREAM =>
-                {
+                _ => (),
+            }
+        }
+        for response in h.drain_progress() {
+            match response {
+                ComputeResponse::Frontiers(id, frontiers) if id == UPSTREAM => {
                     if let Some(input) = frontiers.input_frontier {
                         assert!(
                             !input.is_empty(),
@@ -619,17 +644,13 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
         h.worker.step();
         h.poll();
         completed += h
-            .drain()
+            .drain_progress()
             .into_iter()
-            .filter(|(response, nonce)| match response {
-                ComputeResponse::Frontiers(id, frontiers)
-                    if *nonce == Uuid::nil() && *id == UPSTREAM =>
-                {
-                    frontiers
-                        .input_frontier
-                        .as_ref()
-                        .is_some_and(|f| f.is_empty())
-                }
+            .filter(|response| match response {
+                ComputeResponse::Frontiers(id, frontiers) if *id == UPSTREAM => frontiers
+                    .input_frontier
+                    .as_ref()
+                    .is_some_and(|f| f.is_empty()),
                 _ => false,
             })
             .count();
@@ -638,7 +659,7 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
         completed, 1,
         "execution completes once after the final reader closes"
     );
-    assert!(h.worker.installed_dataflows().is_empty());
+    assert_eq!(h.worker.installed_dataflows(), vec![h.progress_dataflow]);
 }
 
 #[mz_ore::test(tokio::test)]

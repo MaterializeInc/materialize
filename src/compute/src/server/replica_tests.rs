@@ -15,6 +15,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_persist_client::PersistLocation;
 use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::GenericClient;
+use timely::progress::Antichain;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -78,7 +79,6 @@ async fn replica_progress_outlives_query_factory() {
             ..Default::default()
         },
         ComputeRuntimeRole::Solo,
-        true,
         &registry,
         Arc::new(PersistClientCache::new_no_metrics()),
         TxnsContext::default(),

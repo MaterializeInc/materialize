@@ -279,7 +279,6 @@ async fn sink_harness(case: SinkCase) {
     let mut compute = mz_compute::server::serve(
         timely.clone(),
         ComputeRuntimeRole::Solo,
-        true,
         &registry,
         Arc::clone(&clients),
         TxnsContext::default(),
@@ -294,7 +293,6 @@ async fn sink_harness(case: SinkCase) {
     .unwrap();
     let mut storage = mz_storage::server::serve_with_replica(
         timely,
-        true,
         &registry,
         Arc::clone(&clients),
         TxnsContext::default(),

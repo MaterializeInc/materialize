@@ -9,18 +9,31 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Remove the remaining public Rust ownership selectors and attached lifecycle
-replay/routing alternatives. The native startup boundary is verified: clusterd
-requires complete catalog arguments on every process, provisioning inputs are
-nonoptional, and process zero requires both native endpoints. All-target checks
-for clusterd/environmentd and executed parser/reconciliation tests pass against
-the exact source snapshot. Independent static review found no blocking issues.
-Evidence: `native-driver-scratch/native-ingress-check.log`,
-`native-ingress-tests.log` and `native-ingress-source-sha256.json`.
-The unoptimized test build reached its 32-GiB job cap without swap. Use one Cargo
-job for subsequent heavy builds, still under the aggregate scratch budget.
-Preserve query multiplexing, native command sequencing and endpoint-free
-nonleaders during that removal. See `native-ingress-current-audit.md`.
+Remove the remaining storage lifecycle branches and role-client alternatives.
+Public compute/storage runtime constructors are native-only. Compute nonce
+replacement/replay, context-free query admission, lifecycle routing, frontier
+silencing, replay-only trace padding and its unused counters are removed.
+Maintained responses use native progress. Query multiplexing, cancellation,
+shared ordering and delayed-local endpoint stashing remain.
+
+The exact final snapshot passes all-target checks and targeted native lifetime,
+query admission/isolation, peek fairness, ordering and trace-scan tests in the
+unoptimized build, without warnings. Independent review found no concrete
+correctness issue. Evidence: `native-driver-scratch/native-compute-final-check.log`
+and `native-compute-final-source-sha256.json`. Peak job memory was 14 GiB with no
+swap. This is targeted Rust coverage, not broad CI or a rebuilt-image lifecycle
+run. Nightly forced-migration workflows remain unchanged pending the explicit
+coverage decision below.
+
+Preserve shared command ordering and endpoint-free nonleaders during storage
+and role-client removal.
+See `native-ingress-current-audit.md` for the remaining boundaries.
+
+The mandatory startup contract is committed and verified by all-target checks,
+executed parser/reconciliation tests and independent review. Evidence:
+`native-driver-scratch/native-ingress-check.log`, `native-ingress-tests.log` and
+`native-ingress-source-sha256.json`. The unoptimized test build reached its
+32-GiB job cap with no new OOMs or swap. Use one Cargo job for heavy builds.
 The limits launchers now declare inventory before starting every process and
 refresh IDs after catalog resets. Generator definitions and counts are unchanged.
 Unit checks cover ordering, missing inventory, nonleader context and fresh IDs.
@@ -109,6 +122,13 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
 
 ## Live blockers and decisions
 
+- Asked whether to explicitly defer positive forced builtin-migration coverage
+  for M3 and mark its two nightly workflows unsupported while keeping rejection
+  and compatible-promotion coverage. These are current-build workflows, not
+  pre-native upgrades. Native startup rejects their force flags. Do not remove
+  guards or change them into ordinary promotion tests to claim preserved coverage.
+  Evidence and native continuity assertion options:
+  `native-builtin-migration-assertions.md`. Approval remains pending.
 - Catalog-free production replica ingress remains. The programmable native driver
   replacement is verified. External launchers still need native context and
   refreshed IDs on replica recreation. Preserve historical-image-only paths.

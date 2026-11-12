@@ -2299,16 +2299,6 @@ impl RetiringDataflow {
     }
 }
 
-impl ComputeState {
-    /// Retired exports belong to the previous maintained connection. Reconciliation
-    /// must not send their progress to a controller that no longer tracks them.
-    pub(crate) fn silence_retired_frontiers(&mut self) {
-        for retired in self.retiring_dataflows.values_mut() {
-            retired.inputs.clear();
-        }
-    }
-}
-
 /// State maintained for a compute collection.
 pub struct CollectionState {
     /// Tracks the frontiers that have been reported to the controller.

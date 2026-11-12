@@ -199,7 +199,6 @@ async fn exercise_liveness() {
             ..Default::default()
         },
         ComputeRuntimeRole::Solo,
-        true,
         &registry,
         Arc::clone(&fixture.clients),
         TxnsContext::default(),

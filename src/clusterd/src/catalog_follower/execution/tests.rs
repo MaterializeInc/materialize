@@ -610,7 +610,6 @@ pub(super) async fn start_runtime(
             ..Default::default()
         },
         ComputeRuntimeRole::Solo,
-        true,
         &registry,
         Arc::clone(&clients),
         TxnsContext::default(),

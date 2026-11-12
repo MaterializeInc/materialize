@@ -38,10 +38,6 @@ pub struct ComputeMetrics {
     history_command_count: raw::UIntGaugeVec,
     history_dataflow_count: raw::UIntGaugeVec,
 
-    // reconciliation
-    reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
-    reconciliation_replaced_dataflows_count_total: raw::IntCounterVec,
-
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
@@ -172,16 +168,6 @@ impl ComputeMetrics {
                 var_labels: ["worker_id"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Compute],
-            ), role)),
-            reconciliation_reused_dataflows_count_total: registry.register(with_role(metric!(
-                name: "mz_compute_reconciliation_reused_dataflows_count_total",
-                help: "The total number of dataflows that were reused during compute reconciliation.",
-                var_labels: ["worker_id"],
-            ), role)),
-            reconciliation_replaced_dataflows_count_total: registry.register(with_role(metric!(
-                name: "mz_compute_reconciliation_replaced_dataflows_count_total",
-                help: "The total number of dataflows that were replaced during compute reconciliation.",
-                var_labels: ["worker_id", "reason"],
             ), role)),
             arrangement_maintenance_seconds_total: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
@@ -522,60 +508,6 @@ impl WorkerMetrics {
         HistoryMetrics {
             command_counts,
             dataflow_count,
-        }
-    }
-
-    /// Record the reconciliation result for a single dataflow.
-    ///
-    /// Reconciliation is recorded as successful if the given properties all hold. Otherwise it is
-    /// recorded as unsuccessful, with a reason based on the first property that does not hold.
-    ///
-    /// The properties are:
-    ///  * compatible: The old and new dataflow descriptions are compatible.
-    ///  * uncompacted: Collections currently installed for the dataflow exports have not been
-    ///                 allowed to compact beyond that new dataflow as-of.
-    ///  * subscribe_free: The dataflow does not export a subscribe sink.
-    ///  * copy_to_free: The dataflow does not export a copy-to sink.
-    ///  * dependencies_retained: All local inputs to the dataflow were retained by compute
-    ///                           reconciliation.
-    pub fn record_dataflow_reconciliation(
-        &self,
-        compatible: bool,
-        uncompacted: bool,
-        subscribe_free: bool,
-        copy_to_free: bool,
-        dependencies_retained: bool,
-    ) {
-        if !compatible {
-            self.metrics
-                .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[self.worker_label.as_ref(), "incompatible"])
-                .inc();
-        } else if !uncompacted {
-            self.metrics
-                .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[self.worker_label.as_ref(), "compacted"])
-                .inc();
-        } else if !subscribe_free {
-            self.metrics
-                .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[self.worker_label.as_ref(), "subscribe"])
-                .inc();
-        } else if !copy_to_free {
-            self.metrics
-                .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[self.worker_label.as_ref(), "copy-to"])
-                .inc();
-        } else if !dependencies_retained {
-            self.metrics
-                .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[self.worker_label.as_ref(), "dependency"])
-                .inc();
-        } else {
-            self.metrics
-                .reconciliation_reused_dataflows_count_total
-                .with_label_values(&[&self.worker_label])
-                .inc();
         }
     }
 

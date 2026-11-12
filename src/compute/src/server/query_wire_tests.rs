@@ -24,6 +24,7 @@ fn query_worker(
     Worker<'_>,
     command_channel::Sender,
     mpsc::UnboundedReceiver<ResponseEvent>,
+    mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
 ) {
     let registry = MetricsRegistry::new();
     let metrics = ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
@@ -49,10 +50,11 @@ fn query_worker(
     );
     let (commands, command_rx) = command_channel::render(timely_worker, None);
     let (responses, response_rx) = mpsc::unbounded_channel();
+    let (progress_tx, progress) = crate::replica_progress::render(timely_worker);
     let worker = Worker {
         timely_worker,
         command_rx: CommandReceiver::new(command_rx, 0),
-        response_tx: ResponseSender::new(responses, 0),
+        response_tx: ResponseSender::new(responses, 0, progress_tx),
         compute_state: Some(state),
         metrics,
         persist_clients,
@@ -64,7 +66,7 @@ fn query_worker(
         peek_permits,
         storage: None,
     };
-    (worker, commands, response_rx)
+    (worker, commands, response_rx, progress)
 }
 
 pub(super) fn constant_dataflow(
@@ -115,6 +117,7 @@ struct AdmissionHarness<'w> {
     worker: Worker<'w>,
     commands: command_channel::Sender,
     responses: mpsc::UnboundedReceiver<ResponseEvent>,
+    progress: mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
 }
 
 impl AdmissionHarness<'_> {
@@ -122,7 +125,7 @@ impl AdmissionHarness<'_> {
         self.commands.send((command, Origin::Query(nonce)));
     }
 
-    fn lifecycle(&self, command: ComputeCommand) {
+    fn replica(&self, command: ComputeCommand) {
         self.commands.send((Some(command), Origin::Replica));
     }
 
@@ -146,7 +149,7 @@ impl AdmissionHarness<'_> {
         let mut responses = Vec::new();
         loop {
             self.worker.timely_worker.step();
-            assert!(self.worker.handle_pending_commands().is_ok());
+            self.worker.handle_pending_commands();
             self.worker.activate_compute().unwrap().process_peeks();
             self.worker
                 .compute_state
@@ -164,23 +167,35 @@ impl AdmissionHarness<'_> {
                 }
             }
             if finished {
-                return responses;
+                // The query barrier and native progress use different FIFOs. Drain
+                // progress through its own marker before making negative assertions.
+                self.worker
+                    .response_tx
+                    .send(ComputeResponse::QueryReady)
+                    .unwrap();
+                loop {
+                    self.worker.timely_worker.step();
+                    while let Ok((worker, response)) = self.progress.try_recv() {
+                        assert_eq!(worker, 0);
+                        if response == ComputeResponse::QueryReady {
+                            return responses;
+                        }
+                        // Nil denotes native progress only in this assertion projection.
+                        responses.push((response, Uuid::nil()));
+                    }
+                    assert!(Instant::now() < deadline, "native progress stalled");
+                }
             }
             assert!(Instant::now() < deadline, "query sequencer stalled");
         }
     }
 }
 
-fn with_query_worker(
-    native: bool,
-    test: impl FnOnce(&mut AdmissionHarness<'_>) + Send + Sync + 'static,
-) {
+fn with_query_worker(test: impl FnOnce(&mut AdmissionHarness<'_>) + Send + Sync + 'static) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _guard = runtime.enter();
     timely::execute_directly(move |timely_worker| {
-        let (mut worker, commands, responses) = query_worker(timely_worker);
-        worker.command_rx.replica_owned = native;
-        worker.set_nonce(Uuid::nil());
+        let (mut worker, commands, responses, progress) = query_worker(timely_worker);
         worker
             .compute_state
             .as_mut()
@@ -191,6 +206,7 @@ fn with_query_worker(
             worker,
             commands,
             responses,
+            progress,
         };
         test(&mut h);
         for id in h.worker.timely_worker.installed_dataflows() {
@@ -224,13 +240,13 @@ fn catalog_dataflow(request_id: Uuid, position: Option<CatalogPosition>) -> Comp
 
 #[mz_ore::test]
 fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo() {
-    with_query_worker(true, |h| {
+    with_query_worker(|h| {
         let query = Uuid::new_v4();
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
         let required = catalog_position();
         h.open(query);
-        h.lifecycle(ComputeCommand::UpdateConfiguration(Box::new(
+        h.replica(ComputeCommand::UpdateConfiguration(Box::new(
             ComputeParameters {
                 max_result_size: Some(0),
                 ..Default::default()
@@ -251,7 +267,7 @@ fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo()
             )]
         );
 
-        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(
+        h.replica(ComputeCommand::ApplyCatalogPosition(Box::new(
             CatalogPosition {
                 upper: Timestamp::from(9),
                 ..required
@@ -279,7 +295,7 @@ fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo()
         );
         assert!(h.flush().is_empty());
 
-        h.lifecycle(ComputeCommand::UpdateConfiguration(Box::new(
+        h.replica(ComputeCommand::UpdateConfiguration(Box::new(
             ComputeParameters {
                 max_result_size: Some(u64::MAX),
                 ..Default::default()
@@ -289,7 +305,7 @@ fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo()
             h.flush().is_empty(),
             "configuration alone does not certify a prefix"
         );
-        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        h.replica(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
         let responses = h.flush();
         assert_eq!(responses.len(), 2, "{responses:?}");
         assert!(
@@ -306,11 +322,11 @@ fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo()
 
 #[mz_ore::test]
 fn native_catalog_admission_rejects_missing_context_and_wrong_scope() {
-    with_query_worker(true, |h| {
+    with_query_worker(|h| {
         let query = Uuid::new_v4();
         let applied = catalog_position();
         h.open(query);
-        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(applied)));
+        h.replica(ComputeCommand::ApplyCatalogPosition(Box::new(applied)));
         h.flush();
         let installed = h.worker.timely_worker.next_dataflow_index();
         for position in [
@@ -344,7 +360,7 @@ fn native_catalog_admission_rejects_missing_context_and_wrong_scope() {
 
 #[mz_ore::test]
 fn native_catalog_wait_cleanup_overtakes_without_later_execution() {
-    with_query_worker(true, |h| {
+    with_query_worker(|h| {
         let canceled = Uuid::new_v4();
         let disconnected = Uuid::new_v4();
         let request = Uuid::new_v4();
@@ -388,7 +404,7 @@ fn native_catalog_wait_cleanup_overtakes_without_later_execution() {
         );
         assert_eq!(h.worker.timely_worker.next_dataflow_index(), installed);
 
-        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        h.replica(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
         assert!(
             h.flush().is_empty(),
             "cleanup must not leave work to release later"
@@ -401,24 +417,6 @@ fn native_catalog_wait_cleanup_overtakes_without_later_execution() {
         assert!(responses.iter().any(|(r, n)| *n == canceled && matches!(r,
             ComputeResponse::QueryDataflowResponse { request_id, error: None } if *request_id == request)));
         assert!(responses.iter().any(|(r, n)| *n == canceled
-            && matches!(r,
-            ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) if *id == request)));
-    });
-}
-
-#[mz_ore::test]
-fn legacy_queries_do_not_require_catalog_context() {
-    with_query_worker(false, |h| {
-        let query = Uuid::new_v4();
-        let request = Uuid::new_v4();
-        h.open(query);
-        h.flush();
-        h.query(query, Some(catalog_dataflow(request, None)));
-        h.query(query, Some(catalog_peek(request, None)));
-        let responses = h.flush();
-        assert!(responses.iter().any(|(r, n)| *n == query && matches!(r,
-            ComputeResponse::QueryDataflowResponse { request_id, error: None } if *request_id == request)));
-        assert!(responses.iter().any(|(r, n)| *n == query
             && matches!(r,
             ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) if *id == request)));
     });
@@ -448,172 +446,152 @@ fn routing_retirement_without_local_endpoint_is_bounded() {
                 .observe(ResponseEvent::Response(ComputeResponse::QueryReady, nonce))
                 .is_none()
         );
-        routing.observe(ResponseEvent::Lifecycle(nonce));
-        routing
-            .stashed
-            .entry(nonce)
-            .or_default()
-            .push(ComputeResponse::QueryReady);
-        routing.observe(ResponseEvent::Lifecycle(Uuid::new_v4()));
-        assert!(routing.stashed.is_empty());
     }
 }
 
 #[mz_ore::test]
-fn unfinished_lifecycle_initialization_services_queries() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let _guard = runtime.enter();
-    let handle = runtime.handle().clone();
-    timely::execute_directly(move |timely_worker| {
-        let (mut worker, commands, mut response_rx) = query_worker(timely_worker);
-        let state = worker.compute_state.take();
-        let early_query = Uuid::new_v4();
-        worker.command_rx.deferred_queries.extend([
-            (
-                Some(ComputeCommand::HelloQuery { nonce: early_query }),
-                early_query,
-            ),
-            (None, early_query),
+fn queries_wait_for_native_initialization_and_catalog_without_blocking_siblings() {
+    with_query_worker(|h| {
+        let state = h.worker.compute_state.take();
+        let early = Uuid::new_v4();
+        h.worker.command_rx.deferred_queries.extend([
+            (Some(ComputeCommand::HelloQuery { nonce: early }), early),
+            (None, early),
         ]);
-        worker.handle_deferred_queries();
-        assert_eq!(worker.command_rx.deferred_queries.len(), 2);
-        worker.compute_state = state;
+        h.worker.handle_deferred_queries();
+        assert_eq!(h.worker.command_rx.deferred_queries.len(), 2);
+        assert!(h.responses.try_recv().is_err());
+        h.worker.compute_state = state;
+        h.worker.handle_deferred_queries();
+        assert!(
+            matches!(h.responses.try_recv().unwrap(), ResponseEvent::QueryOpen(n) if n == early)
+        );
+        assert!(matches!(h.responses.try_recv().unwrap(),
+            ResponseEvent::Response(ComputeResponse::QueryReady, n) if n == early));
+        assert!(
+            matches!(h.responses.try_recv().unwrap(), ResponseEvent::QueryRetired(n) if n == early)
+        );
+        assert!(h.responses.try_recv().is_err());
+        assert!(h.worker.command_rx.deferred_queries.is_empty());
 
-        // A pending peek keeps this producer alive across export retirement.
-        // It will finish while the replacement lifecycle is still initializing.
-        let retired_id = mz_repr::GlobalId::User(2);
-        let dataflow = constant_dataflow(retired_id);
-        worker.set_nonce(Uuid::new_v4());
-        let mut active = worker.activate_compute().expect("initialized worker");
-        active.handle_compute_command(ComputeCommand::CreateDataflow(Box::new(dataflow)));
-        active.handle_compute_command(ComputeCommand::Schedule(retired_id));
-        let reader = Uuid::new_v4();
-        let peek_id = Uuid::new_v4();
-        let mut peek = crate::compute_state::index_peek_tests::index_peek_with_uuid(peek_id, None);
-        peek.target = mz_compute_client::protocol::command::PeekTarget::Index { id: retired_id };
-        let state = worker.compute_state.as_mut().expect("initialized worker");
-        for command in [
-            ComputeCommand::HelloQuery { nonce: reader },
-            ComputeCommand::SetQueryMaxResultSize {
-                max_result_size: u64::MAX,
-            },
-            ComputeCommand::Peek(Box::new(peek)),
-        ] {
-            state.handle_query_command(
-                worker.timely_worker,
-                Some(command),
-                reader,
-                &mut worker.response_tx,
-            );
-        }
-        worker
-            .activate_compute()
-            .expect("initialized worker")
-            .handle_compute_command(ComputeCommand::AllowCompaction {
-                id: retired_id,
-                frontier: timely::progress::Antichain::new(),
-            });
-        let lifecycle = Uuid::new_v4();
-        worker.command_rx.nonce = Some(lifecycle);
-        worker.set_nonce(lifecycle);
-        let replacement = Uuid::new_v4();
-        let task =
-            mz_ore::task::RuntimeExt::spawn_named(&handle, || "query-reconnect-test", async move {
-                let query = Uuid::new_v4();
-                commands.send((
-                    Some(ComputeCommand::UpdateConfiguration(Default::default())),
-                    Origin::Lifecycle(lifecycle),
-                ));
-                commands.send((
-                    Some(ComputeCommand::HelloQuery { nonce: query }),
-                    Origin::Query(query),
-                ));
-                let result = tokio::time::timeout(Duration::from_secs(10), async {
-                    let mut ready = false;
-                    let mut peek_finished = false;
-                    while !(ready && peek_finished) {
-                        let event = response_rx
-                            .recv()
-                            .await
-                            .ok_or("worker response channel closed")?;
-                        if matches!(&event,
-                            ResponseEvent::Response(ComputeResponse::Frontiers(id, _), n)
-                                if *id == retired_id && *n == lifecycle
-                        ) {
-                            return Err("retired progress crossed the lifecycle nonce boundary");
-                        }
-                        ready |= matches!(
-                            &event,
-                            ResponseEvent::Response(ComputeResponse::QueryReady, n) if *n == query
-                        );
-                        peek_finished |= matches!(&event,
-                            ResponseEvent::Response(
-                                ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _), n
-                            )
-                                if *id == peek_id && *n == reader
-                        );
-                    }
-                    commands.send((None, Origin::Query(query)));
-                    loop {
-                        let event = response_rx
-                            .recv()
-                            .await
-                            .ok_or("worker response channel closed")?;
-                        if matches!(&event,
-                            ResponseEvent::Response(ComputeResponse::Frontiers(id, _), n)
-                                if *id == retired_id && *n == lifecycle
-                        ) {
-                            return Err("retired progress crossed the lifecycle nonce boundary");
-                        }
-                        if matches!(event, ResponseEvent::QueryRetired(n) if n == query) {
-                            break;
-                        }
-                    }
-                    Ok(())
-                })
-                .await;
-                // End the wait without ever completing the pending initialization.
-                commands.send((
-                    Some(ComputeCommand::InitializationComplete),
-                    Origin::Lifecycle(replacement),
-                ));
-                result
-                    .expect("queries complete during initialization")
-                    .expect("retirement stays within its lifecycle");
-            });
-        assert!(matches!(worker.reconcile(), Err(NonceChange(n)) if n == replacement));
-        handle.block_on(task);
-        worker.timely_worker.drop_dataflow(0);
+        let waiting = Uuid::new_v4();
+        let sibling = Uuid::new_v4();
+        let request = Uuid::new_v4();
+        let required = catalog_position();
+        h.open(waiting);
+        h.flush();
+        h.query(waiting, Some(catalog_peek(request, Some(required))));
+        h.query(waiting, Some(catalog_dataflow(request, Some(required))));
+        let installed = h.worker.timely_worker.next_dataflow_index();
+        let responses = h.flush();
+        assert_eq!(
+            responses,
+            vec![(
+                ComputeResponse::CatalogCatchup(Box::new(required)),
+                Uuid::nil()
+            )]
+        );
+        assert_eq!(h.worker.timely_worker.next_dataflow_index(), installed);
+        h.open(sibling);
+        assert!(h.flush().contains(&(ComputeResponse::QueryReady, sibling)));
+        h.query(sibling, None);
+        assert!(h.flush().is_empty());
+
+        h.replica(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        let responses = h.flush();
+        assert!(responses.iter().any(|(r, n)| *n == waiting
+            && matches!(r,
+            ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) if *id == request)));
+        assert!(responses.iter().any(|(r, n)| *n == waiting && matches!(r,
+            ComputeResponse::QueryDataflowResponse { request_id, error: None } if *request_id == request)));
     });
 }
 
 #[mz_ore::test]
-fn query_origin_does_not_change_lifecycle_nonce() {
+fn pending_query_peek_survives_export_retirement_while_siblings_connect() {
+    with_query_worker(|h| {
+        let export = GlobalId::User(2);
+        let reader = Uuid::new_v4();
+        let sibling = Uuid::new_v4();
+        let request = Uuid::new_v4();
+        let required = catalog_position();
+        let mut active = h.worker.activate_compute().unwrap();
+        active.handle_compute_command(ComputeCommand::CreateDataflow(Box::new(constant_dataflow(
+            export,
+        ))));
+        active.handle_compute_command(ComputeCommand::Schedule(export));
+        // Admit the peek before servicing the producer, then retire its public export.
+        h.worker
+            .handle_command(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        let mut peek = index_peek_with_uuid(request, None);
+        peek.target = mz_compute_client::protocol::command::PeekTarget::Index { id: export };
+        peek.catalog_position = Some(required);
+        h.worker.command_rx.deferred_queries.extend([
+            (Some(ComputeCommand::HelloQuery { nonce: reader }), reader),
+            (
+                Some(ComputeCommand::SetQueryMaxResultSize {
+                    max_result_size: u64::MAX,
+                }),
+                reader,
+            ),
+            (Some(ComputeCommand::Peek(Box::new(peek))), reader),
+        ]);
+        h.worker.handle_deferred_queries();
+        h.worker.activate_compute().unwrap().handle_compute_command(
+            ComputeCommand::AllowCompaction {
+                id: export,
+                frontier: timely::progress::Antichain::new(),
+            },
+        );
+        h.open(sibling);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut ready = false;
+        let mut finished = false;
+        while !(ready && finished) {
+            for (response, nonce) in h.flush() {
+                ready |= nonce == sibling && response == ComputeResponse::QueryReady;
+                if let ComputeResponse::PeekResponse(id, response, _) = response {
+                    assert_eq!((id, nonce), (request, reader));
+                    assert!(matches!(response, PeekResponse::Rows(_)));
+                    assert!(!finished, "peek answered twice");
+                    finished = true;
+                }
+            }
+            assert!(Instant::now() < deadline, "retained peek stalled");
+        }
+        h.query(sibling, None);
+        assert!(
+            !h.flush()
+                .iter()
+                .any(|(response, _)| matches!(response, ComputeResponse::PeekResponse(..))),
+            "peek answered twice"
+        );
+    });
+}
+
+#[mz_ore::test]
+fn query_origin_is_deferred_without_consuming_replica_commands() {
     timely::execute_directly(|worker| {
         let (tx, rx) = command_channel::render(worker, None);
         let mut receiver = CommandReceiver::new(rx, 0);
         let query = Uuid::new_v4();
-        let lifecycle = Uuid::new_v4();
         tx.send((
             Some(ComputeCommand::HelloQuery { nonce: query }),
             Origin::Query(query),
         ));
         tx.send((
             Some(ComputeCommand::InitializationComplete),
-            Origin::Lifecycle(lifecycle),
+            Origin::Replica,
         ));
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match receiver.try_recv() {
-                Err(NonceChange(nonce)) => {
-                    assert_eq!(nonce, lifecycle);
-                    break;
-                }
-                Ok(None) => {
+                Some(WorkerCommand::Compute(ComputeCommand::InitializationComplete)) => break,
+                None => {
                     assert!(Instant::now() < deadline, "sequencer stalled");
                     worker.step();
                 }
-                Ok(Some(_)) => panic!("expected initial lifecycle nonce change"),
+                Some(_) => panic!("expected replica initialization command"),
             }
         }
         assert_eq!(receiver.deferred_queries.len(), 1);
@@ -621,24 +599,19 @@ fn query_origin_does_not_change_lifecycle_nonce() {
             receiver.deferred_queries.pop_front(),
             Some((Some(ComputeCommand::HelloQuery { .. }), nonce)) if nonce == query
         ));
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(Some(WorkerCommand::Compute(
-                ComputeCommand::InitializationComplete
-            )))
-        ));
-        assert_eq!(receiver.nonce, Some(lifecycle));
+        assert!(receiver.try_recv().is_none());
         worker.drop_dataflow(0);
     });
 }
 
 #[mz_ore::test]
-fn multiplexes_queries_without_replacing_lifecycle() {
+fn multiplexes_sibling_queries_and_delayed_local_endpoints() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _guard = runtime.enter();
     let handle = runtime.handle().clone();
     timely::execute_directly(move |worker| {
         let (command_tx, command_rx) = command_channel::render(worker, None);
+        let (progress_tx, _progress_rx) = crate::replica_progress::render(worker);
         let (clients, client_rx) = mpsc::unbounded_channel();
         let (responses, response_rx) = mpsc::unbounded_channel();
         spawn_channel_adapter(client_rx, command_tx, response_rx, 0);
@@ -661,16 +634,6 @@ fn multiplexes_queries_without_replacing_lifecycle() {
                 worker.step_or_park(Some(Duration::from_millis(10)));
             }
         };
-        let lifecycle = Uuid::new_v4();
-        let (life_tx, mut life_rx) = connect(lifecycle);
-        life_tx
-            .send(ComputeCommand::InitializationComplete)
-            .unwrap();
-        assert!(matches!(
-            next(),
-            (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
-                if n == lifecycle
-        ));
         let q1 = Uuid::new_v4();
         let q2 = Uuid::new_v4();
         let (q1_tx, mut q1_rx) = connect(q1);
@@ -689,15 +652,13 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             next(),
             (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q2
         ));
-        let mut sender = ResponseSender::new(responses, 0);
-        sender.set_nonce(lifecycle);
+        let sender = ResponseSender::new(responses, 0, progress_tx);
         sender.inner.send(ResponseEvent::QueryOpen(q1)).unwrap();
         sender.inner.send(ResponseEvent::QueryOpen(q2)).unwrap();
         sender.send_query(q1, ComputeResponse::QueryReady).unwrap();
         sender.send_query(q2, ComputeResponse::QueryReady).unwrap();
-        sender.send(ComputeResponse::QueryReady).unwrap();
         handle.block_on(async {
-            for rx in [&mut life_rx, &mut q1_rx, &mut q2_rx] {
+            for rx in [&mut q1_rx, &mut q2_rx] {
                 assert_eq!(
                     tokio::time::timeout(Duration::from_secs(10), rx.recv())
                         .await
@@ -706,9 +667,8 @@ fn multiplexes_queries_without_replacing_lifecycle() {
                 );
             }
         });
-        let replacement = Uuid::new_v4();
-        // Responses can overtake this process's local handshake. The lifecycle
-        // response acts as a FIFO barrier proving the query responses are stashed.
+        // Responses can overtake this process's local handshake. A sibling query
+        // response is a FIFO barrier proving the delayed responses are stashed.
         let delayed = Uuid::new_v4();
         sender
             .inner
@@ -724,10 +684,10 @@ fn multiplexes_queries_without_replacing_lifecycle() {
         for response in &expected {
             sender.send_query(delayed, response.clone()).unwrap();
         }
-        sender.send(ComputeResponse::QueryReady).unwrap();
+        sender.send_query(q2, ComputeResponse::QueryReady).unwrap();
         handle.block_on(async {
             assert_eq!(
-                tokio::time::timeout(Duration::from_secs(10), life_rx.recv())
+                tokio::time::timeout(Duration::from_secs(10), q2_rx.recv())
                     .await
                     .unwrap(),
                 Some(ComputeResponse::QueryReady),
@@ -751,14 +711,6 @@ fn multiplexes_queries_without_replacing_lifecycle() {
                 );
             }
         });
-        let (new_tx, _new_rx) = connect(replacement);
-        new_tx.send(ComputeCommand::InitializationComplete).unwrap();
-        assert!(matches!(
-            next(),
-            (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
-                if n == replacement
-        ));
-        assert!(life_rx.is_closed());
         assert!(!q1_rx.is_closed());
         assert!(!q2_rx.is_closed());
         drop(q1_tx);
@@ -772,7 +724,21 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             next(),
             (Some(ComputeCommand::CancelPeek { .. }), Origin::Query(n)) if n == q2
         ));
-        // The adapter still holds the sequencer sender.
-        worker.drop_dataflow(0);
+        sender.inner.send(ResponseEvent::QueryRetired(q1)).unwrap();
+        sender.send_query(q2, ComputeResponse::QueryReady).unwrap();
+        handle.block_on(async {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(10), q2_rx.recv())
+                    .await
+                    .unwrap(),
+                Some(ComputeResponse::QueryReady)
+            );
+        });
+        assert!(q1_rx.is_closed());
+        assert!(!q2_rx.is_closed());
+        // Persistent transports must be dropped before their endpoints.
+        for id in worker.installed_dataflows() {
+            worker.drop_dataflow(id);
+        }
     });
 }

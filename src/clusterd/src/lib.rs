@@ -522,7 +522,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let (server, endpoint, builder) = mz_compute::server::serve_unified(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
-            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx,
@@ -541,7 +540,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     } else {
         let mut storage_server = mz_storage::server::serve_with_replica(
             storage_timely_config,
-            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx.clone(),
@@ -554,7 +552,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let compute_server = mz_compute::server::serve(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
-            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx,
