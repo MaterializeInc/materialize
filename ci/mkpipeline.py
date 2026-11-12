@@ -410,6 +410,7 @@ so it is executed.""",
                 lto,
                 keep_steps,
             )
+    add_annotate_errors_plugin(pipeline)
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
     prioritize_pipeline(pipeline, args.priority)
@@ -511,6 +512,15 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
             if agent == "hetzner-aarch64-16cpu-32gb":
                 agent_priority = 2
         step["priority"] = step.get("priority", 0) + priority + agent_priority
+
+
+def add_annotate_errors_plugin(pipeline: Any) -> None:
+    """Annotate failed commands, like the mzcompose and cloudtest plugins do."""
+    for step in steps(pipeline):
+        if "command" in step:
+            step.setdefault("plugins", []).append(
+                {"./ci/plugins/annotate-errors": None}
+            )
 
 
 def truncate_skip_length(pipeline: Any) -> None:
