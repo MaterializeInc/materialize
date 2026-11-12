@@ -1334,3 +1334,117 @@ def test_pg_cdc_mixed_upgrade_stops_before_certificate_setup(mode):
             ),
         )
     assert c.method_calls == []
+
+
+@pytest.mark.parametrize(
+    "scenario_name",
+    [
+        "RestartClusterdCompute",
+        "RestartEnvironmentdClusterdStorage",
+        "KillClusterdStorage",
+    ],
+)
+def test_native_compute_plans_declare_inventory_before_launch(scenario_name):
+    from materialize.checks import mzcompose_actions, scenarios
+    from materialize.checks.executors import MzcomposeExecutor
+    from materialize.checks.features import Features
+
+    scenario = getattr(scenarios, scenario_name)(
+        [], MzcomposeExecutor(Mock()), Features([])
+    )
+    plan = scenario.actions()
+    declaration = next(
+        i
+        for i, a in enumerate(plan)
+        if isinstance(a, mzcompose_actions.UseClusterdCompute)
+    )
+    starts = [
+        (i, a)
+        for i, a in enumerate(plan)
+        if isinstance(a, mzcompose_actions.StartClusterdCompute)
+    ]
+    assert starts and all(declaration < i for i, _ in starts)
+    assert all(action is starts[0][1] for _, action in starts)
+
+
+@pytest.mark.parametrize("preserve_ports", [False, True])
+def test_native_compute_start_retains_inventory_and_shared_context(
+    composition, monkeypatch, preserve_ports
+):
+    from materialize.checks import mzcompose_actions
+
+    c = composition
+    c.preserve_ports = preserve_ports
+    c.repo.images = {
+        "materialized": Mock(docker_name=Mock(return_value="materialize/materialized"))
+    }
+    c.compose["services"]["clusterd_compute_1"] = {}
+    lookup = Mock(return_value=[("u1", "u2")])
+    monkeypatch.setattr(c, "sql_query", lookup)
+    monkeypatch.setattr(c, "pull_if_variable", Mock())
+    launches = []
+    monkeypatch.setattr(
+        c,
+        "up",
+        lambda *args: launches.append(
+            copy.deepcopy(c.compose["services"]["clusterd_compute_1"])
+        ),
+    )
+    context = Mock(
+        return_value=["--catalog-deploy-generation=7", "--catalog-config={}"]
+    )
+    monkeypatch.setattr(mzcompose_actions, "native_catalog_options", context)
+    executor = Mock()
+    executor.mzcompose_composition.return_value = c
+    start = mzcompose_actions.StartClusterdCompute()
+    start.execute(executor)
+    lookup.return_value = [("u1", "u3")]
+    start.execute(executor)
+
+    first, second = launches
+    assert first == second
+    assert {
+        "--catalog-cluster-id=u1",
+        "--catalog-replica-id=u2",
+        *context.return_value,
+    } <= set(first["command"])
+    assert first["ports"] == [
+        f"127.0.0.1:{port if preserve_ports else ''}:{port}"
+        for port in (2100, 2101, 6878)
+    ]
+    lookup.assert_called_once()
+    context.assert_called_once_with(c)
+
+
+def test_native_compute_start_requires_declared_inventory(monkeypatch):
+    from materialize.checks import mzcompose_actions
+
+    c = Mock()
+    c.sql_query.return_value = []
+    executor = Mock()
+    executor.mzcompose_composition.return_value = c
+    with pytest.raises(ValueError):
+        mzcompose_actions.StartClusterdCompute().execute(executor)
+    c.override.assert_not_called()
+    c.up.assert_not_called()
+
+
+def test_historical_compute_start_keeps_its_original_interface(monkeypatch):
+    from materialize.checks import mzcompose_actions
+
+    c = Mock()
+    c.override.side_effect = lambda *args: nullcontext()
+    context = Mock(
+        side_effect=AssertionError("historical launch requested native context")
+    )
+    monkeypatch.setattr(mzcompose_actions, "native_catalog_options", context)
+    executor = Mock()
+    executor.mzcompose_composition.return_value = c
+    mzcompose_actions.StartClusterdCompute(tag=MzVersion.parse_mz("v26.30.0")).execute(
+        executor
+    )
+    service = c.override.call_args.args[0]
+    assert service.config["image"] == "materialize/clusterd:v26.30.0"
+    assert not any(arg.startswith("--catalog-") for arg in service.config["command"])
+    c.sql_query.assert_not_called()
+    context.assert_not_called()

@@ -196,19 +196,21 @@ class RestartClusterdCompute(Scenario):
     """Restart clusterd by having it run in a separate container that is then killed and restarted."""
 
     def actions(self) -> list[Action]:
+        # Reuse the configured native replica without replacing its inventory.
+        start_compute = StartClusterdCompute()
         return [
             StartMz(self),
-            StartClusterdCompute(),
             UseClusterdCompute(self),
+            start_compute,
             Initialize(self),
             KillClusterdCompute(),
-            StartClusterdCompute(),
+            start_compute,
             Manipulate(self, phase=1),
             KillClusterdCompute(),
-            StartClusterdCompute(),
+            start_compute,
             Manipulate(self, phase=2),
             KillClusterdCompute(),
-            StartClusterdCompute(),
+            start_compute,
             Validate(self),
         ]
 
@@ -219,8 +221,8 @@ class RestartEnvironmentdClusterdStorage(Scenario):
     def actions(self) -> list[Action]:
         return [
             StartMz(self),
-            StartClusterdCompute(),
             UseClusterdCompute(self),
+            StartClusterdCompute(),
             Initialize(self),
             KillMz(),
             StartMz(self),
@@ -243,8 +245,8 @@ class KillClusterdStorage(Scenario):
     def actions(self) -> list[Action]:
         return [
             StartMz(self),
-            StartClusterdCompute(),
             UseClusterdCompute(self),
+            StartClusterdCompute(),
             Initialize(self),
             KillClusterdStorageAction(),
             Manipulate(self, phase=1),

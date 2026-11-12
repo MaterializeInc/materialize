@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from contextlib import nullcontext
+from copy import deepcopy
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +19,7 @@ from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.listener_config import (
     resolve_listeners_config_path,
 )
@@ -369,29 +370,45 @@ class KillClusterdCompute(MzcomposeAction):
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        with c.override(Clusterd(name="clusterd_compute_1")):
-            c.kill("clusterd_compute_1")
+        c.kill("clusterd_compute_1")
 
-            if self.capture_logs:
-                c.capture_logs("clusterd_compute_1")
+        if self.capture_logs:
+            c.capture_logs("clusterd_compute_1")
 
 
 class StartClusterdCompute(MzcomposeAction):
     def __init__(self, tag: MzVersion | None = None) -> None:
         self.tag = tag
+        self.clusterd: Clusterd | None = None
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        clusterd = Clusterd(name="clusterd_compute_1")
-        if self.tag:
-            clusterd = Clusterd(
-                name="clusterd_compute_1",
-                image=f"materialize/clusterd:{self.tag}",
-            )
-        print(f"Starting Compute using image {clusterd.config.get('image')}")
+        if self.clusterd is None:
+            if self.tag is not None:
+                self.clusterd = Clusterd(
+                    name="clusterd_compute_1",
+                    image=f"materialize/clusterd:{self.tag}",
+                )
+            else:
+                [(cluster_id, replica_id)] = c.sql_query("""
+                    SELECT c.id, r.id FROM mz_clusters c
+                    JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                    WHERE c.name = 'quickstart' AND r.name = 'r1'
+                """)
+                self.clusterd = Clusterd(
+                    name="clusterd_compute_1",
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *native_catalog_options(c),
+                    ],
+                )
+        print(f"Starting Compute using image {self.clusterd.config.get('image')}")
 
-        with c.override(clusterd):
+        # Composition normalizes service configuration in place. Keep the
+        # cached launch template pristine, including preserved host ports.
+        with c.override(deepcopy(self.clusterd)):
             c.up("clusterd_compute_1")
 
 

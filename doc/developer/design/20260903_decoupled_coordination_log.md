@@ -9,15 +9,15 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish the targeted platform-action runtime check in
-`native-driver-scratch/platform-actions-verification.log`, then commit the
-platform launch changes. Current-native plans declare inventory before launch
-and retain a pristine service template across restarts. Historical launches and
-the unsupported-upgrade guard are unchanged. The full Python result suite passes,
-including real Compose port normalization and a negative control. This checks
-actual changed actions with indexed rows, not every platform scenario.
+Convert the remaining limits launchers, then tighten production native ingress.
+Platform-check launch migration is verified: current-native plans declare
+inventory first and retain an untouched service template across restarts.
+Historical launches and the unsupported-upgrade guard remain unchanged. The full
+Python result suite and preserved-port negative control pass. Targeted actual
+actions preserve indexed reads/writes across external replica restart, container
+restart and managed-replica kills. This is not full platform-scenario acceptance.
+Evidence: `native-driver-scratch/platform-action-evidence/aj-native-cluster-dfe8ab86/`.
 
-Next, convert the limits launchers and tighten production native ingress.
 The separate upsert load-test launcher still needs migration. Its scenario list
 combines two cases into one malformed tuple. Approval to split that tuple was
 requested before expanding scope. Other launcher work can proceed meanwhile.
@@ -141,8 +141,7 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` are the performance baseline, not a claim about
   cleanup's performance impact.
 
-Completed fixtures are removed. The current platform-action fixture is tracked
-in its runtime log above and must be cleaned before another heavy run. Obsolete 26.47 demo binaries were reclaimed,
+All completed runtime fixtures are removed. The owned scratch worker is idle. Obsolete 26.47 demo binaries were reclaimed,
 with their manifests and evidence retained. Verify the earlier baseline artifact locations before reuse. The identity-fixed production candidate is preserved
 locally with matching source and binary manifests. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB
 available-memory reserves, and use one low-priority Cargo job. Preserve baseline
