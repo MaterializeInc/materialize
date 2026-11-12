@@ -43,6 +43,9 @@ pub async fn run(
         !crate::BUILD_INFO.is_dev() || !build.build.is_empty(),
         "development adapter plan namespace requires the build metadata from adapterd --version"
     );
+    let catalog_timestamp_oracle_url = config.timestamp_oracle_url.clone().ok_or_else(|| {
+        anyhow::anyhow!("controllerd requires a shared catalog timestamp oracle URL")
+    })?;
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
     let (mut catalog, oracle) = super::open_catalog(&mut config, &adapter_sizes).await?;
     let mut was_active =
@@ -159,11 +162,11 @@ pub async fn run(
                     deploy_generation: config.controller.deploy_generation,
                     connection_context: &config.controller.connection_context,
                     persist_pubsub_url: &config.controller.persist_pubsub_url,
-                    catalog_persist_location: Some(&config.controller.persist_location),
-                    catalog_timestamp_oracle_url: config.timestamp_oracle_url.as_ref(),
+                    catalog_persist_location: &config.controller.persist_location,
+                    catalog_timestamp_oracle_url: &catalog_timestamp_oracle_url,
                     timestamp_oracle_clock_file: config.controller
                         .timestamp_oracle_clock_file.as_deref(),
-                    catalog_follower_config: Some(&follower),
+                    catalog_follower_config: &follower,
                     secrets_args: &config.controller.secrets_args,
                     dyncfg: &config.system_dyncfgs,
                     replica_dyncfg_overrides: None,

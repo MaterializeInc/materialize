@@ -117,28 +117,28 @@ struct Args {
     test_persist_build_version: Option<String>,
 
     /// The cluster whose committed catalog state this replica follows.
-    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_timestamp_oracle_url", "catalog_config"])]
-    catalog_cluster_id: Option<mz_controller_types::ClusterId>,
+    #[clap(long)]
+    catalog_cluster_id: mz_controller_types::ClusterId,
     /// Serialized non-runtime configuration for catalog reconstruction.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_config: Option<String>,
+    #[clap(long)]
+    catalog_config: String,
     /// The replica identity within the declared cluster.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_replica_id: Option<mz_controller_types::ReplicaId>,
+    #[clap(long)]
+    catalog_replica_id: mz_controller_types::ReplicaId,
     /// The deployment generation this replica may join, never inferred from the leader.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_deploy_generation: Option<u64>,
+    #[clap(long)]
+    catalog_deploy_generation: u64,
     /// Persist blob location for committed catalog and written plans.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_persist_blob_url: Option<mz_ore::url::SensitiveUrl>,
+    #[clap(long)]
+    catalog_persist_blob_url: mz_ore::url::SensitiveUrl,
     /// Persist consensus location for committed catalog and written plans.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_persist_consensus_url: Option<mz_ore::url::SensitiveUrl>,
+    #[clap(long)]
+    catalog_persist_consensus_url: mz_ore::url::SensitiveUrl,
     /// Shared EpochMilliseconds oracle for catalog publications.
-    #[clap(long, requires = "catalog_cluster_id")]
-    catalog_timestamp_oracle_url: Option<mz_ore::url::SensitiveUrl>,
+    #[clap(long)]
+    catalog_timestamp_oracle_url: mz_ore::url::SensitiveUrl,
     /// Fixture-owned clock file for catalog timestamp allocation and policy checks only.
-    #[clap(long, hide = true, requires = "catalog_cluster_id")]
+    #[clap(long, hide = true)]
     timestamp_oracle_clock_file: Option<PathBuf>,
 
     // === Cloud options. ===
@@ -455,30 +455,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
-    if args.catalog_cluster_id.is_some() {
-        let environment_id: mz_sql::catalog::EnvironmentId =
-            connection_context.environment_id.parse()?;
-        persist_clients.cfg().require_state_version_target(Some(
-            mz_catalog::durable::catalog_shard_id(environment_id.organization_id()),
-        ));
-    }
+    let environment_id: mz_sql::catalog::EnvironmentId =
+        connection_context.environment_id.parse()?;
+    persist_clients.cfg().require_state_version_target(Some(
+        mz_catalog::durable::catalog_shard_id(environment_id.organization_id()),
+    ));
 
     // Catalog following is replica-wide, not independently sampled per process.
-    let follower_config = if args.process == 0
-        && let Some(cluster_id) = args.catalog_cluster_id
-    {
-        let environment_id = connection_context.environment_id.parse()?;
-        let reconstruction: mz_catalog::config::ReplicaCatalogConfig = serde_json::from_str(
-            args.catalog_config
-                .as_deref()
-                .expect("required with cluster identity"),
-        )?;
+    let follower_config = if args.process == 0 {
+        let reconstruction: mz_catalog::config::ReplicaCatalogConfig =
+            serde_json::from_str(&args.catalog_config)?;
         // Reject incompatible plan namespaces before opening network backends.
         reconstruction.plan_build_version(&BUILD_INFO)?;
         let oracle_config = mz_timestamp_oracle::TimestampOracleConfig::from_url(
-            args.catalog_timestamp_oracle_url
-                .as_ref()
-                .expect("required with cluster identity"),
+            &args.catalog_timestamp_oracle_url,
             &metrics_registry,
         )?;
         let timestamp_oracle_now = match args.timestamp_oracle_clock_file {
@@ -501,20 +491,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             reconstruction,
             environment_id,
             connection_context: connection_context.clone(),
-            cluster_id,
-            replica_id: args
-                .catalog_replica_id
-                .expect("required with cluster identity"),
-            deploy_generation: args
-                .catalog_deploy_generation
-                .expect("required with cluster identity"),
+            cluster_id: args.catalog_cluster_id,
+            replica_id: args.catalog_replica_id,
+            deploy_generation: args.catalog_deploy_generation,
             persist_location: mz_persist_client::PersistLocation {
-                blob_uri: args
-                    .catalog_persist_blob_url
-                    .expect("required with cluster identity"),
-                consensus_uri: args
-                    .catalog_persist_consensus_url
-                    .expect("required with cluster identity"),
+                blob_uri: args.catalog_persist_blob_url,
+                consensus_uri: args.catalog_persist_consensus_url,
             },
             build_info: &BUILD_INFO,
         };
@@ -531,7 +513,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    let replica_owned = args.catalog_cluster_id.is_some();
     let (mut compute_server, storage_endpoint, storage_client_builder): (
         _,
         _,
@@ -541,7 +522,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let (server, endpoint, builder) = mz_compute::server::serve_unified(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
-            replica_owned,
+            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx,
@@ -560,7 +541,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     } else {
         let mut storage_server = mz_storage::server::serve_with_replica(
             storage_timely_config,
-            replica_owned,
+            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx.clone(),
@@ -573,7 +554,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let compute_server = mz_compute::server::serve(
             compute_timely_config,
             ComputeRuntimeRole::Solo,
-            replica_owned,
+            true,
             &metrics_registry,
             Arc::clone(&persist_clients),
             txns_ctx,
@@ -614,9 +595,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         let endpoint = compute_server
             .take_replica()
             .expect("catalog follower requires native compute ingress");
+        let storage_endpoint =
+            storage_endpoint.expect("catalog follower requires native storage ingress");
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {
-            let mut owner = catalog_follower::NativeOwner::new(endpoint, storage_endpoint);
+            let mut owner = catalog_follower::NativeOwner::new(endpoint, Some(storage_endpoint));
             if let Err(error) =
                 catalog_follower::run(config, persist_clients, registry, &mut owner).await
             {
@@ -710,6 +693,62 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn native_catalog_arguments_required_for_every_process() {
+        use clap::Parser;
+
+        let timely = TimelyConfig {
+            workers: 1,
+            addresses: vec!["leader:2102".into(), "peer:2102".into()],
+            ..Default::default()
+        };
+        let catalog = [
+            "--catalog-cluster-id=u1",
+            "--catalog-replica-id=u1",
+            "--catalog-deploy-generation=1",
+            "--catalog-config={}",
+            "--catalog-persist-blob-url=mem://blob",
+            "--catalog-persist-consensus-url=mem://consensus",
+            "--catalog-timestamp-oracle-url=postgres://unused",
+        ];
+        for process in [0, 1] {
+            let base = vec![
+                "clusterd".to_owned(),
+                format!("--process={process}"),
+                format!("--storage-timely-config={}", timely.to_string()),
+                format!("--compute-timely-config={}", timely.to_string()),
+                "--environment-id=fixture".to_owned(),
+                "--secrets-reader=local-file".to_owned(),
+                "--secrets-reader-local-file-dir=unused".to_owned(),
+            ];
+            let error = Args::try_parse_from(&base)
+                .err()
+                .expect("missing catalog context");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+            for omitted in 0..catalog.len() {
+                let args = base.iter().map(String::as_str).chain(
+                    catalog
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, arg)| (index != omitted).then_some(*arg)),
+                );
+                let error = Args::try_parse_from(args)
+                    .err()
+                    .expect("partial catalog context");
+                assert_eq!(
+                    error.kind(),
+                    clap::error::ErrorKind::MissingRequiredArgument
+                );
+            }
+            let parsed = Args::try_parse_from(base.iter().map(String::as_str).chain(catalog))
+                .expect("complete catalog context");
+            assert_eq!(parsed.process, process);
+        }
+    }
 
     #[mz_ore::test]
     fn deployment_fence_retirement_is_typed() {

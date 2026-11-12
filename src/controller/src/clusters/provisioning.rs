@@ -42,13 +42,13 @@ pub struct ReplicaProvisioningConfig<'a> {
     /// Shared relay endpoint.
     pub persist_pubsub_url: &'a str,
     /// Shared catalog location for native catalog-following replicas.
-    pub catalog_persist_location: Option<&'a PersistLocation>,
+    pub catalog_persist_location: &'a PersistLocation,
     /// Shared catalog timestamp oracle.
-    pub catalog_timestamp_oracle_url: Option<&'a SensitiveUrl>,
+    pub catalog_timestamp_oracle_url: &'a SensitiveUrl,
     /// Explicit fixture clock for timestamp allocation and policy checks.
     pub timestamp_oracle_clock_file: Option<&'a Path>,
     /// Serialized catalog reconstruction inputs.
-    pub catalog_follower_config: Option<&'a str>,
+    pub catalog_follower_config: &'a str,
     /// Secrets-reader launch arguments.
     pub secrets_args: &'a SecretsReaderCliArgs,
     /// Environment-wide process configuration.
@@ -82,16 +82,10 @@ impl ReplicaProvisioningConfig<'_> {
         let aws_external_id_prefix = self.connection_context.aws_external_id_prefix.clone();
         let aws_connection_role_arn = self.connection_context.aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.to_owned();
-        let catalog_persist_location = self.catalog_persist_location.cloned();
-        let catalog_follower_config = self.catalog_follower_config.map(str::to_owned);
-        let catalog_timestamp_oracle_url = self.catalog_timestamp_oracle_url.cloned();
+        let catalog_persist_location = self.catalog_persist_location.clone();
+        let catalog_follower_config = self.catalog_follower_config.to_owned();
+        let catalog_timestamp_oracle_url = self.catalog_timestamp_oracle_url.clone();
         let timestamp_oracle_clock_file = self.timestamp_oracle_clock_file.map(Path::to_path_buf);
-        if catalog_persist_location.is_some() && catalog_timestamp_oracle_url.is_none() {
-            anyhow::bail!("catalog timestamp oracle URL must be set before provisioning replicas");
-        }
-        if catalog_persist_location.is_some() && catalog_follower_config.is_none() {
-            anyhow::bail!("catalog follower config must be set before provisioning replicas");
-        }
         let deploy_generation = self.deploy_generation;
         let secrets_args = self.secrets_args.to_flags();
 
@@ -183,36 +177,28 @@ impl ReplicaProvisioningConfig<'_> {
                         compute_timely_config.to_string(),
                     ),
                 ];
-                if let Some(location) = &catalog_persist_location {
-                    args.extend([
-                        format!("--catalog-cluster-id={cluster_id}"),
-                        format!("--catalog-replica-id={replica_id}"),
-                        format!("--catalog-deploy-generation={deploy_generation}"),
-                        format!(
-                            "--catalog-timestamp-oracle-url={}",
-                            catalog_timestamp_oracle_url
-                                .as_ref()
-                                .expect("checked before provisioning")
-                                .to_string_unredacted()
-                        ),
-                        format!(
-                            "--catalog-config={}",
-                            catalog_follower_config
-                                .as_ref()
-                                .expect("checked before provisioning")
-                        ),
-                        format!(
-                            "--catalog-persist-blob-url={}",
-                            location.blob_uri.to_string_unredacted()
-                        ),
-                        format!(
-                            "--catalog-persist-consensus-url={}",
-                            location.consensus_uri.to_string_unredacted()
-                        ),
-                    ]);
-                    if let Some(path) = &timestamp_oracle_clock_file {
-                        args.push(format!("--timestamp-oracle-clock-file={}", path.display()));
-                    }
+                args.extend([
+                    format!("--catalog-cluster-id={cluster_id}"),
+                    format!("--catalog-replica-id={replica_id}"),
+                    format!("--catalog-deploy-generation={deploy_generation}"),
+                    format!(
+                        "--catalog-timestamp-oracle-url={}",
+                        catalog_timestamp_oracle_url.to_string_unredacted()
+                    ),
+                    format!("--catalog-config={}", catalog_follower_config),
+                    format!(
+                        "--catalog-persist-blob-url={}",
+                        catalog_persist_location.blob_uri.to_string_unredacted()
+                    ),
+                    format!(
+                        "--catalog-persist-consensus-url={}",
+                        catalog_persist_location
+                            .consensus_uri
+                            .to_string_unredacted()
+                    ),
+                ]);
+                if let Some(path) = &timestamp_oracle_clock_file {
+                    args.push(format!("--timestamp-oracle-clock-file={}", path.display()));
                 }
                 if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                     args.push(format!(

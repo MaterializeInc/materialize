@@ -9,15 +9,18 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish verification of the uncommitted native startup boundary. Clusterd now
+Remove the remaining public Rust ownership selectors and attached lifecycle
+replay/routing alternatives. The native startup boundary is verified: clusterd
 requires complete catalog arguments on every process, provisioning inputs are
-nonoptional, and process zero requires both native endpoints. Parser coverage
-checks omitted and partial context on leaders and nonleaders. The reconciliation
-fixture also checks generated native arguments for both processes. Formatting
-passes, but Rust compilation/tests and runtime verification are not yet run.
-Independent static review found no blocking issues. The upsert fixture has finished and cleaned up. Run the targeted Rust checks
-on scratch before committing the startup boundary. Public Rust ownership selectors and their attached legacy
-branches remain the next removal, not a completed outcome.
+nonoptional, and process zero requires both native endpoints. All-target checks
+for clusterd/environmentd and executed parser/reconciliation tests pass against
+the exact source snapshot. Independent static review found no blocking issues.
+Evidence: `native-driver-scratch/native-ingress-check.log`,
+`native-ingress-tests.log` and `native-ingress-source-sha256.json`.
+The unoptimized test build reached its 32-GiB job cap without swap. Use one Cargo
+job for subsequent heavy builds, still under the aggregate scratch budget.
+Preserve query multiplexing, native command sequencing and endpoint-free
+nonleaders during that removal. See `native-ingress-current-audit.md`.
 The limits launchers now declare inventory before starting every process and
 refresh IDs after catalog resets. Generator definitions and counts are unchanged.
 Unit checks cover ordering, missing inventory, nonleader context and fresh IDs.
@@ -49,6 +52,8 @@ expiry recorded in `native-driver-scratch/worker.json`. Connect through its
 instance-specific `native-driver-scratch/remote.py`. No access rules changed.
 Completed runtime fixtures, including the upsert load test, are removed.
 Keep the compiled candidate and evidence before releasing the worker.
+Unused local Docker images were pruned. Local disk headroom is 39 GiB. Volumes
+and retained candidate binaries were preserved.
 
 Do not run heavy suites or builds on the local VM. Polling reserves did not prevent
 an overload that required a restart. Scratch test containers must share the

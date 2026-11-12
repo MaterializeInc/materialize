@@ -386,14 +386,17 @@ async fn replica_cleanup_preserves_unobserved_peer_create() {
         secrets_reader_aws_prefix: None,
         secrets_reader_name_prefix: None,
     };
+    let catalog_location = PersistLocation::new_in_mem();
+    let catalog_oracle_url = "postgres://unused:26257".parse().unwrap();
+    let catalog_config = serde_json::to_string(&writer.replica_config()).unwrap();
     let launch = ReplicaProvisioningConfig {
         deploy_generation: generation,
         connection_context: &writer.config().connection_context,
         persist_pubsub_url: "http://unused:6879",
-        catalog_persist_location: None,
-        catalog_timestamp_oracle_url: None,
+        catalog_persist_location: &catalog_location,
+        catalog_timestamp_oracle_url: &catalog_oracle_url,
         timestamp_oracle_clock_file: None,
-        catalog_follower_config: None,
+        catalog_follower_config: &catalog_config,
         secrets_args: &secrets,
         dyncfg: &dyncfg,
         replica_dyncfg_overrides: None,
@@ -412,6 +415,64 @@ async fn replica_cleanup_preserves_unobserved_peer_create() {
         .find(|entry| entry.replica_id == live)
         .unwrap();
     assert_eq!(entry.service, live_service);
+
+    // Every process, including endpoint-free nonleaders, needs native context.
+    let mut resources = entry.resources.clone();
+    resources.allocation.scale = NonZero::new(2).unwrap();
+    let spec = launch
+        .service_config(
+            entry.cluster_id,
+            entry.replica_id,
+            entry.cluster_name.clone(),
+            entry.replica_name.clone(),
+            entry.role.clone(),
+            resources,
+            false,
+        )
+        .unwrap();
+    let peers: Vec<BTreeMap<_, _>> = (0..spec.scale.get())
+        .map(|process| {
+            spec.ports
+                .iter()
+                .map(|port| {
+                    (
+                        port.name.clone(),
+                        format!("node-{process}:{}", port.port_hint),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    for listen_addrs in &peers {
+        let args = (spec.args)(mz_orchestrator::ServiceAssignments {
+            listen_addrs,
+            peer_addrs: &peers,
+        });
+        for required in [
+            format!("--catalog-cluster-id={}", entry.cluster_id),
+            format!("--catalog-replica-id={}", entry.replica_id),
+            format!("--catalog-deploy-generation={generation}"),
+            format!("--catalog-config={catalog_config}"),
+            format!(
+                "--catalog-persist-blob-url={}",
+                catalog_location.blob_uri.to_string_unredacted()
+            ),
+            format!(
+                "--catalog-persist-consensus-url={}",
+                catalog_location.consensus_uri.to_string_unredacted()
+            ),
+            format!(
+                "--catalog-timestamp-oracle-url={}",
+                catalog_oracle_url.to_string_unredacted()
+            ),
+        ] {
+            assert!(
+                args.contains(&required),
+                "missing native launch argument {required}"
+            );
+        }
+    }
+
     assert_eq!(entry.replica_name, "peer_live");
     assert!(inventory.iter().all(|entry| entry.replica_id != retired));
     assert!(
