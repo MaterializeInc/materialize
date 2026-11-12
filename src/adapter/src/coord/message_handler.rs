@@ -27,11 +27,12 @@ use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_sql::ast::Statement;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use rand::{RngExt, SeedableRng, rngs};
 use serde_json::json;
@@ -139,6 +140,9 @@ impl Coordinator {
                 // The committer applied `write_ts` to the oracle, so the read ts is at least
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
+                // This message arrives on the top-priority internal channel, which a command
+                // flood cannot starve, unlike the `LinearizeReads` re-check below `cmd_rx`.
+                self.retire_local_reads_linearized_by(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
                 for result in internal_results {
                     result.send(crate::coord::appends::WriteResult::Success {
@@ -1105,6 +1109,27 @@ impl Coordinator {
                 };
                 notifier(notice);
             }
+        }
+    }
+
+    /// Retires pending reads that the local timestamp oracle having applied `applied_ts`
+    /// linearizes.
+    ///
+    /// Reads that stay pending keep the re-check scheduled by the
+    /// [`Coordinator::message_linearize_reads`] pass that left them pending.
+    fn retire_local_reads_linearized_by(&mut self, applied_ts: Timestamp) {
+        if self.pending_linearize_read_txns.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let (ready_txns, pending_txns) = std::mem::take(&mut self.pending_linearize_read_txns)
+            .into_iter()
+            .partition::<BTreeMap<_, _>, _>(|(_conn_id, read_txn)| {
+                read_txn.linearized_by(&Timeline::EpochMilliseconds, &applied_ts)
+            });
+        self.pending_linearize_read_txns = pending_txns;
+        for ready_txn in ready_txns.into_values() {
+            ready_txn.finish_with_metrics(&self.metrics, now);
         }
     }
 

@@ -1275,6 +1275,16 @@ impl PendingReadTxn {
         self.timestamp_context.timestamp_to_linearize()
     }
 
+    /// Returns whether the oracle of `timeline` having applied `applied_ts` linearizes this read.
+    fn linearized_by(&self, timeline: &Timeline, applied_ts: &Timestamp) -> bool {
+        match self.timestamp_to_linearize() {
+            None => true,
+            Some((read_timeline, chosen_ts)) => {
+                read_timeline == timeline && chosen_ts <= applied_ts
+            }
+        }
+    }
+
     /// Finishes an already-linearized ordinary read, or returns it unchanged.
     fn try_finish_read(self, metrics: &Metrics) -> Option<Self> {
         if self.timestamp_to_linearize().is_some() {
@@ -4014,21 +4024,14 @@ impl Coordinator {
                         };
                         messages.push(Message::GroupCommitInitiate(span, Some(permit)));
                     },
-                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
-                    // Receive a batch of commands.
-                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
-                        if count == 0 {
-                            break;
-                        } else {
-                            messages.extend(cmd_messages.drain(..).map(
-                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
-                            ));
-                        }
-                    },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     // Receive a single command.
+                    //
+                    // Placed above `cmd_rx`, where a sustained command flood cannot starve it.
+                    // It cannot starve `cmd_rx` in turn: only the sequencer, running on this loop
+                    // after taking a command off `cmd_rx`, sends to this channel, so each pending
+                    // read costs one command first.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -4045,6 +4048,18 @@ impl Coordinator {
                         }
                         messages.push(Message::LinearizeReads);
                     }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
+                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(cmd_messages.drain(..).map(
+                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
+                            ));
+                        }
+                    },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4068,6 +4083,11 @@ impl Coordinator {
                     // sub-millisecond), the lower branches (including the idle
                     // watchdog) stay reachable. See the pin above for why the
                     // future is persisted rather than recreated per iteration.
+                    //
+                    // Sitting below `cmd_rx`, a sustained command flood starves this branch.
+                    // Under write load, `Message::GroupCommitApplied` retires pending reads
+                    // instead. This branch covers reads that no group commit linearizes, such as
+                    // reads on other timelines or reads during idle periods.
                     () = linearize_reads_notified.as_mut() => {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);
@@ -5795,6 +5815,34 @@ mod execute_context_tests {
         ));
         assert_eq!(response.session.vars().application_name(), "session");
         assert_eq!(metrics.linearize_read_fast_path.get(), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_applied_write_linearizes_local_reads_up_to_it() {
+        let local = Timeline::EpochMilliseconds;
+        let applied_ts = Timestamp::from(100u64);
+        for (context, expected) in [
+            (TimestampContext::NoTimestamp, true),
+            (timestamp_context(100, Some(100)), true),
+            (timestamp_context(99, Some(50)), true),
+            (timestamp_context(100, Some(50)), true),
+            (timestamp_context(101, Some(50)), false),
+            (
+                TimestampContext::TimelineTimestamp {
+                    timeline: Timeline::User("other".into()),
+                    chosen_ts: 99.into(),
+                    oracle_ts: Some(50.into()),
+                },
+                false,
+            ),
+        ] {
+            let (pending, _client_rx) = pending_read(context.clone());
+            assert_eq!(
+                pending.linearized_by(&local, &applied_ts),
+                expected,
+                "{context:?}"
+            );
+        }
     }
 
     #[mz_ore::test(tokio::test)]
