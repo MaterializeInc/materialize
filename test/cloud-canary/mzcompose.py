@@ -48,7 +48,7 @@ REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
 USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
 APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
-VERSION = ci_util.dev_docker_tag()
+VERSION = ci_util.dev_docker_tag(os.getenv("BUILDKITE_COMMIT"))
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-oxqxx9.us-east-1.aws.confluent.cloud:9092"
