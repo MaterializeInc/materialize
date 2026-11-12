@@ -158,6 +158,9 @@ with the `date_trunc` unit.
    (FORMAT PARQUET, AWS CONNECTION = aws_connection, PATTERN = '*.parquet');
    ```
 
+   `COPY TO` fails if the S3 path already contains objects, so use a new path
+   for each run.
+
    The loaded rows are not yet visible in `daily_revenue`, because they are
    later than the current cutoff.
 
