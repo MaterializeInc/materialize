@@ -84,16 +84,6 @@ const RoleGraphInner = () => {
     return new Map<string, RoleItem>(roles?.map((r) => [r.roleId, r]) ?? []);
   }, [roles]);
 
-  const roleIdByName = React.useMemo(() => {
-    return new Map<string, string>(
-      roles?.map((r) => [r.roleName, r.roleId]) ?? [],
-    );
-  }, [roles]);
-
-  const selectRoleByName = (roleName: string) => {
-    setSelectedRoleId(roleIdByName.get(roleName));
-  };
-
   const inheritsFrom = React.useMemo(() => {
     if (!selectedRoleId || !graph) return [];
     return getUpstreamNodes(selectedRoleId, graph)
@@ -134,8 +124,8 @@ const RoleGraphInner = () => {
     }
   };
 
-  const handleRoleSelect = (roleName: string) => {
-    selectRoleByName(roleName);
+  const handleRoleSelect = (roleId: string) => {
+    setSelectedRoleId(roleId);
     setFilterValue("");
   };
 
@@ -207,7 +197,7 @@ const RoleGraphInner = () => {
         selectedRole={selectedRoleId ? roleMap.get(selectedRoleId) : undefined}
         inheritsFrom={inheritsFrom}
         grantedTo={grantedTo}
-        onRoleClick={selectRoleByName}
+        onRoleClick={setSelectedRoleId}
         filterValue={filterValue}
         onFilterChange={handleFilterChange}
         filteredRoles={getFilterMatches(filterValue)}

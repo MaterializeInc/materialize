@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 
 import {
@@ -21,11 +22,7 @@ import { roleQueryKeys } from "./queries";
 import RoleGraph from "./RoleGraph";
 
 describe("RoleGraph", () => {
-  afterEach(() => {
-    Reflect.deleteProperty(Object.prototype, "cache");
-  });
-
-  it("renders roles named after Object.prototype keys without writing to it", async () => {
+  beforeEach(() => {
     server.use(
       buildSqlQueryHandlerV2({
         queryKey: roleQueryKeys.list(),
@@ -64,11 +61,32 @@ describe("RoleGraph", () => {
         }),
       }),
     );
+  });
 
+  afterEach(() => {
+    Reflect.deleteProperty(Object.prototype, "cache");
+  });
+
+  it("renders roles named after Object.prototype keys without writing to it", async () => {
     renderComponent(<RoleGraph />);
 
     expect(await screen.findByText("__proto__")).toBeVisible();
     expect(screen.getByText("cache")).toBeVisible();
     expect(Object.hasOwn(Object.prototype, "cache")).toBe(false);
+  });
+
+  it("selects a related role clicked in the sidebar", async () => {
+    const user = userEvent.setup();
+    renderComponent(<RoleGraph />);
+
+    // Graph node buttons also name the member count, so an exact name only
+    // matches the sidebar's related-role buttons.
+    await user.click(await screen.findByRole("button", { name: /^cache/ }));
+    await user.click(screen.getByRole("button", { name: "__proto__" }));
+
+    expect(screen.getByRole("button", { name: "cache" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "__proto__" }),
+    ).not.toBeInTheDocument();
   });
 });
