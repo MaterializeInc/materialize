@@ -9,17 +9,17 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Replace the catalog-free replica driver with the approved test-only native
-runtime, then remove the remaining production transport-owned execution path. Preserve programmable MIR/LIR coverage,
-shared query transport, native nonleader workers and split/unified Timely
-topologies. Retire only obsolete controller-replay assertions.
-See `native-replica-execution-boundary.md` for the boundary and concrete callers.
+Migrate remaining external replica launchers before making production catalog
+context mandatory. Start with feature-benchmark startup ordering, shared
+environment identity and exact inventory IDs, while preserving historical-only
+comparisons. See `native-external-launcher-audit.md` and
+`native-replica-execution-boundary.md`. Production ingress removal also needs
+multi-process nonleader coverage in both Timely topologies.
 
-The subscription repair and harness correction are committed. The final SQL
-runner is preserved locally with its verified checksum in
-`native-compatible-current/subscription-harness-host-stack-aligned/`. All runtime
-fixtures are removed and owned scratch worker `i-04e2dcc55223c6916` is terminated.
-Receipt: `subscription-scratch-final-state.json`.
+Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
+expiry recorded in `native-driver-scratch/worker.json`. Connect through its
+instance-specific `native-driver-scratch/remote.py`. No access rules changed.
+Keep the compiled candidate and evidence before releasing the worker.
 
 ## Verified outcome
 
@@ -45,6 +45,14 @@ Commits: `8c9e18f0d7` (subscriptions), `917c98e010` (SLT harness).
 Evidence and review dispositions: `native-subscription-frontier-assessment.md`.
 These checks used mounted candidate binaries, not rebuilt-image CI.
 
+The programmable driver now owns native endpoints and admits transient plans
+through query connections (`4b7ce262`). Dynamic plans and within-owner mixed
+exports remain. Default-build subprocess tests, crate tests, all-target checks
+and the kept scripts pass in split and unified topologies. The PostgreSQL/MinIO
+composition also passes and its fixture is removed. This proves one process with
+multiple workers, not multi-process ingress or rebuilt-image CI. Evidence:
+`native-driver-scratch/verified/`, including `aj-native-driver-24356554/`.
+
 The pinned 26.46/26.47 prototype pair shares implementation and plan encoding,
 not arbitrary release compatibility. Its lifecycle runs precede the isolated
 pgwire stack fix. That fix separately passes initial and resumed subscription
@@ -53,11 +61,11 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
 
 ## Live blockers and decisions
 
-- Catalog-free replica ingress remains. Replacing headless programmable coverage
-  with a test-only native runtime is approved. Preserve shared query
-  transport, native nonleader workers and both Timely topologies. The dormant
-  final-preflight hook's old-to-old coverage also needs a decision. See
-  `native-replica-execution-boundary.md` and `final-preflight-boundary-research.md`.
+- Catalog-free production replica ingress remains. The programmable native driver
+  replacement is verified. External launchers still need native context and
+  refreshed IDs on replica recreation. Preserve historical-image-only paths.
+  The dormant final-preflight hook also needs its boundary decision. See
+  `native-external-launcher-audit.md` and `final-preflight-boundary-research.md`.
 - Forced-migration cases and some platform/stress workflows remain unconverted.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are unsupported, not reset or converted.
