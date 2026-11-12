@@ -1857,8 +1857,51 @@ class Repository:
         return iter(self.images.values())
 
 
+def verify_multiarch_image(name: str, sources: Iterable[str]) -> None:
+    """Require a multiarch tag to resolve to the supplied immutable images."""
+
+    def digests(image: str) -> dict[tuple[str, str, str], str]:
+        manifests = json.loads(
+            spawn.run_with_retries(
+                lambda: spawn.capture(
+                    ["docker", "manifest", "inspect", "--verbose", image]
+                )
+            )
+        )
+        if not isinstance(manifests, list):
+            manifests = [manifests]
+        result = {}
+        for manifest in manifests:
+            descriptor = manifest["Descriptor"]
+            platform = descriptor["platform"]
+            key = (
+                platform["os"],
+                platform["architecture"],
+                platform.get("variant", ""),
+            )
+            if key in result:
+                raise ui.UIError(f"Duplicate platform in {image}: {key}")
+            result[key] = descriptor["digest"]
+        return result
+
+    expected = {}
+    for source in sources:
+        source_digests = digests(source)
+        if expected.keys() & source_digests.keys():
+            raise ui.UIError(f"Duplicate source platform while verifying {name}")
+        expected.update(source_digests)
+    actual = digests(name)
+    if not expected or actual != expected:
+        raise ui.UIError(
+            f"Image digest mismatch for {name}: expected {expected}, found {actual}"
+        )
+
+
 def publish_multiarch_images(
-    tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
+    tag: str,
+    dependency_sets: Iterable[Iterable[ResolvedImage]],
+    *,
+    verify: bool = False,
 ) -> None:
     """Publishes a set of docker images under a given tag."""
     always_push_tags = ("latest", "unstable")
@@ -1895,6 +1938,9 @@ def publish_multiarch_images(
                 )
             )
 
+        if verify:
+            verify_multiarch_image(name, [image.spec() for image in images])
+
         ghcr_name = f"{GHCR_PREFIX}{name}"
         if ghcr_token and (
             tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
@@ -1913,6 +1959,10 @@ def publish_multiarch_images(
                     ),
                     spawn.runv(["docker", "manifest", "push", ghcr_name]),
                 )
+            )
+        if verify and ghcr_token:
+            verify_multiarch_image(
+                ghcr_name, [f"{GHCR_PREFIX}{image.spec()}" for image in images]
             )
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""

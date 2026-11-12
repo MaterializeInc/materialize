@@ -42,6 +42,13 @@ def main() -> None:
         for repo in repos
     ]
     mzbuild.publish_multiarch_images(ci_util.dev_docker_tag(), deps)
+    runtime_images = [
+        [image for image in images if image.image.name in ("environmentd", "clusterd")]
+        for images in deps
+    ]
+    mzbuild.publish_multiarch_images(
+        ci_util.dev_docker_tag(include_profile=True), runtime_images, verify=True
+    )
 
 
 if __name__ == "__main__":

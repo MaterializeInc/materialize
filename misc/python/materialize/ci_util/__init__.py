@@ -95,15 +95,22 @@ def get_mz_version(workspace: cargo.Workspace | None = None) -> VersionInfo:
     return VersionInfo.parse(workspace.crates["mz-environmentd"].version_string)
 
 
-def dev_docker_tag() -> str:
+def dev_docker_tag(*, include_profile: bool = False) -> str:
     """The Docker tag under which this commit's images are published.
 
     Both the publishing side (`ci/test/dev_tag.py`) and anything that pulls
     those images have to derive the tag the same way, or the pull looks for an
     image that was never pushed.
+
+    `include_profile` selects the additional environmentd/clusterd tag whose
+    build profile cannot collide with another build of the same commit.
     """
     # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+` is not
     # a valid character in Docker tags, so we use `--` instead.
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
-    return f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"
+    tag = f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"
+    if include_profile:
+        profile = "release" if ui.env_is_truthy("CI_LTO") else "optimized"
+        tag += f".{profile}"
+    return tag

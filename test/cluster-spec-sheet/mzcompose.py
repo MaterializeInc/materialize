@@ -35,14 +35,13 @@ import psycopg
 from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
-from materialize import MZ_ROOT, buildkite, pgbench
+from materialize import MZ_ROOT, buildkite, ci_util, mzbuild, pgbench
 from materialize.cluster_spec_sheet_qps import (
     QPS_CONCURRENCIES,
     QpsSweep,
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -51,6 +50,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
+from materialize.rustc_flags import Sanitizer
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -59,6 +59,7 @@ from materialize.test_analytics.data.cluster_spec_sheet import (
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.ui import CommandFailureCausedUIError, UIError
+from materialize.xcompile import Arch
 
 CLUSTER_SPEC_SHEET_VERSION = "1.0.0"  # Used for uploading test analytics results
 
@@ -118,9 +119,22 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    # Cached: the version cannot change within a run, and `parse_cargo` shells
-    # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    tag = ci_util.dev_docker_tag(include_profile=True)
+    sources: dict[str, list[str]] = {"environmentd": [], "clusterd": []}
+    for arch in (Arch.X86_64, Arch.AARCH64):
+        repo = mzbuild.Repository(
+            MZ_ROOT,
+            arch,
+            coverage=False,
+            sanitizer=Sanitizer[os.getenv("CI_SANITIZER", "none")],
+            image_registry="materialize",
+        )
+        images = repo.resolve_dependencies(repo.images[name] for name in sources)
+        for name in sources:
+            sources[name].append(images[name].spec())
+    for name, images in sources.items():
+        mzbuild.verify_multiarch_image(f"materialize/{name}:{tag}", images)
+    return tag
 
 
 SERVICES = [

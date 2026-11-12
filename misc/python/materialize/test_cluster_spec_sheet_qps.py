@@ -442,3 +442,43 @@ def test_logging_variants_are_uploaded_separately(monkeypatch, tmp_path):
             200,
         ),
     ]
+
+
+def test_staging_selects_and_verifies_profile_tag(monkeypatch, tmp_path):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    calls = []
+
+    def tag(*, include_profile):
+        assert include_profile
+        return "v26.51.0-dev.0--pr.gabcdef.release"
+
+    class Repository:
+        def __init__(self, root, arch, **kwargs):
+            self.arch = arch
+            self.images = {name: name for name in ("environmentd", "clusterd")}
+
+        def resolve_dependencies(self, targets):
+            return {
+                name: SimpleNamespace(spec=lambda name=name: f"{name}:{self.arch}")
+                for name in targets
+            }
+
+    monkeypatch.setattr(module.ci_util, "dev_docker_tag", tag)
+    monkeypatch.setattr(module.mzbuild, "Repository", Repository)
+    monkeypatch.setattr(
+        module.mzbuild,
+        "verify_multiarch_image",
+        lambda name, sources: calls.append((name, sources)),
+    )
+    assert module.staging_version() == tag(include_profile=True)
+    assert module.staging_version() == tag(include_profile=True)
+    assert calls == [
+        (
+            f"materialize/{name}:{tag(include_profile=True)}",
+            [f"{name}:{arch}" for arch in (module.Arch.X86_64, module.Arch.AARCH64)],
+        )
+        for name in ("environmentd", "clusterd")
+    ]
