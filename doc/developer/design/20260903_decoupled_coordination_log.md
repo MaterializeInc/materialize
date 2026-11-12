@@ -9,10 +9,17 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate memory-limiter replica recreation in `test/cluster/mzcompose.py`.
-Preserve its workload and heap limits, and refresh native inventory IDs after
-each recreation. Its existing default-suite exclusion (database-issues#9502)
-remains explicit. Then continue the external-launcher inventory below.
+Migrate the remaining upsert external launchers: rehydration, failpoint recovery
+and load-test variants. Preserve four workers, failpoints, restart coverage and
+full workloads. Start inventory before replicas and retain native launch options
+through restart. Continue the external-launcher inventory below afterward.
+
+Memory-limiter replica recreation now refreshes native identities. All three
+original scenarios pass with retained default-debug binaries on capped scratch:
+both million-row hydration checks and deliberate exit 167 at the low limit.
+The heap bound is unchanged. Distinct identities, no OOM and fixture cleanup are
+verified in `native-driver-scratch/cluster-launcher-evidence/aj-native-cluster-71ded598/`.
+Its existing default-suite exclusion (database-issues#9502) remains unchanged.
 
 Cluster death detection and replica metrics now launch with native ownership.
 Both actual workflows pass on capped scratch with retained default-debug binaries.

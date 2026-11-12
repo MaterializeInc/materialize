@@ -7680,21 +7680,19 @@ def workflow_test_memory_limiter(c: Composition) -> None:
     does, or does not, manage to hydrate with various limiter configurations.
     """
 
-    with c.override(
-        Materialized(
-            additional_system_parameter_defaults={
-                "enable_lgalloc": "false",
-                "memory_limiter_interval": "100ms",
-                "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            },
-            support_external_clusterd=True,
+    with (
+        c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_lgalloc": "false",
+                    "memory_limiter_interval": "100ms",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                },
+                support_external_clusterd=True,
+            ),
+            Testdrive(no_reset=True),
         ),
-        Clusterd(
-            name="clusterd1",
-            # Enforce a heap limit of 1GiB.
-            options=["--heap-limit=1073741824"],
-        ),
-        Testdrive(no_reset=True),
+        ExitStack() as replicas,
     ):
         c.up("materialized", Service("testdrive", idle=True))
 
@@ -7722,6 +7720,27 @@ def workflow_test_memory_limiter(c: Composition) -> None:
                 CREATE MATERIALIZED VIEW mv IN CLUSTER test AS
                     SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
                 """)
+
+            [(cluster_id, replica_id)] = c.sql_query("""
+                SELECT c.id, r.id FROM mz_clusters c
+                JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                WHERE c.name = 'test' AND r.name = 'r1'
+            """)
+            # Each recreation has a new execution identity. Keep its launch
+            # configuration installed through startup, inspection and shutdown.
+            replicas.enter_context(
+                c.override(
+                    Clusterd(
+                        name="clusterd1",
+                        options=[
+                            "--heap-limit=1073741824",
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *native_catalog_options(c),
+                        ],
+                    )
+                )
+            )
 
         # Test 1: The MV should be able to hydrate with a memory limit of 2 GiB.
         c.sql(
