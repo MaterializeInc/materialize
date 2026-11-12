@@ -278,6 +278,42 @@ SELECT array_fill(1, ARRAY[4, 0, 3]);
 ----
 {}
 
+# An array without elements is zero-dimensional, matching PostgreSQL.
+# Regression test for CPU-334.
+
+query T
+SELECT ARRAY[array_fill(1, ARRAY[0]), array_fill(1, ARRAY[0])]::text;
+----
+{}
+
+query B
+SELECT array_fill(1, ARRAY[0]) = '{}'::int[];
+----
+true
+
+query B
+SELECT array_fill(1, ARRAY[4, 0], ARRAY[3, 5]) = '{}'::int[];
+----
+true
+
+query I
+SELECT array_lower(array_fill(1, ARRAY[0], ARRAY[7]), 1);
+----
+NULL
+
+query B
+SELECT array_fill(1, ARRAY[]::int[]) = '{}'::int[];
+----
+true
+
+query T
+SELECT array_fill(1, ARRAY[]::int[], ARRAY[]::int[]);
+----
+{}
+
+query error wrong number of array subscripts
+SELECT array_fill(1, ARRAY[0], ARRAY[]::int[]);
+
 # Too large of array
 
 query error array size exceeds the maximum allowed \(268435455 bytes\)

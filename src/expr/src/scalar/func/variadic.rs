@@ -305,16 +305,15 @@ fn array_fill<'a>(
         return Err(EvalError::ArrayFillWrongArraySubscripts);
     }
 
-    let fill_count: usize = dimensions
-        .iter()
-        .cloned()
-        .map(Some)
-        .reduce(|a, b| match (a, b) {
-            (Some(a), Some(b)) => a.checked_mul(b),
-            _ => None,
-        })
-        .flatten()
-        .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?;
+    // An empty dimension array describes an empty array, not a single element.
+    let fill_count: usize = if dimensions.is_empty() {
+        0
+    } else {
+        dimensions
+            .iter()
+            .try_fold(1usize, |a, b| a.checked_mul(*b))
+            .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?
+    };
 
     if matches!(
         mz_repr::datum_size(&fill).checked_mul(fill_count),
@@ -336,11 +335,11 @@ fn array_fill<'a>(
         return Err(EvalError::TempStorageBudgetExceeded);
     }
 
+    // Per PostgreSQL, an array without elements is zero-dimensional, whatever the requested
+    // dimensions and lower bounds. A one-dimensional array of length zero compares unequal to
+    // `'{}'` and nests into `{{},{}}` under `ARRAY[...]`.
     let array_dimensions = if fill_count == 0 {
-        vec![ArrayDimension {
-            lower_bound: 1,
-            length: 0,
-        }]
+        vec![]
     } else {
         dimensions
             .into_iter()
