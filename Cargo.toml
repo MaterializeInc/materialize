@@ -670,12 +670,12 @@ debug-assertions = true
 # version of Materialize.
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes. To bump
