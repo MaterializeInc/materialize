@@ -58,10 +58,10 @@
 //! slot. A short direct write is retried whole first, and its final error
 //! is classified the same way. Either `ENOSPC` additionally lowers the
 //! capacity to the bytes allocated at that moment. The volume can be shared
-//! with other writers, so [`FileStore::release_warm`] re-derives the
+//! with other writers, so [`FileStore::refresh_capacity`] re-derives the
 //! capacity from the volume's free space, and room another writer frees
-//! becomes usable again. Any other
-//! write or `fallocate` error disables writes for the store's lifetime. Data
+//! becomes usable again. Any other write or `fallocate` error disables
+//! writes for the store's lifetime. Data
 //! already written stays readable. A read error, short read, or checksum
 //! mismatch panics: there is no correct value to return, and the pool's
 //! contents are recreatable.
@@ -621,11 +621,9 @@ impl FileStore {
         (0..self.classes.len()).any(|class| self.can_alloc(class))
     }
 
-    /// Re-derives the capacity from the volume's free space, then punches
-    /// warm slots of every class, up to `max_bytes` per class rounded up to a
-    /// whole slot, and returns the bytes punched.
+    /// Punches warm slots of every class, up to `max_bytes` per class
+    /// rounded up to a whole slot, and returns the bytes punched.
     pub(crate) fn release_warm(&self, max_bytes: u64) -> u64 {
-        self.refresh_capacity();
         (0..self.classes.len())
             .map(|class| self.punch_warm(class, max_bytes).0)
             .sum()
@@ -634,7 +632,7 @@ impl FileStore {
     /// Sets the capacity to the bytes allocated plus the volume's
     /// [`usable_bytes`], at most the capacity `open` set. Keeps the capacity
     /// if the volume cannot be queried.
-    fn refresh_capacity(&self) {
+    pub(crate) fn refresh_capacity(&self) {
         let Ok(available) = sys::available_bytes(&self.dir) else {
             return;
         };

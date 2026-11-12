@@ -604,6 +604,9 @@ struct FileRelease {
     /// When the next release is due. `None` when an interval too long for
     /// `Instant` put it out of reach.
     due: Option<std::time::Instant>,
+    /// When the next capacity refresh is due, on its own cadence so that
+    /// disabling the release does not freeze the capacity.
+    refresh_due: std::time::Instant,
 }
 
 /// Beyond this many queued or in-flight spill entries, eviction degrades to
@@ -611,16 +614,25 @@ struct FileRelease {
 /// unbounded queue of still-resident chunks.
 pub const SPILL_IN_FLIGHT_MAX: usize = 64;
 
-/// The most extent bytes one spill-thread pass demotes to the file store
-/// while the eviction queue is empty. With queued evictions a pass demotes
-/// one extent, so a spill thread alternates one eviction with one demotion.
+/// The most extent bytes one file-mode pass demotes: a spill thread's pass
+/// while the eviction queue is empty, and an inline pass while spill threads
+/// exist. With queued evictions a spill thread's pass demotes one extent, so
+/// the thread alternates one eviction with one demotion.
 ///
 /// Demotions are device writes. On a device slower than the rate at which
-/// evictions fill the compressed tier, an unbounded pass never gets the tier
-/// back to its capacity, the eviction queue stays full, and every eviction
-/// runs inline on the threads that trip the budget. 16 MiB is about 35 ms of
-/// writes at the 475 MB/s an 8 vCPU instance-store NVMe sustained.
-const BACKGROUND_DEMOTION_BYTES: u64 = 16 << 20;
+/// evictions fill the compressed tier, an unbounded spill-thread pass never
+/// gets the tier back to its capacity, the eviction queue stays full, and
+/// every eviction runs inline on the threads that trip the budget. An inline
+/// pass runs on the caller's thread, often a timely worker, and an unbounded
+/// one after a lowered RSS target writes the whole overage before the worker
+/// returns. The bound is at least the largest size class, so an inline
+/// caller still demotes the extent its own eviction added. 16 MiB is about
+/// 35 ms of writes at the 475 MB/s an 8 vCPU instance-store NVMe sustained.
+const DEMOTION_PASS_BYTES: u64 = 16 << 20;
+
+/// How often a spill thread re-derives the file store's capacity from the
+/// volume's free space.
+const FILE_CAPACITY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// How long an idle spill thread parks, and how often a spill thread retries
 /// demotion while the file store's full hint is set.
@@ -864,6 +876,7 @@ impl Pool {
                 interval: std::time::Duration::ZERO,
                 bytes_per_class: 0,
                 due: Some(std::time::Instant::now()),
+                refresh_due: std::time::Instant::now(),
             }),
             queues: std::array::from_fn(|_| Mutex::new(VecDeque::new())),
             extent_queue: Mutex::new(VecDeque::new()),
@@ -1215,6 +1228,11 @@ impl Pool {
     /// slots that still hold blocks, so the store's disk usage follows its
     /// live extents. A zero interval or zero bytes disables the release. No
     /// effect on a swap-backed pool or one without spill threads.
+    ///
+    /// The store's capacity follows the volume's free space independently of
+    /// the release, re-derived by the spill threads every
+    /// [`FILE_CAPACITY_REFRESH_INTERVAL`]. Without spill threads it changes
+    /// only when the store hits `ENOSPC`.
     pub fn set_file_release(&self, interval: std::time::Duration, bytes_per_class: u64) {
         let mut release = self.0.file_release();
         release.interval = interval;
@@ -1246,14 +1264,15 @@ impl Pool {
     /// plus compressed-resident extents. The compressed tier's capacity is
     /// the gap above the budget and warm cap; zero (the default) collapses
     /// the tier, paging extents out as soon as they are written. A shrink
-    /// takes effect by paging out the oldest extents on this call.
+    /// starts paging out the oldest extents on this call.
     pub fn set_rss_target(&self, target_bytes: usize) {
         let new = u64::cast_from(target_bytes);
         let prev = self.0.rss_target_bytes.swap(new, Ordering::Relaxed);
         if new < prev {
             self.0.enforce_compressed_cap(Pass::Inline);
-            // An inline file-mode pass stops at the backstop threshold, and
-            // the spill threads demote the rest.
+            // An inline file-mode pass stops at the backstop threshold or
+            // after `DEMOTION_PASS_BYTES`, and the spill threads demote the
+            // rest.
             self.0.spill.cv.notify_all();
         }
     }
@@ -1589,7 +1608,7 @@ impl PoolInner {
                 return;
             }
             self.spill_trim(&mut hinted_retry);
-            self.spill_release_file();
+            self.spill_file_upkeep();
             let popped = self.spill_queue().pop_front();
             if let Some(meta) = popped {
                 self.spill_process(&meta, SpillKind::Evict);
@@ -1635,27 +1654,36 @@ impl PoolInner {
         self.enforce_compressed_cap(Pass::Background);
     }
 
-    /// Releases warm file store slots if the release is enabled and due.
-    /// The first spill thread to see it due claims the interval.
-    fn spill_release_file(&self) {
+    /// Re-derives the file store's capacity and releases warm file store
+    /// slots, each when due. The first spill thread to see one due claims
+    /// its interval.
+    fn spill_file_upkeep(&self) {
         let ExtentStore::File(store) = &self.store else {
             return;
         };
-        let bytes_per_class = {
+        let now = std::time::Instant::now();
+        let (refresh, release) = {
             let mut release = self.file_release();
-            let now = std::time::Instant::now();
+            let refresh = now >= release.refresh_due;
+            if refresh {
+                release.refresh_due = now + FILE_CAPACITY_REFRESH_INTERVAL;
+            }
             // A zero interval would release on every spill-loop wakeup and
             // punch the warm slots demotions are about to reuse.
-            if release.bytes_per_class == 0
-                || release.interval.is_zero()
-                || release.due.is_none_or(|due| now < due)
-            {
-                return;
+            let due = release.bytes_per_class != 0
+                && !release.interval.is_zero()
+                && release.due.is_some_and(|due| now >= due);
+            if due {
+                release.due = now.checked_add(release.interval);
             }
-            release.due = now.checked_add(release.interval);
-            release.bytes_per_class
+            (refresh, due.then_some(release.bytes_per_class))
         };
-        store.release_warm(bytes_per_class);
+        if refresh {
+            store.refresh_capacity();
+        }
+        if let Some(bytes_per_class) = release {
+            store.release_warm(bytes_per_class);
+        }
     }
 
     fn file_release(&self) -> MutexGuard<'_, FileRelease> {
@@ -2424,7 +2452,9 @@ impl PoolInner {
     /// moves to the back of the queue, and a store that can place no class
     /// or has writes disabled ends the pass. An inline file-mode pass with
     /// spill threads present stops at the [`backstop_threshold`], and a
-    /// background file-mode pass stops per [`BACKGROUND_DEMOTION_BYTES`].
+    /// background file-mode pass stops per [`DEMOTION_PASS_BYTES`]. An inline
+    /// file-mode pass with spill threads present also stops after
+    /// [`DEMOTION_PASS_BYTES`].
     fn enforce_compressed_cap(&self, pass: Pass) {
         let cap = self.compressed_cap();
         let over = match (&self.store, pass) {
@@ -2458,7 +2488,9 @@ impl PoolInner {
         let mut remaining = self.extent_queue().len();
         let demotion_limit = match pass {
             Pass::Background if !self.spill_queue().is_empty() => 1,
-            Pass::Background => BACKGROUND_DEMOTION_BYTES,
+            Pass::Background => DEMOTION_PASS_BYTES,
+            Pass::Inline if self.spill.threads.load(Ordering::Relaxed) > 0 => DEMOTION_PASS_BYTES,
+            // Without spill threads nobody else would demote.
             Pass::Inline => u64::MAX,
         };
         let mut demoted_bytes = 0u64;

@@ -1108,9 +1108,44 @@ fn evicted_chunks(pool: &Pool, chunks: u64) -> Vec<ChunkHandle> {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
+fn inline_pass_with_spill_threads_demotes_a_bounded_amount() {
+    assert!(
+        DEMOTION_PASS_BYTES >= u64::cast_from(SIZE_CLASSES[SIZE_CLASSES.len() - 1]),
+        "an inline caller demotes at least the extent its eviction added"
+    );
+    let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
+    let chunks = 4 * (DEMOTION_PASS_BYTES / extent);
+    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+    let handles = evicted_chunks(&pool, chunks);
+    pool.fake_spill_threads();
+
+    // A target below the budget collapses the tier, so all of it is above
+    // the backstop.
+    pool.set_rss_target(1);
+    let bound = DEMOTION_PASS_BYTES.div_ceil(extent);
+    assert_eq!(
+        pool.stats().extent_file_writes,
+        bound,
+        "the target change demotes at most the bound"
+    );
+    pool.enforce_compressed();
+    assert_eq!(
+        pool.stats().extent_file_writes,
+        2 * bound,
+        "the next inline caller continues by the bound"
+    );
+    for (seed, handle) in (0..chunks).zip_eq(&handles) {
+        assert_eq!(read(handle), payload(SMALL, seed));
+    }
+    drop(handles);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
 fn background_pass_demotes_a_bounded_amount() {
     let extent = u64::cast_from(stored_class_size(&payload(SMALL, 0), &TEST_CODEC));
-    let chunks = BACKGROUND_DEMOTION_BYTES / extent + 8;
+    let chunks = DEMOTION_PASS_BYTES / extent + 8;
     let (_dir, pool) = file_pool(1 << 30, 1 << 30);
     let handles = evicted_chunks(&pool, chunks);
 
@@ -1118,7 +1153,7 @@ fn background_pass_demotes_a_bounded_amount() {
     pool.0.enforce_compressed_cap(Pass::Background);
     assert_eq!(
         pool.stats().extent_file_writes,
-        BACKGROUND_DEMOTION_BYTES.div_ceil(extent),
+        DEMOTION_PASS_BYTES.div_ceil(extent),
         "one background pass demotes at most the bound"
     );
     pool.0.enforce_compressed_cap(Pass::Background);
@@ -1255,31 +1290,31 @@ fn file_release_punches_freed_slots_once_per_interval() {
     };
     demote_and_free(1);
     assert!(store.allocated_bytes() > 0, "a freed slot keeps its blocks");
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert!(store.allocated_bytes() > 0, "the release is off by default");
 
     pool.set_file_release(Duration::from_secs(3600), u64::MAX);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert_eq!(
         store.allocated_bytes(),
         0,
         "the first release is due at once"
     );
     demote_and_free(2);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert!(
         store.allocated_bytes() > 0,
         "the next release waits out the interval"
     );
     pool.set_file_release(Duration::from_secs(3600), u64::MAX);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert!(
         store.allocated_bytes() > 0,
         "reapplying the config does not move the release up"
     );
     pool.set_file_release(Duration::from_millis(1), u64::MAX);
     std::thread::sleep(Duration::from_millis(5));
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert_eq!(
         store.allocated_bytes(),
         0,
@@ -1325,11 +1360,11 @@ fn file_release_is_off_at_zero_interval_and_survives_huge_ones() {
     assert!(store.allocated_bytes() > 0);
 
     pool.set_file_release(Duration::ZERO, u64::MAX);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert!(store.allocated_bytes() > 0, "a zero interval disables");
 
     pool.set_file_release(Duration::MAX, u64::MAX);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert_eq!(
         store.allocated_bytes(),
         0,
@@ -1338,15 +1373,44 @@ fn file_release_is_off_at_zero_interval_and_survives_huge_ones() {
     let handle = insert(&pool, &payload(SMALL, 53));
     pool.evict(&handle);
     drop(handle);
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert!(
         store.allocated_bytes() > 0,
         "an interval past what `Instant` holds is never due again"
     );
     pool.set_file_release(Duration::from_millis(1), u64::MAX);
     std::thread::sleep(Duration::from_millis(5));
-    pool.0.spill_release_file();
+    pool.0.spill_file_upkeep();
     assert_eq!(store.allocated_bytes(), 0, "a later interval still applies");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn file_capacity_refreshes_with_the_release_off() {
+    use file::testing::fault;
+
+    let (_dir, pool) = file_pool(256 << 20, 64 << 20);
+    let store = pool.file_store().expect("file mode");
+    pool.set_file_release(std::time::Duration::ZERO, 0);
+    let class = store.class_for(10_000).expect("a class fits");
+    fault::fail_next(fault::Op::Fallocate, libc::ENOSPC);
+    assert_eq!(store.alloc(class), Err(file::AllocError::Full));
+    assert_eq!(store.capacity_bytes(), 0, "ENOSPC lowered the capacity");
+
+    pool.0.spill_file_upkeep();
+    assert!(
+        store.capacity_bytes() > 0,
+        "the refresh restores room on the volume"
+    );
+
+    fault::fail_next(fault::Op::Fallocate, libc::ENOSPC);
+    assert_eq!(store.alloc(class), Err(file::AllocError::Full));
+    pool.0.spill_file_upkeep();
+    assert_eq!(
+        store.capacity_bytes(),
+        0,
+        "the next refresh waits for its interval"
+    );
 }
 
 /// A typed body whose serialized form is its words.
