@@ -511,9 +511,10 @@ impl ComputeState {
         // reruns on every UpdateConfiguration, so flipping a gate on installs
         // the pool on the next tick. The pool is a process singleton with no
         // teardown: once installed it stays active for the life of the process.
-        // Turning every gate back off makes this block do nothing, so the pool
-        // keeps its last-applied budget rather than being uninstalled. Later
-        // ticks with a gate on retune the one instance in place.
+        // Later ticks retune the installed instance in place even with every
+        // gate off. Consumers that rendered under a gate keep spilling into the
+        // pool after it turns off, so a skipped retune would leave them on the
+        // old budget and RSS target, with no error.
         //
         // Storage's stash shares the singleton and gates only participation,
         // so its spill gate installs the pool too, on replicas where the
@@ -523,7 +524,7 @@ impl ComputeState {
         {
             use mz_storage_types::dyncfgs::{ENABLE_UPSERT_PAGED_SPILL, ENABLE_UPSERT_V2};
             use mz_timely_util::pool_config::{
-                PoolPagerConfig, apply_pool_config, spill_threads_for_workers,
+                PoolPagerConfig, apply_pool_config, global_pool_peek, spill_threads_for_workers,
             };
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
@@ -534,7 +535,7 @@ impl ComputeState {
             // Storage's config application sets the storage chunk gate.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
             mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
-            if !(compute_spill || storage_spill || sink_spill) {
+            if !(compute_spill || storage_spill || sink_spill) && global_pool_peek().is_none() {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
                 let spill_fraction = COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION.get(config);
