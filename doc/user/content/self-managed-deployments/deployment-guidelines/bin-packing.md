@@ -122,8 +122,7 @@ none of them can be removed while it runs a Materialize pod.
 The `MostAllocated` strategy prefers the node with the least free resources
 that still fits the pod. New replicas fill existing nodes before the autoscaler
 adds new ones, and nodes freed up by dropped or resized replicas tend to empty
-completely, so they can be removed. Switching to `MostAllocated` has been shown
-to noticeably improve bin packing for Materialize.
+completely, so they can be removed.
 
 Both strategies score nodes by the resources pods _request_, not by what they
 actually use.
@@ -275,8 +274,25 @@ kubectl delete pod -n <materialize-instance-namespace> <pod-name>
 ```
 
 Kubernetes recreates the pod on another node, since the original node is
-cordoned. The new replica serves queries while the recreated pod rehydrates.
-Wait for it to hydrate, using the query from the previous step.
+cordoned. The new replica serves queries while the original replica restarts
+and rehydrates.
+
+Some sizes, such as `6400cc`, run each replica as more than one pod, one per
+process, and these pods can be on different nodes. Delete only the pods on the
+cordoned node. Deleting any one of them restarts the whole replica, so you
+still need the temporary replica.
+
+Wait for the recreated pod to be ready:
+
+```bash
+kubectl wait -n <materialize-instance-namespace> --for=condition=Ready pod/<pod-name>
+```
+
+Then wait for the original replica to hydrate again, using the query from the
+previous step. Don't rely on a check made right after deleting the pod: until
+Materialize notices the restart, the original replica can still show as
+hydrated. Its `hydrated` count should drop, then climb back to match
+`objects`.
 
 ### 6. Remove the temporary replica
 
