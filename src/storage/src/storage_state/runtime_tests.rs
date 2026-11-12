@@ -217,10 +217,9 @@ fn step(worker: &mut Worker<'_>, startup: bool) {
     {
         worker.handle_internal_storage_command(command);
     }
-    let (discard, _) = mpsc::unbounded_channel();
-    worker.report_dropped_ids(&discard);
-    worker.report_status_updates(&discard);
-    worker.report_frontier_progress(&discard);
+    worker.report_dropped_ids();
+    worker.report_status_updates();
+    worker.report_frontier_progress();
     for response in worker.storage_state.executions.as_mut().unwrap().report() {
         worker
             .storage_state

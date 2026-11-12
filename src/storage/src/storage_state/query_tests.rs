@@ -36,7 +36,6 @@ pub(super) fn worker<'w>(
 fn connect(
     clients: &mpsc::UnboundedSender<(Uuid, CommandReceiver, ResponseSender)>,
     nonce: Uuid,
-    query: bool,
 ) -> (
     mpsc::UnboundedSender<StorageCommand>,
     mpsc::UnboundedReceiver<StorageResponse>,
@@ -44,23 +43,24 @@ fn connect(
     let (tx, commands) = mpsc::unbounded_channel();
     let (responses, rx) = mpsc::unbounded_channel();
     clients.send((nonce, commands, responses)).unwrap();
-    tx.send(if query {
-        StorageCommand::HelloQuery { nonce }
-    } else {
-        // ClusterClient consumes lifecycle Hello before the worker boundary.
-        StorageCommand::UpdateConfiguration(Default::default())
-    })
-    .unwrap();
+    tx.send(StorageCommand::HelloQuery { nonce }).unwrap();
     (tx, rx)
 }
 
 fn drive(worker: &mut Worker<'_>, done: impl Fn(&Worker<'_>) -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let (discard_responses, _) = mpsc::unbounded_channel();
     loop {
+        if let Some(commands) = &mut worker.storage_state.replica_commands {
+            while let Ok(command) = commands.try_recv() {
+                worker
+                    .storage_state
+                    .internal_cmd_tx
+                    .send(InternalStorageCommand::Replica(command));
+            }
+        }
         worker.poll_clients();
         worker.timely_worker.step();
-        worker.process_oneshot_ingestions(&discard_responses);
+        worker.process_oneshot_ingestions();
         while let Some(command) = worker
             .storage_state
             .internal_cmd_rx
@@ -111,6 +111,46 @@ fn request(id: Uuid) -> StorageCommand {
     }))
 }
 
+fn positioned(id: Uuid, position: CatalogPosition) -> StorageCommand {
+    let StorageCommand::RunOneshotIngestion(mut request) = request(id) else {
+        unreachable!()
+    };
+    request.catalog_position = Some(Box::new(position));
+    StorageCommand::RunOneshotIngestion(request)
+}
+
+fn catalog_position() -> CatalogPosition {
+    CatalogPosition {
+        shard_id: "s00000000-0000-0000-0000-000000000001".parse().unwrap(),
+        deployment_generation: 1,
+        upper: Timestamp::from(20),
+    }
+}
+
+fn native_command(
+    worker: &Worker<'_>,
+    commands: &mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
+    command: StorageCommand,
+) {
+    if worker.timely_worker.index() == 0 {
+        commands
+            .send(crate::replica::ReplicaCommand::Storage(0, command))
+            .unwrap();
+    }
+}
+
+fn initialize(
+    worker: &Worker<'_>,
+    commands: &mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
+) {
+    native_command(worker, commands, StorageCommand::InitializationComplete);
+    native_command(
+        worker,
+        commands,
+        StorageCommand::ApplyCatalogPosition(Box::new(catalog_position())),
+    );
+}
+
 #[mz_ore::test]
 fn native_catalog_wait_scope_and_cancellation() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -118,17 +158,12 @@ fn native_catalog_wait_scope_and_cancellation() {
     timely::execute_directly(|timely| {
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let (_commands, mut progress) = worker.enable_replica();
+        let (commands, mut progress) = worker.enable_replica();
         let owner = Uuid::new_v4();
         let sibling = Uuid::new_v4();
-        let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
-        let (sibling_tx, mut sibling_rx) = connect(&clients, sibling, true);
-        let lifecycle = |worker: &mut Worker<'_>, command| {
-            worker.handle_internal_storage_command(InternalStorageCommand::Replica(
-                crate::replica::ReplicaCommand::Storage(0, command),
-            ));
-        };
-        lifecycle(&mut worker, StorageCommand::InitializationComplete);
+        let (owner_tx, mut owner_rx) = connect(&clients, owner);
+        let (sibling_tx, mut sibling_rx) = connect(&clients, sibling);
+        native_command(&worker, &commands, StorageCommand::InitializationComplete);
         drive(&mut worker, |w| {
             w.storage_state.query_ready && w.storage_state.queries.len() == 2
         });
@@ -147,13 +182,6 @@ fn native_catalog_wait_scope_and_cancellation() {
             shard_id: mz_persist_types::ShardId::new(),
             deployment_generation: 1,
             upper: Timestamp::from(20),
-        };
-        let positioned = |id, position| {
-            let StorageCommand::RunOneshotIngestion(mut request) = request(id) else {
-                unreachable!()
-            };
-            request.catalog_position = Some(Box::new(position));
-            StorageCommand::RunOneshotIngestion(request)
         };
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
@@ -220,12 +248,14 @@ fn native_catalog_wait_scope_and_cancellation() {
         };
         let mut params = mz_storage_types::parameters::StorageParameters::default();
         params.statistics_collection_interval = Duration::from_secs(99);
-        lifecycle(
-            &mut worker,
+        native_command(
+            &worker,
+            &commands,
             StorageCommand::UpdateConfiguration(Box::new(params)),
         );
-        lifecycle(
-            &mut worker,
+        native_command(
+            &worker,
+            &commands,
             StorageCommand::ApplyCatalogPosition(Box::new(applied)),
         );
         // First-stage ingress is not application. The marker must follow the
@@ -295,18 +325,17 @@ fn native_observation_subscription_and_current_status_reconnect() {
     timely::execute_directly(|timely| {
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let (_commands, mut progress) = worker.enable_replica();
-        let (discard, _) = mpsc::unbounded_channel();
+        let (commands, mut progress) = worker.enable_replica();
         let observer = Uuid::new_v4();
         let copy = Uuid::new_v4();
-        let (observer_tx, mut observer_rx) = connect(&clients, observer, true);
-        let (_copy_tx, mut copy_rx) = connect(&clients, copy, true);
+        let (observer_tx, mut observer_rx) = connect(&clients, observer);
+        let (_copy_tx, mut copy_rx) = connect(&clients, copy);
         drive(&mut worker, |w| w.storage_state.queries.len() == 2);
         assert!(observer_rx.try_recv().is_err());
         assert!(copy_rx.try_recv().is_err());
 
         let premature = Uuid::new_v4();
-        let (premature_tx, mut premature_rx) = connect(&clients, premature, true);
+        let (premature_tx, mut premature_rx) = connect(&clients, premature);
         drive(&mut worker, |w| {
             w.storage_state.queries.contains_key(&premature)
         });
@@ -335,7 +364,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             .shared_status_updates
             .borrow_mut()
             .push(event(status.clone()));
-        worker.report_status_updates(&discard);
+        worker.report_status_updates();
         assert_eq!(worker.storage_state.latest_status_updates[&id], status);
         assert!(observer_rx.try_recv().is_err());
         drive(&mut worker, |_| !progress.is_empty());
@@ -348,12 +377,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
         };
         assert_eq!(original.update, status);
 
-        worker
-            .storage_state
-            .internal_cmd_tx
-            .send(InternalStorageCommand::Replica(
-                crate::replica::ReplicaCommand::Storage(0, StorageCommand::InitializationComplete),
-            ));
+        native_command(&worker, &commands, StorageCommand::InitializationComplete);
         drive(&mut worker, |w| w.storage_state.query_ready);
         assert_eq!(observer_rx.try_recv().unwrap(), StorageResponse::QueryReady);
         assert_eq!(copy_rx.try_recv().unwrap(), StorageResponse::QueryReady);
@@ -381,10 +405,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             .outputs
             .0
             .insert(id, 1);
-        worker.send_storage_response(
-            &discard,
-            StorageResponse::FrontierUpper(id, Antichain::new()),
-        );
+        worker.send_storage_response(StorageResponse::FrontierUpper(id, Antichain::new()));
         drive(&mut worker, |_| !progress.is_empty());
         let frontier = progress.try_recv().unwrap().1;
         assert_eq!(frontier.output_generation, Some(1));
@@ -401,7 +422,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             .unwrap()
             .dropped_outputs
             .push((id, 1));
-        worker.report_dropped_ids(&discard);
+        worker.report_dropped_ids();
         drive(&mut worker, |_| !progress.is_empty());
         assert!(observer_rx.try_recv().is_err());
         assert!(matches!(
@@ -416,7 +437,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             .shared_status_updates
             .borrow_mut()
             .push(event(status.clone()));
-        worker.report_status_updates(&discard);
+        worker.report_status_updates();
         assert_eq!(
             observer_rx.try_recv().unwrap(),
             StorageResponse::StatusUpdate(status.clone())
@@ -434,7 +455,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
                 .shared_status_updates
                 .borrow_mut()
                 .push(event(status.clone()));
-            worker.report_status_updates(&discard);
+            worker.report_status_updates();
         }
         let mut history = Vec::new();
         for _ in 0..3 {
@@ -456,7 +477,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
         assert_eq!(history[1].timestamp, mz_ore::now::to_datetime(2));
         assert_eq!(history[2].timestamp, mz_ore::now::to_datetime(2));
         let reconnect = Uuid::new_v4();
-        let (reconnect_tx, mut reconnect_rx) = connect(&clients, reconnect, true);
+        let (reconnect_tx, mut reconnect_rx) = connect(&clients, reconnect);
         drive(&mut worker, |w| {
             w.storage_state.queries.contains_key(&reconnect)
         });
@@ -501,8 +522,7 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
     timely::execute_directly(|timely| {
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let (_commands, _progress) = worker.enable_replica();
-        let (discard, _) = mpsc::unbounded_channel();
+        let (commands, _progress) = worker.enable_replica();
         let id = GlobalId::User(602);
         let stats = SinkStatistics::new(id, 0, &worker.storage_state.metrics.sink_statistics);
         let remote = SinkStatistics::new(id, 1, &worker.storage_state.metrics.sink_statistics);
@@ -513,14 +533,9 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
             .initialize_sink(id, || stats.clone());
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
-        let (a_tx, mut a_rx) = connect(&clients, a, true);
-        let (b_tx, mut b_rx) = connect(&clients, b, true);
-        worker
-            .storage_state
-            .internal_cmd_tx
-            .send(InternalStorageCommand::Replica(
-                crate::replica::ReplicaCommand::Storage(0, StorageCommand::InitializationComplete),
-            ));
+        let (a_tx, mut a_rx) = connect(&clients, a);
+        let (b_tx, mut b_rx) = connect(&clients, b);
+        native_command(&worker, &commands, StorageCommand::InitializationComplete);
         drive(&mut worker, |w| {
             w.storage_state.query_ready && w.storage_state.queries.len() == 2
         });
@@ -533,7 +548,7 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
                 .storage_state
                 .aggregated_statistics
                 .ingest(Vec::new(), vec![(0, remote.snapshot().unwrap())]);
-            worker.report_storage_statistics(&discard);
+            worker.report_storage_statistics();
         }
         assert!(a_rx.try_recv().is_err());
         assert!(b_rx.try_recv().is_err());
@@ -546,7 +561,7 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
             a_rx.try_recv().is_err(),
             "subscription does not replay statistics"
         );
-        worker.report_storage_statistics(&discard);
+        worker.report_storage_statistics();
         let first = a_rx.try_recv().unwrap();
         assert_eq!(first, b_rx.try_recv().unwrap());
         let StorageResponse::StatisticsUpdates(sources, sinks) = first else {
@@ -556,7 +571,7 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
         assert_eq!(sinks.len(), 1);
         assert_eq!(sinks[0].messages_staged, 30u64.into());
         stats.inc_messages_staged_by(5);
-        worker.report_storage_statistics(&discard);
+        worker.report_storage_statistics();
         let next = a_rx.try_recv().unwrap();
         assert_eq!(next, b_rx.try_recv().unwrap());
         let StorageResponse::StatisticsUpdates(_, sinks) = next else {
@@ -578,19 +593,17 @@ fn query_worker_pending_routing_and_retirement() {
         let _guard = handle.enter();
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let lifecycle = Uuid::from_u128(1);
         let owner = Uuid::from_u128(2);
         let sibling = Uuid::from_u128(3);
         let id = Uuid::from_u128(4);
-        let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, lifecycle, false);
-        let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
-        let (sibling_tx, mut sibling_rx) = connect(&clients, sibling, true);
-        owner_tx.send(request(id)).unwrap();
+        let (commands, mut progress) = worker.enable_replica();
+        let (owner_tx, mut owner_rx) = connect(&clients, owner);
+        let (sibling_tx, mut sibling_rx) = connect(&clients, sibling);
+        owner_tx.send(positioned(id, catalog_position())).unwrap();
         drive(&mut worker, |w| {
             w.storage_state.query_owners.contains_key(&id)
                 && w.storage_state.queries.contains_key(&sibling)
         });
-        assert!(worker.storage_state.initialization.is_some());
         assert!(!worker.storage_state.query_ready);
         assert!(owner_rx.try_recv().is_err());
         barrier.wait();
@@ -617,8 +630,10 @@ fn query_worker_pending_routing_and_retirement() {
         barrier.wait();
         let pending = Uuid::from_u128(5);
         // The sibling cancelled this ID before ever submitting a run.
-        sibling_tx.send(request(id)).unwrap();
-        owner_tx.send(request(pending)).unwrap();
+        sibling_tx.send(positioned(id, catalog_position())).unwrap();
+        owner_tx
+            .send(positioned(pending, catalog_position()))
+            .unwrap();
         drive(&mut worker, |w| {
             w.storage_state.query_owners.contains_key(&pending)
         });
@@ -634,26 +649,33 @@ fn query_worker_pending_routing_and_retirement() {
         });
         assert!(worker.storage_state.query_owners.is_empty());
         assert!(worker.storage_state.queries.contains_key(&sibling));
-        assert!(worker.storage_state.initialization.is_some());
+        assert!(!worker.storage_state.query_ready);
         barrier.wait();
-        lifecycle_tx
-            .send(StorageCommand::InitializationComplete)
-            .unwrap();
-        drive(&mut worker, |w| w.storage_state.query_ready);
+        initialize(&worker, &commands);
+        drive(&mut worker, |w| {
+            w.storage_state.query_ready
+                && w.storage_state.applied_catalog_position == Some(catalog_position())
+        });
         assert!(matches!(
             sibling_rx.try_recv(),
             Ok(StorageResponse::QueryReady)
         ));
-        assert!(lifecycle_rx.try_recv().is_err());
+        while let Ok((_, response)) = progress.try_recv() {
+            assert!(matches!(response.response,
+                crate::server::ReplicaStorageResponse::Response(StorageResponse::CatalogCatchup(p))
+                if *p == catalog_position()));
+        }
         barrier.wait();
         drop(sibling_tx);
         drive(&mut worker, |w| w.storage_state.queries.is_empty());
         barrier.wait();
-        drop(lifecycle_tx);
         drop(clients);
-        worker.run();
-        // Timely's sequencer is intentionally live until the server returns.
-        worker.timely_worker.drop_dataflow(0);
+        drive(&mut worker, |w| {
+            w.storage_state.peers.is_empty() && w.storage_state.queries.is_empty()
+        });
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     })
     .unwrap();
     for result in guards.join() {
@@ -672,11 +694,12 @@ fn query_worker_results_preserve_maintained_work() {
         let _guard = handle.enter();
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, Uuid::from_u128(1), false);
-        lifecycle_tx
-            .send(StorageCommand::InitializationComplete)
-            .unwrap();
-        drive(&mut worker, |w| w.storage_state.query_ready);
+        let (commands, mut progress) = worker.enable_replica();
+        initialize(&worker, &commands);
+        drive(&mut worker, |w| {
+            w.storage_state.query_ready
+                && w.storage_state.applied_catalog_position == Some(catalog_position())
+        });
         barrier.wait();
 
         let maintained = GlobalId::User(9);
@@ -701,18 +724,17 @@ fn query_worker_results_preserve_maintained_work() {
 
         let owner = Uuid::from_u128(2);
         // Worker one's local endpoint arrives after the sequenced open and
-        // QueryReady. Responses must wait for that endpoint, not leak to lifecycle.
+        // QueryReady. Responses must wait for that endpoint, not leak to native progress.
         let mut owner_client =
-            (worker.timely_worker.index() == 0).then(|| connect(&clients, owner, true));
+            (worker.timely_worker.index() == 0).then(|| connect(&clients, owner));
         drive(&mut worker, |w| {
             w.storage_state.queries.contains_key(&owner)
         });
         barrier.wait();
         let (owner_tx, mut owner_rx) = owner_client
             .take()
-            .unwrap_or_else(|| connect(&clients, owner, true));
-        let (sibling_tx, mut sibling_rx) = connect(&clients, Uuid::from_u128(3), true);
-        let (replacement_tx, mut replacement_rx) = connect(&clients, Uuid::from_u128(4), false);
+            .unwrap_or_else(|| connect(&clients, owner));
+        let (sibling_tx, mut sibling_rx) = connect(&clients, Uuid::from_u128(3));
 
         let results_barrier = Arc::clone(&results_barrier);
         let saw_error = Arc::clone(&saw_error);
@@ -730,7 +752,7 @@ fn query_worker_results_preserve_maintained_work() {
                     Some(StorageResponse::QueryReady)
                 ));
                 let id = Uuid::from_u128(5);
-                owner_tx.send(request(id)).unwrap();
+                owner_tx.send(positioned(id, catalog_position())).unwrap();
                 worker_thread.unpark();
                 let Some(StorageResponse::StagedBatches(batches)) = owner_rx.recv().await else {
                     panic!("expected owner result");
@@ -740,13 +762,11 @@ fn query_worker_results_preserve_maintained_work() {
                     saw_error.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 assert!(sibling_rx.try_recv().is_err());
-                assert!(lifecycle_rx.try_recv().is_err());
-                assert!(replacement_rx.try_recv().is_err());
                 results_barrier.wait().await;
                 assert!(saw_error.load(std::sync::atomic::Ordering::SeqCst));
                 drop(owner_tx);
                 let id = Uuid::from_u128(6);
-                sibling_tx.send(request(id)).unwrap();
+                sibling_tx.send(positioned(id, catalog_position())).unwrap();
                 worker_thread.unpark();
                 let Some(StorageResponse::StagedBatches(batches)) = sibling_rx.recv().await else {
                     panic!("expected healthy sibling result");
@@ -755,14 +775,17 @@ fn query_worker_results_preserve_maintained_work() {
                 results_barrier.wait().await;
             })
             .await;
-            // Closing the real channels must terminate Worker::run, including
-            // when the assertion/timeout path leaves initialization incomplete.
-            drop((lifecycle_tx, replacement_tx, sibling_tx));
+            drop(sibling_tx);
             worker_thread.unpark();
             result.unwrap();
         });
-        worker.run();
+        drive(&mut worker, |_| task.is_finished());
         handle.block_on(task);
+        assert!(
+            progress.try_recv().is_err(),
+            "query results must not use native progress"
+        );
+        drive(&mut worker, |w| w.storage_state.queries.is_empty());
         assert!(worker.storage_state.source_tokens.contains_key(&maintained));
         assert!(Rc::ptr_eq(
             &worker.storage_state.source_uppers[&maintained],
@@ -772,7 +795,9 @@ fn query_worker_results_preserve_maintained_work() {
             worker.storage_state.reported_frontiers[&maintained],
             *upper.borrow()
         );
-        worker.timely_worker.drop_dataflow(0);
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     })
     .unwrap();
     for result in guards.join() {
@@ -789,21 +814,21 @@ fn query_worker_completion_reclaims_work_before_disconnect() {
         let _guard = handle.enter();
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
-        let (lifecycle_tx, _) = connect(&clients, Uuid::from_u128(1), false);
+        let (commands, _progress) = worker.enable_replica();
         let owner = Uuid::from_u128(2);
-        let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
-        lifecycle_tx
-            .send(StorageCommand::InitializationComplete)
-            .unwrap();
+        let (owner_tx, mut owner_rx) = connect(&clients, owner);
+        initialize(&worker, &commands);
         drive(&mut worker, |w| {
-            w.storage_state.query_ready && w.storage_state.queries.contains_key(&owner)
+            w.storage_state.query_ready
+                && w.storage_state.applied_catalog_position == Some(catalog_position())
+                && w.storage_state.queries.contains_key(&owner)
         });
         assert!(matches!(
             owner_rx.try_recv(),
             Ok(StorageResponse::QueryReady)
         ));
         let id = Uuid::from_u128(3);
-        owner_tx.send(request(id)).unwrap();
+        owner_tx.send(positioned(id, catalog_position())).unwrap();
         drive(&mut worker, |w| {
             w.storage_state.queries[&owner].seen.contains(&id)
                 && !w.storage_state.query_owners.contains_key(&id)
@@ -815,9 +840,13 @@ fn query_worker_completion_reclaims_work_before_disconnect() {
             Ok(StorageResponse::StagedBatches(b)) if b.contains_key(&id)
         ));
         barrier.wait();
-        drop((clients, owner_tx, lifecycle_tx));
-        worker.run();
-        worker.timely_worker.drop_dataflow(0);
+        drop((clients, owner_tx));
+        drive(&mut worker, |w| {
+            w.storage_state.peers.is_empty() && w.storage_state.queries.is_empty()
+        });
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     })
     .unwrap();
     for result in guards.join() {
@@ -826,12 +855,13 @@ fn query_worker_completion_reclaims_work_before_disconnect() {
 }
 
 #[mz_ore::test]
-fn query_worker_container_shutdown() {
+fn query_worker_unopened_disconnect() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _guard = runtime.enter();
     timely::execute_directly(|timely| {
         let (clients, rx) = mpsc::unbounded_channel();
         let mut worker = worker(timely, rx);
+        let (_native_commands, _progress) = worker.enable_replica();
         let (commands, responses) = mpsc::unbounded_channel();
         let (response_tx, _response_rx) = mpsc::unbounded_channel();
         clients
@@ -839,8 +869,12 @@ fn query_worker_container_shutdown() {
             .unwrap();
         drop(commands);
         drop(clients);
-        worker.run();
+        drive(&mut worker, |w| {
+            w.storage_state.peers.is_empty() && w.storage_state.queries.is_empty()
+        });
         assert!(worker.storage_state.peers.is_empty());
-        worker.timely_worker.drop_dataflow(0);
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     });
 }
