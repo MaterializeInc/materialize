@@ -53,5 +53,5 @@ contains:type "bigint_map[]" does not exist
 > INSERT INTO record_null VALUES (1), (2);
 > GRANT SELECT ON record_null TO PUBLIC;
 
-$ http-request method=POST url=http://${testdrive.materialize-http-addr}/api/sql content-type=application/json
+$ http-request method=POST url=${testdrive.materialize-http-url}/api/sql content-type=application/json
 {"query": "SELECT ARRAY[ROW(1), ROW(CASE WHEN k = 1 THEN 1 END)], ARRAY[ROW(1)] || ARRAY[ROW(CASE WHEN k = 1 THEN 1 END)] FROM record_null ORDER BY k"}

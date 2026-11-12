@@ -192,7 +192,7 @@ def testdrive(no_reset: bool) -> Testdrive:
     return Testdrive(
         materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
         materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-        materialize_use_https=False,
+        materialize_use_https=True,
         no_consistency_checks=True,
         set_persist_urls=False,
         network_mode="host",
