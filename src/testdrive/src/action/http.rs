@@ -17,7 +17,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_request(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let url = cmd.args.string("url")?;
     let method: Method = cmd.args.parse("method")?;

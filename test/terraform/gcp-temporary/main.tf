@@ -289,10 +289,13 @@ module "materialize_instance" {
 
   license_key = var.license_key
 
-  issuer_ref = {
-    name = module.self_signed_cluster_issuer.issuer_name
-    kind = "ClusterIssuer"
-  }
+  # TODO: Enable TLS. With `issuer_ref` set, cert-manager never issued the
+  # environmentd certificate in one CI run, so setup timed out. Enabling it
+  # also needs `use_https=True` in `workflow_gcp_temporary`.
+  # issuer_ref = {
+  #   name = module.self_signed_cluster_issuer.issuer_name
+  #   kind = "ClusterIssuer"
+  # }
 
   depends_on = [
     module.gke,

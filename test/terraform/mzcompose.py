@@ -188,11 +188,11 @@ def run_ignore_error(
         pass
 
 
-def testdrive(no_reset: bool) -> Testdrive:
+def testdrive(no_reset: bool, use_https: bool = True) -> Testdrive:
     return Testdrive(
         materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
         materialize_url_internal="postgres://mz_system:materialize@127.0.0.1:6877/materialize",
-        materialize_use_https=True,
+        materialize_use_https=use_https,
         no_consistency_checks=True,
         set_persist_urls=False,
         network_mode="host",
@@ -282,14 +282,15 @@ def run_mz_debug(env: dict[str, str] | None = None) -> None:
 
 class State:
     path: Path
-    environmentd_port_forward_process: subprocess.Popen[bytes] | None
-    balancerd_port_forward_process: subprocess.Popen[bytes] | None
+    port_forward_processes: list[subprocess.Popen[bytes]]
     version: int
+    use_https: bool
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, use_https: bool = True):
+        """`use_https` must match whether the setup sets `issuer_ref`."""
         self.path = path
-        self.environmentd_port_forward_process = None
-        self.balancerd_port_forward_process = None
+        self.use_https = use_https
+        self.port_forward_processes = []
         self.version = 0
 
     def _kubectl_get_pods(self, namespace: str) -> None:
@@ -499,14 +500,9 @@ class State:
             raise ValueError("Never completed")
 
     def cleanup(self) -> None:
-        if self.environmentd_port_forward_process:
-            os.killpg(
-                os.getpgid(self.environmentd_port_forward_process.pid), signal.SIGTERM
-            )
-        if self.balancerd_port_forward_process:
-            os.killpg(
-                os.getpgid(self.balancerd_port_forward_process.pid), signal.SIGTERM
-            )
+        for process in self.port_forward_processes:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        self.port_forward_processes = []
 
     def destroy(self, env=None) -> None:
         print("--- Destroying")
@@ -563,7 +559,7 @@ class State:
                 ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
         if run_testdrive_files:
-            with c.override(testdrive(no_reset=False)):
+            with c.override(testdrive(no_reset=False, use_https=self.use_https)):
                 c.up(Service("testdrive", idle=True))
                 c.run_testdrive_files(*TD_CMD, *files, *TERRAFORM_TESTDRIVE_FILES)
 
@@ -622,12 +618,11 @@ class State:
         balancerd_svc = self._find_service("balancerd")
         print(f"Got balancerd service: {balancerd_svc}")
 
-        self.environmentd_port_forward_process = self._port_forward(
-            f"svc/{environmentd_svc}", "6877:6877", "6878:6878"
-        )
-        self.balancerd_port_forward_process = self._port_forward(
-            f"svc/{balancerd_svc}", "6875:6875", "6876:6876"
-        )
+        self.port_forward_processes = [
+            self._port_forward(f"svc/{environmentd_svc}", "6877:6877"),
+            self._port_forward(f"svc/{environmentd_svc}", "6878:6878"),
+            self._port_forward(f"svc/{balancerd_svc}", "6875:6875", "6876:6876"),
+        ]
         time.sleep(10)
 
         with psycopg.connect(
@@ -639,7 +634,7 @@ class State:
                 cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)")
                 cur.execute("ALTER SYSTEM SET enable_create_table_from_source = true")
 
-        with c.override(testdrive(no_reset=False)):
+        with c.override(testdrive(no_reset=False, use_https=self.use_https)):
             c.up(Service("testdrive", idle=True))
             c.testdrive(dedent("""
                > SELECT 1
@@ -1426,7 +1421,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
-    state = State(path)
+    state = State(path, use_https=False)
     run_project = gcp_run_project()
     project = run_project or GCP_SHARED_PROJECT
 
