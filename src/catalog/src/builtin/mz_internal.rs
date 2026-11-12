@@ -41,6 +41,8 @@ use super::{
     SUPPORT_SELECT,
 };
 
+// TODO(SQL-932): every builtin relation but `mz_catalog_state` and the audit
+// log should stop reading this source and read `mz_catalog_state` instead.
 pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_catalog_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -53,6 +55,32 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     access: vec![],
     ontology: None,
 });
+
+/// Every catalog record but the audit log, with its kind as a column.
+///
+/// The audit log is append-only, so a relation reading `mz_catalog_raw` decodes
+/// the whole audit log at hydration. To optimize on hydration time,
+/// catalog relations read this copy instead and filter on `kind`.
+pub static MZ_CATALOG_STATE: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_catalog_state",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CATALOG_STATE_OID,
+        desc: RelationDesc::builder()
+            .with_column("kind", SqlScalarType::String.nullable(false))
+            .with_column("data", SqlScalarType::Jsonb.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (ASSERT NOT NULL kind) AS
+SELECT data->>'kind' AS kind, data
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' <> 'AuditLog'",
+        is_retained_metrics_object: false,
+        access: vec![],
+        ontology: None,
+    });
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_postgres_sources",

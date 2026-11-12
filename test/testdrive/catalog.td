@@ -722,6 +722,7 @@ pg_authid_core                           ""
 name                   cluster             comment
 ----------------------------------------------------
 mz_aws_connections             mz_catalog_server   ""
+mz_catalog_state               mz_catalog_server   ""
 mz_cluster_auto_scaling_strategies    mz_catalog_server   ""
 mz_cluster_reconfigurations    mz_catalog_server   ""
 mz_cluster_schedules           mz_catalog_server   ""
