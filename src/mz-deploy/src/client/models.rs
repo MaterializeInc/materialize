@@ -141,6 +141,8 @@ pub enum ClusterConfig {
     },
     /// Unmanaged cluster with explicit replicas
     Unmanaged {
+        /// The attached policy's unquoted catalog name, if any.
+        query_policy: Option<String>,
         /// Replica configurations
         replicas: Vec<ClusterReplica>,
         /// Privilege grants on the cluster
@@ -525,6 +527,7 @@ mod tests {
     #[mz_ore::test]
     fn test_cluster_config_unmanaged() {
         let config = ClusterConfig::Unmanaged {
+            query_policy: None,
             replicas: vec![
                 ClusterReplica {
                     name: "r1".to_string(),
@@ -540,7 +543,10 @@ mod tests {
             grants: vec![],
         };
 
-        if let ClusterConfig::Unmanaged { replicas, grants } = &config {
+        if let ClusterConfig::Unmanaged {
+            replicas, grants, ..
+        } = &config
+        {
             assert_eq!(replicas.len(), 2);
             assert_eq!(replicas[0].name, "r1");
             assert_eq!(replicas[1].availability_zone, Some("use1-az1".to_string()));
@@ -554,6 +560,7 @@ mod tests {
     fn test_cluster_config_unmanaged_empty_replicas() {
         // Unmanaged clusters with 0 replicas are valid
         let config = ClusterConfig::Unmanaged {
+            query_policy: None,
             replicas: vec![],
             grants: vec![ObjectGrant {
                 grantee: "admin".to_string(),
@@ -561,7 +568,10 @@ mod tests {
             }],
         };
 
-        if let ClusterConfig::Unmanaged { replicas, grants } = &config {
+        if let ClusterConfig::Unmanaged {
+            replicas, grants, ..
+        } = &config
+        {
             assert!(replicas.is_empty());
             assert_eq!(grants.len(), 1);
         } else {

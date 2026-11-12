@@ -1025,7 +1025,9 @@ fn log_cluster_creation(staging_cluster: &str, prod_cluster: &str, config: &Clus
                 prod_cluster
             );
         }
-        ClusterConfig::Unmanaged { replicas, grants } => {
+        ClusterConfig::Unmanaged {
+            replicas, grants, ..
+        } => {
             verbose!(
                 "  Created unmanaged cluster '{}' with {} replica(s), {} grant(s) (cloned from '{}')",
                 staging_cluster,

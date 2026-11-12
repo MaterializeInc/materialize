@@ -72,7 +72,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 volumes_extra=["secrets:/secrets"],
                 default_replication_factor=1,
                 additional_system_parameter_defaults={
-                    "default_cluster_replication_factor": "1"
+                    "default_cluster_replication_factor": "1",
+                    "enable_query_policies": "true",
                 },
             )
             test_args = ["dbt-materialize/tests"]

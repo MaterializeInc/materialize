@@ -107,9 +107,12 @@ impl ProvisioningClient<'_> {
 
                 grants
             }
-            ClusterConfig::Unmanaged { replicas, grants } => {
-                let create_cluster_sql =
-                    format!("CREATE CLUSTER {} REPLICAS ()", quote_identifier(name));
+            ClusterConfig::Unmanaged {
+                replicas,
+                grants,
+                query_policy,
+            } => {
+                let create_cluster_sql = unmanaged_cluster_sql(name, query_policy.as_deref());
 
                 self.client
                     .execute(&create_cluster_sql, &[])
@@ -170,5 +173,39 @@ impl ProvisioningClient<'_> {
         }
 
         Ok(())
+    }
+}
+
+fn unmanaged_cluster_sql(name: &str, query_policy: Option<&str>) -> String {
+    let mut sql = format!("CREATE CLUSTER {} REPLICAS ()", quote_identifier(name));
+    if let Some(policy) = query_policy {
+        sql.push_str(&format!(", QUERY POLICY = {}", quote_identifier(policy)));
+    }
+    sql
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn unmanaged_cluster_policy() {
+        for policy in [None, Some("policy"), Some("Policy \"quoted\"")] {
+            let sql = unmanaged_cluster_sql("Cluster \"quoted\"", policy);
+            let parsed = crate::client::parse_create_cluster(&sql).unwrap();
+            let expected = match policy {
+                None => r#"CREATE CLUSTER "Cluster ""quoted""" (REPLICAS = ())"#,
+                Some("policy") => {
+                    r#"CREATE CLUSTER "Cluster ""quoted""" (REPLICAS = (), QUERY POLICY = "policy")"#
+                }
+                Some(_) => {
+                    r#"CREATE CLUSTER "Cluster ""quoted""" (REPLICAS = (), QUERY POLICY = "Policy ""quoted""")"#
+                }
+            };
+            assert_eq!(
+                parsed,
+                crate::client::parse_create_cluster(expected).unwrap()
+            );
+        }
     }
 }
