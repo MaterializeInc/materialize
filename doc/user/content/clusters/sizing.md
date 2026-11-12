@@ -18,7 +18,7 @@ during [hydration](/fundamentals/concepts/hydration/).
 
 This guide will walk you through how to estimate resources required for
 hydration. Before reading this guide, make sure you understand the [lifecycle of
-a cluster](/fundamentals/concepts/clusters/#lifecycle-of-a-cluster).
+a cluster](/clusters/lifecycle-of-a-cluster/).
 
 {{< note >}}
 Hydration rebuilds a dataflow's in-memory state from the storage layer, which
