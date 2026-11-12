@@ -492,6 +492,15 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Upper bound of the delay before restarting a source / sink that keeps halting.
+pub const STORAGE_SUSPEND_AND_RESTART_MAX_DELAY: Config<Duration> = Config::new(
+    "storage_suspend_and_restart_max_delay",
+    Duration::ZERO,
+    "Cap that `storage_suspend_and_restart_delay` doubles up to each time a source / sink halts \
+     again before it has run for this long. A value below that delay disables the backoff.",
+    ParameterScope::Replica,
+);
+
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
@@ -635,6 +644,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
+        .add(&STORAGE_SUSPEND_AND_RESTART_MAX_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)

@@ -9,13 +9,13 @@
 
 //! Healthcheck common
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::Hashable;
@@ -329,6 +329,30 @@ pub struct HealthStatusMessage {
     pub update: HealthStatusUpdate,
 }
 
+/// The delay before a halted dataflow restarts, which doubles with each consecutive halt.
+#[derive(Debug)]
+pub(crate) struct RestartBackoff {
+    pub initial: Duration,
+    pub max: Duration,
+    pub consecutive_halts: Rc<Cell<u32>>,
+}
+
+impl RestartBackoff {
+    /// Returns how long a dataflow that halted after running for `uptime` waits to restart.
+    fn next_delay(&self, uptime: Duration) -> Duration {
+        let max = self.max.max(self.initial);
+        // A dataflow that stayed up for `max` is not in a restart loop.
+        let halts = if uptime >= max {
+            0
+        } else {
+            self.consecutive_halts.get()
+        };
+        self.consecutive_halts.set(halts.saturating_add(1));
+        let factor = 1u32.checked_shl(halts).unwrap_or(u32::MAX);
+        self.initial.saturating_mul(factor).min(max)
+    }
+}
+
 /// Writes updates that come across `health_stream` to the collection's status shards, as identified
 /// by their `CollectionMetadata`.
 ///
@@ -354,7 +378,7 @@ pub(crate) fn health_operator<'scope, T: Timestamp, P>(
     write_namespaced_map: bool,
     // How long to wait before initiating a `SuspendAndRestart` command, to
     // prevent hot restart loops.
-    suspend_and_restart_delay: Duration,
+    restart_backoff: RestartBackoff,
 ) -> PressOnDropButton
 where
     P: HealthOperator + 'static,
@@ -385,6 +409,11 @@ where
     );
 
     let button = health_op.build(move |mut _capabilities| async move {
+        let started_at = Instant::now();
+        // Decided once, because each later health update of a halted object halts it again, which
+        // would otherwise count as a consecutive halt.
+        let mut restart_delay = None;
+
         let mut health_states: BTreeMap<_, _> = mark_starting
             .iter()
             .copied()
@@ -504,12 +533,14 @@ where
                         halting_id
                     );
 
+                    let delay = *restart_delay
+                        .get_or_insert_with(|| restart_backoff.next_delay(started_at.elapsed()));
                     info!(
                         "Broadcasting suspend-and-restart \
                         command because of {:?} after {:?} delay",
-                        halt_with, suspend_and_restart_delay
+                        halt_with, delay
                     );
-                    tokio::time::sleep(suspend_and_restart_delay).await;
+                    tokio::time::sleep(delay).await;
                     health_operator_impl.send_halt(id, halt_with);
                 }
             }
@@ -585,6 +616,26 @@ impl HealthStatusUpdate {
 mod tests {
     use super::*;
     use itertools::Itertools;
+
+    #[mz_ore::test]
+    fn test_restart_backoff() {
+        let secs = Duration::from_secs;
+        let backoff = RestartBackoff {
+            initial: secs(5),
+            max: secs(30),
+            consecutive_halts: Default::default(),
+        };
+        let delays: Vec<_> = (0..5).map(|_| backoff.next_delay(secs(1))).collect();
+        assert_eq!(delays, [5, 10, 20, 30, 30].map(secs), "doubles up to max");
+        assert_eq!(backoff.next_delay(secs(30)), secs(5), "starts over");
+        assert_eq!(backoff.next_delay(secs(1)), secs(10), "doubles again");
+
+        let disabled = RestartBackoff {
+            max: Duration::ZERO,
+            ..backoff
+        };
+        assert_eq!(disabled.next_delay(secs(1)), secs(5), "max below initial");
+    }
 
     // Actual timely tests for `health_operator`.
 
@@ -1107,7 +1158,11 @@ mod tests {
                                     input_mapping: inputs,
                                 },
                                 write_namespaced_map,
-                                Duration::from_secs(5),
+                                RestartBackoff {
+                                    initial: Duration::from_secs(5),
+                                    max: Duration::ZERO,
+                                    consecutive_halts: Default::default(),
+                                },
                             )));
                         });
                 });
