@@ -4027,11 +4027,8 @@ impl Coordinator {
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     // Receive a single command.
-                    //
-                    // Placed above `cmd_rx`, where a sustained command flood cannot starve it.
-                    // It cannot starve `cmd_rx` in turn: only the sequencer, running on this loop
-                    // after taking a command off `cmd_rx`, sends to this channel, so each pending
-                    // read costs one command first.
+                    // Above `cmd_rx` so a command flood cannot starve it. Only the sequencer
+                    // sends here.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -4083,11 +4080,6 @@ impl Coordinator {
                     // sub-millisecond), the lower branches (including the idle
                     // watchdog) stay reachable. See the pin above for why the
                     // future is persisted rather than recreated per iteration.
-                    //
-                    // Sitting below `cmd_rx`, a sustained command flood starves this branch.
-                    // Under write load, `Message::GroupCommitApplied` retires pending reads
-                    // instead. This branch covers reads that no group commit linearizes, such as
-                    // reads on other timelines or reads during idle periods.
                     () = linearize_reads_notified.as_mut() => {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);

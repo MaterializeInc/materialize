@@ -140,8 +140,6 @@ impl Coordinator {
                 // The committer applied `write_ts` to the oracle, so the read ts is at least
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
-                // This message arrives on the top-priority internal channel, which a command
-                // flood cannot starve, unlike the `LinearizeReads` re-check below `cmd_rx`.
                 self.retire_local_reads_linearized_by(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
                 for result in internal_results {
@@ -1112,11 +1110,7 @@ impl Coordinator {
         }
     }
 
-    /// Retires pending reads that the local timestamp oracle having applied `applied_ts`
-    /// linearizes.
-    ///
-    /// Reads that stay pending keep the re-check scheduled by the
-    /// [`Coordinator::message_linearize_reads`] pass that left them pending.
+    /// Retires pending local-timeline reads at or below `applied_ts`.
     fn retire_local_reads_linearized_by(&mut self, applied_ts: Timestamp) {
         if self.pending_linearize_read_txns.is_empty() {
             return;
