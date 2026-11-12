@@ -46,10 +46,12 @@ use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
 use tracing::{Instrument, debug, info, info_span, warn};
 
+use crate::batch::BlobDeleteStats;
 use crate::cfg::{
     PER_SHARD_METRICS_ENABLE_REGEX, SHARD_INFO_METRIC, SHARD_METRICS, ShardMetricsExport,
 };
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
+use crate::internal::gc::GcCaller;
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
@@ -995,6 +997,8 @@ pub struct GcMetrics {
     pub(crate) merged: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) steps: GcStepTimings,
+    tombstone_deleted_blobs: IntCounterVec,
+    tombstone_deleted_bytes: IntCounterVec,
 }
 
 #[derive(Debug)]
@@ -1054,7 +1058,38 @@ impl GcMetrics {
                 help: "time spent in garbage collections",
             )),
             steps: GcStepTimings::new(step_timings),
+            tombstone_deleted_blobs: registry.register(metric!(
+                name: "mz_persist_gc_tombstone_deleted_blobs",
+                help: "count of blobs GC deleted from dropped (tombstone) shards, by who requested the GC",
+                var_labels: ["caller"],
+            )),
+            tombstone_deleted_bytes: registry.register(metric!(
+                name: "mz_persist_gc_tombstone_deleted_bytes",
+                help: "total size of blobs GC deleted from dropped (tombstone) shards, by who requested the GC",
+                var_labels: ["caller"],
+            )),
         }
+    }
+
+    /// Records what a GC deleted from a dropped (tombstone) shard.
+    pub(crate) fn tombstone_deleted(&self, caller: GcCaller, deleted: BlobDeleteStats) {
+        let caller = match caller {
+            GcCaller::Maintenance => "maintenance",
+            GcCaller::Finalize => "finalize",
+        };
+        self.tombstone_deleted_blobs
+            .with_label_values(&[caller])
+            .inc_by(u64::cast_from(deleted.count));
+        self.tombstone_deleted_bytes
+            .with_label_values(&[caller])
+            .inc_by(u64::cast_from(deleted.bytes));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tombstone_deleted_blobs(&self, caller: &str) -> u64 {
+        self.tombstone_deleted_blobs
+            .with_label_values(&[caller])
+            .get()
     }
 }
 

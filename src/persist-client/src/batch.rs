@@ -176,7 +176,7 @@ where
         for part in self.batch.parts.drain(..) {
             deletes.add(&part);
         }
-        let () = deletes
+        deletes
             .delete(
                 &*self.blob,
                 self.shard_id(),
@@ -1520,6 +1520,22 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
     Ok(bounds_truncated)
 }
 
+/// Blobs a delete removed. Keys that were already gone don't count.
+#[derive(Debug, Default)]
+pub(crate) struct BlobDeleteStats {
+    pub(crate) count: usize,
+    pub(crate) bytes: usize,
+}
+
+impl BlobDeleteStats {
+    pub(crate) fn add(&mut self, deleted: Option<usize>) {
+        if let Some(bytes) = deleted {
+            self.count += 1;
+            self.bytes += bytes;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PartDeletes<T> {
     /// Keys to hollow parts that we're ready to delete.
@@ -1584,21 +1600,24 @@ impl<T: Timestamp> PartDeletes<T> {
         concurrency: usize,
         metrics: &Metrics,
         delete_metrics: &RetryMetrics,
-    ) where
+    ) -> BlobDeleteStats
+    where
         T: Codec64,
     {
+        let mut deleted = BlobDeleteStats::default();
         let mut run_keys = Vec::new();
         loop {
-            let () = stream::iter(mem::take(&mut self.blob_keys))
+            let results: Vec<_> = stream::iter(mem::take(&mut self.blob_keys))
                 .map(|key| {
                     let key = key.complete(&shard_id);
-                    async move {
-                        retry_external(delete_metrics, || blob.delete(&key)).await;
-                    }
+                    async move { retry_external(delete_metrics, || blob.delete(&key)).await }
                 })
                 .buffer_unordered(concurrency)
                 .collect()
                 .await;
+            for result in results {
+                deleted.add(result);
+            }
 
             let Some((run_key, run_ref)) = self.hollow_runs.pop_first() else {
                 break;
@@ -1634,8 +1653,9 @@ impl<T: Timestamp> PartDeletes<T> {
         // first, running each level's deletes concurrently.
         for run_key in run_keys.into_iter().rev() {
             let key = run_key.complete(&shard_id);
-            retry_external(delete_metrics, || blob.delete(&key)).await;
+            deleted.add(retry_external(delete_metrics, || blob.delete(&key)).await);
         }
+        deleted
     }
 }
 
