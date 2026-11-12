@@ -17,7 +17,8 @@ destination:
 
 1. Create a Kafka sink in Materialize.
 1. Load the sink's data topic and progress topic into Snowflake.
-1. Create a Snowflake view that exposes only committed changes.
+1. Build a table of trusted frontiers that Snowflake has fully loaded.
+1. Create Snowflake views that expose only changes below the trusted frontier.
 
 The same approach works for any destination that stores Kafka headers and
 message keys alongside the message value.
@@ -37,14 +38,25 @@ the two topics and hide any row that is not yet covered by a progress record.
 | Progress topic | Message key | `mz-sink-` followed by the sink's ID, for example `mz-sink-u123`. |
 | Progress topic | Message value | JSON of the form `{"frontier":[1792700001000],"version":1}`. |
 
-The `frontier` is exclusive: the sink has committed every change with a
-timestamp less than the frontier. To expose only committed data:
+All sinks on a Kafka connection share one progress topic, and each sink's
+records are keyed by `mz-sink-<sink_id>`. Joining on the `materialize-sink-id`
+header is what ties each data message to its own sink's frontier.
 
-1. Match each data message to the progress records whose key equals
-   `'mz-sink-' || <materialize-sink-id header>`.
-1. Take the latest frontier for that sink.
-1. Keep the data messages where `materialize-timestamp` is less than that
-   frontier.
+{{< warning >}}
+This pattern parses progress records. Their format is not yet a documented,
+stable interface and may change in a future release. Ignore any fields you
+don't recognize when you parse them.
+{{< /warning >}}
+
+The `frontier` is exclusive: the sink has committed every change with a
+timestamp less than the frontier. The pattern has two parts:
+
+1. **Build a trusted frontier.** For each sink, record a frontier only once
+   the loader has confirmed that every data message below it has landed in
+   the destination. The latest frontier in the progress topic is only a
+   candidate; see [Step 3](#step-3-build-a-trusted-frontier-table).
+1. **Gate views on the trusted frontier.** Keep the data messages whose
+   `materialize-timestamp` is less than the trusted frontier for their sink.
 
 ## Before you begin
 
@@ -108,14 +120,16 @@ timestamp less than the frontier. To expose only committed data:
 ## Step 2. Load both topics into Snowflake
 
 Configure the Snowflake connector to load the data topic into a table named
-`raw_orders` and the progress topic into a table named `raw_progress`. For
-example:
+`raw_orders` and the progress topic into a table named `raw_progress`. This
+guide uses version 3 of the connector with Snowpipe Streaming, which loads
+each partition through its own channel. For example:
 
 ```json
 {
   "name": "materialize_orders",
   "config": {
     "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector",
+    "snowflake.ingestion.method": "SNOWPIPE_STREAMING",
     "topics": "orders,<sink_progress_topic>",
     "snowflake.topic2table.map": "orders:raw_orders,<sink_progress_topic>:raw_progress",
     "snowflake.url.name": "<account>.snowflakecomputing.com:443",
@@ -124,7 +138,8 @@ example:
     "snowflake.database.name": "<database>",
     "snowflake.schema.name": "<schema>",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-    "value.converter": "com.snowflake.kafka.connector.records.SnowflakeJsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
     "consumer.override.isolation.level": "read_committed"
   }
 }
@@ -137,8 +152,12 @@ Each Snowflake table gets two columns:
 - `RECORD_METADATA`: the message metadata, as a `VARIANT`. The message key is
   in `RECORD_METADATA:key` and the headers are in `RECORD_METADATA:headers`.
 
-Two settings in this configuration matter for the pattern:
+These settings in this configuration matter for the pattern:
 
+- `snowflake.ingestion.method` must be `SNOWPIPE_STREAMING`. Each channel
+  then records an offset token, which [Step 3](#step-3-build-a-trusted-frontier-table)
+  relies on. Snowpipe Streaming does not support the Snowflake converters, so
+  this example uses `JsonConverter` for values.
 - `key.converter` must be `org.apache.kafka.connect.storage.StringConverter`.
   Otherwise, the connector does not keep the progress topic's message key, and
   you can't tell which sink a progress record belongs to.
@@ -147,46 +166,129 @@ Two settings in this configuration matter for the pattern:
   Connect worker must allow client configuration overrides
   (`connector.client.config.override.policy`). Alternatively, set
   `consumer.isolation.level=read_committed` in the worker configuration.
+  This setting only excludes aborted transactions. It does not order the
+  connector's flushes across partitions; see [Step 3](#step-3-build-a-trusted-frontier-table).
+- `errors.tolerance` and `behavior.on.null.values` must keep their defaults,
+  `none` and `DEFAULT`. With other values, the connector can skip a message
+  but still advance its offset token past it, and Step 3 would then trust a
+  frontier that is missing that message. With `DEFAULT`, a deletion (a
+  message with a `null` value) loads as a row with empty content.
 
-## Step 3. Create a view of committed changes in Snowflake
+## Step 3. Build a trusted frontier table
 
-In Snowflake, create a view that keeps only the data messages that Materialize
-has fully committed:
+The latest frontier in `raw_progress` is not enough to gate on. Kafka
+transactions are atomic on write, not on read: the Snowflake connector loads
+each topic partition through its own channel and flushes each one
+independently. A progress record can land in Snowflake before every data
+message below its frontier has landed. Before you trust a frontier, you must
+confirm that the loader has consumed the data topic up to it.
+
+This requires a loader that reports the offset it has committed for each
+partition. With Snowpipe Streaming, the Snowflake connector loads each
+partition through its own channel, and each channel's offset token records the
+last Kafka offset that channel has committed to Snowflake. To read the offset
+tokens, run `SHOW CHANNELS IN TABLE raw_orders` and use the `offset_token`
+column. The checks below compare those offset tokens to the data topic.
+Create a table to hold the frontiers you have confirmed:
+
+```sql
+CREATE TABLE trusted_frontier (
+  sink_id STRING NOT NULL,
+  frontier NUMBER NOT NULL,
+  confirmed_at TIMESTAMP_LTZ NOT NULL
+);
+```
+
+Then run a small routine outside Snowflake that appends a row each time it
+confirms a new frontier for a sink. Views read the highest frontier for each
+sink, the same way they would read `raw_progress`. For each sink, the routine
+should:
+
+1. Read the candidate frontier for the sink from `raw_progress`.
+1. Record each data partition's high watermark. The progress record is
+   already in Snowflake, so every data message below the candidate frontier
+   sits below these high watermarks.
+1. For each data partition, start a consumer with `read_committed` isolation
+   at the channel's offset token + 1, or at the start of the partition if the
+   channel has no offset token yet. Read until the consumer's position reaches
+   the recorded high watermark. `read_committed` skips transaction markers and
+   aborted messages.
+1. If no partition returns a message, Snowflake has loaded every committed
+   data message below the candidate frontier. Write the candidate frontier
+   to `trusted_frontier`.
+1. Otherwise, the connector is still loading. Wait, then repeat from step 3
+   with the same candidate frontier and high watermarks.
+
+Keep the candidate fixed until you confirm it. If you pick a newer candidate
+on each attempt, the routine can keep chasing new data and never confirm any
+frontier. A production routine also needs to handle timeouts and retries, for
+example when a transaction stays open and holds the consumer below the high
+watermark.
+
+## Step 4. Create a view of committed changes in Snowflake
+
+Create a view that keeps only the data messages below the sink's trusted
+frontier:
 
 ```sql
 CREATE VIEW committed_orders AS
-WITH latest_progress AS (
-  -- The latest frontier for each sink that uses the progress topic.
-  SELECT
-    RECORD_METADATA:key::string AS progress_key,
-    MAX(RECORD_CONTENT:frontier[0]::number) AS frontier
-  FROM raw_progress
+WITH latest_trusted AS (
+  -- The latest trusted frontier for each sink.
+  SELECT sink_id, MAX(frontier) AS frontier
+  FROM trusted_frontier
   GROUP BY 1
 )
 SELECT
   o.RECORD_METADATA:headers:"materialize-timestamp"::number AS mz_timestamp,
   o.RECORD_CONTENT AS order_record
 FROM raw_orders AS o
--- Match each data message to the progress records for its sink.
-JOIN latest_progress AS p
-  ON p.progress_key =
-     'mz-sink-' || o.RECORD_METADATA:headers:"materialize-sink-id"::string
+-- Match each data message to the trusted frontier for its sink.
+JOIN latest_trusted AS f
+  ON f.sink_id = o.RECORD_METADATA:headers:"materialize-sink-id"::string
 -- Keep only the changes below the frontier.
-WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < p.frontier;
+WHERE o.RECORD_METADATA:headers:"materialize-timestamp"::number < f.frontier;
 ```
 
-The view works as follows:
+`latest_trusted` takes the highest trusted frontier for each sink. The join
+uses the `materialize-sink-id` header, so each message is compared to its own
+sink's frontier. Messages at or above the frontier appear in the view
+once the routine confirms they have loaded.
 
-1. `latest_progress` finds the most recent frontier for each sink. Because the
-   progress topic is shared by every sink on the same Kafka connection, the
-   query groups by message key.
-1. The join matches each order message to its sink's frontier, using the
-   `materialize-sink-id` header.
-1. The `WHERE` clause drops any message whose timestamp is not yet below the
-   frontier. Those messages appear in the view once Materialize commits the
-   rest of their timestamp.
+## Step 5. Join changes from multiple sinks
 
-## Step 4. Query the view
+If you sink several relations and create a view like `committed_orders` for
+each, each view is gated on its own sink's frontier. Joining two such views can
+combine changes from different Materialize timestamps, which loses
+consistency. Gate joined views on a common frontier instead. There are two
+ways to do this:
+
+- **One shared frontier.** Gate every view on the lowest trusted frontier
+  across all sinks. Any of the views can then be joined with any other. The
+  tradeoff is freshness: every view is held back by the sink that is furthest
+  behind.
+
+  ```sql
+  CREATE VIEW shared_frontier AS
+  WITH current_frontiers AS (
+    -- The latest trusted frontier for each live sink.
+    SELECT sink_id, MAX(frontier) AS current_frontier
+    FROM trusted_frontier
+    WHERE sink_id IN ('u123', 'u456')
+    GROUP BY sink_id
+  )
+  SELECT MIN(current_frontier) AS frontier
+  FROM current_frontiers;
+  ```
+
+  List the live sinks explicitly. A dropped sink's frontier stops advancing,
+  and a recreated sink gets a new ID, so update the list whenever you drop or
+  recreate a sink. Otherwise, the shared frontier stalls.
+
+- **One frontier per join.** For each join, gate on the lowest trusted
+  frontier of only the sinks that join reads. This keeps each join as fresh as
+  its inputs allow, but each join needs its own gate that lists its sinks.
+
+## Step 6. Query the view
 
 Point downstream readers at `committed_orders` instead of `raw_orders`:
 
@@ -195,15 +297,16 @@ SELECT * FROM committed_orders ORDER BY mz_timestamp DESC LIMIT 10;
 ```
 
 Every row in the result belongs to a Materialize timestamp whose changes have
-all been loaded into Snowflake.
+all been loaded into Snowflake, because the view gates on `trusted_frontier`
+rather than on `raw_progress` directly.
 
 ## Considerations
 
 - `committed_orders` contains one row per change, not the current state of
   `orders`. With the upsert envelope, a deletion is a message with a `null`
-  value (a tombstone). To build the current state, take the latest committed
-  row for each key and handle tombstones as configured by the connector's
-  `behavior.on.null.values` setting.
+  value (a tombstone), which loads as a row with empty content. To build the
+  current state, take the latest committed row for each key and drop the keys
+  whose latest row is a tombstone.
 - Materialize writes a progress record each time the sink's frontier advances,
   even when there is no new data. Expect `raw_progress` to grow steadily.
 - Header keys starting with `materialize-` are reserved for Materialize.
