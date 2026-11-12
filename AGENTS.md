@@ -18,6 +18,13 @@ the PR title as subject and the PR body as message. Intermediate commits on a
 PR branch never reach `main`, so `git bisect` never visits them. Do not ask
 authors to squash on merge or to keep every intermediate commit green.
 
+## Pull requests and reviews
+
+Open PRs as drafts and leave reviews pending. Mark a PR ready, request
+reviewers, or submit a review only when the user explicitly asks. The user
+names the reviewers and chooses the review type. See
+`doc/developer/guide-changes.md#agent-authored-changes`.
+
 ## Guidance
 
 * When designing specs or implementing features, preserve the full scope and
