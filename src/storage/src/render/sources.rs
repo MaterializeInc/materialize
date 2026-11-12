@@ -346,12 +346,12 @@ where
                         source_statistics: export_statistics,
                     };
                     // The chunked v2 stash spills only to swap, through the
-                    // buffer pool. On a replica that cannot swap, v1 keeps its state
-                    // in RocksDB on the scratch disk, where v2 would hold the
-                    // same state in RAM and risk OOM.
+                    // buffer pool. On a replica that cannot swap, v1 keeps its
+                    // state in RocksDB on the scratch disk where one exists,
+                    // and v2's footprint without swap has not been measured.
                     let use_upsert_v2 = dyncfgs::ENABLE_UPSERT_V2
                         .get(storage_state.storage_configuration.config_set())
-                        && !storage_state.instance_context.spill_to_disk;
+                        && storage_state.instance_context.swap_available;
                     let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
                     {
                         // Resolved here, at operator construction, so the

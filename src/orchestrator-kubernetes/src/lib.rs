@@ -595,6 +595,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             other_replicas_selector,
             replicas_selector,
             disk_limit,
+            swap_enabled,
             node_selector,
         }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
@@ -720,6 +721,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             listen_addrs: &listen_addrs,
             peer_addrs: &peer_addrs,
         });
+        if !swap_enabled {
+            args.push("--no-swap".into());
+        }
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
