@@ -5388,6 +5388,10 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 func::ParseConnectionDetails,
             ) => Jsonb, oid::FUNC_PARSE_CONNECTION_DETAILS_OID;
         },
+        "try_decode_catalog_create_sql" => Scalar {
+            params!(String) => UnaryFunc::TryDecodeCatalogCreateSql(func::TryDecodeCatalogCreateSql)
+                => Jsonb, oid::FUNC_TRY_DECODE_CATALOG_CREATE_SQL_OID;
+        },
         "redact_sql" => Scalar {
             params!(String) => UnaryFunc::RedactSql(func::RedactSql)
                 => String, oid::FUNC_REDACT_SQL_OID;

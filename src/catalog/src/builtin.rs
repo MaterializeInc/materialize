@@ -1152,6 +1152,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     let mut builtin_items = vec![
         Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::MaterializedView(&MZ_CATALOG_STATE),
+        Builtin::MaterializedView(&MZ_CATALOG_ITEMS),
+        Builtin::View(&MZ_CATALOG_ITEM_METADATA),
+        Builtin::Index(&MZ_CATALOG_ITEM_METADATA_IND),
         Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),

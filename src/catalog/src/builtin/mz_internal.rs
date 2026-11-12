@@ -81,6 +81,131 @@ WHERE data->>'kind' <> 'AuditLog'",
         access: vec![],
         ontology: None,
     });
+/// Every user-defined catalog item.
+/// This is an intermediate layer, intended to be used by
+/// downstream builtin item relations (e.g. mz_sources). Without it,
+/// they would need to parse DDL statements of all items in the durable catalog
+/// then filter down to their specific object type.
+///
+/// A relation reading this filters on `type` and if a row's DDL fails to parse,
+/// it populates the column `details` as null and `decode_error` with an error message. Readers of this
+/// should raise the error through `mz_unsafe.mz_error_if_null`.
+pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_catalog_items",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CATALOG_ITEMS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("type", SqlScalarType::String.nullable(true))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
+            .with_column("details", SqlScalarType::Jsonb.nullable(true))
+            .with_column("decode_error", SqlScalarType::String.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql
+) AS
+WITH
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql
+        FROM mz_internal.mz_catalog_state
+        WHERE kind = 'Item'
+    ),
+    decoded AS (
+        SELECT
+            items.*,
+            mz_internal.try_decode_catalog_create_sql(create_sql) AS decoded
+        FROM items
+    )
+SELECT
+    id,
+    oid,
+    schema_id,
+    name,
+    owner_id,
+    privileges,
+    decoded->>'type' AS type,
+    create_sql,
+    decoded->'ok'->>'redacted_create_sql' AS redacted_create_sql,
+    decoded->'ok'->'details' AS details,
+    decoded->>'error' AS decode_error
+FROM decoded",
+        is_retained_metrics_object: false,
+        access: vec![],
+        ontology: None,
+    });
+
+/// `mz_catalog_items` without the statement text such that the index holds
+/// no DDL text.
+pub static MZ_CATALOG_ITEM_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_catalog_item_metadata",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CATALOG_ITEM_METADATA_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("type", SqlScalarType::String.nullable(true))
+        .with_column("details", SqlScalarType::Jsonb.nullable(true))
+        .with_column("decode_error", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT
+    id,
+    oid,
+    schema_id,
+    name,
+    owner_id,
+    privileges,
+    type,
+    details - 'definition' AS details,
+    decode_error
+FROM mz_internal.mz_catalog_items",
+    access: vec![],
+    ontology: None,
+});
+
+pub const MZ_CATALOG_ITEM_METADATA_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_catalog_item_metadata_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CATALOG_ITEM_METADATA_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_catalog_item_metadata (id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_postgres_sources",

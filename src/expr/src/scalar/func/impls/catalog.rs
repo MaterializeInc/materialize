@@ -15,6 +15,7 @@ use mz_expr_derive::sqlfunc;
 use mz_repr::ArrayRustType;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::EvalError;
 
@@ -57,6 +58,30 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     create_sql::item_details(a)
         .map(to_jsonb)
         .map_err(catalog_err)
+}
+
+/// Decodes a catalog `create_sql` string as
+/// `{"type": ..., "ok": {"details": ..., "redacted_create_sql": ...}}`, or
+/// `{"type": ..., "error": ...}` when the decoder rejects it. `type` is the
+/// item kind of the parsed statement, and NULL when the statement does not
+/// parse or defines no catalog item.
+#[sqlfunc]
+fn try_decode_catalog_create_sql<'a>(a: &'a str) -> Jsonb {
+    let stmt = match create_sql::parse_single_statement(a) {
+        Ok(stmt) => stmt,
+        Err(error) => {
+            return to_jsonb(serde_json::json!({ "type": null, "error": error }));
+        }
+    };
+    let item_type = create_sql::item_type(&stmt);
+    let redacted_create_sql = stmt.to_ast_string_redacted();
+    match create_sql::item_details_of(stmt) {
+        Ok(details) => to_jsonb(serde_json::json!({
+            "type": item_type,
+            "ok": { "details": details, "redacted_create_sql": redacted_create_sql }
+        })),
+        Err(error) => to_jsonb(serde_json::json!({ "type": item_type, "error": error })),
+    }
 }
 
 #[sqlfunc]

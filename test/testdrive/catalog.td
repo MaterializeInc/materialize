@@ -627,6 +627,7 @@ mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
 mz_builtin_views                         ""
+mz_catalog_item_metadata                 ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -722,6 +723,7 @@ pg_authid_core                           ""
 name                   cluster             comment
 ----------------------------------------------------
 mz_aws_connections             mz_catalog_server   ""
+mz_catalog_items               mz_catalog_server   ""
 mz_catalog_state               mz_catalog_server   ""
 mz_cluster_auto_scaling_strategies    mz_catalog_server   ""
 mz_cluster_reconfigurations    mz_catalog_server   ""
@@ -851,7 +853,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-280
+281
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
