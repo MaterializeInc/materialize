@@ -51,7 +51,7 @@ impl StorageServer {
             let client = mz_storage_client::client::RoleClient::new(ClusterClient::new(
                 Arc::clone(&runtime),
             ));
-            Box::new(QueryOnly(client))
+            Box::new(client)
         }
     }
 
@@ -294,7 +294,7 @@ pub fn guest_client<C: StorageClient + 'static>(
     runtime: Arc<impl Send + Sync + 'static>,
 ) -> Box<dyn StorageClient> {
     let client = mz_storage_client::client::RoleClient::new(client);
-    let inner: Box<dyn StorageClient> = Box::new(QueryOnly(client));
+    let inner: Box<dyn StorageClient> = Box::new(client);
     Box::new(GuestClient {
         inner,
         _runtime: runtime,
@@ -320,32 +320,6 @@ impl GenericClient<StorageCommand, StorageResponse> for GuestClient {
 
     async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse>> {
         self.inner.recv().await
-    }
-}
-
-// RoleClient owns handshake validation. This runtime boundary additionally
-// excludes lifecycle connections without changing the shared storage protocol.
-#[derive(Debug)]
-struct QueryOnly<C>(C);
-
-#[async_trait::async_trait]
-impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for QueryOnly<C> {
-    async fn send(&mut self, command: StorageCommand) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            matches!(
-                command,
-                StorageCommand::HelloQuery { .. }
-                    | StorageCommand::SubscribeObservations
-                    | StorageCommand::RunOneshotIngestion(_)
-                    | StorageCommand::CancelOneshotIngestion(_)
-            ),
-            "native storage transport accepts only query commands"
-        );
-        self.0.send(command).await
-    }
-
-    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse>> {
-        self.0.recv().await
     }
 }
 

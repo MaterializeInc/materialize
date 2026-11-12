@@ -61,18 +61,21 @@ impl GenericClient<StorageCommand, StorageResponse> for Box<dyn StorageClient> {
     }
 }
 
-/// Validates the connection role before forwarding commands to a cluster client.
+/// Accepts only query connections before forwarding commands to a cluster client.
 /// Query handshakes open the transport with Hello and retain a worker-visible marker.
 #[derive(Debug)]
 pub struct RoleClient<C> {
     inner: C,
-    query: Option<bool>,
+    handshake_open: bool,
 }
 
 impl<C> RoleClient<C> {
-    /// Wrap a fresh, unconnected client.
+    /// Wrap a fresh, unconnected client, rejecting external lifecycle handshakes.
     pub fn new(inner: C) -> Self {
-        Self { inner, query: None }
+        Self {
+            inner,
+            handshake_open: false,
+        }
     }
 }
 
@@ -80,25 +83,20 @@ impl<C> RoleClient<C> {
 impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for RoleClient<C> {
     async fn send(&mut self, command: StorageCommand) -> anyhow::Result<()> {
         use StorageCommand::*;
-        match (self.query, &command) {
-            (None, Hello { .. }) => self.query = Some(false),
-            (None, HelloQuery { nonce }) => {
+        match (self.handshake_open, &command) {
+            (false, Hello { .. }) => anyhow::bail!("maintained storage is owned by this replica"),
+            (false, HelloQuery { nonce }) => {
                 self.inner.send(Hello { nonce: *nonce }).await?;
-                self.query = Some(true);
+                self.handshake_open = true;
             }
-            (None, _) => anyhow::bail!("first storage command must be Hello or HelloQuery"),
-            (Some(_), Hello { .. } | HelloQuery { .. }) => {
+            (false, _) => anyhow::bail!("first storage command must be HelloQuery"),
+            (true, Hello { .. } | HelloQuery { .. }) => {
                 anyhow::bail!("duplicate storage handshake")
             }
-            (
-                Some(true),
-                RunOneshotIngestion(_) | CancelOneshotIngestion(_) | SubscribeObservations,
-            ) => (),
-            (Some(true), _) => anyhow::bail!("command is not allowed on this query connection"),
-            (Some(false), SubscribeObservations) => {
-                anyhow::bail!("observations require a query connection")
+            (true, RunOneshotIngestion(_) | CancelOneshotIngestion(_) | SubscribeObservations) => {
+                ()
             }
-            (Some(false), _) => (),
+            (true, _) => anyhow::bail!("command is not allowed on this query connection"),
         }
         self.inner.send(command).await
     }
@@ -741,80 +739,67 @@ mod tests {
 #[cfg(test)]
 mod query_wire_tests {
     use super::*;
+    use futures::FutureExt;
     use mz_service::local::LocalClient;
     use tokio::sync::mpsc;
 
     #[mz_ore::test(tokio::test)]
     async fn storage_query_role_validation() {
-        for query in [false, true] {
-            let (commands, mut received) = mpsc::unbounded_channel();
-            let (_responses, response_rx) = mpsc::unbounded_channel();
-            let mut client = RoleClient::new(LocalClient::new(
-                response_rx,
-                commands,
-                std::thread::current(),
-            ));
-            assert!(client.send(StorageCommand::AllowWrites).await.is_err());
-            assert!(
-                client
-                    .send(StorageCommand::SubscribeObservations)
-                    .await
-                    .is_err()
-            );
+        let (commands, mut received) = mpsc::unbounded_channel();
+        let (responses, response_rx) = mpsc::unbounded_channel();
+        let mut client = RoleClient::new(LocalClient::new(
+            response_rx,
+            commands,
+            std::thread::current(),
+        ));
+        let nonce = Uuid::new_v4();
+        for command in [
+            StorageCommand::Hello { nonce },
+            StorageCommand::AllowWrites,
+            StorageCommand::SubscribeObservations,
+            StorageCommand::CancelOneshotIngestion(Uuid::new_v4()),
+        ] {
+            assert!(client.send(command).await.is_err());
             assert!(received.try_recv().is_err());
-            let nonce = Uuid::new_v4();
-            let hello = if query {
-                StorageCommand::HelloQuery { nonce }
-            } else {
-                StorageCommand::Hello { nonce }
-            };
-            client.send(hello.clone()).await.unwrap();
-            assert_eq!(received.recv().await, Some(StorageCommand::Hello { nonce }));
-            if query {
-                assert_eq!(received.recv().await, Some(hello));
-            }
-            for command in [
-                StorageCommand::Hello { nonce },
-                StorageCommand::HelloQuery { nonce },
-            ] {
-                assert!(client.send(command).await.is_err());
-                assert!(received.try_recv().is_err());
-            }
-            for command in [
-                StorageCommand::InitializationComplete,
-                StorageCommand::AllowWrites,
-                StorageCommand::UpdateConfiguration(Default::default()),
-                StorageCommand::ApplyCatalogPosition(Box::new(CatalogPosition {
-                    shard_id: mz_persist_types::ShardId::new(),
-                    deployment_generation: 1,
-                    upper: Timestamp::from(10),
-                })),
-                StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
-            ] {
-                let result = client.send(command.clone()).await;
-                if query {
-                    assert!(result.is_err());
-                    assert!(received.try_recv().is_err());
-                } else {
-                    result.unwrap();
-                    assert_eq!(received.recv().await, Some(command));
-                }
-            }
-            let cancel = StorageCommand::CancelOneshotIngestion(Uuid::new_v4());
-            client.send(cancel.clone()).await.unwrap();
-            assert_eq!(received.recv().await, Some(cancel));
-            let subscribed = client.send(StorageCommand::SubscribeObservations).await;
-            if query {
-                subscribed.unwrap();
-                assert_eq!(
-                    received.recv().await,
-                    Some(StorageCommand::SubscribeObservations)
-                );
-            } else {
-                assert!(subscribed.is_err());
-                assert!(received.try_recv().is_err());
-            }
         }
+        client
+            .send(StorageCommand::HelloQuery { nonce })
+            .await
+            .unwrap();
+        assert_eq!(received.recv().await, Some(StorageCommand::Hello { nonce }));
+        assert_eq!(
+            received.recv().await,
+            Some(StorageCommand::HelloQuery { nonce })
+        );
+        for command in [
+            StorageCommand::Hello { nonce },
+            StorageCommand::HelloQuery { nonce },
+            StorageCommand::InitializationComplete,
+            StorageCommand::AllowWrites,
+            StorageCommand::UpdateConfiguration(Default::default()),
+            StorageCommand::ApplyCatalogPosition(Box::new(CatalogPosition {
+                shard_id: mz_persist_types::ShardId::new(),
+                deployment_generation: 1,
+                upper: Timestamp::from(10),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+        ] {
+            assert!(client.send(command).await.is_err());
+            assert!(received.try_recv().is_err());
+        }
+        for command in [
+            StorageCommand::CancelOneshotIngestion(Uuid::new_v4()),
+            StorageCommand::SubscribeObservations,
+        ] {
+            client.send(command.clone()).await.unwrap();
+            assert_eq!(received.recv().await, Some(command));
+        }
+        assert!(client.recv().now_or_never().is_none());
+        responses.send(StorageResponse::QueryReady).unwrap();
+        assert_eq!(
+            client.recv().await.unwrap(),
+            Some(StorageResponse::QueryReady)
+        );
     }
 
     #[mz_ore::test]

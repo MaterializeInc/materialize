@@ -9,25 +9,35 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Remove the remaining storage lifecycle branches and role-client alternatives.
-Public compute/storage runtime constructors are native-only. Compute nonce
-replacement/replay, context-free query admission, lifecycle routing, frontier
-silencing, replay-only trace padding and its unused counters are removed.
-Maintained responses use native progress. Query multiplexing, cancellation,
-shared ordering and delayed-local endpoint stashing remain.
+Remove the remaining storage-local restart, sink reconstruction and async drop
+alternatives next. The focused audit has exact callers, invariants and fixture
+migrations: `native-storage-restart-drop-audit.md`. Require admitted execution
+identities on maintained commands. Preserve two-phase construction, query
+oneshots, ingestion recovery and optional compaction-bound format compatibility.
 
-The exact final snapshot passes all-target checks and targeted native lifetime,
-query admission/isolation, peek fairness, ordering and trace-scan tests in the
-unoptimized build, without warnings. Independent review found no concrete
-correctness issue. Evidence: `native-driver-scratch/native-compute-final-check.log`
-and `native-compute-final-source-sha256.json`. Peak job memory was 14 GiB with no
-swap. This is targeted Rust coverage, not broad CI or a rebuilt-image lifecycle
-run. Nightly forced-migration workflows remain unchanged pending the explicit
-coverage decision below.
+Storage transport lifecycle/replay and query-only role-client conversion are
+verified together with the committed native fixtures (`0679833f`). Final
+all-target checks passed without warnings. Targeted tests passed for query
+isolation, native attempt/restart fencing, real-loop process lifetime, shared
+ordering, role admission and partition aggregation. The corrected native-runtime
+filter executed its tests. Review found no blocking production issue. Its test
+finding is fixed: a receive error ends the client's lifetime.
 
-Preserve shared command ordering and endpoint-free nonleaders during storage
-and role-client removal.
-See `native-ingress-current-audit.md` for the remaining boundaries.
+Exact evidence: `native-driver-scratch/native-storage-final-check.log`,
+`native-storage-final-check.sh` and `native-storage-final-source-sha256.json`.
+The default-development run peaked at 27 GiB with no swap within scratch caps.
+These are targeted checks, not rebuilt-image CI or full native-only acceptance.
+Scratch SSO expired on the post-run resource check. The completed run log is
+local, but current worker resource state and cleanup need renewed access.
+
+Compute lifecycle removal is committed as `b3a88e96`. Public constructors are
+native-only, and compute replay, lifecycle routing, trace padding and unused
+reconciliation counters are removed. Exact-source all-target and targeted runtime
+checks pass without warnings. Query multiplexing, cancellation, shared ordering,
+delayed endpoints and peek fairness remain. Evidence:
+`native-driver-scratch/native-compute-final-check.log` and its source hashes.
+This is targeted Rust coverage, not broad CI or rebuilt-image lifecycle acceptance.
+See `native-ingress-current-audit.md` for remaining boundaries.
 
 The mandatory startup contract is committed and verified by all-target checks,
 executed parser/reconciliation tests and independent review. Evidence:

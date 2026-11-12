@@ -70,7 +70,8 @@ fn catalog_markers_broadcast_and_catchup_comes_from_worker_zero() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn catalog_authority_is_lifecycle_only() {
+async fn query_connection_rejects_catalog_authority() {
+    use futures::FutureExt;
     use mz_service::local::LocalClient;
     use tokio::sync::mpsc;
 
@@ -79,56 +80,47 @@ async fn catalog_authority_is_lifecycle_only() {
         deployment_generation: 1,
         upper: Timestamp::from(10),
     };
-    for query in [false, true] {
-        let (commands, mut received) = mpsc::unbounded_channel();
-        let (responses, response_rx) = mpsc::unbounded_channel();
-        let mut client = RoleClient::new(LocalClient::new(
-            response_rx,
-            commands,
-            std::thread::current(),
-        ));
-        let nonce = Uuid::new_v4();
-        let hello = if query {
-            ComputeCommand::HelloQuery { nonce }
-        } else {
-            ComputeCommand::Hello { nonce }
-        };
-        client.send(hello.clone()).await.unwrap();
-        assert_eq!(received.recv().await, Some(ComputeCommand::Hello { nonce }));
-        if query {
-            assert_eq!(received.recv().await, Some(hello));
-            let limit = ComputeCommand::SetQueryMaxResultSize {
-                max_result_size: 100,
-            };
-            client.send(limit.clone()).await.unwrap();
-            assert_eq!(received.recv().await, Some(limit));
-        }
-        let marker = ComputeCommand::ApplyCatalogPosition(Box::new(position));
-        let result = client.send(marker.clone()).await;
-        let catchup = ComputeResponse::CatalogCatchup(Box::new(position));
-        responses.send(catchup.clone()).unwrap();
-        if query {
-            assert!(result.is_err());
-            assert!(received.try_recv().is_err());
-            assert!(client.recv().await.is_err());
-        } else {
-            result.unwrap();
-            assert_eq!(received.recv().await, Some(marker));
-            assert_eq!(client.recv().await.unwrap(), Some(catchup));
-        }
+    let (commands, mut received) = mpsc::unbounded_channel();
+    let (responses, response_rx) = mpsc::unbounded_channel();
+    let mut client = RoleClient::new(LocalClient::new(
+        response_rx,
+        commands,
+        std::thread::current(),
+    ));
+    let nonce = Uuid::new_v4();
+    client
+        .send(ComputeCommand::HelloQuery { nonce })
+        .await
+        .unwrap();
+    assert_eq!(received.recv().await, Some(ComputeCommand::Hello { nonce }));
+    assert_eq!(
+        received.recv().await,
+        Some(ComputeCommand::HelloQuery { nonce })
+    );
+    let limit = ComputeCommand::SetQueryMaxResultSize {
+        max_result_size: 100,
+    };
+    client.send(limit.clone()).await.unwrap();
+    assert_eq!(received.recv().await, Some(limit));
+    let marker = ComputeCommand::ApplyCatalogPosition(Box::new(position));
+    assert!(client.send(marker).await.is_err());
+    assert!(received.try_recv().is_err());
+    let uuid = Uuid::new_v4();
+    let cancel = ComputeCommand::CancelPeek { uuid };
+    client.send(cancel.clone()).await.unwrap();
+    assert_eq!(received.recv().await, Some(cancel));
+    // Dropping a pending receive must not prevent delivery on the next receive.
+    assert!(client.recv().now_or_never().is_none());
+    let canceled =
+        ComputeResponse::PeekResponse(uuid, PeekResponse::Canceled, OpenTelemetryContext::empty());
+    responses.send(canceled.clone()).unwrap();
+    assert_eq!(client.recv().await.unwrap(), Some(canceled));
 
-        let uuid = Uuid::new_v4();
-        let cancel = ComputeCommand::CancelPeek { uuid };
-        client.send(cancel.clone()).await.unwrap();
-        assert_eq!(received.recv().await, Some(cancel));
-        let canceled = ComputeResponse::PeekResponse(
-            uuid,
-            PeekResponse::Canceled,
-            OpenTelemetryContext::empty(),
-        );
-        responses.send(canceled.clone()).unwrap();
-        assert_eq!(client.recv().await.unwrap(), Some(canceled));
-    }
+    // A receive error ends the client's lifetime.
+    responses
+        .send(ComputeResponse::CatalogCatchup(Box::new(position)))
+        .unwrap();
+    assert!(client.recv().await.is_err());
 }
 
 #[mz_ore::test]

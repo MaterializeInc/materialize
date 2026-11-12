@@ -53,33 +53,22 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Box<dyn ComputeClient> {
     }
 }
 
-/// Validates a compute connection's role before connecting it to the cluster.
+/// Accepts only query connections before connecting them to the cluster.
 /// Query handshakes become an inner Hello followed by a worker-visible role marker.
 #[derive(Debug)]
 pub struct RoleClient<C> {
     inner: C,
-    query: Option<bool>,
+    handshake_open: bool,
     query_configured: bool,
-    allow_lifecycle: bool,
 }
 
 impl<C> RoleClient<C> {
-    /// Wrap a fresh, unconnected cluster client.
+    /// Wrap a fresh, unconnected cluster client, rejecting external lifecycle handshakes.
     pub fn new(inner: C) -> Self {
         Self {
             inner,
-            query: None,
+            handshake_open: false,
             query_configured: false,
-            allow_lifecycle: true,
-        }
-    }
-
-    /// Accepts only query connections to a replica-owned runtime.
-    /// Lifecycle handshakes are rejected before they reach the cluster client.
-    pub fn query_only(inner: C) -> Self {
-        Self {
-            allow_lifecycle: false,
-            ..Self::new(inner)
         }
     }
 }
@@ -88,41 +77,35 @@ impl<C> RoleClient<C> {
 impl<C: ComputeClient> GenericClient<ComputeCommand, ComputeResponse> for RoleClient<C> {
     async fn send(&mut self, command: ComputeCommand) -> anyhow::Result<()> {
         use ComputeCommand::*;
-        match (self.query, &command) {
-            (None, Hello { .. }) if !self.allow_lifecycle => {
+        match (self.handshake_open, &command) {
+            (false, Hello { .. }) => {
                 anyhow::bail!("maintained compute is owned by this replica")
             }
-            (None, Hello { .. }) => self.query = Some(false),
-            (None, HelloQuery { nonce }) => {
+            (false, HelloQuery { nonce }) => {
                 self.inner.send(Hello { nonce: *nonce }).await?;
-                self.query = Some(true);
+                self.handshake_open = true;
             }
-            (None, _) => anyhow::bail!("first compute command must be Hello or HelloQuery"),
-            (Some(_), Hello { .. } | HelloQuery { .. }) => {
+            (false, _) => anyhow::bail!("first compute command must be HelloQuery"),
+            (true, Hello { .. } | HelloQuery { .. }) => {
                 anyhow::bail!("duplicate compute handshake")
             }
-            (Some(true), SetQueryMaxResultSize { .. }) => self.query_configured = true,
+            (true, SetQueryMaxResultSize { .. }) => self.query_configured = true,
             (
-                Some(true),
+                true,
                 CreateQueryDataflow { .. }
                 | Peek(_)
                 | CancelPeek { .. }
                 | Schedule(_)
                 | AllowCompaction { .. },
             ) if self.query_configured => (),
-            (Some(true), _) => anyhow::bail!("command is not allowed on this query connection"),
-            (Some(false), SetQueryMaxResultSize { .. } | CreateQueryDataflow { .. }) => {
-                anyhow::bail!("query command on lifecycle connection")
-            }
-            (Some(false), _) => (),
+            (true, _) => anyhow::bail!("command is not allowed on this query connection"),
         }
         self.inner.send(command).await
     }
 
     async fn recv(&mut self) -> anyhow::Result<Option<ComputeResponse>> {
         let response = self.inner.recv().await?;
-        if self.query == Some(true) && matches!(response, Some(ComputeResponse::CatalogCatchup(_)))
-        {
+        if self.handshake_open && matches!(response, Some(ComputeResponse::CatalogCatchup(_))) {
             anyhow::bail!("catalog catch-up received on query connection");
         }
         Ok(response)
@@ -1019,7 +1002,7 @@ mod query_wire_tests {
             let (commands, received) = mpsc::unbounded_channel();
             let (_responses, response_rx) = mpsc::unbounded_channel();
             (
-                RoleClient::query_only(LocalClient::new(
+                RoleClient::new(LocalClient::new(
                     response_rx,
                     commands,
                     std::thread::current(),
@@ -1074,6 +1057,16 @@ mod query_wire_tests {
             std::thread::current(),
         ));
         let nonce = Uuid::new_v4();
+        for command in [
+            ComputeCommand::InitializationComplete,
+            ComputeCommand::SetQueryMaxResultSize {
+                max_result_size: 42,
+            },
+            ComputeCommand::Schedule(GlobalId::User(1)),
+        ] {
+            assert!(client.send(command).await.is_err());
+            assert!(received.try_recv().is_err());
+        }
         client
             .send(ComputeCommand::HelloQuery { nonce })
             .await
@@ -1089,6 +1082,7 @@ mod query_wire_tests {
             ComputeCommand::AllowWrites(GlobalId::User(1)),
             ComputeCommand::Schedule(GlobalId::User(1)),
             ComputeCommand::Hello { nonce },
+            ComputeCommand::HelloQuery { nonce },
         ] {
             assert!(client.send(command).await.is_err());
             assert!(received.try_recv().is_err());

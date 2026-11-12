@@ -85,7 +85,7 @@ impl ComputeServer {
         let runtime = Arc::clone(&self.runtime);
         move || -> Box<dyn ComputeClient> {
             let client = ClusterClient::new(Arc::clone(&runtime));
-            Box::new(RoleClient::query_only(client))
+            Box::new(RoleClient::new(client))
         }
     }
 
