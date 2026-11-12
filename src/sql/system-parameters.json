@@ -1571,6 +1571,24 @@
       "dyncfg": true
     },
     {
+      "name": "enable_query_policies",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Enable creating and managing query policies and their attachments. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_query_policy_enforcement",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Enable checking attached query policies during query admission. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_raise_statement",
       "typeName": "boolean",
       "default": "off",
@@ -2314,6 +2332,15 @@
       "typeName": "unsigned integer",
       "default": "1000",
       "description": "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_query_policies",
+      "typeName": "unsigned integer",
+      "default": "25",
+      "description": "The maximum number of query policies in the region.",
       "scope": "environment",
       "userVisible": true,
       "dyncfg": false
