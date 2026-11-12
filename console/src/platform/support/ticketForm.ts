@@ -62,32 +62,26 @@ export const ENVIRONMENT_OPTIONS: {
 ];
 
 /**
- * Files a ticket can carry, matching the global API's limits: Intercom's
- * default file types for customer attachments, and up to 10 files (Intercom's
- * limit per reply), 10 MB each and 20 MB in total.
+ * Files a ticket can carry, matching the global API's limits: screenshots,
+ * logs and PDFs, up to 10 files (Intercom's limit per reply) and 5 MB in
+ * total. Larger files and recordings go through the Messenger or a reply to
+ * the confirmation email.
  */
 export const ATTACHMENT_EXTENSIONS = [
   "gif",
   "jpeg",
   "jpg",
-  "mov",
-  "mp4",
   "pdf",
   "png",
   "txt",
-  "heic",
-  "oga",
-  "ogg",
-  "dng",
-  "mp3",
 ];
 export const MAX_ATTACHMENTS = 10;
-export const MAX_ATTACHMENT_MB = 10;
-export const MAX_ATTACHMENTS_TOTAL_MB = 20;
+export const MAX_ATTACHMENT_MB = 5;
+export const MAX_ATTACHMENTS_TOTAL_MB = 5;
 const MB = 1024 * 1024;
 
 /** The limits, for the attachment button's tooltip. */
-export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENT_MB} MB each and ${MAX_ATTACHMENTS_TOTAL_MB} MB in total: ${ATTACHMENT_EXTENSIONS.map(
+export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENTS_TOTAL_MB} MB in total: ${ATTACHMENT_EXTENSIONS.map(
   (extension) => `.${extension}`,
 ).join(", ")}.`;
 

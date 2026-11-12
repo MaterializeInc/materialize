@@ -578,7 +578,7 @@ export interface components {
         };
         /** @description Files to add to a ticket. */
         AttachSupportTicketFilesRequest: {
-            /** @description Up to 10 files: 10 MB each and 20 MB in total. */
+            /** @description Up to 10 files: 5 MB in total. */
             files: components["schemas"]["SupportTicketFile"][];
         };
         /** @description Files added to a ticket. */
@@ -1022,15 +1022,14 @@ export interface components {
         /** @description A file to add to a ticket. */
         SupportTicketFile: {
             /**
-             * @description The file name, whose extension decides the type: gif, jpeg, jpg, mov,
-             *     mp4, pdf, png, txt, heic, oga, ogg, dng or mp3. It needs a name before
-             *     the extension, and can't have slashes, control characters or invisible
-             *     characters.
+             * @description The file name, whose extension decides the type: gif, jpeg, jpg, pdf,
+             *     png or txt. It needs a name before the extension, and can't have
+             *     slashes, control characters or invisible characters.
              */
             name: string;
             /**
              * Format: byte
-             * @description The file's contents, base64-encoded with padding: 1 byte to 10 MB.
+             * @description The file's contents, base64-encoded with padding: 1 byte to 5 MB.
              */
             data: string;
         };

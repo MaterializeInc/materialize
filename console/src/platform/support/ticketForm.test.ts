@@ -111,9 +111,9 @@ describe("attachmentError", () => {
     size: Math.round(megabytes * 1024 * 1024),
   });
 
-  it("allows Intercom's default file types within the limits", () => {
+  it("allows screenshots, logs and PDFs within the limits", () => {
     expect(
-      attachmentError([file("error.TXT"), file("screen.png", 10)]),
+      attachmentError([file("error.TXT"), file("screen.png", 4.9)]),
     ).toBeUndefined();
     expect(attachmentError([])).toBeUndefined();
   });
@@ -123,13 +123,17 @@ describe("attachmentError", () => {
       "debug.zip can't be attached",
     );
     expect(attachmentError([file("README")])).toMatch("can't be attached");
-    expect(attachmentError([file("video.mp4", 10.5)])).toBe(
-      "video.mp4 is larger than 10 MB.",
+    // Recordings go through the Messenger.
+    expect(attachmentError([file("recording.mp4")])).toMatch(
+      "recording.mp4 can't be attached",
+    );
+    expect(attachmentError([file("screen.png", 5.5)])).toBe(
+      "screen.png is larger than 5 MB.",
     );
     expect(attachmentError([file("empty.txt", 0)])).toBe("empty.txt is empty.");
     expect(
-      attachmentError([file("a.png", 9), file("b.png", 9), file("c.png", 9)]),
-    ).toBe("Files can be up to 20 MB in total.");
+      attachmentError([file("a.png", 2), file("b.png", 2), file("c.png", 2)]),
+    ).toBe("Files can be up to 5 MB in total.");
     expect(
       attachmentError(Array.from({ length: 11 }, () => file("a.txt"))),
     ).toBe("Attach up to 10 files.");
@@ -144,7 +148,7 @@ describe("attachmentError", () => {
 
   it("lists the limits for the tooltip", () => {
     expect(ATTACHMENT_LIMITS).toBe(
-      "Up to 10 files, 10 MB each and 20 MB in total: .gif, .jpeg, .jpg, .mov, .mp4, .pdf, .png, .txt, .heic, .oga, .ogg, .dng, .mp3.",
+      "Up to 10 files, 5 MB in total: .gif, .jpeg, .jpg, .pdf, .png, .txt.",
     );
   });
 });
