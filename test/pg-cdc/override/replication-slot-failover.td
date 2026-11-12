@@ -30,16 +30,27 @@ INSERT INTO pk_table VALUES (1, 'one');
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_postgres_source_failover = false
 
-! CREATE SOURCE pg_source
+! CREATE SOURCE implied
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER);
+contains:the FAILOVER option for PostgreSQL sources is not available
+
+! CREATE SOURCE explicit_false
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = false);
 contains:the FAILOVER option for PostgreSQL sources is not available
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_postgres_source_failover = true
 
-> CREATE SOURCE pg_source
+> CREATE SOURCE implied
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER);
-> CREATE TABLE pk_table FROM SOURCE pg_source (REFERENCE pk_table);
+> CREATE SOURCE explicit_true
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = true);
+> CREATE SOURCE explicit_false
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = false);
+> CREATE TABLE pk_table FROM SOURCE implied (REFERENCE pk_table);
+
+> SELECT count(*) FROM mz_internal.mz_postgres_sources
+3
 
 > SELECT * FROM pk_table
 1 one

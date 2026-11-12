@@ -1183,9 +1183,9 @@ fn plan_postgres_source_connection(
         // in these options for round-tripping of a `CREATE SOURCE` statement. This should
         // be removed once we drop support for implicitly created subsources.
         exclude_columns: _,
-        seen: _,
+        seen,
     } = options.clone().try_into()?;
-    if failover {
+    if seen.contains(&PgConfigOptionName::Failover) {
         scx.require_feature_flag(&vars::ENABLE_POSTGRES_SOURCE_FAILOVER)?;
     }
     let details = details

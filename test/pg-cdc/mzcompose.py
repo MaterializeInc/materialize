@@ -209,7 +209,7 @@ def workflow_replication_slot_failover(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Test that the FAILOVER source option creates a failover slot on PostgreSQL 17+.
+    Test that the FAILOVER source option decides whether a slot is a failover slot.
     """
     pg_version = get_targeted_pg_version(parser)
     if pg_version is not None and int(pg_version.split(".")[0]) < 17:
@@ -224,10 +224,22 @@ def workflow_replication_slot_failover(
             password="postgres",
             port=c.default_port("postgres"),
         )
-        failover = pg_conn.execute(
-            "SELECT failover FROM pg_replication_slots"
-        ).fetchall()
-        assert failover == [(True,)], f"expected one failover slot, found {failover}"
+        expected = {"implied": True, "explicit_true": True, "explicit_false": False}
+        slots = c.sql_query("""
+            SELECT s.name, p.replication_slot
+            FROM mz_sources s JOIN mz_internal.mz_postgres_sources p USING (id)
+            """)
+        for _ in range(60):
+            failover = dict(
+                pg_conn.execute(
+                    "SELECT slot_name, failover FROM pg_replication_slots"
+                ).fetchall()
+            )
+            if len(failover) == len(expected):
+                break
+            time.sleep(1)
+        actual = {name: failover.get(slot) for name, slot in slots}
+        assert actual == expected, f"expected {expected}, found {actual}"
 
 
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
