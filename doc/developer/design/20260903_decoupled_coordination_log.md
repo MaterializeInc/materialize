@@ -9,14 +9,21 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Convert the remaining limits launchers, then tighten production native ingress.
-Platform-check launch migration is verified: current-native plans declare
-inventory first and retain an untouched service template across restarts.
-Historical launches and the unsupported-upgrade guard remain unchanged. The full
-Python result suite and preserved-port negative control pass. Targeted actual
-actions preserve indexed reads/writes across external replica restart, container
-restart and managed-replica kills. This is not full platform-scenario acceptance.
-Evidence: `native-driver-scratch/platform-action-evidence/aj-native-cluster-dfe8ab86/`.
+Tighten production native ingress after the remaining upsert launcher migration.
+The limits launchers now declare inventory before starting every process and
+refresh IDs after catalog resets. Generator definitions and counts are unchanged.
+Unit checks cover ordering, missing inventory, nonleader context and fresh IDs.
+Independent review found no correctness issues. The actual helper passed the
+original Tables workload and replica-targeted queries across its seven-process
+layout on capped scratch. This does not cover the full limits suite,
+authentication setup or rebuilt-image CI. Evidence:
+`native-driver-scratch/limits-launcher-evidence/aj-native-cluster-faf2e302/`.
+
+Platform launch migration also passes targeted actual indexed read/write actions
+across external replica restart, container restart and managed-replica kills.
+Historical launches and the unsupported-upgrade guard remain unchanged. This is
+not full platform-scenario acceptance. Evidence:
+`native-driver-scratch/platform-action-evidence/aj-native-cluster-dfe8ab86/`.
 
 The separate upsert load-test launcher still needs migration. Its scenario list
 combines two cases into one malformed tuple. Approval to split that tuple was
@@ -27,7 +34,8 @@ and `final-preflight-boundary-research.md` for the remaining boundaries.
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
 instance-specific `native-driver-scratch/remote.py`. No access rules changed.
-Keep the compiled candidate and evidence before releasing the worker.
+Completed runtime fixtures are removed. Keep the compiled candidate and evidence
+before releasing the worker.
 
 Do not run heavy suites or builds on the local VM. Polling reserves did not prevent
 an overload that required a restart. Scratch test containers must share the

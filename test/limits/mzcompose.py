@@ -32,7 +32,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
@@ -2111,8 +2111,43 @@ service_names = [
 ]
 
 
-def setup(c: Composition, workers: int) -> None:
-    c.up(*service_names)
+def start_native_replicas(
+    c: Composition,
+    replicas: list[tuple[str, str, list[str], int]],
+    overrides: contextlib.ExitStack,
+) -> None:
+    catalog_options = native_catalog_options(c)
+    node_names = []
+    for cluster_name, replica_name, names, workers in replicas:
+        with c.sql_cursor(port=6877, user="mz_system") as cursor:
+            cursor.execute(
+                "SELECT c.id, r.id FROM mz_clusters c "
+                "JOIN mz_cluster_replicas r ON r.cluster_id = c.id "
+                "WHERE c.name = %s AND r.name = %s",
+                (cluster_name, replica_name),
+            )
+            [(cluster_id, replica_id)] = cursor.fetchall()
+        for name in names:
+            node_names.append(name)
+            overrides.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=workers,
+                        process_names=names,
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+    c.up(*node_names)
+
+
+def setup(c: Composition, workers: int, overrides: contextlib.ExitStack) -> None:
+    c.up(*(name for name in service_names if not name.startswith("clusterd_")))
     setup_sql_server_testing(c)
 
     iceberg_credentials = setup_polaris_for_iceberg(c)
@@ -2180,6 +2215,22 @@ def setup(c: Composition, workers: int) -> None:
     """,
         port=6877,
         user="mz_system",
+    )
+
+    start_native_replicas(
+        c,
+        [
+            ("quickstart", "replica1", ["clusterd_1_1_1", "clusterd_1_1_2"], workers),
+            ("quickstart", "replica2", ["clusterd_1_2_1", "clusterd_1_2_2"], workers),
+            (
+                "single_replica_cluster",
+                "replica1",
+                ["clusterd_2_1_1", "clusterd_2_1_2"],
+                workers,
+            ),
+            ("single_worker_cluster", "replica1", ["clusterd_3_1_1"], 1),
+        ],
+        overrides,
     )
 
 
@@ -2272,51 +2323,20 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not scenarios:
         return
 
-    with c.override(
-        Clusterd(
-            name="clusterd_1_1_1",
-            workers=args.workers,
-            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_1_2",
-            workers=args.workers,
-            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_2_1",
-            workers=args.workers,
-            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_2_2",
-            workers=args.workers,
-            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_1_1",
-            workers=args.workers,
-            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_1_2",
-            workers=args.workers,
-            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_3_1_1",
-            workers=1,
-        ),
-    ):
-        run_scenarios(c, scenarios, args.find_limit, args.workers)
+    with contextlib.ExitStack() as overrides:
+        run_scenarios(c, scenarios, args.find_limit, args.workers, overrides)
 
 
 def run_scenarios(
-    c: Composition, scenarios: list[type[Generator]], find_limit: bool, workers: int
+    c: Composition,
+    scenarios: list[type[Generator]],
+    find_limit: bool,
+    workers: int,
+    overrides: contextlib.ExitStack,
 ):
     c.up(Service("testdrive", idle=True))
 
-    setup(c, workers)
+    setup(c, workers, overrides)
 
     failures: list[TestFailureDetails] = []
     stats: dict[tuple[type[Generator], int], Statistics] = {}
@@ -2368,7 +2388,7 @@ def run_scenarios(
                             )
                             print("Retrying in a minute...")
                             time.sleep(60)
-                    setup(c, workers)
+                    setup(c, workers, overrides)
 
                     bad_count = scenario.COUNT
                     scenario.COUNT = (
@@ -2492,35 +2512,17 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         Service("testdrive", idle=True),
     )
 
-    # Construct the requied Clusterd instances and peer them into clusters
-    node_names = []
-    node_overrides = []
-    for cluster_id in range(1, args.clusters + 1):
-        for replica_id in range(1, args.replicas + 1):
-            names = [
-                f"clusterd_{cluster_id}_{replica_id}_{i}"
-                for i in range(1, args.nodes + 1)
-            ]
-            for node_name in names:
-                node_names.append(node_name)
-                node_overrides.append(
-                    Clusterd(
-                        name=node_name,
-                        workers=args.workers,
-                        process_names=names,
-                    )
-                )
-
-    with c.override(
-        Testdrive(
-            seed=1,
-            materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
-            materialize_use_https=True,
-            no_reset=True,
+    with (
+        c.override(
+            Testdrive(
+                seed=1,
+                materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+                materialize_use_https=True,
+                no_reset=True,
+            ),
         ),
-        *node_overrides,
+        contextlib.ExitStack() as overrides,
     ):
-        c.up(*node_names)
 
         # Increase resource limits. CI lowers grpc_client_http2_keep_alive_timeout
         # to 5s, but this workflow oversubscribes the host CPU with
@@ -2605,6 +2607,24 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 port=6877,
                 user="mz_system",
             )
+
+        start_native_replicas(
+            c,
+            [
+                (
+                    f"cluster_u{cluster_id}",
+                    f"replica_u{cluster_id}_{replica_id}",
+                    [
+                        f"clusterd_{cluster_id}_{replica_id}_{node}"
+                        for node in range(1, args.nodes + 1)
+                    ],
+                    args.workers,
+                )
+                for cluster_id in range(1, args.clusters + 1)
+                for replica_id in range(1, args.replicas + 1)
+            ],
+            overrides,
+        )
 
         # Construct some dataflows in each cluster
         for cluster_id in range(1, args.clusters + 1):
