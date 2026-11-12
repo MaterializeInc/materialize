@@ -23,3 +23,7 @@ The following guides outline recommended configurations for deploying Materializ
   Guidelines](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/)
 - [GCP Deployment
   Guidelines](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/)
+
+The following guides apply to deployments on any cloud:
+
+- [Bin packing](/self-managed-deployments/deployment-guidelines/bin-packing/)
