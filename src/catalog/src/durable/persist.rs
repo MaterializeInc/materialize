@@ -1281,7 +1281,8 @@ impl UnopenedPersistCatalogState {
 
         // Perform data migrations.
         if is_initialized && !read_only {
-            commit_ts = upgrade(&mut self, commit_ts).await?;
+            commit_ts =
+                upgrade(&mut self, commit_ts, bootstrap_args.force_catalog_migration).await?;
         }
 
         debug!(

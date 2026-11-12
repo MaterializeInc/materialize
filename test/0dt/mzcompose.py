@@ -55,6 +55,20 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
+
+def _mz_new(*, force_catalog_migration: bool = False) -> Materialized:
+    return Materialized(
+        name="mz_new",
+        sanity_restart=False,
+        deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        restart="on-failure",
+        external_metadata_store=True,
+        default_replication_factor=2,
+        force_catalog_migration=force_catalog_migration,
+    )
+
+
 SERVICES = [
     DockerService(
         name="hydration-flags",
@@ -88,15 +102,7 @@ SERVICES = [
         external_metadata_store=True,
         default_replication_factor=2,
     ),
-    Materialized(
-        name="mz_new",
-        sanity_restart=False,
-        deploy_generation=1,
-        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-        restart="on-failure",
-        external_metadata_store=True,
-        default_replication_factor=2,
-    ),
+    _mz_new(),
     # A second process of mz_new's generation, as the container entrypoint
     # starts it after `restart_in_place!`.
     Materialized(
@@ -532,6 +538,11 @@ def workflow_read_only(c: Composition) -> None:
             AAA
             CCC
             """))
+
+
+def workflow_basic_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_basic(c)
 
 
 def workflow_basic(c: Composition) -> None:
@@ -2383,6 +2394,11 @@ def workflow_upsert_sources(c: Composition) -> None:
 
     for thread in threads:
         thread.join()
+
+
+def workflow_ddl_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_ddl(c)
 
 
 def workflow_ddl(c: Composition) -> None:

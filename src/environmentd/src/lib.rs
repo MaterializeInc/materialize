@@ -232,6 +232,8 @@ pub struct Config {
     /// If `Some`, force running builtin schema migration using the specified
     /// migration mechanism ("evolution" or "replacement").
     pub force_builtin_schema_migration: Option<String>,
+    /// See [`BootstrapArgs::force_catalog_migration`].
+    pub force_catalog_migration: bool,
 }
 
 /// Configuration for the Catalog.
@@ -683,6 +685,7 @@ impl Listeners {
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role,
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
+            force_catalog_migration: config.force_catalog_migration,
         };
 
         let (caught_up_trigger, bootstrapped) = if read_only {

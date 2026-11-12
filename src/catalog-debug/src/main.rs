@@ -634,6 +634,7 @@ async fn upgrade_check(
                 default_cluster_replication_factor: 1,
                 bootstrap_role: None,
                 cluster_replica_size_map: cluster_replica_sizes.clone(),
+                force_catalog_migration: false,
             },
         )
         .await?;

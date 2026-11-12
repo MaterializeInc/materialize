@@ -1425,6 +1425,7 @@ async fn create_materialize_state(
         default_cluster_replica_size: "ABC".to_string(),
         default_cluster_replication_factor: 1,
         bootstrap_role: None,
+        force_catalog_migration: false,
     };
 
     let materialize_state = MaterializeState {

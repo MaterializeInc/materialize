@@ -5105,6 +5105,7 @@ class ZeroDowntimeDeployAction(Action):
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
+                force_catalog_migration=True,
                 system_parameter_defaults=get_default_system_parameters(),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
