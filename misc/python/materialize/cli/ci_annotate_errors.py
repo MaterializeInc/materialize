@@ -11,13 +11,16 @@
 # during CI and find associated open GitHub issues in Materialize repository.
 
 import argparse
+import html
 import json
 import mmap
 import os
 import re
 import sys
+import time
 import traceback
 import urllib.parse
+from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -33,7 +36,11 @@ from materialize.buildkite import (
     add_annotation_raw,
     get_artifact_url,
 )
-from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
+from materialize.buildkite_insights.buildkite_api import (
+    builds_api,
+    generic_api,
+    logs_api,
+)
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
@@ -238,6 +245,12 @@ PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     )
     """,
     re.VERBOSE | re.MULTILINE,
+)
+
+# What logs_api leaves of Buildkite's timestamps, ANSI CSI and OSC escape
+# sequences, and the "\r" that the agent's pseudo-terminal adds before "\n".
+BUILDKITE_LOG_NOISE_RE = re.compile(
+    r"\x1b_|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r+(?=\n)"
 )
 
 
@@ -458,8 +471,22 @@ and finds associated open GitHub issues in Materialize repository.""",
             "occurrence. Logs without the marker are scanned in full."
         ),
     )
-    parser.add_argument("log_files", nargs="+", help="log files to search in")
+    parser.add_argument(
+        "--buildkite-log-until",
+        metavar="MARKER",
+        help="also search this job's log on Buildkite, up to the last MARKER",
+    )
+    parser.add_argument(
+        "--failures-only",
+        action="store_true",
+        help="record nothing in test analytics, as only failures would be",
+    )
+    parser.add_argument("log_files", nargs="*", help="log files to search in")
     args = parser.parse_args()
+
+    if args.buildkite_log_until:
+        # Unlike output the caller captures, Buildkite's log has secrets redacted.
+        args.log_files.insert(0, write_buildkite_log(args.buildkite_log_until))
 
     test_analytics_config = create_test_analytics_config_with_hostname(
         args.cloud_hostname
@@ -467,7 +494,8 @@ and finds associated open GitHub issues in Materialize repository.""",
     test_analytics = TestAnalyticsDb(test_analytics_config)
 
     # always insert a build job regardless whether it has annotations or not
-    test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
+    if not args.failures_only:
+        test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
 
     number_of_unknown_errors, ignore_failure = annotate_logged_errors(
         args.log_files,
@@ -479,7 +507,8 @@ and finds associated open GitHub issues in Materialize repository.""",
     )
 
     try:
-        test_analytics.submit_updates()
+        if not args.failures_only:
+            test_analytics.submit_updates()
     except Exception as e:
         if not isinstance(e, TestAnalyticsUploadError):
             print(traceback.format_exc())
@@ -543,17 +572,16 @@ def annotate_unexplained_failure(
     test_desc: str,
     test_result: int,
     build_history_on_main: BuildHistory | None = None,
+    log_file: str | None = None,
 ) -> None:
     """
     Safety net: the test failed, but there are no unknown or known errors to
     explain it with, so annotate the failure anyway so that it doesn't go
-    unnoticed, and show the current failures on main branch.
-    Only fetch the main branch status when we are running in CI, but not on
-    main, so inside of a PR or a release branch instead.
+    unnoticed, with the end of `log_file` and the current failures on main
+    branch.
     """
     if (
         ui.env_is_truthy("BUILDKITE")
-        and os.getenv("BUILDKITE_BRANCH") != "main"
         and test_result != 0
         and get_job_state() not in ("canceling", "canceled")
     ):
@@ -572,7 +600,12 @@ def annotate_unexplained_failure(
             test_desc=test_desc,
             ignore_failure=False,
         )
-        add_annotation_raw(style="error", markdown=annotation.to_markdown())
+        markdown = annotation.to_markdown()
+        if log_file:
+            with open(log_file, errors="replace") as f:
+                tail = "\n".join(line.rstrip()[:500] for line in deque(f, 30))
+            markdown += f"The end of its log:\n<pre>{html.escape(tail)}</pre>"
+        add_annotation_raw(style="error", markdown=markdown)
 
         store_annotation_in_test_analytics(test_analytics, annotation)
 
@@ -616,7 +649,13 @@ def annotate_logged_errors(
     if not errors:
         # No error pattern was detected in the logs and no junit report
         # contains an error, but the test may still have failed.
-        annotate_unexplained_failure(test_analytics, test_cmd, test_desc, test_result)
+        annotate_unexplained_failure(
+            test_analytics,
+            test_cmd,
+            test_desc,
+            test_result,
+            log_file=log_files[0] if log_files else None,
+        )
         return (0, False)
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
@@ -1196,6 +1235,23 @@ def get_job_state() -> str:
         if job["id"] == job_id:
             return job["state"]
     raise ValueError("Job not found")
+
+
+def write_buildkite_log(until: str) -> str:
+    log = ""
+    # The agent uploads the log in chunks, so `until` can take a moment to show.
+    for _ in range(30):
+        log = logs_api.download_log(
+            os.environ["BUILDKITE_PIPELINE_SLUG"],
+            int(os.environ["BUILDKITE_BUILD_NUMBER"]),
+            os.environ["BUILDKITE_JOB_ID"],
+        )
+        if until in log:
+            break
+        time.sleep(2)
+    with open("buildkite.log", "w") as f:
+        f.write(BUILDKITE_LOG_NOISE_RE.sub("", log.rsplit(until, 1)[0]))
+    return "buildkite.log"
 
 
 def get_suite_name(include_retry_info: bool = True) -> str:
