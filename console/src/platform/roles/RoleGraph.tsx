@@ -41,7 +41,7 @@ export const RoleGraph = () => {
 };
 
 const RoleGraphInner = () => {
-  const [selectedRoleName, setSelectedRoleName] = React.useState<
+  const [selectedRoleId, setSelectedRoleId] = React.useState<
     string | undefined
   >(undefined);
   const [filterValue, setFilterValue] = React.useState("");
@@ -52,10 +52,13 @@ const RoleGraphInner = () => {
   const { data: edgesData } = useRoleGraphEdges();
   const edges = edgesData?.rows;
 
+  // NOTE: Graph nodes are keyed by role id, never by name. graphlib keeps
+  // nodes in plain objects, so a role named `__proto__` would otherwise write
+  // to `Object.prototype` and break every later `fetch`.
   const nodes = React.useMemo(
     () =>
       roles?.map((role) => ({
-        id: role.roleName,
+        id: role.roleId,
         width: ROLE_NODE_WIDTH,
         height: ROLE_NODE_HEIGHT,
       })) ?? [],
@@ -73,27 +76,27 @@ const RoleGraphInner = () => {
   } = useDagreGraph({
     nodes,
     edges,
-    selectedNodeId: selectedRoleName,
+    selectedNodeId: selectedRoleId,
     ranksep: ROLE_NODE_HEIGHT * 2,
   });
 
   const roleMap = React.useMemo(() => {
-    return new Map<string, RoleItem>(roles?.map((r) => [r.roleName, r]) ?? []);
+    return new Map<string, RoleItem>(roles?.map((r) => [r.roleId, r]) ?? []);
   }, [roles]);
 
   const inheritsFrom = React.useMemo(() => {
-    if (!selectedRoleName || !graph) return [];
-    return getUpstreamNodes(selectedRoleName, graph)
-      .map((name) => roleMap.get(name))
+    if (!selectedRoleId || !graph) return [];
+    return getUpstreamNodes(selectedRoleId, graph)
+      .map((id) => roleMap.get(id))
       .filter(notNullOrUndefined);
-  }, [graph, roleMap, selectedRoleName]);
+  }, [graph, roleMap, selectedRoleId]);
 
   const grantedTo = React.useMemo(() => {
-    if (!selectedRoleName || !graph) return [];
-    return getDownstreamNodes(selectedRoleName, graph)
-      .map((name) => roleMap.get(name))
+    if (!selectedRoleId || !graph) return [];
+    return getDownstreamNodes(selectedRoleId, graph)
+      .map((id) => roleMap.get(id))
       .filter(notNullOrUndefined);
-  }, [graph, roleMap, selectedRoleName]);
+  }, [graph, roleMap, selectedRoleId]);
 
   const matchesFilter = (roleName: string) => {
     if (!filterValue) return true;
@@ -115,14 +118,14 @@ const RoleGraphInner = () => {
     }
     const matches = getFilterMatches(value);
     if (matches.length === 1) {
-      setSelectedRoleName(matches[0].roleName);
+      setSelectedRoleId(matches[0].roleId);
     } else {
-      setSelectedRoleName(undefined);
+      setSelectedRoleId(undefined);
     }
   };
 
-  const handleRoleSelect = (roleName: string) => {
-    setSelectedRoleName(roleName);
+  const handleRoleSelect = (roleId: string) => {
+    setSelectedRoleId(roleId);
     setFilterValue("");
   };
 
@@ -144,23 +147,23 @@ const RoleGraphInner = () => {
         rightOffset={ROLE_SIDEBAR_WIDTH}
         controlsZIndex={ROLE_GRAPH_CANVAS_Z_INDEX}
       >
-        {graph.nodes().map((roleName: string) => {
-          const node = graph.node(roleName);
-          const nodePosition = nodePositionMap.get(roleName);
-          const role = roleMap.get(roleName);
+        {graph.nodes().map((roleId: string) => {
+          const node = graph.node(roleId);
+          const nodePosition = nodePositionMap.get(roleId);
+          const role = roleMap.get(roleId);
           if (!node || !nodePosition || !role) return null;
 
           return (
             <RoleGraphNode
-              key={roleName}
+              key={roleId}
               roleData={role}
-              isSelected={roleName === selectedRoleName}
-              isFiltered={matchesFilter(roleName)}
+              isSelected={roleId === selectedRoleId}
+              isFiltered={matchesFilter(role.roleName)}
               left={nodePosition.left}
               top={nodePosition.top}
               width={node.width}
               onClick={() => {
-                setSelectedRoleName(roleName);
+                setSelectedRoleId(roleId);
               }}
             />
           );
@@ -183,7 +186,7 @@ const RoleGraphInner = () => {
                   ...points,
                 ]}
                 isAdjacentToSelectedNode={
-                  e.v === selectedRoleName || e.w === selectedRoleName
+                  e.v === selectedRoleId || e.w === selectedRoleId
                 }
               />
             );
@@ -191,12 +194,10 @@ const RoleGraphInner = () => {
         </GraphEdgeContainer>
       </Canvas>
       <RoleGraphSidebar
-        selectedRole={
-          selectedRoleName ? roleMap.get(selectedRoleName) : undefined
-        }
+        selectedRole={selectedRoleId ? roleMap.get(selectedRoleId) : undefined}
         inheritsFrom={inheritsFrom}
         grantedTo={grantedTo}
-        onRoleClick={setSelectedRoleName}
+        onRoleClick={setSelectedRoleId}
         filterValue={filterValue}
         onFilterChange={handleFilterChange}
         filteredRoles={getFilterMatches(filterValue)}
