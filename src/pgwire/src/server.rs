@@ -14,32 +14,52 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use bytes::BytesMut;
+use futures::FutureExt;
+use futures::future::Shared;
 use mz_authenticator::GenericOidcAuthenticator;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
-    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
-    MAX_FORWARDED_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, ErrorResponse,
+    FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY,
+    REJECT_ENCRYPTION, decode_startup,
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
-use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
+use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig, STARTING_UP_MESSAGE};
 use openssl::ssl::Ssl;
+use postgres::error::SqlState;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::oneshot;
 use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
+use tokio_util::codec::Encoder;
 use tracing::{debug, error, trace};
 
-use crate::codec::FramedConn;
+use crate::codec::{Codec, FramedConn};
+use crate::message::BackendMessage;
 use crate::metrics::{Metrics, MetricsConfig};
 use crate::protocol;
+
+/// The adapter-backed parts of a [`Server`], which only exist once the adapter
+/// has booted.
+#[derive(Clone, Debug)]
+pub struct AdapterHandles {
+    /// A client for the adapter with which the server will communicate.
+    pub adapter_client: mz_adapter::Client,
+    /// OIDC authenticator.
+    pub oidc: GenericOidcAuthenticator,
+}
 
 /// Configures a [`Server`].
 #[derive(Debug)]
 pub struct Config {
     /// The label for the mz_connection_status metric.
     pub label: &'static str,
-    /// A client for the adapter with which the server will communicate.
-    pub adapter_client: mz_adapter::Client,
+    /// Resolves once the adapter has booted. Until then, the server answers
+    /// every startup message with a fatal `57P03` (`cannot_connect_now`)
+    /// error, as PostgreSQL does while it starts up.
+    pub adapter_handles_rx: Shared<oneshot::Receiver<AdapterHandles>>,
     /// The TLS configuration for the server.
     ///
     /// If not present, then TLS is not enabled, and clients requests to
@@ -47,8 +67,6 @@ pub struct Config {
     pub tls: Option<ReloadingTlsConfig>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
-    /// OIDC authenticator.
-    pub oidc: GenericOidcAuthenticator,
     /// The authentication method defined by the server's listener
     /// configuration.
     pub authenticator_kind: AuthenticatorKind,
@@ -65,10 +83,9 @@ pub struct Config {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<ReloadingTlsConfig>,
-    adapter_client: mz_adapter::Client,
+    adapter_handles_rx: Shared<oneshot::Receiver<AdapterHandles>>,
     authenticator_kind: AuthenticatorKind,
     frontegg: Option<FronteggAuthenticator>,
-    oidc: GenericOidcAuthenticator,
     metrics: Metrics,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -100,10 +117,9 @@ impl Server {
     pub fn new(config: Config) -> Server {
         Server {
             tls: config.tls,
-            adapter_client: config.adapter_client,
+            adapter_handles_rx: config.adapter_handles_rx,
             authenticator_kind: config.authenticator_kind,
             frontegg: config.frontegg,
-            oidc: config.oidc,
             metrics: Metrics::new(config.metrics, config.label),
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
@@ -117,10 +133,9 @@ impl Server {
         conn: Connection,
         tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> impl Future<Output = Result<(), anyhow::Error>> + Send + 'static {
-        let adapter_client = self.adapter_client.clone();
+        let adapter_handles_rx = self.adapter_handles_rx.clone();
         let authenticator_kind = self.authenticator_kind;
         let frontegg = self.frontegg.clone();
-        let oidc = self.oidc.clone();
         let tls = self.tls.clone();
         let metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
@@ -132,15 +147,14 @@ impl Server {
         async move {
             let result = (|| {
                 async move {
-                    let conn_id = adapter_client.new_conn_id()?;
                     let mut conn = Conn::Unencrypted(conn);
                     loop {
                         let message =
                             decode_startup(&mut conn, MAX_FORWARDED_STARTUP_FRAME_SIZE).await?;
 
                         match &message {
-                            Some(message) => trace!("cid={} recv={:?}", conn_id, message),
-                            None => trace!("cid={} recv=<eof>", conn_id),
+                            Some(message) => trace!("recv={:?}", message),
+                            None => trace!("recv=<eof>"),
                         }
 
                         conn = match message {
@@ -153,6 +167,18 @@ impl Server {
                                 version,
                                 mut params,
                             }) => {
+                                // Checked here, after encryption negotiation, so
+                                // that a client which negotiated TLS receives the
+                                // error over TLS.
+                                let Some(Ok(AdapterHandles {
+                                    adapter_client,
+                                    oidc,
+                                })) = adapter_handles_rx.now_or_never()
+                                else {
+                                    trace!("send=StartingUp");
+                                    return send_starting_up(conn).await;
+                                };
+                                let conn_id = adapter_client.new_conn_id()?;
                                 // If someone (usually the balancer) forwarded a connection UUID,
                                 // then use that, otherwise generate one.
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
@@ -230,7 +256,12 @@ impl Server {
                                 conn_id,
                                 secret_key,
                             }) => {
-                                adapter_client.cancel_request(conn_id, secret_key);
+                                // There are no sessions to cancel before boot.
+                                if let Some(Ok(AdapterHandles { adapter_client, .. })) =
+                                    adapter_handles_rx.now_or_never()
+                                {
+                                    adapter_client.cancel_request(conn_id, secret_key);
+                                }
                                 // For security, the client is not told whether the cancel
                                 // request succeeds or fails.
                                 return Ok(());
@@ -238,7 +269,7 @@ impl Server {
 
                             Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
                                 (Conn::Unencrypted(mut conn), Some(tls)) => {
-                                    trace!("cid={} send=AcceptSsl", conn_id);
+                                    trace!("send=AcceptSsl");
                                     conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                                     let mut ssl_stream =
                                         SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
@@ -249,14 +280,14 @@ impl Server {
                                     Conn::Ssl(ssl_stream)
                                 }
                                 (mut conn, _) => {
-                                    trace!("cid={} send=RejectSsl", conn_id);
+                                    trace!("send=RejectSsl");
                                     conn.write_all(&[REJECT_ENCRYPTION]).await?;
                                     conn
                                 }
                             },
 
                             Some(FrontendStartupMessage::GssEncRequest) => {
-                                trace!("cid={} send=RejectGssEnc", conn_id);
+                                trace!("send=RejectGssEnc");
                                 conn.write_all(&[REJECT_ENCRYPTION]).await?;
                                 conn
                             }
@@ -269,4 +300,20 @@ impl Server {
             result
         }
     }
+}
+
+/// Tells the client that the server is starting up and closes the connection,
+/// matching PostgreSQL's response while it boots.
+async fn send_starting_up(mut conn: Conn<Connection>) -> Result<(), anyhow::Error> {
+    let mut buf = BytesMut::new();
+    Codec::new().encode(
+        BackendMessage::from(ErrorResponse::fatal(
+            SqlState::CANNOT_CONNECT_NOW,
+            STARTING_UP_MESSAGE,
+        )),
+        &mut buf,
+    )?;
+    conn.write_all(&buf).await?;
+    conn.flush().await?;
+    Ok(())
 }

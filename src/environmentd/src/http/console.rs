@@ -26,7 +26,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use mz_adapter_types::dyncfgs::{CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, OIDC_ISSUER};
 
-use crate::http::Delayed;
+use crate::http::{Delayed, ready_or_starting_up};
 
 /// Query parameter that selects (or, with an empty value, clears) the console
 /// preview build this proxy serves to the requesting browser.
@@ -118,12 +118,8 @@ static CONSOLE_CONFIG_VAR_NAMES: LazyLock<[&'static str; 3]> = LazyLock::new(|| 
 pub async fn handle_console_config(
     Extension(adapter_client_rx): Extension<Delayed<mz_adapter::Client>>,
 ) -> Result<Response, (StatusCode, String)> {
-    let adapter_client = adapter_client_rx.await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Adapter client unavailable".to_string(),
-        )
-    })?;
+    let adapter_client = ready_or_starting_up(&adapter_client_rx)
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
 
     let system_vars = adapter_client.get_system_vars().await;
     let mut config: BTreeMap<&str, String> = BTreeMap::new();
