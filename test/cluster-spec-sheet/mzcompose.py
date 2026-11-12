@@ -1954,16 +1954,23 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
             conditions = [
-                (disabled, protocol, concurrency)
+                (disabled, protocol, concurrency, metrics_enabled)
                 for disabled in (False, True)
                 for protocol in self.options.protocols
                 for concurrency in self.options.concurrencies
+                for metrics_enabled in (True, False)
             ]
             for round_index in (1, 2):
                 ordered = conditions if round_index == 1 else list(reversed(conditions))
-                for disabled, protocol, concurrency in ordered:
+                for disabled, protocol, concurrency, metrics_enabled in ordered:
                     self.measure(
-                        runner, size, concurrency, protocol, disabled, round_index
+                        runner,
+                        size,
+                        concurrency,
+                        protocol,
+                        disabled,
+                        round_index,
+                        metrics_enabled,
                     )
         finally:
             runner.run_query("SET cluster = 'c'")
@@ -1979,9 +1986,10 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         protocol: str,
         disable_statement_logging: bool = False,
         round_index: int = 1,
+        metrics_enabled: bool = True,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
-        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}_round_{round_index}"
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}_round_{round_index}_metrics_{metrics_enabled}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
@@ -1995,9 +2003,13 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 )
             ]
             flags[params_index] = urlencode(params, doseq=True)
+        application_name = "qps_metrics_on" if metrics_enabled else "qps_metrics_off"
         config = self.options.config(flags, concurrency, protocol)
+        for env in config["libpq_envs"]:
+            env["PGAPPNAME"] = application_name
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
+        assert result["application_names"] == [application_name] * result["clusters"]
         if (
             disable_statement_logging
             and result.get("statement_logging_sample_rates") != [0] * result["clusters"]
@@ -2037,6 +2049,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             )
         result.update(
             benchmark_round=round_index,
+            linearization_metrics_enabled=metrics_enabled,
             replica_cpu_peak_percent=replica_cpu,
             replica_cpu_samples=replica_samples,
             warnings=warnings,

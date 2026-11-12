@@ -212,6 +212,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
     )
     results = []
     logging_rates = []
+    application_names = []
     processes = []
     script = root / "query.sql"
     script.write_text(config["query"].rstrip("; \n") + ";\n")
@@ -247,14 +248,14 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-c",
-                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, count(*) FROM ({config['query']}) q",
+                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, count(*), current_setting('application_name') FROM ({config['query']}) q",
             ),
             capture_output=True,
             text=True,
             timeout=config["query_timeout_seconds"] + 10,
         )
         fields = preflight.stdout.strip().split("|")
-        if preflight.returncode or len(fields) != 3:
+        if preflight.returncode or len(fields) != 4:
             print(preflight.stdout, preflight.stderr, file=sys.stderr)
             raise ValueError(f"cluster {i}: routing/row-count preflight failed")
         if (
@@ -263,6 +264,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
         ):
             raise ValueError(f"cluster {i}: unexpected cluster or row count: {fields}")
         logging_rates.append(float(fields[1]))
+        application_names.append(fields[3])
     capacity_text = container_output(
         container,
         "sh",
@@ -397,6 +399,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
         "protocol": config["protocol"],
         "errors": 0,
         "statement_logging_sample_rates": logging_rates,
+        "application_names": application_names,
         "driver_name": "pgbench",
         "threads_per_cluster": 1,
         "pgbench_version": container_output(container, "pgbench", "--version").strip(),
