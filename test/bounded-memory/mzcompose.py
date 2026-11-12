@@ -15,6 +15,7 @@ and do not regress. Contains tests for large data ingestions.
 import argparse
 import math
 import traceback
+from contextlib import ExitStack
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
@@ -27,7 +28,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
@@ -96,6 +97,9 @@ class Scenario:
     timeout: str = "5m"
     disabled: bool = False
     needs_iceberg: bool = False
+    # Inventory changes and loading that require the external replica to be absent.
+    before_replica_start: str = ""
+    before_replica_restart: str = ""
 
 
 class PgCdcScenario(Scenario):
@@ -638,7 +642,7 @@ SCENARIOS = [
     ),
     Scenario(
         name="table-index-hydration",
-        pre_restart=dedent("""
+        before_replica_start=dedent("""
             > DROP CLUSTER REPLICA clusterd.r1;
 
             > CREATE TABLE t (a bigint, b bigint);
@@ -668,6 +672,11 @@ SCENARIOS = [
               STORAGE ADDRESSES ['clusterd:2103'],
               COMPUTECTL ADDRESSES ['clusterd:2101'],
               COMPUTE ADDRESSES ['clusterd:2102'];
+
+            """),
+        pre_restart=dedent("""
+            > SET statement_timeout = '300s'
+            $ set-max-tries max-tries=1
 
             > SET CLUSTER = clusterd
 
@@ -748,13 +757,15 @@ SCENARIOS = [
             > CREATE INDEX i1 IN CLUSTER clusterd ON s1_tbl (f1);
             """
         ),
-        post_restart=KafkaScenario.SCHEMAS + dedent(f"""
+        before_replica_restart=dedent("""
             > CREATE CLUSTER REPLICA clusterd.r1
               STORAGECTL ADDRESSES ['clusterd:2100'],
               STORAGE ADDRESSES ['clusterd:2103'],
               COMPUTECTL ADDRESSES ['clusterd:2101'],
               COMPUTE ADDRESSES ['clusterd:2102'];
 
+            """),
+        post_restart=KafkaScenario.SCHEMAS + dedent(f"""
             > SET CLUSTER = clusterd;
 
             > SELECT COUNT(*) FROM s1_tbl;
@@ -1182,7 +1193,7 @@ SCENARIOS = [
     ),
     Scenario(
         name="dataflow-logical-backpressure",
-        pre_restart=dedent("""
+        before_replica_start=dedent("""
             # * Timestamp interval to quickly create a source with many distinct timestamps.
             # * Lgalloc disabled to force more memory pressure.
             # * Index options to enable retained history.
@@ -1216,6 +1227,8 @@ SCENARIOS = [
               COMPUTECTL ADDRESSES ['clusterd:2101'],
               COMPUTE ADDRESSES ['clusterd:2102'];
 
+            """),
+        pre_restart=dedent("""
             > SET CLUSTER = clusterd
 
             # Ballast is the concatenation of two 32-byte strings, for readability.
@@ -1473,16 +1486,17 @@ def run_scenario(
 ) -> None:
     c.down(destroy_volumes=True)
 
-    with c.override(
-        Materialized(memory=materialized_memory, support_external_clusterd=True),
-        Clusterd(memory=clusterd_memory),
+    with (
+        c.override(
+            Materialized(memory=materialized_memory, support_external_clusterd=True),
+        ),
+        ExitStack() as replicas,
     ):
         c.up(
             "redpanda",
             "materialized",
             "postgres",
             "mysql",
-            "clusterd",
             "minio",
             Service("testdrive", idle=True),
             *(
@@ -1522,14 +1536,52 @@ def run_scenario(
                 "--var=aws-endpoint=minio:9000",
             ]
 
+        def start_replica(preparation: str) -> None:
+            if preparation:
+                c.testdrive(
+                    statement_timeout + preparation,
+                    args=[testdrive_timeout_arg] + extra_testdrive_args,
+                )
+            [(cluster_id, replica_id)] = c.sql_query("""
+                SELECT c.id, r.id FROM mz_clusters c
+                JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                WHERE c.name = 'clusterd' AND r.name = 'r1'
+            """)
+            replicas.enter_context(
+                c.override(
+                    Clusterd(
+                        memory=clusterd_memory,
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *native_catalog_options(c),
+                        ],
+                    )
+                )
+            )
+            c.up("clusterd")
+
+        start_replica(scenario.before_replica_start)
+
         c.testdrive(
             statement_timeout + scenario.pre_restart,
             args=[testdrive_timeout_arg] + extra_testdrive_args,
         )
 
-        # Restart Mz to confirm that re-hydration is also bounded memory
-        c.kill("materialized", "clusterd")
-        c.up("materialized", "clusterd")
+        # A dropped native replica may already have exited. Do not race its
+        # retirement with a kill, but retain crash coverage for live replicas.
+        [(replica_count,)] = c.sql_query("""
+            SELECT count(*) FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'clusterd' AND r.name = 'r1'
+        """)
+        if replica_count == 0:
+            c.stop("clusterd")
+            c.kill("materialized")
+        else:
+            c.kill("materialized", "clusterd")
+        c.up("materialized")
+        start_replica(scenario.before_replica_restart)
 
         c.testdrive(
             statement_timeout + scenario.post_restart,

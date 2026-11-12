@@ -9,62 +9,20 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate `test/bounded-memory/mzcompose.py` to inventory-first launch. Three
-scenarios drop/recreate the external replica inside testdrive scripts. Give these
-explicit script boundaries so the runner can launch with refreshed IDs before
-queries need the replacement. Preserve workload sizes, memory limits and assertions.
+Finish the targeted platform-action runtime check in
+`native-driver-scratch/platform-actions-verification.log`, then commit the
+platform launch changes. Current-native plans declare inventory before launch
+and retain a pristine service template across restarts. Historical launches and
+the unsupported-upgrade guard are unchanged. The full Python result suite passes,
+including real Compose port normalization and a negative control. This checks
+actual changed actions with indexed rows, not every platform scenario.
 
-Upsert rehydration now passes all four original variants with four workers,
-retained launch options across restart, row/statistics checks, updates and deletes.
-Independent review found no defects. The first run exhausted the scratch runner's
-ten-minute budget during the final restart. The complete rerun passed with a
-twenty-minute overall budget and unchanged resource caps/assertion deadlines.
-Evidence: `native-driver-scratch/upsert-launcher-evidence/aj-native-cluster-e79068f4/`.
-No OOM occurred and fixtures were removed. This is mounted default-debug candidate
-verification, not rebuilt-image CI.
-
-The separate upsert load-test launcher remains unconverted. Its scenario list
+Next, convert the limits launchers and tighten production native ingress.
+The separate upsert load-test launcher still needs migration. Its scenario list
 combines two cases into one malformed tuple. Approval to split that tuple was
 requested before expanding scope. Other launcher work can proceed meanwhile.
-
-Upsert failpoint recovery now retains native ownership through healthy, failing
-and recovered launches. All three original failpoints pass on capped scratch,
-including expected source errors, retained rows and continued ingestion after
-recovery. Four workers and each replica's identity survive restart. Evidence:
-`native-driver-scratch/upsert-launcher-evidence/aj-native-cluster-1e5bd8fe/`.
-These are mounted default-debug candidate checks, not rebuilt-image CI. No OOM
-occurred and fixtures were removed.
-
-Memory-limiter replica recreation now refreshes native identities. All three
-original scenarios pass with retained default-debug binaries on capped scratch:
-both million-row hydration checks and deliberate exit 167 at the low limit.
-The heap bound is unchanged. Distinct identities, no OOM and fixture cleanup are
-verified in `native-driver-scratch/cluster-launcher-evidence/aj-native-cluster-71ded598/`.
-Its existing default-suite exclusion (database-issues#9502) remains unchanged.
-
-Cluster death detection and replica metrics now launch with native ownership.
-Both actual workflows pass on capped scratch with retained default-debug binaries.
-Death detection establishes query readiness and checks only post-fault logs.
-Metrics preserves zero-before-connection assertions with disabled control proxies,
-then checks workloads, metrics and keepalives after enabling them. Review's startup
-registration race is fixed without retrying unexpected nonzero values. Evidence:
-`native-driver-scratch/cluster-launcher-evidence/`. An initial metrics runner failed
-only while inspecting an unused testdrive container. The corrected runner passes
-with unchanged workflow assertions, no OOM and fixture cleanup verified.
-
-Replica-isolation is committed and passes its complete split/unified disruption
-matrices with two processes per replica. Tracing passes after establishing native
-query readiness before its unchanged configuration-propagation deadline. Kafka
-source resumption preserves its four workers, restart, offsets and continued
-ingestion. Source/sink-error tests no longer launch an unused replica, with active
-workloads/assertions statically verified unchanged. Evidence is under
-`native-driver-scratch/{isolation-verified,tracing-evidence}/` and
-`native-driver-scratch/aj-native-kafka-resumption-55360511/`. These are targeted
-mounted-candidate outcomes, not rebuilt-image CI.
-
-Production ingress removal still needs the remaining external launchers. Native
-multi-process nonleader coverage now passes in both Timely topologies. The launcher inventory
-is in `native-external-launcher-audit.md` and `native-replica-execution-boundary.md`.
+See `native-external-launcher-audit.md`, `native-replica-execution-boundary.md`
+and `final-preflight-boundary-research.md` for the remaining boundaries.
 
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
@@ -105,14 +63,17 @@ Commits: `8c9e18f0d7` (subscriptions), `917c98e010` (SLT harness).
 Evidence and review dispositions: `native-subscription-frontier-assessment.md`.
 These checks used mounted candidate binaries, not rebuilt-image CI.
 
-Native programmable renderer scripts preserve dynamic plans and within-owner
-mixed exports. Their default-build tests and PostgreSQL/MinIO composition pass
-in both Timely topologies. External benchmark launch/restart checks also pass in
-both topologies for native and historical v26.30 environments, preserving table
-contents and continued writes. Native checks use retained default-debug binaries.
-This covers actual launcher/executor methods, not the full benchmark workflow,
-multi-process ingress or rebuilt-image CI. Fixtures are removed. Evidence:
-`native-driver-scratch/verified/` and `native-driver-scratch/benchmark-verified/`.
+Native renderer and external benchmark launch/restart checks pass in both
+Timely topologies, preserving historical-image comparisons. Replica isolation,
+connection metrics/death detection, tracing, Kafka resumption, limiter recreation
+and original upsert rehydration/failpoint workflows pass with native ownership.
+Bounded-memory table hydration and logical backpressure pass at their original
+limits, including post-restart checks. Their payloads, budgets and crash coverage
+remain intact. These are targeted mounted default-debug candidate outcomes,
+not full-suite or rebuilt-image CI acceptance. Evidence directories under
+`native-driver-scratch/`: `verified/`, `benchmark-verified/`, `isolation-verified/`,
+`tracing-evidence/`, `cluster-launcher-evidence/`, `upsert-launcher-evidence/` and
+`bounded-memory-evidence/`. Kafka evidence: `aj-native-kafka-resumption-55360511/`.
 
 The pinned 26.46/26.47 prototype pair shares implementation and plan encoding,
 not arbitrary release compatibility. Its lifecycle runs precede the isolated
@@ -130,6 +91,14 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
 - Forced-migration cases and some platform/stress workflows remain unconverted.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are unsupported, not reset or converted.
+- Bounded-memory upsert-index hydration reproducibly OOMs the external replica
+  at its unchanged 3.5-GiB limit. Last samples show roughly 3.0–3.1 GiB anonymous
+  memory and little file cache. A source audit found no omitted native memory or
+  backpressure setting, but no matched successful legacy configuration capture
+  exists. Do not attribute causality or raise the limit without evidence.
+  Failure receipts: `native-driver-scratch/bounded-memory-evidence/`
+  `aj-native-cluster-6ed29d27/` and `aj-native-cluster-c74e55f5/`.
+  Fixtures are removed. Cleanup now runs even when resource assertions fail.
 - Full upsert stress exceeded the local deployment memory cap. Worker cleanup is
   repaired, but full-stress acceptance remains blocked. Do not shrink the workload
   or raise caps blindly. The full workload still needs a measured retry, not a
@@ -172,9 +141,9 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` are the performance baseline, not a claim about
   cleanup's performance impact.
 
-All owned fixtures are removed. Obsolete 26.47 demo binaries were reclaimed,
-with their manifests and evidence retained. The stack-fixed frontier-bug baseline
-and upstream baselines remain. The identity-fixed production candidate is preserved
+Completed fixtures are removed. The current platform-action fixture is tracked
+in its runtime log above and must be cleaned before another heavy run. Obsolete 26.47 demo binaries were reclaimed,
+with their manifests and evidence retained. Verify the earlier baseline artifact locations before reuse. The identity-fixed production candidate is preserved
 locally with matching source and binary manifests. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB
 available-memory reserves, and use one low-priority Cargo job. Preserve baseline
 artifacts,
