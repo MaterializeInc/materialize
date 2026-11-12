@@ -42,6 +42,12 @@ All sinks on a Kafka connection share one progress topic, and each sink's
 records are keyed by `mz-sink-<sink_id>`. Joining on the `materialize-sink-id`
 header is what ties each data message to its own sink's frontier.
 
+{{< warning >}}
+This pattern parses progress records. Their format is not yet a documented,
+stable interface and may change in a future release. Ignore any fields you
+don't recognize when you parse them.
+{{< /warning >}}
+
 The `frontier` is exclusive: the sink has committed every change with a
 timestamp less than the frontier. The pattern has two parts:
 
@@ -114,14 +120,16 @@ timestamp less than the frontier. The pattern has two parts:
 ## Step 2. Load both topics into Snowflake
 
 Configure the Snowflake connector to load the data topic into a table named
-`raw_orders` and the progress topic into a table named `raw_progress`. For
-example:
+`raw_orders` and the progress topic into a table named `raw_progress`. This
+guide uses version 3 of the connector with Snowpipe Streaming, which loads
+each partition through its own channel. For example:
 
 ```json
 {
   "name": "materialize_orders",
   "config": {
     "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector",
+    "snowflake.ingestion.method": "SNOWPIPE_STREAMING",
     "topics": "orders,<sink_progress_topic>",
     "snowflake.topic2table.map": "orders:raw_orders,<sink_progress_topic>:raw_progress",
     "snowflake.url.name": "<account>.snowflakecomputing.com:443",
@@ -130,7 +138,8 @@ example:
     "snowflake.database.name": "<database>",
     "snowflake.schema.name": "<schema>",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-    "value.converter": "com.snowflake.kafka.connector.records.SnowflakeJsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
     "consumer.override.isolation.level": "read_committed"
   }
 }
@@ -143,8 +152,12 @@ Each Snowflake table gets two columns:
 - `RECORD_METADATA`: the message metadata, as a `VARIANT`. The message key is
   in `RECORD_METADATA:key` and the headers are in `RECORD_METADATA:headers`.
 
-Two settings in this configuration matter for the pattern:
+These settings in this configuration matter for the pattern:
 
+- `snowflake.ingestion.method` must be `SNOWPIPE_STREAMING`. Each channel
+  then records an offset token, which [Step 3](#step-3-build-a-trusted-frontier-table)
+  relies on. Snowpipe Streaming does not support the Snowflake converters, so
+  this example uses `JsonConverter` for values.
 - `key.converter` must be `org.apache.kafka.connect.storage.StringConverter`.
   Otherwise, the connector does not keep the progress topic's message key, and
   you can't tell which sink a progress record belongs to.
@@ -180,21 +193,30 @@ CREATE TABLE trusted_frontier (
 );
 ```
 
-Then run a small routine outside Snowflake, on a schedule, that appends a row
-each time it confirms a new frontier for a sink. Views read the highest
-frontier for each sink, the same way they would read `raw_progress`. For each
-sink, the routine should:
+Then run a small routine outside Snowflake that appends a row each time it
+confirms a new frontier for a sink. Views read the highest frontier for each
+sink, the same way they would read `raw_progress`. For each sink, the routine
+should:
 
-- Read the candidate frontier for the sink from `raw_progress`.
-- After that progress record is visible, read each data partition's high
-  watermark, then wait until its last stable offset (LSO), read with
-  `read_committed` isolation, reaches that high watermark.
-- Find the last committed data message below the LSO. Transaction markers
-  occupy offsets, so this is not simply `LSO - 1`, and aborted ranges must be
-  skipped.
-- Confirm that each partition's channel offset token has reached that message,
-  or that the partition is empty.
-- Only then write the candidate frontier to `trusted_frontier`.
+1. Read the candidate frontier for the sink from `raw_progress`.
+1. Record each data partition's high watermark. The progress record is
+   already in Snowflake, so every data message below the candidate frontier
+   sits below these high watermarks.
+1. For each data partition, start a consumer with `read_committed` isolation
+   at the channel's offset token + 1, and read until its position reaches the
+   recorded high watermark. `read_committed` skips transaction markers and
+   aborted messages.
+1. If no partition returns a message, Snowflake has loaded every committed
+   data message below the candidate frontier. Write the candidate frontier
+   to `trusted_frontier`.
+1. Otherwise, the connector is still loading. Wait, then repeat from step 3
+   with the same candidate frontier and high watermarks.
+
+Keep the candidate fixed until you confirm it. If you pick a newer candidate
+on each attempt, the routine can keep chasing new data and never confirm any
+frontier. A production routine also needs to handle timeouts, retries, empty
+partitions, and tombstones; see the connector's `behavior.on.null.values`
+setting.
 
 ## Step 4. Create a view of committed changes in Snowflake
 
@@ -241,14 +263,19 @@ ways to do this:
   ```sql
   CREATE VIEW shared_frontier AS
   WITH current_frontiers AS (
-    -- The latest trusted frontier for each sink.
+    -- The latest trusted frontier for each live sink.
     SELECT sink_id, MAX(frontier) AS current_frontier
     FROM trusted_frontier
+    WHERE sink_id IN ('u123', 'u456')
     GROUP BY sink_id
   )
   SELECT MIN(current_frontier) AS frontier
   FROM current_frontiers;
   ```
+
+  List the live sinks explicitly. A dropped sink's frontier stops advancing,
+  and a recreated sink gets a new ID, so update the list whenever you drop or
+  recreate a sink. Otherwise, the shared frontier stalls.
 
 - **One frontier per join.** For each join, gate on the lowest trusted
   frontier of only the sinks that join reads. This keeps each join as fresh as
