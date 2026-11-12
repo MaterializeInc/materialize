@@ -9,12 +9,23 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate the remaining upsert external launchers: rehydration and load-test
-variants. Preserve four workers, restart coverage and full workloads. Start
-inventory before replicas and retain native launch options through restart.
-The load-test scenario list contains a malformed tuple unrelated to ownership.
-Flag that repair before expanding scope. Continue the external-launcher inventory
-below afterward.
+Migrate `test/bounded-memory/mzcompose.py` to inventory-first launch. Three
+scenarios drop/recreate the external replica inside testdrive scripts. Give these
+explicit script boundaries so the runner can launch with refreshed IDs before
+queries need the replacement. Preserve workload sizes, memory limits and assertions.
+
+Upsert rehydration now passes all four original variants with four workers,
+retained launch options across restart, row/statistics checks, updates and deletes.
+Independent review found no defects. The first run exhausted the scratch runner's
+ten-minute budget during the final restart. The complete rerun passed with a
+twenty-minute overall budget and unchanged resource caps/assertion deadlines.
+Evidence: `native-driver-scratch/upsert-launcher-evidence/aj-native-cluster-e79068f4/`.
+No OOM occurred and fixtures were removed. This is mounted default-debug candidate
+verification, not rebuilt-image CI.
+
+The separate upsert load-test launcher remains unconverted. Its scenario list
+combines two cases into one malformed tuple. Approval to split that tuple was
+requested before expanding scope. Other launcher work can proceed meanwhile.
 
 Upsert failpoint recovery now retains native ownership through healthy, failing
 and recovered launches. All three original failpoints pass on capped scratch,

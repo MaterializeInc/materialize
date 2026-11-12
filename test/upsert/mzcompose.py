@@ -162,7 +162,6 @@ def workflow_rehydration(c: Composition) -> None:
         "materialized",
         "kafka",
         "schema-registry",
-        "clusterd1",
     ]
 
     for style, mz, clusterd in [
@@ -285,7 +284,6 @@ def workflow_rehydration(c: Composition) -> None:
     ]:
         with c.override(
             mz,
-            clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
             c.rm("testdrive")
@@ -294,14 +292,30 @@ def workflow_rehydration(c: Composition) -> None:
 
             c.up(*dependencies)
             c.run_testdrive_files("rehydration/01-setup.td")
-            c.run_testdrive_files("rehydration/02-source-setup.td")
+            [(cluster_id, replica_id)] = c.sql_query("""
+                SELECT c.id, r.id FROM mz_clusters c
+                JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                WHERE c.name = 'storage_cluster' AND r.name = 'r1'
+            """)
+            command = clusterd.config["command"]
+            assert isinstance(command, list)
+            command.extend(
+                [
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *native_catalog_options(c),
+                ]
+            )
+            with c.override(clusterd):
+                c.up("clusterd1")
+                c.run_testdrive_files("rehydration/02-source-setup.td")
 
-            c.kill("materialized")
-            c.kill("clusterd1")
-            c.up("materialized")
-            c.up("clusterd1")
+                c.kill("materialized")
+                c.kill("clusterd1")
+                c.up("materialized")
+                c.up("clusterd1")
 
-            c.run_testdrive_files("rehydration/03-after-rehydration.td")
+                c.run_testdrive_files("rehydration/03-after-rehydration.td")
 
         c.run_testdrive_files("rehydration/04-reset.td")
 
