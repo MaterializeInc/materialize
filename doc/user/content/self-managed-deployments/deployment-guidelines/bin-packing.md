@@ -31,8 +31,16 @@ karpenter.sh/do-not-disrupt: "true"
 
 A replica restarted by an eviction has to rehydrate, and it can't serve
 queries until it has. To avoid that, the cluster autoscaler (including GKE's)
-and Karpenter (including AKS Node Auto Provisioning) never remove a node while
-a Materialize pod is running on it.
+and Karpenter (including AKS Node Auto Provisioning) won't scale down or
+consolidate a node while a Materialize pod is running on it.
+
+These annotations only block voluntary disruption. A node can still be removed
+in other ways, for example by a spot interruption, a GKE node upgrade, or
+Karpenter node expiry when the `NodePool` sets a `terminationGracePeriod`. See
+[Karpenter node
+expiry](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/#karpenter-node-expiry)
+and [GKE node pool
+upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/).
 
 As a result, a Materialize pod stays on the node it was first scheduled to
 until it's replaced: by a Materialize rollout, by dropping or resizing its
@@ -62,12 +70,39 @@ labels and taints for swap or the local-disk scratch filesystem.
 The largest size in a tier must fit on one node of that tier's pool, after
 leaving room for the daemonsets running on every node.
 
-### 2. Add node selectors to the cluster sizes
+### 2. Keep other pods off the large pool
 
-In the Materialize operator Helm chart, add `selectors` to each size in
-[`operator.clusters.sizes`](/self-managed-deployments/appendix/appendix-cluster-sizes/#custom-cluster-sizes).
-Helm merges these into the default size definitions, so you only need to set
-`selectors`:
+Node selectors only keep a pod off a pool if the pod has one. `environmentd`,
+`balancerd`, and `console` have no cluster size, so without more configuration
+they can still be scheduled onto a large node, and `environmentd` then holds
+that node just like a replica would.
+
+To keep them off, taint the large pool, for example with
+`materialize.cloud/node-class=large:NoSchedule`, and add a matching toleration
+to `clusterd.tolerations` in the Materialize operator Helm chart, so only
+`clusterd` pods can schedule there:
+
+```yaml
+clusterd:
+  tolerations:
+    # ... any tolerations you already set ...
+    - key: materialize.cloud/node-class
+      operator: Equal
+      value: large
+      effect: NoSchedule
+```
+
+Helm replaces lists rather than merging them, so include any tolerations you
+already set for `clusterd`.
+
+### 3. Add node selectors to the cluster sizes
+
+In the Materialize operator Helm chart, add `selectors` to every size in
+[`operator.clusters.sizes`](/self-managed-deployments/appendix/appendix-cluster-sizes/#custom-cluster-sizes),
+including sizes you don't expect to use, such as `mz_probe`. A size without a
+selector can still be scheduled onto a large node, since all `clusterd` pods
+tolerate the large pool's taint. Helm merges these into the default size
+definitions, so you only need to set `selectors`:
 
 ```yaml
 operator:
@@ -90,11 +125,11 @@ These selectors are added to the `clusterd` pods of every replica of that size,
 together with `clusterd.nodeSelector`. Built-in clusters, such as
 `mz_catalog_server`, use small sizes, so they land in the small tier.
 
-### 3. Roll out each Materialize instance
+### 4. Roll out each Materialize instance
 
 Upgrade the operator release with the new values, then [roll out each
 Materialize instance](/self-managed-deployments/upgrading/#rollout-configuration)
-so existing replicas are rescheduled with the new selectors. New replicas pick
+so existing pods are rescheduled with the new selectors and tolerations. New replicas pick
 them up when they're created.
 
 ### Avoid overly granular tiers
@@ -133,8 +168,8 @@ How you enable `MostAllocated` depends on your platform:
 {{< tab "EKS" >}}
 
 Set the scoring strategy in the EKS cluster's scheduler configuration. In
-Terraform, this requires a version of the AWS provider that supports the
-`kube_scheduler_config` block:
+Terraform, the `kube_scheduler_config` block requires v6.59.0 or later of the
+AWS provider:
 
 ```hcl
 resource "aws_eks_cluster" "example" {
