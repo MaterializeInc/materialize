@@ -9,20 +9,24 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish replica-isolation verification and commit its working-tree changes. The
-full unified matrix passes with native identities on both processes and actual
-compaction advancement checks. The split matrix is running on scratch under
-`native-driver-scratch/isolation-split-hard-budget-fixed.log`. The interrupted
-local run is not acceptance evidence. Review details and earlier failures are in
-`native-replica-isolation-boundary.md`.
+Migrate the remaining external launchers in `test/cluster/mzcompose.py`: death
+detection, the replica-metrics preconnection fixture, and memory-limiter replica
+recreation. Preserve proxy disruption, metric assertions and limiter workloads.
+The preconnection fixture needs valid native ownership before connections are
+allowed, not a catalog-free process. Inspect that boundary before changing it.
 
-The tracing launcher is also migrated in the working tree, but needs runtime
-verification. Kafka source resumption is committed and verified with its original
-four workers, restart, offsets and continued ingestion (`20fa8635`). Evidence:
-`native-driver-scratch/aj-native-kafka-resumption-55360511/`.
+Replica-isolation is committed and passes its complete split/unified disruption
+matrices with two processes per replica. Tracing passes after establishing native
+query readiness before its unchanged configuration-propagation deadline. Kafka
+source resumption preserves its four workers, restart, offsets and continued
+ingestion. Source/sink-error tests no longer launch an unused replica, with active
+workloads/assertions statically verified unchanged. Evidence is under
+`native-driver-scratch/{isolation-verified,tracing-evidence}/` and
+`native-driver-scratch/aj-native-kafka-resumption-55360511/`. These are targeted
+mounted-candidate outcomes, not rebuilt-image CI.
 
-Production ingress removal still needs the remaining external launchers and
-multi-process nonleader coverage in both Timely topologies. The launcher inventory
+Production ingress removal still needs the remaining external launchers. Native
+multi-process nonleader coverage now passes in both Timely topologies. The launcher inventory
 is in `native-external-launcher-audit.md` and `native-replica-execution-boundary.md`.
 
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
