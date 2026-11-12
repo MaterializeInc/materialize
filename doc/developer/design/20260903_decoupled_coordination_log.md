@@ -9,10 +9,20 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Migrate the remaining upsert external launchers: rehydration, failpoint recovery
-and load-test variants. Preserve four workers, failpoints, restart coverage and
-full workloads. Start inventory before replicas and retain native launch options
-through restart. Continue the external-launcher inventory below afterward.
+Migrate the remaining upsert external launchers: rehydration and load-test
+variants. Preserve four workers, restart coverage and full workloads. Start
+inventory before replicas and retain native launch options through restart.
+The load-test scenario list contains a malformed tuple unrelated to ownership.
+Flag that repair before expanding scope. Continue the external-launcher inventory
+below afterward.
+
+Upsert failpoint recovery now retains native ownership through healthy, failing
+and recovered launches. All three original failpoints pass on capped scratch,
+including expected source errors, retained rows and continued ingestion after
+recovery. Four workers and each replica's identity survive restart. Evidence:
+`native-driver-scratch/upsert-launcher-evidence/aj-native-cluster-1e5bd8fe/`.
+These are mounted default-debug candidate checks, not rebuilt-image CI. No OOM
+occurred and fixtures were removed.
 
 Memory-limiter replica recreation now refreshes native identities. All three
 original scenarios pass with retained default-debug binaries on capped scratch:

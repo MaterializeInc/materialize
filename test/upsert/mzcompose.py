@@ -22,7 +22,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -335,31 +335,42 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
     c.run_testdrive_files("failpoint/00-reset.td")
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
-        Clusterd(name="clusterd1", workers=4),
     ):
         c.rm("testdrive")
         c.run_testdrive_files("failpoint/01-setup.td")
-        c.up("clusterd1")
-        c.run_testdrive_files("failpoint/02-source.td")
-        c.kill("clusterd1")
-
-        with c.override(
-            # Start clusterd with failpoint
-            Clusterd(
-                name="clusterd1",
-                environment_extra=[f"FAILPOINTS={failpoint}=return"],
-                workers=4,
-            ),
-        ):
+        [(cluster_id, replica_id)] = c.sql_query("""
+            SELECT c.id, r.id FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'storage_cluster' AND r.name = 'r1'
+        """)
+        catalog_options = [
+            f"--catalog-cluster-id={cluster_id}",
+            f"--catalog-replica-id={replica_id}",
+            *native_catalog_options(c),
+        ]
+        with c.override(Clusterd(name="clusterd1", workers=4, options=catalog_options)):
             c.up("clusterd1")
-            c.run_testdrive_files(
-                f"--var=error={error_message}", "failpoint/03-failpoint.td"
-            )
+            c.run_testdrive_files("failpoint/02-source.td")
             c.kill("clusterd1")
 
-        # Running without set failpoint
-        c.up("clusterd1")
-        c.run_testdrive_files("failpoint/04-recover.td")
+            with c.override(
+                # Start clusterd with failpoint
+                Clusterd(
+                    name="clusterd1",
+                    environment_extra=[f"FAILPOINTS={failpoint}=return"],
+                    workers=4,
+                    options=catalog_options,
+                ),
+            ):
+                c.up("clusterd1")
+                c.run_testdrive_files(
+                    f"--var=error={error_message}", "failpoint/03-failpoint.td"
+                )
+                c.kill("clusterd1")
+
+            # Running without set failpoint
+            c.up("clusterd1")
+            c.run_testdrive_files("failpoint/04-recover.td")
 
 
 def workflow_incident_49(c: Composition) -> None:
