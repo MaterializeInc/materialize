@@ -168,6 +168,11 @@ These settings in this configuration matter for the pattern:
   `consumer.isolation.level=read_committed` in the worker configuration.
   This setting only excludes aborted transactions. It does not order the
   connector's flushes across partitions; see [Step 3](#step-3-build-a-trusted-frontier-table).
+- `errors.tolerance` and `behavior.on.null.values` must keep their defaults,
+  `none` and `DEFAULT`. With other values, the connector can skip a message
+  but still advance its offset token past it, and Step 3 would then trust a
+  frontier that is missing that message. With `DEFAULT`, a deletion (a
+  message with a `null` value) loads as a row with empty content.
 
 ## Step 3. Build a trusted frontier table
 
@@ -181,9 +186,10 @@ confirm that the loader has consumed the data topic up to it.
 This requires a loader that reports the offset it has committed for each
 partition. With Snowpipe Streaming, the Snowflake connector loads each
 partition through its own channel, and each channel's offset token records the
-last Kafka offset that channel has committed to Snowflake. The checks below
-compare those offset tokens to the data topic. Create a table to hold the
-frontiers you have confirmed:
+last Kafka offset that channel has committed to Snowflake. To read the offset
+tokens, run `SHOW CHANNELS IN TABLE raw_orders` and use the `offset_token`
+column. The checks below compare those offset tokens to the data topic.
+Create a table to hold the frontiers you have confirmed:
 
 ```sql
 CREATE TABLE trusted_frontier (
@@ -203,8 +209,9 @@ should:
    already in Snowflake, so every data message below the candidate frontier
    sits below these high watermarks.
 1. For each data partition, start a consumer with `read_committed` isolation
-   at the channel's offset token + 1, and read until its position reaches the
-   recorded high watermark. `read_committed` skips transaction markers and
+   at the channel's offset token + 1, or at the start of the partition if the
+   channel has no offset token yet. Read until the consumer's position reaches
+   the recorded high watermark. `read_committed` skips transaction markers and
    aborted messages.
 1. If no partition returns a message, Snowflake has loaded every committed
    data message below the candidate frontier. Write the candidate frontier
@@ -214,9 +221,9 @@ should:
 
 Keep the candidate fixed until you confirm it. If you pick a newer candidate
 on each attempt, the routine can keep chasing new data and never confirm any
-frontier. A production routine also needs to handle timeouts, retries, empty
-partitions, and tombstones; see the connector's `behavior.on.null.values`
-setting.
+frontier. A production routine also needs to handle timeouts and retries, for
+example when a transaction stays open and holds the consumer below the high
+watermark.
 
 ## Step 4. Create a view of committed changes in Snowflake
 
@@ -297,9 +304,9 @@ rather than on `raw_progress` directly.
 
 - `committed_orders` contains one row per change, not the current state of
   `orders`. With the upsert envelope, a deletion is a message with a `null`
-  value (a tombstone). To build the current state, take the latest committed
-  row for each key and handle tombstones as configured by the connector's
-  `behavior.on.null.values` setting.
+  value (a tombstone), which loads as a row with empty content. To build the
+  current state, take the latest committed row for each key and drop the keys
+  whose latest row is a tombstone.
 - Materialize writes a progress record each time the sink's frontier advances,
   even when there is no new data. Expect `raw_progress` to grow steadily.
 - Header keys starting with `materialize-` are reserved for Materialize.
