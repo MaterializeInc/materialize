@@ -116,6 +116,7 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_postgres_source_failover": "true",
         "enable_mcp_protocol_2026_07_28": "true",
         "enable_mcp_unified": "true",
         "enable_metric_sink": "true",
@@ -655,15 +656,6 @@ def get_variable_system_parameters(
                 )
             ]
             if version >= MzVersion.parse_mz("v26.44.0-dev")
-            else []
-        ),
-        *(
-            [
-                VariableSystemParameter(
-                    "pg_source_replication_slot_failover", "true", ["true", "false"]
-                )
-            ]
-            if version >= MzVersion.parse_mz("v26.51.0-dev")
             else []
         ),
         VariableSystemParameter(

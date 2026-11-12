@@ -2945,9 +2945,6 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["pg_source_replication_slot_failover"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["compute_mv_sink_shared_batch_max_bytes"] = [
             # 0 never shares, 64 KiB, 1 MiB, 128 MiB
             "0",

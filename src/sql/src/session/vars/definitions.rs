@@ -2185,6 +2185,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_postgres_source_failover,
+        desc: "the FAILOVER option for PostgreSQL sources",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_load_generator_counter,
         desc: "Create a LOAD GENERATOR COUNTER",
         default: false,

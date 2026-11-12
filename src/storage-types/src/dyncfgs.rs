@@ -321,15 +321,6 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether PostgreSQL sources create their replication slot with `FAILOVER`, so that PostgreSQL
-/// 17+ can synchronize it to standbys.
-pub const PG_SOURCE_REPLICATION_SLOT_FAILOVER: Config<bool> = Config::new(
-    "pg_source_replication_slot_failover",
-    false,
-    "Whether PostgreSQL sources create their replication slot with failover enabled.",
-    ParameterScope::Replica,
-);
-
 /// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
 /// is to emit a definite error forcing source recreation. In cases of HA, the upstream DB may
 /// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
@@ -633,7 +624,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
         .add(&PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT)
-        .add(&PG_SOURCE_REPLICATION_SLOT_FAILOVER)
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)

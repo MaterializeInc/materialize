@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET pg_source_replication_slot_failover = true
-
 > CREATE SECRET pgpass AS 'postgres'
 
 > CREATE CONNECTION pg TO POSTGRES (
@@ -30,8 +27,18 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO pk_table VALUES (1, 'one');
 
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_postgres_source_failover = false
+
+! CREATE SOURCE pg_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER);
+contains:the FAILOVER option for PostgreSQL sources is not available
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_postgres_source_failover = true
+
 > CREATE SOURCE pg_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER);
 > CREATE TABLE pk_table FROM SOURCE pg_source (REFERENCE pk_table);
 
 > SELECT * FROM pk_table

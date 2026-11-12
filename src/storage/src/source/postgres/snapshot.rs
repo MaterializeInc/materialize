@@ -178,7 +178,7 @@ use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::dyncfgs::{
     PG_FETCH_SLOT_RESUME_LSN_INTERVAL, PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT,
-    PG_SOURCE_REPLICATION_SLOT_FAILOVER, STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD,
+    STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD,
 };
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
@@ -481,12 +481,10 @@ pub(crate) fn render<'scope>(
                 let main_slot = &connection.publication_details.slot;
 
                 tracing::info!(%id, "ensuring replication slot {main_slot} exists");
-                let failover =
-                    PG_SOURCE_REPLICATION_SLOT_FAILOVER.get(config.config.config_set());
                 super::ensure_replication_slot(
                     &client,
                     main_slot,
-                    failover,
+                    connection.failover,
                     slot_creation_timeout,
                 )
                 .await?;

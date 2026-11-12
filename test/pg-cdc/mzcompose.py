@@ -209,9 +209,11 @@ def workflow_replication_slot_failover(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Test that pg_source_replication_slot_failover creates a failover slot on PostgreSQL 17+.
+    Test that the FAILOVER source option creates a failover slot on PostgreSQL 17+.
     """
     pg_version = get_targeted_pg_version(parser)
+    if pg_version is not None and int(pg_version.split(".")[0]) < 17:
+        return
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-slot-failover.td")
@@ -222,14 +224,10 @@ def workflow_replication_slot_failover(
             password="postgres",
             port=c.default_port("postgres"),
         )
-        with pg_conn.cursor() as cur:
-            cur.execute("SELECT current_setting('server_version_num')::int >= 170000")
-            if cur.fetchall()[0][0]:
-                cur.execute("SELECT failover FROM pg_replication_slots")
-                failover = cur.fetchall()
-                assert failover == [
-                    (True,)
-                ], f"expected one failover slot, found {failover}"
+        failover = pg_conn.execute(
+            "SELECT failover FROM pg_replication_slots"
+        ).fetchall()
+        assert failover == [(True,)], f"expected one failover slot, found {failover}"
 
 
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:

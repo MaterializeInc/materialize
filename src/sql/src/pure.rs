@@ -1090,6 +1090,7 @@ async fn execute_create_source_preparation(
         ) => {
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
+                failover,
                 text_columns,
                 exclude_columns,
                 details,
@@ -1116,6 +1117,14 @@ async fn execute_create_source_preparation(
             // Record whether the upstream server is a physical replica, which changes how we can determine
             // the latest LSN.
             let is_physical_replica = mz_postgres_util::get_is_in_recovery(&client).await?;
+
+            // PostgreSQL 17 introduced failover slots, and rejects creating one on a standby.
+            if failover
+                && (is_physical_replica
+                    || mz_postgres_util::schemas::get_pg_major_version(&client).await? < 17)
+            {
+                Err(PgSourcePurificationError::FailoverUnsupported)?;
+            }
 
             // Read after the references above, so it bounds the LSN their schemas belong to.
             let initial_lsn = MzOffset::from(

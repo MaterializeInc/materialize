@@ -439,15 +439,14 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-/// Creates the replication slot `slot` unless it exists, with `FAILOVER` if `failover` is set
-/// and the server supports it.
+/// Creates the replication slot `slot` unless it exists, with `FAILOVER` if `failover` is set.
 async fn ensure_replication_slot(
     client: &Client,
     slot: &str,
     failover: bool,
     timeout: Duration,
 ) -> Result<(), TransientError> {
-    let query = if failover && supports_failover_slots(client).await? {
+    let query = if failover {
         sql!(
             "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" (SNAPSHOT 'nothing', FAILOVER)",
             Sql::ident(slot)
@@ -522,19 +521,6 @@ async fn set_timeout(
     let query = sql!("SET {} = {}", Sql::new(parameter), Sql::from(millis));
     simple_query(client, query).await?;
     Ok(())
-}
-
-async fn supports_failover_slots(client: &Client) -> Result<bool, TransientError> {
-    // PostgreSQL 17 introduced the option, and rejects it on a standby.
-    let row = simple_query_opt(
-        client,
-        sql!(
-            "SELECT pg_catalog.current_setting('server_version_num')::int >= 170000 \
-             AND NOT pg_catalog.pg_is_in_recovery() AS supported"
-        ),
-    )
-    .await?;
-    Ok(row.is_some_and(|row| row.get("supported") == Some("t")))
 }
 
 /// The state of a replication slot.
