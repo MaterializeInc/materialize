@@ -439,10 +439,8 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-/// Creates the replication slot `slot` unless it exists.
-///
-/// `failover` asks for a slot that PostgreSQL synchronizes to standbys. It only takes effect on a
-/// server that can create one.
+/// Creates the replication slot `slot` unless it exists, with `FAILOVER` if `failover` is set
+/// and the server supports it.
 async fn ensure_replication_slot(
     client: &Client,
     slot: &str,
@@ -526,7 +524,6 @@ async fn set_timeout(
     Ok(())
 }
 
-/// Whether the server accepts `FAILOVER` when creating a logical replication slot.
 async fn supports_failover_slots(client: &Client) -> Result<bool, TransientError> {
     // PostgreSQL 17 introduced the option, and rejects it on a standby.
     let row = simple_query_opt(

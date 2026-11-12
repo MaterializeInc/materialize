@@ -321,11 +321,8 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether PostgreSQL sources create their replication slot with `FAILOVER`, which lets
-/// PostgreSQL 17+ synchronize the slot to standbys so that it survives a failover. Slots that
-/// already exist are not altered.
-/// Replica-scoped because it decides how the upstream slot is created and never what a
-/// collection contains.
+/// Whether PostgreSQL sources create their replication slot with `FAILOVER`, so that PostgreSQL
+/// 17+ can synchronize it to standbys.
 pub const PG_SOURCE_REPLICATION_SLOT_FAILOVER: Config<bool> = Config::new(
     "pg_source_replication_slot_failover",
     false,

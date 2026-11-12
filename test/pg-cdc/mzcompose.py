@@ -209,9 +209,7 @@ def workflow_replication_slot_failover(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Test that pg_source_replication_slot_failover creates the replication slot
-    with failover enabled on PostgreSQL 17+, and that the source still works on
-    older versions, which have no such slots.
+    Test that pg_source_replication_slot_failover creates a failover slot on PostgreSQL 17+.
     """
     pg_version = get_targeted_pg_version(parser)
     with c.override(create_postgres(pg_version=pg_version)):

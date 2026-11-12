@@ -663,7 +663,7 @@ def get_variable_system_parameters(
                     "pg_source_replication_slot_failover", "true", ["true", "false"]
                 )
             ]
-            if version >= MzVersion.parse_mz("v26.47.0-dev")
+            if version >= MzVersion.parse_mz("v26.51.0-dev")
             else []
         ),
         VariableSystemParameter(
