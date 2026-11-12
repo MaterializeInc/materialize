@@ -16,7 +16,7 @@ import argparse
 import random
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -136,22 +136,35 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
     """Test creating sources in a remote clusterd process."""
     args = parse_args(parser)
 
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
-        Clusterd(workers=4),
-    ):
-        c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
-
+    with c.override(Testdrive(no_reset=True, consistent_seed=True)):
+        c.up(*(["materialized"] + get_kafka_services(args.redpanda)))
         c.run_testdrive_files("source-resumption/setup.td")
-        c.run_testdrive_files("source-resumption/verify.td")
 
-        c.kill("clusterd")
-        c.up("clusterd")
-        c.sleep(10)
+        [(cluster_id, replica_id)] = c.sql_query("""
+            SELECT c.id, r.id FROM mz_clusters c
+            JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'clusterd' AND r.name = 'r1'
+        """)
+        with c.override(
+            Clusterd(
+                workers=4,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *native_catalog_options(c),
+                ],
+            )
+        ):
+            c.up("clusterd")
+            c.run_testdrive_files("source-resumption/verify.td")
 
-        # Verify the same data is query-able, and that we can make forward progress
-        c.run_testdrive_files("source-resumption/verify.td")
-        c.run_testdrive_files("source-resumption/re-ingest-and-verify.td")
+            c.kill("clusterd")
+            c.up("clusterd")
+            c.sleep(10)
+
+            # Verify the same data is query-able, and that we can make forward progress
+            c.run_testdrive_files("source-resumption/verify.td")
+            c.run_testdrive_files("source-resumption/re-ingest-and-verify.td")
 
 
 def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:
