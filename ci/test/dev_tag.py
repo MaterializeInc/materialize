@@ -9,7 +9,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import os
+import subprocess
 from pathlib import Path
 
 from materialize import ci_util, mzbuild
@@ -18,6 +20,22 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
+    if raw := os.getenv("CI_QPS_DIAGNOSTIC_IMAGES"):
+        tag = os.environ["CI_QPS_DIAGNOSTIC_TAG"]
+        assert tag.endswith(".qps-lto-nov12")
+        images = json.loads(raw)
+        assert set(images) == {"environmentd", "clusterd"}
+        for name, sources in images.items():
+            assert len(sources) == 2
+            assert all(s.startswith(f"materialize/{name}:mzbuild-") for s in sources)
+            destination = f"materialize/{name}:{tag}"
+            assert not mzbuild.is_docker_image_pushed(destination), destination
+            subprocess.run(
+                ["docker", "manifest", "create", "--amend", destination, *sources],
+                check=True,
+            )
+            subprocess.run(["docker", "manifest", "push", destination], check=True)
+        return
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
     repos = [

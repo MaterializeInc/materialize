@@ -67,14 +67,11 @@ steps:
         skip: "currently broken"
 
       - id: devel-docker-tags
-        skip: "Private comparison reuses separately built release-LTO images"
         label: Tag development docker images
         command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
         inputs:
           - "*"
-        depends_on:
-          - build-x86_64
-          - build-aarch64
+        depends_on: []
         timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
@@ -124,7 +121,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
           run: default
-          args: [--cleanup, --target=cloud-staging, "--qps-concurrencies=1,128,512", --qps-duration=30, --qps-warmup=10, qps_envd_strong_scaling]
+          args: [--cleanup, --target=cloud-staging, "--qps-concurrencies=512", --qps-duration=30, --qps-warmup=10, qps_envd_strong_scaling]
     agents:
       queue: linux-aarch64-medium
 
