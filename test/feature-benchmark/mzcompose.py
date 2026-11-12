@@ -97,7 +97,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
@@ -226,12 +226,15 @@ def run_one_scenario(
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
+        # Both processes belong to the same deployment, including after restart.
+        environment_id = f"local-az1-{uuid.uuid4()}-0"
         mz_image = f"{image_registry()}/materialized:{tag}" if tag else None
         mz = create_mz_service(
             mz_image,
             size,
             additional_system_parameter_defaults,
             args.azurite,
+            environment_id,
         )
         # Keep clusterd on the same registry as materialized; both services of
         # one instance must be pulled from the same place.
@@ -240,6 +243,7 @@ def run_one_scenario(
             clusterd_image,
             size,
             additional_system_parameter_defaults,
+            environment_id,
         )
 
         if tag is not None and not c.try_pull_service_image(mz):
@@ -252,6 +256,7 @@ def run_one_scenario(
                 size,
                 additional_system_parameter_defaults,
                 args.azurite,
+                environment_id,
             )
             # Fall back to latest for clusterd too, so the two services of the
             # instance stay on a matching tag instead of pairing latest
@@ -261,11 +266,10 @@ def run_one_scenario(
                 clusterd_image,
                 size,
                 additional_system_parameter_defaults,
+                environment_id,
             )
 
-        start_overridden_mz_clusterd_and_cockroach(
-            c, mz, clusterd, instance, balancerd, first_run
-        )
+        start_benchmark_environment(c, mz, instance, balancerd, first_run)
         first_run = False
 
         testdrive_entrypoint_extra = []
@@ -295,8 +299,14 @@ def run_one_scenario(
 
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], STORAGE ADDRESSES ['clusterd:2103'], COMPUTECTL ADDRESSES ['clusterd:2101'], COMPUTE ADDRESSES ['clusterd:2102'], WORKERS 1));
-                    ALTER SYSTEM SET cluster = cluster_default;
                     GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""),
+            )
+
+            start_benchmark_replica(c, mz, clusterd)
+            c.sql(
+                "ALTER SYSTEM SET cluster = cluster_default",
+                port=6877,
+                user="mz_system",
             )
 
             executor = Docker(
@@ -372,12 +382,13 @@ def create_mz_service(
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
     azurite: bool,
+    environment_id: str,
 ) -> Materialized:
     return Materialized(
         image=mz_image,
         default_size=default_size,
         # Avoid clashes with the Kafka sink progress topic across restarts
-        environment_id=f"local-az1-{uuid.uuid4()}-0",
+        environment_id=environment_id,
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         external_metadata_store=True,
@@ -393,6 +404,7 @@ def create_clusterd_service(
     clusterd_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
+    environment_id: str,
 ) -> Clusterd:
     # The benchmark cluster is unmanaged, so the enable_unified_cluster system
     # parameter never reaches it. Key the service's topology off the same
@@ -401,38 +413,69 @@ def create_clusterd_service(
     unified_cluster = (additional_system_parameter_defaults or {}).get(
         "enable_unified_cluster", "false"
     ) == "true"
-    return Clusterd(image=clusterd_image, unified_cluster=unified_cluster)
+    return Clusterd(
+        image=clusterd_image,
+        environment_id=environment_id,
+        unified_cluster=unified_cluster,
+    )
 
 
-def start_overridden_mz_clusterd_and_cockroach(
+def start_benchmark_environment(
     c: Composition,
     mz: Materialized,
-    clusterd: Clusterd,
     instance: str,
     balancerd: bool,
     first_run: bool,
 ) -> None:
-    with c.override(mz, clusterd):
+    with c.override(mz):
         c.up(
             "cockroach",
             "materialized",
-            "clusterd",
             *(["balancerd"] if balancerd else []),
         )
         if first_run:
             setup_sql_server_testing(c)
 
-        version_request_command = c.run(
-            "materialized",
-            "-c",
-            "environmentd --version | grep environmentd",
-            entrypoint="bash",
-            rm=True,
-            capture=True,
-        )
-        version = version_request_command.stdout.strip()
+        version = c.query_mz_version()
         print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
         c.verify_build_profile()
+
+
+def start_benchmark_replica(
+    c: Composition, mz: Materialized, clusterd: Clusterd
+) -> None:
+    """Start the declared benchmark replica and retain its configuration for restarts."""
+    with c.override(mz):
+        # Probe the binary's interface, not its tag. Historical materialized
+        # images may not bundle clusterd at all. A broken probe or missing native
+        # catalog context must fail rather than silently choose legacy execution.
+        help_output = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            "if command -v clusterd >/dev/null; then exec clusterd --help; fi",
+            capture=True,
+        ).stdout
+        if "--catalog-replica-id" in help_output:
+            [(cluster_id, replica_id)] = c.sql_query("""
+                SELECT c.id, r.id
+                FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+                WHERE c.name = 'cluster_default' AND r.name = 'r1'
+            """)
+            options = native_catalog_options(c)
+            # Native images bundle the matching clusterd. Keep the separate
+            # historical clusterd image only for historical-only environments.
+            if "image" in mz.config:
+                clusterd.config.pop("mzbuild", None)
+                clusterd.config["image"] = mz.config["image"]
+            clusterd.config["command"] += [
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *options,
+            ]
+
+    with c.override(clusterd):
+        c.up("clusterd")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
