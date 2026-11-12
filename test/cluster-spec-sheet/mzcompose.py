@@ -35,7 +35,7 @@ import psycopg
 from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
-from materialize import MZ_ROOT, buildkite, pgbench
+from materialize import MZ_ROOT, buildkite, mzbuild, pgbench
 from materialize.cluster_spec_sheet_qps import (
     QPS_CONCURRENCIES,
     QpsSweep,
@@ -119,7 +119,14 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 def staging_version() -> str:
     # Cached: the version cannot change within a run, and `parse_cargo` shells
     # out to cargo, whose failure must not surface inside a region retry loop.
-    return os.environ["CI_QPS_BENCH_VERSION"]
+    tag = os.environ["CI_QPS_BENCH_VERSION"]
+    assert tag.endswith(".release")
+    inputs = json.loads(os.environ["CI_QPS_RUNTIME_IMAGES"])[tag]
+    assert set(inputs) == {"environmentd", "clusterd"}
+    for name, sources in inputs.items():
+        mzbuild.verify_multiarch_image(f"materialize/{name}:{tag}", sources)
+    print(json.dumps({"qps_runtime_images_verified": tag, "sources": inputs}))
+    return tag
 
 
 SERVICES = [

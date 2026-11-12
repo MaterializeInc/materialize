@@ -10,6 +10,13 @@
 priority: 40
 
 steps:
+  - id: qps-profile-images
+    label: "Publish verified release images for the QPS comparison"
+    command: bin/ci-builder run min bin/pyactivate -m ci.test.qps_profile_images
+    depends_on: []
+    timeout_in_minutes: 20
+    agents:
+      queue: linux-aarch64-small
   - group: Builds
     key: builds
     steps:
