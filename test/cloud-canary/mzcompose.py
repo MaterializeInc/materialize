@@ -24,9 +24,8 @@ import urllib.parse
 
 import psycopg
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, ci_util
 from materialize.mz_env_util import connect_and_print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     _wait_for_pg,
 )
@@ -49,7 +48,7 @@ REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
 USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
 APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
-VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
+VERSION = ci_util.dev_docker_tag()
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-oxqxx9.us-east-1.aws.confluent.cloud:9092"

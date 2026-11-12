@@ -106,4 +106,5 @@ def dev_docker_tag() -> str:
     # a valid character in Docker tags, so we use `--` instead.
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
-    return f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"
+    tag = f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"
+    return tag if ui.env_is_truthy("CI_LTO") else f"{tag}.optimized"
