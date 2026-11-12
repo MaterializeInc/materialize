@@ -51,6 +51,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
@@ -64,7 +65,7 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{NetworkPolicyRule, PlanError};
+use mz_sql::plan::{NetworkPolicyRule, PlanError, QueryPolicyMode, QueryPolicyRule};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
@@ -129,6 +130,11 @@ pub enum Op {
         name: String,
         owner_id: RoleId,
     },
+    AlterQueryPolicy {
+        id: QueryPolicyId,
+        mode: QueryPolicyMode,
+        rules: Vec<QueryPolicyRule>,
+    },
     AlterAddColumn {
         id: CatalogItemId,
         new_global_id: GlobalId,
@@ -179,12 +185,21 @@ pub enum Op {
         name: String,
         owner_id: RoleId,
     },
+    CreateQueryPolicy {
+        name: String,
+        mode: QueryPolicyMode,
+        rules: Vec<QueryPolicyRule>,
+        owner_id: RoleId,
+    },
     Comment {
         object_id: CommentObjectId,
         sub_component: Option<usize>,
         comment: Option<String>,
     },
-    DropObjects(Vec<DropObjectInfo>),
+    DropObjects {
+        objects: Vec<DropObjectInfo>,
+        cascade: bool,
+    },
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -309,6 +324,7 @@ pub enum DropObjectInfo {
     Role(RoleId),
     Item(CatalogItemId),
     NetworkPolicy(NetworkPolicyId),
+    QueryPolicy(QueryPolicyId),
 }
 
 impl DropObjectInfo {
@@ -327,6 +343,7 @@ impl DropObjectInfo {
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
             ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
             ObjectId::NetworkPolicy(policy_id) => DropObjectInfo::NetworkPolicy(policy_id),
+            ObjectId::QueryPolicy(id) => DropObjectInfo::QueryPolicy(id),
         }
     }
 
@@ -345,6 +362,7 @@ impl DropObjectInfo {
             DropObjectInfo::NetworkPolicy(network_policy_id) => {
                 ObjectId::NetworkPolicy(network_policy_id.clone())
             }
+            DropObjectInfo::QueryPolicy(id) => ObjectId::QueryPolicy(*id),
         }
     }
 }
@@ -761,7 +779,10 @@ impl Catalog {
         let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::DropObjects(drop_object_infos) => {
+                Op::DropObjects {
+                    objects: drop_object_infos,
+                    ..
+                } => {
                     let ids = drop_object_infos.iter().map(|info| info.to_object_id());
                     let item_ids = ids.filter_map(|id| match id {
                         ObjectId::Item(id) => Some(id),
@@ -1486,6 +1507,31 @@ impl Catalog {
 
                 info!("update role {name} ({id})");
             }
+            Op::AlterQueryPolicy { id, mode, rules } => {
+                let mut policy = state.get_query_policy(&id).clone();
+                if id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyQueryPolicy(policy.name),
+                    )));
+                }
+                policy.mode = mode;
+                policy.rules = rules;
+                let name = policy.name.clone();
+                tx.update_query_policy(policy.into())?;
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::QueryPolicy,
+                    EventDetails::IdNameV1(IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
+            }
             Op::AlterNetworkPolicy {
                 id,
                 rules,
@@ -2156,6 +2202,54 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::CreateQueryPolicy {
+                name,
+                mode,
+                rules,
+                owner_id,
+            } => {
+                if state.query_policies_by_name.contains_key(&name) {
+                    return Err(AdapterError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::QueryPolicyAlreadyExists(name),
+                    )));
+                }
+                if is_reserved_name(&name) {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedQueryPolicyName(name),
+                    )));
+                }
+                let object_type = mz_sql::catalog::ObjectType::QueryPolicy;
+                let owner_privileges =
+                    std::iter::once(rbac::owner_privilege(object_type, owner_id));
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(owner_id, None, None, object_type)
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges =
+                    merge_mz_acl_items(owner_privileges.chain(default_privileges)).collect();
+                let temporary_oids = state.get_temporary_oids().collect();
+                let id = tx.insert_user_query_policy(
+                    name.clone(),
+                    mode,
+                    rules,
+                    privileges,
+                    owner_id,
+                    &temporary_oids,
+                )?;
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::QueryPolicy,
+                    EventDetails::IdNameV1(IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
+            }
             Op::CreateNetworkPolicy {
                 rules,
                 name,
@@ -2260,7 +2354,10 @@ impl Catalog {
                     references.updated_at,
                 )?;
             }
-            Op::DropObjects(drop_object_infos) => {
+            Op::DropObjects {
+                objects: drop_object_infos,
+                cascade,
+            } => {
                 // Generate all of the objects that need to get dropped.
                 let delta = ObjectsToDrop::generate(drop_object_infos, state, session)?;
 
@@ -2471,6 +2568,42 @@ impl Catalog {
                         }),
                     )?;
                 }
+
+                // Remove attachment targets first so RESTRICT ignores targets
+                // that are themselves part of this drop.
+                let detached_clusters = tx.remove_query_policies(&delta.query_policies, cascade)?;
+                for id in detached_clusters {
+                    let cluster = state.get_cluster(id);
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(IdNameV1 {
+                            id: id.to_string(),
+                            name: cluster.name.clone(),
+                        }),
+                    )?;
+                }
+                for id in delta.query_policies {
+                    let policy = state.get_query_policy(&id);
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::QueryPolicy,
+                        EventDetails::IdNameV1(IdNameV1 {
+                            id: id.to_string(),
+                            name: policy.name.clone(),
+                        }),
+                    )?;
+                }
             }
             Op::GrantRole {
                 role_id,
@@ -2575,6 +2708,11 @@ impl Catalog {
                             let mut policy = state.get_network_policy(id).clone();
                             update_privilege_fn(&mut policy.privileges);
                             tx.update_network_policy(*id, policy.into())?;
+                        }
+                        ObjectId::QueryPolicy(id) => {
+                            let mut policy = state.get_query_policy(id).clone();
+                            update_privilege_fn(&mut policy.privileges);
+                            tx.update_query_policy(policy.into())?;
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
                             let schema_id = schema_spec.clone().into();
@@ -3066,6 +3204,21 @@ impl Catalog {
                         );
                         policy.owner_id = new_owner;
                         tx.update_network_policy(*id, policy.into())?;
+                    }
+                    ObjectId::QueryPolicy(id) => {
+                        let mut policy = state.get_query_policy(id).clone();
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyQueryPolicy(policy.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut policy.privileges,
+                            policy.owner_id,
+                            new_owner,
+                        );
+                        policy.owner_id = new_owner;
+                        tx.update_query_policy(policy.into())?;
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
@@ -3654,6 +3807,7 @@ pub(crate) struct ObjectsToDrop {
     pub roles: BTreeSet<RoleId>,
     pub items: Vec<CatalogItemId>,
     pub network_policies: BTreeSet<NetworkPolicyId>,
+    pub query_policies: BTreeSet<QueryPolicyId>,
 }
 
 impl ObjectsToDrop {
@@ -3795,6 +3949,15 @@ impl ObjectsToDrop {
 
                 self.network_policies.insert(network_policy_id);
             }
+            DropObjectInfo::QueryPolicy(id) => {
+                let policy = state.get_query_policy(&id);
+                if id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyQueryPolicy(policy.name.clone()),
+                    )));
+                }
+                self.query_policies.insert(id);
+            }
         }
 
         Ok(())
@@ -3855,6 +4018,7 @@ mod tests {
                 burst: None,
             }),
             workload_class: None,
+            query_policy: None,
         };
         let record = |status| ReconfigurationState {
             target: ReconfigurationTarget {
@@ -3957,10 +4121,12 @@ mod tests {
                 burst: None,
             }),
             workload_class: None,
+            query_policy: None,
         };
         let unmanaged = ClusterConfig {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
+            query_policy: None,
         };
         let record = |status| ReconfigurationState {
             target: ReconfigurationTarget {
@@ -4040,10 +4206,12 @@ mod tests {
                 burst,
             }),
             workload_class: None,
+            query_policy: None,
         };
         let unmanaged = ClusterConfig {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
+            query_policy: None,
         };
         let record = |steady_ready_at| BurstState {
             burst_size: "large".into(),
@@ -4211,6 +4379,7 @@ mod tests {
                 burst,
             }),
             workload_class: None,
+            query_policy: None,
         };
         let record = || BurstState {
             burst_size: "large".into(),
@@ -4567,6 +4736,7 @@ mod tests {
                 config: ClusterConfig {
                     variant: ClusterVariant::Unmanaged,
                     workload_class: None,
+                    query_policy: None,
                 },
             };
 
@@ -4731,7 +4901,10 @@ mod tests {
                     None,
                     oracle_write_ts,
                     None,
-                    vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
+                    vec![Op::DropObjects {
+                        objects: vec![DropObjectInfo::Cluster(cluster_a)],
+                        cascade: false,
+                    }],
                 )
                 .await
                 .expect("drop cluster A");

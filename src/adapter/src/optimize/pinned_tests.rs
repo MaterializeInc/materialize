@@ -208,9 +208,10 @@ async fn drop_item(catalog: &mut Catalog, id: u64) {
             None,
             commit_ts,
             None,
-            vec![Op::DropObjects(vec![DropObjectInfo::Item(
-                CatalogItemId::User(id),
-            )])],
+            vec![Op::DropObjects {
+                objects: vec![DropObjectInfo::Item(CatalogItemId::User(id))],
+                cascade: false,
+            }],
         )
         .await
         .expect("transact succeeds");

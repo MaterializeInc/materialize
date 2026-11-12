@@ -631,6 +631,7 @@ Snapshot {
                         burst: None,
                     },
                 ),
+                query_policy: None,
             },
         },
     },
@@ -669,6 +670,7 @@ Snapshot {
         },
     },
     cluster_replica_sizes: {},
+    query_policies: {},
     cluster_replicas: {
         ClusterReplicaKey {
             id: User(
@@ -778,6 +780,11 @@ Snapshot {
             next_id: 2,
         },
         IdAllocKey {
+            name: "user_query_policy",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
             name: "user_role",
         }: IdAllocValue {
             next_id: 1,
@@ -864,7 +871,7 @@ Snapshot {
             ),
         }: SystemPrivilegesValue {
             acl_mode: AclMode {
-                bitflags: 8053063680,
+                bitflags: 8321499136,
             },
         },
     },
