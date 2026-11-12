@@ -16,7 +16,6 @@ import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { useThresholdControl } from "~/components/ThresholdLineGraph/useThresholdControl";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
-import { rangeLabelFor } from "~/platform/freshness/constants";
 import {
   FreshnessContent,
   FreshnessFilterControls,
@@ -86,8 +85,7 @@ export const ClusterFreshness = () => {
           <FreshnessContent
             scope="cluster"
             scopeId={clusterId}
-            lookbackMs={timePeriodMinutes * 60_000}
-            rangeLabel={rangeLabelFor(timePeriodMinutes)}
+            timePeriodMinutes={timePeriodMinutes}
             predicate={predicate}
             setPredicate={setPredicate}
             thresholdControl={thresholdControl}

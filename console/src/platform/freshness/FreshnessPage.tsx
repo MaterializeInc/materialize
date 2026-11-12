@@ -128,7 +128,6 @@ interface FreshnessViewOptions {
   predicate: Predicate;
   thresholdControl: ThresholdControl;
   typeFilters: string[];
-  /** Where the tables' placement links go. The current page when absent. */
   placementPathname?: string;
 }
 
@@ -178,21 +177,25 @@ const HighlightControls = ({
   );
 };
 
-export interface FreshnessContentProps extends FreshnessViewOptions {
+export interface FreshnessContentProps extends Omit<
+  FreshnessViewOptions,
+  "rangeLabel"
+> {
   setPredicate: (predicate: Predicate) => void;
   scopeId: string;
-  lookbackMs: number;
+  timePeriodMinutes: number;
 }
 
 /** The Summary, graph and tables for the objects in one cluster or schema. */
 export const FreshnessContent = ({
   scope,
   scopeId,
-  lookbackMs,
+  timePeriodMinutes,
   setPredicate,
   ...viewOptions
 }: FreshnessContentProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const lookbackMs = timePeriodMinutes * 60_000;
   const objects = useFreshnessObjectsWhere(inFreshnessScope(scope, scopeId));
   // Distinguishes a scope that has nothing in it from one whose objects have
   // not arrived yet. Both are an empty list, and they are not the same state.
@@ -278,6 +281,7 @@ export const FreshnessContent = ({
             percentilesByObjectId={percentiles.data}
             hydrationByObjectId={hydration.data ?? NO_HYDRATION}
             scope={scope}
+            rangeLabel={rangeLabelFor(timePeriodMinutes)}
             {...viewOptions}
           />
         ) : freshness.isError || latest.isError || percentiles.isError ? (
@@ -646,8 +650,7 @@ const FreshnessPage = () => {
             <FreshnessContent
               scope={scope}
               scopeId={selected.id}
-              lookbackMs={timePeriodMinutes * 60_000}
-              rangeLabel={rangeLabelFor(timePeriodMinutes)}
+              timePeriodMinutes={timePeriodMinutes}
               predicate={predicate}
               setPredicate={setPredicate}
               thresholdControl={thresholdControl}
