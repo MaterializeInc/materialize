@@ -9,16 +9,29 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-A current default-development runtime candidate is building on scratch
-(`aj-native-current-build`, one Cargo job, 32-GiB/no-swap/4-CPU job cap). Then verify native
+The current default-development runtime candidate built successfully on scratch
+(one Cargo job, 32-GiB/no-swap/4-CPU job cap, unchanged Cargo.lock). Verify native
 lifecycle/progress across real processes, including split/unified topology and
 query churn. Existing mounted binaries predate the latest ownership removals.
 Keep heavy work sequential on capped scratch.
 Build evidence: `native-driver-scratch/native-current-build.log`, runner
 `native-current-build.sh` and `native-current-build-source-sha256.json`. Outputs
-will be `native-current-candidate/`. The inspected `native_current_runtime_verify.py` runner is staged for unchanged
+are in `native-current-candidate/`. The inspected `native_current_runtime_verify.py` runner is staged for unchanged
 profiling and full multi-process smoke workflows, with explicit split/unified
-topology and capped containers. No services have started. The current introspection audit found native passive relays, not an additional
+topology and capped containers. Profiling passed on both HTTP surfaces and the
+full multi-process smoke workflow passed with both unified and split topology. The initial profiling attempt omitted Cargo
+from PATH and failed before startup. Its exact rerun reproduced that harness
+error, then the corrected environment passed. Production stacks are unchanged.
+Evidence directories: `aj-native-current-c1d90f28` (profiling),
+`aj-native-current-9587e603` (unified smoke), and `aj-native-current-80d7cc03`
+(split). Receipts were copied locally in `native-current-runtime-evidence.tar.gz`.
+Completed fixtures were cleaned up, with no aggregate OOM increment. Live executable paths
+in the split fixture confirm controllerd, adapterd, clusterd and pubsubd all run
+from `/candidate`. These are mounted-binary outcomes, not rebuilt-image CI. Agent 304 is inspecting
+kept 0dt writer/promotion/retirement workflows for current-candidate acceptance.
+The adapter-loss workflow additionally needs a Persist CLI/jobs artifact not
+currently available among the local scratch images.
+The current introspection audit found native passive relays, not an additional
 legacy frontier fallback. Their direct-owner opportunities and SQL/consumer
 dependencies are recorded in the follow-up inventory, not added to this cleanup.
 Detailed evidence: `native-introspection-current-audit.md`. Pending deployment/upgrade scope
