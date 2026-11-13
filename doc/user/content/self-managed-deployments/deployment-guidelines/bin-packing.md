@@ -240,8 +240,8 @@ The autoscaling profile applies to the whole GKE cluster, not just to
 Materialize, and it also makes the cluster autoscaler remove underused nodes
 sooner. Materialize pods are protected from this, as described in [Materialize
 pods aren't consolidated](#materialize-pods-arent-consolidated). Other workloads
-in the
-cluster are not: their pods are evicted and restarted on other nodes more often.
+in the cluster are not: their pods are evicted and restarted on other nodes more
+often.
 
 Before you enable the profile, check that everything else running in the
 cluster tolerates being restarted. To protect a workload that doesn't, give it
