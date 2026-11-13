@@ -186,6 +186,19 @@ expression caching alone does not remove the raw store because fallback opens
 remain. Preserve admin validation, committed selection, cross-cluster producer
 schemas and catalog-authorized retirement. No measured saving is claimed yet.
 
+Fresh debug replicas also pay startup reconstruction cost. In the bounded
+frontier test, one replica snapshots the catalog in 186 ms, then spends about
+26s between expression-cache setup and compute initialization, with builtin-view
+parsing logged in between. `Catalog::open_committed` reconstructs with
+`enable_expression_cache_override: Some(false)` before the follower opens its
+written-plan store. This interval exceeds the test's 20s retry budget. It is not
+a CPU profile and does not separate parsing, scheduling and other startup work.
+Profile that interval before choosing between narrower reconstruction and reuse
+of existing cached expressions. Cache reuse must preserve multi-writer admission
+and plan compatibility, not introduce a new cache owner. Do not mask this with a
+longer frontier assertion timeout. Evidence: `frontier-trace2-evidence.tar.gz`
+under the handoff's `upsert-oom-investigation/` directory.
+
 ## Temporary-item cleanup after native retirement
 
 The legacy temporary-item upgrade tests require durable reclamation after their
