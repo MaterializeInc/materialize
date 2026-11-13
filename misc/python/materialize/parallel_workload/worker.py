@@ -185,6 +185,7 @@ class Worker:
                         or "Connection refused" in e.msg
                         or "the connection is lost" in e.msg
                         or "connection in transaction status INERROR" in e.msg
+                        or error_to_ignore.startswith("catalog deployment generation ")
                     ):
                         self.exe.reconnect_next = True
                     else:

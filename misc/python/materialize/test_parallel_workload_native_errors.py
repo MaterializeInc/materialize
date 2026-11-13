@@ -12,14 +12,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.action import Action
 from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.worker import Worker
 
 
 def ignored_errors(scenario, complexity):
     executor = SimpleNamespace(
         statement_timeout_set=False,
-        db=SimpleNamespace(scenario=scenario, complexity=complexity),
+        db=SimpleNamespace(
+            scenario=scenario, complexity=complexity, retiring_generations=frozenset()
+        ),
     )
     return Action(random.Random(0), None).errors_to_ignore(executor)
 
@@ -53,3 +57,34 @@ def test_restart_and_restore_keep_catalog_loss_exceptions(scenario):
     assert "unknown schema" in ignored
     assert "unknown database" in ignored
     assert "server closed the connection unexpectedly" in ignored
+
+
+@pytest.mark.parametrize("scenario", [Scenario.ZeroDowntimeDeploy, Scenario.Kill])
+@pytest.mark.parametrize("requested", [frozenset(), frozenset({3}), frozenset({4})])
+def test_retirement_rejection_requires_explicit_target(scenario, requested):
+    class Rejected(Action):
+        def run(self, exe):
+            raise QueryError(
+                "catalog deployment generation 3 has been retired", "SELECT 1"
+            )
+
+    action = Rejected(random.Random(0), None)
+    worker = Worker(random.Random(0), [action], [1], 0, True, False, None)
+    executor = SimpleNamespace(
+        statement_timeout_set=False,
+        reconnect_next=False,
+        rollback_next=False,
+        db=SimpleNamespace(
+            scenario=scenario, complexity=Complexity.DML, retiring_generations=requested
+        ),
+    )
+    worker.exe = executor
+    if scenario == Scenario.ZeroDowntimeDeploy and 3 in requested:
+        worker.run_action(action)
+        assert executor.reconnect_next
+        assert not executor.rollback_next
+        assert worker.occurred_exception is None
+    else:
+        with pytest.raises(QueryError, match="generation 3 has been retired"):
+            worker.run_action(action)
+        assert not executor.reconnect_next

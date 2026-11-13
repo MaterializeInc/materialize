@@ -1531,6 +1531,8 @@ class Database:
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
+        # One deploy worker publishes immutable snapshots for concurrent query workers.
+        self.retiring_generations: frozenset[int] = frozenset()
         self.seed = seed
         self.num_threads = num_threads
         set_naughty_identifiers(naughty_identifiers)

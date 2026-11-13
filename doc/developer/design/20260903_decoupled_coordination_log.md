@@ -12,9 +12,11 @@ for written-plan reads, uses the existing paired-writer build identity and leave
 independent consistency reconstruction uncached. Independent review, targeted
 cache/catalog/follower tests and the debug build pass. The complete frontier
 test passes twice at its original retry budget. New replica startup falls from
-31–33s to roughly 5s in this fixture. The parallel repeat now exposes a concrete
-bootstrap crash: dropped replacement MV u1662 fails storage registration with
-`IdentifierMissing`. Prioritize that before the prepared index workflow.
+31–33s to roughly 5s in this fixture. Metadata-only identity recovery and the
+generation-specific retirement error policy are also verified. The native stress
+run passes one promotion/retirement cycle and normal final checks, without a
+captured bootstrap panic. Next recheck index permission publication with
+`native_index_retained.py`, retaining its original workload and 1s reproducer.
 
 The metadata repair keeps metadata-only identities classified as retained
 until catalog metadata removal. Execution retirement can remove the last client
@@ -22,9 +24,12 @@ grant without running the adapter's metadata cleanup transaction. Independent
 review found no blocking issue. The real-catalog regression fails twice before
 the repair and passes afterward, alongside temporary lifetime and retained-storage
 safety checks. Matching debug builds pass. Repaired stress failed earlier on
-three retirement HTTP 409 conflicts, before validating restart. Collect the exact
-repeat from `parallel-retained-repeat-launch.json`. Do not increase retries or
-timeouts to claim acceptance.
+three retirement HTTP 409 conflicts, before validating restart. Its exact repeat
+reached retirement, then misclassified a retired generation's SQL rejection.
+The harness repair permits that rejection only for explicitly requested
+retirement targets in the deploy scenario, then reconnects. Review and policy/
+compose tests and the native stress run pass. Earlier contention remains unexplained.
+Do not increase retries or timeouts to claim acceptance.
 
 The committed frontier decoder guard passes its compiled unindexed regression
 and full catalog plan snapshot. An unchanged parallel promotion repeat passes
@@ -74,7 +79,8 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
   afterward in storage bootstrap. Controllerd also aborts when reporting the child
   panic. The first run's retirement delay remains unattributed.
   The repaired candidate's first run instead exhausted retirement's existing
-  retries with `catalog changed; retry the request`. Native stress is not green.
+  retries with `catalog changed; retry the request`. The latest run passes one
+  cycle, not a reproducibility claim for the earlier two-cycle failure.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
@@ -104,7 +110,9 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`. The
-`native_parallel_retained.py` stress run is active, without a concurrent build.
+`native_parallel_retirement_policy.py` stress run completed and cleaned up. No
+build or runtime is active. Its Python-only changes have a separate source-exception manifest and are
+copied into runtime evidence. Compiled Rust remains unchanged.
 No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
@@ -127,6 +135,10 @@ Essential pointers, relative to the evidence root:
   `upsert-oom-investigation/retained-red-evidence.tar.gz`.
   Passing repair checks and runtime provenance: `retained-green-evidence.tar.gz`.
   Repaired retirement conflict: `parallel-retained-evidence.tar.gz`.
+  Expected-retirement policy failure: `parallel-retained-repeat-evidence.tar.gz`.
+  Policy red/green logs and patch: `retirement-policy-*.log` and
+  `retirement-error-policy.patch` in the same directory.
+  Passing current stress: `parallel-retirement-policy-evidence.tar.gz`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
 - Fixed-binary stress failure:

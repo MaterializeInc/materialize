@@ -872,17 +872,27 @@ def test_parallel_deploy_retires_captured_generation_before_cleanup(
     monkeypatch.setattr(action.time, "sleep", sleep)
     c = MagicMock(spec=Composition)
     deploy = action.ZeroDowntimeDeployAction(Random(0), c, False, False)
+    executor = SimpleNamespace(db=SimpleNamespace(retiring_generations=frozenset()))
     for generation in range(3):
         c.reset_mock()
         target = "materialized2" if generation % 2 == 0 else "materialized"
         previous = "materialized" if generation % 2 == 0 else "materialized2"
+
+        def retiring(*args, **kwargs):
+            assert executor.db.retiring_generations == frozenset(range(generation + 1))
+            if retirement_fails and generation == 2:
+                raise UIError("retirement failed")
+
+        c.retire_mz_deployment.side_effect = retiring
+        c.promote_mz.side_effect = lambda *args, **kwargs: (
+            executor.db.retiring_generations == frozenset(range(generation))
+        ) or pytest.fail("promotion alone must not authorize retirement errors")
         if retirement_fails and generation == 2:
-            c.retire_mz_deployment.side_effect = UIError("retirement failed")
             with pytest.raises(UIError, match="retirement failed"):
-                deploy.run(Mock())
+                deploy.run(executor)
             c.kill_fenced_mz.assert_not_called()
         else:
-            assert deploy.run(Mock())
+            assert deploy.run(executor)
             c.kill_fenced_mz.assert_called_once_with(previous)
         expected = [
             call.await_mz_deployment_status(

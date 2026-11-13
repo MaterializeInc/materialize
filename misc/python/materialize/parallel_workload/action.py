@@ -351,6 +351,11 @@ class Action:
         ]
         if exe.statement_timeout_set:
             result.append("canceling statement due to statement timeout")
+        if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+            result.extend(
+                f"catalog deployment generation {generation} has been retired"
+                for generation in exe.db.retiring_generations
+            )
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
                 [
@@ -5094,6 +5099,9 @@ class ZeroDowntimeDeployAction(Action):
             self.composition.await_mz_deployment_status(
                 DeploymentStatus.IS_LEADER, mz_service
             )
+            # Retirement can become visible before its HTTP acknowledgement.
+            # Only this explicitly requested target may reject concurrent queries.
+            exe.db.retiring_generations |= {previous_generation}
             self.composition.retire_mz_deployment(
                 mz_service,
                 previous_generation,
