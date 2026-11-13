@@ -41,13 +41,13 @@ FAILPOINTS=fileblob_get=return target/release/materialized
 It is possible to enable a failpoint dynamically via SQL:
 
 ```
-> SET failpoints = 'fileblob_set_sync=return';
+> SET unsafe_failpoints = 'fileblob_set_sync=return';
 ```
 
 A failpoint can also be disabled dynamically:
 
 ```
-> SET failpoints = 'fileblob_set_sync=off';
+> SET unsafe_failpoints = 'fileblob_set_sync=off';
 ```
 
 # Failpoint actions

@@ -386,8 +386,11 @@ pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static FAILPOINTS: VarDefinition = VarDefinition::new(
-    "failpoints",
+// The `unsafe_` prefix limits this variable to unsafe mode: a failpoint applies
+// to the whole process, so any session could, for example, crash environmentd
+// with a `panic` action.
+pub static UNSAFE_FAILPOINTS: VarDefinition = VarDefinition::new(
+    "unsafe_failpoints",
     value!(Failpoints; Failpoints),
     "Allows failpoints to be dynamically activated.",
     true,

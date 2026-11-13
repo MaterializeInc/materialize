@@ -443,7 +443,7 @@ impl SessionVars {
         use definitions::*;
 
         let vars = [
-            &FAILPOINTS,
+            &UNSAFE_FAILPOINTS,
             &SERVER_VERSION,
             &SERVER_VERSION_NUM,
             &SQL_SAFE_UPDATES,
