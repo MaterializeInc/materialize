@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Deploys the docs to materialize.com/docs.
+
+name: Deploy docs
+
+on:
+  push:
+    branches: [main, "self-managed-docs/*"]
+    paths:
+      - doc/user/**
+      - ci/deploy_website/**
+      - .github/workflows/deploy-docs.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Restricted to main and self-managed-docs/*; the AWS role trusts only
+    # this environment on those refs.
+    environment: docs-production
+    permissions:
+      contents: read # check out the docs
+      id-token: write # assume GithubActionsDocsDeploy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ci/deploy_website
+            doc/user
+            misc/shlib
+      # Keep in sync with the Hugo version in ci/builder/Dockerfile.
+      - name: Install Hugo
+        run: |
+          curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_withdeploy_0.152.2_Linux-64bit.tar.gz > hugo.tar.gz
+          echo '08200e4d82f086c94c301e8ba08102f9e23f38774ad949bb3251cac76283684a hugo.tar.gz' | sha256sum --check
+          sudo tar -xzf hugo.tar.gz -C /usr/local/bin hugo
+          rm hugo.tar.gz
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::834237029485:role/GithubActionsDocsDeploy
+          aws-region: us-east-1
+      - run: ci/deploy_website/website.sh
