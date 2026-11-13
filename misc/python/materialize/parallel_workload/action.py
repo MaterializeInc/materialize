@@ -387,13 +387,6 @@ class Action:
                     "canceling statement due to user request",
                 ]
             )
-        if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
-            result.extend(
-                [
-                    "cannot write in read-only mode",
-                    "500: internal storage failure! ReadOnly",
-                ]
-            )
         if exe.db.scenario in (
             Scenario.Kill,
             Scenario.BackupRestore,
@@ -422,7 +415,6 @@ class Action:
             )
         if exe.db.scenario in (
             Scenario.Kill,
-            Scenario.ZeroDowntimeDeploy,
             Scenario.BackupRestore,
         ):
             # Expected, see database-issues#6156. For BackupRestore the
@@ -430,12 +422,6 @@ class Action:
             # created after the backup vanish while still being tracked.
             # "invalid database" is the CREATE SCHEMA wording for a database
             # that vanished the same way (CreateSchemaAction does not lock it).
-            # For ZeroDowntimeDeploy the not-yet-promoted environmentd opens
-            # the catalog in savepoint mode, a snapshot frozen at its boot
-            # time, so a worker that lands on it does not see anything the
-            # leader created since. Name resolution runs before the read-only
-            # check, so such a statement reports the missing object rather than
-            # "cannot write in read-only mode".
             result.extend(
                 [
                     "unknown catalog item",

@@ -29,6 +29,12 @@ profiling inventory are committed and pass targeted checks. Temporary objects
 have execution ownership while retaining session visibility. Subscription IDs
 are execution-qualified through observations, logging and dependencies.
 
+The final bounded runtime-ownership audit found no reachable legacy alternative
+in the inspected startup and command-ingress paths. Parallel-workload no longer
+ignores read-only/frozen-catalog failures during native deployment or bypasses
+its wedged-worker verdict just for promotion. Filter regression tests and the
+isolated shutdown negative control pass. This is not a full parallel stress run.
+
 Replay-history cloning, compaction, implementation tests and both history gauges
 are removed (`8c09eb6c`). Independent review found no execution/recovery consumer.
 All-target checks, compute tests and real current-binary replica-metrics/HTTP-proxy
@@ -149,6 +155,10 @@ Essential receipts:
   `native-history-bounded-repeat-evidence.tar.gz` (`aj-native-cluster-f7277a96`).
 - Deferred boundaries: `native-bounded-harness-tests.log` and
   `native-boundary-review-{negative,fixed}.log`.
+- Final source audit and launcher boundaries: `native-runtime-final-audit.md`
+  and `native-final-launch-boundaries.log`.
+- Native stress error policy: `native-parallel-errors-{negative,fixed}.log`,
+  `native-parallel-shutdown-control.log` and `native-parallel-filter-review.md`.
 - Earlier outcomes and pointers: `native-handoff-before-current-version-acceptance.md`,
   `native-handoff-before-approved-deferrals.md` and the
   [archive](20260903_decoupled_coordination_log_archive.md).

@@ -506,8 +506,8 @@ def run(
         print_stats(num_queries, workers, num_threads, complexity, scenario)
 
         # A wedged worker must not mask damage, so run the final oracle pass
-        # on a fresh connection before exiting. Skipped for 0dt deploys,
-        # where connecting to the fenced-out environmentd can hang forever.
+        # on a fresh connection before exiting. Skipped for 0dt deploys:
+        # this fixed endpoint may belong to an explicitly retired deployment.
         if scenario != Scenario.ZeroDowntimeDeploy:
             try:
                 check_conn = psycopg.connect(
@@ -523,11 +523,6 @@ def run(
 
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
-            os._exit(0)
-        if scenario == scenario.ZeroDowntimeDeploy:
-            # With 0dt deploys connections against the currently-fenced-out
-            # environmentd will be stuck forever, the promoted environmentd can
-            # take > 10 minutes to become responsive as well
             os._exit(0)
         if wedged:
             faulthandler.dump_traceback()
