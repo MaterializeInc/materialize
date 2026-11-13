@@ -932,20 +932,6 @@ steps:
           queue: hetzner-x86-64-4cpu-8gb
         sanitizer: skip
 
-  - id: deploy-website
-    label: Deploy website
-    depends_on: lint-docs
-    trigger: deploy-website
-    async: true
-    branches: "main self-managed-docs/*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
-    coverage: skip
-    sanitizer: skip
-
   - id: release-qualification
     label: Release qualification
     depends_on: devel-docker-tags
