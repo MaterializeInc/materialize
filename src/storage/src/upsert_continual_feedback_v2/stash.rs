@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! The upsert-v2 source stash: the consolidating diff, the stash batcher
-//! types, and the per-flavor [`UpsertStashArm`]s.
+//! types, and the [`UpsertStashArm`].
 
 use differential_dataflow::batcher::Extract;
 use differential_dataflow::difference::{IsZero, Semigroup};
@@ -17,12 +17,10 @@ use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::chunk::ChunkMerger;
 use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
-use mz_repr::{Diff, GlobalId, Row};
-use mz_row_spine::FundedValRowSpine;
+use mz_repr::{GlobalId, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, StorageSpill};
-use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::operator::ConsolidatingBatcher;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::operators::Capability;
@@ -32,21 +30,21 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use super::UpsertOutputHandle;
-use super::drain::{DrainStats, drain_sealed_input_chunked, drain_sealed_input_paged};
+use super::drain::{DrainStats, drain_sealed_input_chunked};
 use super::feedback::FeedbackSpine;
 use crate::upsert::UpsertKey;
 
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
 // highest `FromTime` (latest source offset) per group. The diff is `Columnar`
-// so the paged merge batcher can store it in a `Column` and page it out of RSS.
+// so the stash batcher can store it in a `Column` chunk.
 //
 // The value is a tag-encoded `Row` (see `upsert_value_to_row`) rather than an
 // `UpsertValue`: folding both the `Ok` and `Err` arms into one `Row` lets the
 // value share a single columnar byte container, and `Row` already implements
 // `Columnar`. `None` is a deletion tombstone.
 
-// Derive ordering on the generated `UpsertDiffReference` too: the paged merge
+// Derive ordering on the generated `UpsertDiffReference` too: the stash
 // batcher requires `Ref: Ord` to sort the `(key, time, diff)` columns it
 // consolidates. The derived order (by `from_time`, then `value`) is fine —
 // "max FromTime wins" can tie only between equal `from_time`s, and a source
@@ -74,7 +72,7 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
     }
 }
 
-// Accumulate a borrowed columnar reference: the paged merge batcher consolidates
+// Accumulate a borrowed columnar reference: the stash batcher consolidates
 // `Column`-resident diffs through this path on every fold of an equal
 // `(key, time)` run. Materialize only the order key to decide the "max FromTime
 // wins" comparison — copying the value `Row` out of the column solely when `rhs`
@@ -130,18 +128,8 @@ type UpsertChunkBatcher<T, O> = ConsolidatingBatcher<
     ChunkMerger<UpsertChunk<T, O>>,
 >;
 
-/// The paged flavor's stash: the paged columnar merge batcher, consolidating
-/// like [`UpsertChunkBatcher`] but storing each chain entry as a `Column`
-/// routed through the storage-owned pager, which pages cold chains out of
-/// RSS.
-type UpsertPagedBatcher<T, O> =
-    ColumnMergeBatcher<PagedChunker<UpsertUpdate<T, O>>, UpsertKey, T, UpsertDiff<O>, ()>;
-
-/// The chunker that sorts and consolidates raw input into the `Column` chunks
-/// the paged stash batcher consumes.
-type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
-
-/// [`UpsertChunker`]'s time-major counterpart, for the chunked stash.
+/// The chunker that sorts and consolidates raw input into the time-major
+/// `Column` chunks the stash batcher consumes.
 type TimeMajorChunker<T, O> = ColumnChunker<TimeMajorUpdate<T, O>>;
 
 /// The start of the `mz_repr::Timestamp` after `persist_upper`'s, capped at
@@ -172,11 +160,11 @@ fn next_outer<T: Refines<mz_repr::Timestamp>>(ts: &T) -> Option<T> {
     ts.clone().to_outer().try_step_forward().map(T::to_inner)
 }
 
-/// The flavor-specific pieces of the upsert-v2 operator: the stash batcher,
-/// the feedback arrangement's spine, and how the drain reads prior state.
-/// [`build_upsert_operator`](super::build_upsert_operator) holds the
-/// flavor-independent operator loop and calls through this trait at the few
-/// points where the flavors diverge.
+/// The pieces of the upsert-v2 operator that depend on the stash
+/// representation: the stash batcher, the feedback arrangement's spine, and
+/// how the drain reads prior state.
+/// [`build_upsert_operator`](super::build_upsert_operator) holds the operator
+/// loop and calls through this trait at those points.
 pub(super) trait UpsertStashArm<T, O>
 where
     T: Timestamp + Lattice + mz_timely_util::columnar::chunk::PoolColumnar + Default,
@@ -337,83 +325,6 @@ where
     ) -> DrainStats {
         drain_sealed_input_chunked(
             sealed.into_iter().map(ColumnChunk::into_body),
-            ineligible,
-            output_handle,
-            output_cap,
-            persist_upper,
-            trace,
-            worker_id,
-            source_id,
-        )
-        .await
-    }
-}
-
-/// The paged flavor: [`UpsertPagedBatcher`] stash, `ValRowSpine` feedback
-/// arrangement, cursor drain. Cold chains page out of RSS through the
-/// storage-owned column pager, captured once per batcher at construction.
-pub(super) struct PagedArm;
-
-impl<T, O> UpsertStashArm<T, O> for PagedArm
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + mz_timely_util::columnar::chunk::PoolColumnar + Default,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: mz_timely_util::columnar::chunk::PoolColumnar
-        + Default
-        + Ord
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-    for<'a> columnar::Ref<'a, O>: Ord + Copy,
-{
-    type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
-    type Batcher = UpsertPagedBatcher<T, O>;
-    type Chunk = Column<UpsertUpdate<T, O>>;
-    type Chunker = UpsertChunker<T, O>;
-
-    fn new_batcher() -> Self::Batcher {
-        let mut batcher = UpsertPagedBatcher::<T, O>::new(None, 0);
-        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
-        batcher
-    }
-
-    fn extract(
-        batcher: &mut Self::Batcher,
-        upper: AntichainRef<T>,
-    ) -> (Vec<Self::Chunk>, Antichain<T>) {
-        let (chain, frontier) = batcher.extract_chain(upper);
-        (chain, frontier.to_owned())
-    }
-
-    fn flush(
-        updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut Self::Chunker,
-        batcher: &mut Self::Batcher,
-    ) {
-        flush_through(
-            updates,
-            chunker,
-            |update, raw| raw.push_into(&update),
-            // The pager's chains are edge containers, so the body goes back
-            // onto one.
-            |chunk| batcher.push_chunk(Column::from(chunk)),
-        );
-    }
-
-    async fn drain(
-        sealed: Vec<Column<UpsertUpdate<T, O>>>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
-        output_handle: &UpsertOutputHandle<T>,
-        output_cap: &Capability<T>,
-        persist_upper: &Antichain<T>,
-        trace: &mut TraceAgent<Self::Spine>,
-        worker_id: usize,
-        source_id: GlobalId,
-    ) -> DrainStats {
-        drain_sealed_input_paged(
-            sealed,
             ineligible,
             output_handle,
             output_cap,

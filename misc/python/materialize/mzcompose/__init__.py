@@ -351,9 +351,9 @@ def get_variable_system_parameters(
             "enable_column_paged_batcher", "false", ["true", "false"]
         ),
         # Varied for the same reason, and because it reaches past the arrange
-        # sites: it installs the process buffer pool and enables the column pager
-        # storage's upsert stash draws from, so defaulting it on would move several
-        # subsystems' memory behavior at once.
+        # sites: it installs the process buffer pool that storage's upsert stash
+        # also draws from, so defaulting it on would move several subsystems'
+        # memory behavior at once.
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
@@ -441,12 +441,6 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_upsert_paged_spill",
-            "true",
-            ["true", "false"],
-        ),
-        # Only meaningful when enable_upsert_v2 is true.
-        VariableSystemParameter(
-            "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
@@ -799,8 +793,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "linear_join_yielding",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
-    "column_paged_batcher_lz4",
-    "column_paged_batcher_swap_pageout",
     "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",

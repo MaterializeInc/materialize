@@ -522,7 +522,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
     "cluster_topology_spread_min_domains",
-    "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
@@ -541,7 +540,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # while the fallthrough this check compares against keeps the old value for
     # builds that predate the default.
     "column_paged_batcher_budget_fraction",
-    "enable_upsert_chunked_stash",
     # TODO: triage. These features default *on* in the compiled-in default but
     # production cloud still serves them *off* (or vice versa). Either production
     # LaunchDarkly is stale and should be flipped, or
@@ -581,7 +579,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
-    enable_upsert_chunked_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

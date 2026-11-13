@@ -99,8 +99,7 @@ mod spines {
     pub type ValRowBuilder<K, T, R> =
         ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
-    /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// `Col2ValPagedBatcher<K, Row, T, R, Chu, Se>` for the spillable arrange path where
+    /// `ValRowBuilder` variant that consumes [`Column`] chunks, for arrangements where
     /// keys are arbitrary `Columnar` values (e.g. `UpsertKey`) and values are
     /// packed `Row` bytes. Installs a dictionary codec on the value container at
     /// seal time, gathering statistics from the sealed `Column` chain; keys are

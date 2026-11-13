@@ -22,14 +22,6 @@ name = "columnar_merger"
 harness = false
 
 [[bench]]
-name = "columnar_merge_batcher"
-harness = false
-
-[[bench]]
-name = "column_pager"
-harness = false
-
-[[bench]]
 name = "column_borrow"
 harness = false
 
@@ -46,7 +38,7 @@ differential-dataflow.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 lz4_flex.workspace = true
-mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager", "pool"] }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pool"] }
 num-traits.workspace = true
 serde.workspace = true
 smallvec.workspace = true
