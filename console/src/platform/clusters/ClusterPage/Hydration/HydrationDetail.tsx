@@ -418,7 +418,7 @@ const WATERFALL_ORDERS: Record<WaterfallOrder, string> = {
   slowest: "Slowest first",
 };
 
-const ObjectWaterfall = ({
+export const ObjectWaterfall = ({
   spans,
   durationMs,
 }: {

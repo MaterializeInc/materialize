@@ -922,13 +922,13 @@ describe("ClusterHydration", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows what a hydrating replica is working on", async () => {
+  it("shows what a hydrating replica is working on and has hydrated so far", async () => {
     await renderHydrationTab({
       statusRows: [
         online("u1", BOOTED_AT_MS),
         online("u2", NOW_MS - 2 * MINUTE_MS),
       ],
-      progress: { u1: [9, 9], u2: [1, 2] },
+      progress: { u1: [9, 9], u2: [1, 3] },
       liveObjects: [
         [
           "u10",
@@ -937,12 +937,19 @@ describe("ClusterHydration", () => {
           String(NOW_MS - MINUTE_MS),
           null,
         ],
-        ["u11", "u11", String(NOW_MS - 2 * MINUTE_MS), null, null],
+        [
+          "u11",
+          "u11",
+          String(NOW_MS - 2 * MINUTE_MS),
+          String(NOW_MS - 2 * MINUTE_MS),
+          String(NOW_MS - 90_000),
+        ],
+        ["u12", "u12", String(NOW_MS - 2 * MINUTE_MS), null, null],
       ],
     });
 
     expect(
-      await screen.findByText("Hydrated so far: 1 of 2 objects"),
+      await screen.findByText("Hydrated so far: 1 of 3 objects"),
     ).toBeVisible();
     // The progress card says it, so there's no alert and no Hydrating label.
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
@@ -958,6 +965,15 @@ describe("ClusterHydration", () => {
       ),
     ).toBeVisible();
     expect(within(working).queryByText(/waiting/)).not.toBeInTheDocument();
+    const hydrated = screen.getByRole("group", {
+      name: "Objects r2 has hydrated so far",
+    });
+    expect(
+      within(hydrated)
+        .getAllByText(/^(orders_idx|customer_ltv|u12)$/, { selector: "title" })
+        .map(({ textContent }) => textContent),
+    ).toEqual(["customer_ltv"]);
+    expect(within(hydrated).getByText("30s")).toBeVisible();
   });
 
   it("dates a new object's hydration from its creation, not the replica's boot", async () => {

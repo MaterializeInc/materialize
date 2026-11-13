@@ -472,15 +472,17 @@ export interface ReplicaEpisode {
 }
 
 /**
- * The latest episode a replica finished, from its objects' hydrations, grouped
- * as Materialize groups them when it records an episode (`replica_collection_sql`
- * in `src/adapter/src/coord/hydration_history.rs`): objects whose spans from
- * installation to hydrated overlap belong to one episode. An episode that an
- * unhydrated object's installation falls in is still running.
+ * A replica's hydrated objects in episodes, grouped as Materialize groups them
+ * when it records an episode (`replica_collection_sql` in
+ * `src/adapter/src/coord/hydration_history.rs`): objects whose spans from
+ * installation to hydrated overlap belong to one episode. An unhydrated
+ * object's span is open, so every episode that ends at or after `openMs`, the
+ * earliest unhydrated installation, is part of the one still running.
  */
-export function latestFinishedEpisode(
-  objects: LiveObjectHydration[],
-): ReplicaEpisode | undefined {
+function groupEpisodes(objects: LiveObjectHydration[]): {
+  episodes: ReplicaEpisode[];
+  openMs: number;
+} {
   const openMs =
     min(objects, ({ installedAt, hydratedAt }) =>
       hydratedAt ? undefined : installedAt.getTime(),
@@ -510,5 +512,34 @@ export function latestFinishedEpisode(
     }
     coveredMs = Math.max(coveredMs, hydratedAt.getTime());
   }
+  return { episodes, openMs };
+}
+
+/** The latest episode a replica finished, from its objects' hydrations. */
+export function latestFinishedEpisode(
+  objects: LiveObjectHydration[],
+): ReplicaEpisode | undefined {
+  const { episodes, openMs } = groupEpisodes(objects);
   return episodes.findLast(({ finishedAt }) => finishedAt.getTime() < openMs);
+}
+
+/**
+ * The objects of the episode a replica is still running that have hydrated so
+ * far, with `finishedAt` the latest of them. Undefined when no episode is
+ * running or none of its objects has hydrated yet.
+ */
+export function runningEpisodeSoFar(
+  objects: LiveObjectHydration[],
+): ReplicaEpisode | undefined {
+  const { episodes, openMs } = groupEpisodes(objects);
+  const running = episodes.filter(
+    ({ finishedAt }) => finishedAt.getTime() >= openMs,
+  );
+  if (running.length === 0) return undefined;
+  return {
+    startedAt: new Date(Math.min(openMs, running[0].startedAt.getTime())),
+    // Episodes are disjoint and in order, so the last one finished latest.
+    finishedAt: running[running.length - 1].finishedAt,
+    objects: running.flatMap((episode) => episode.objects),
+  };
 }

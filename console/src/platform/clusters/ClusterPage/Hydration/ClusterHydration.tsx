@@ -54,8 +54,16 @@ import {
 import { useStatusStyles } from "../ResourceUsage/resourceUsageStyles";
 import { useSelectedReplica } from "../useSelectedReplica";
 import { InfoTip, InfoTipProps } from "./hydrationComponents";
-import { HydrationDetail, UnrecordedDetail } from "./HydrationDetail";
-import { HydrationReplica } from "./hydrationModel";
+import {
+  HydrationDetail,
+  ObjectWaterfall,
+  UnrecordedDetail,
+} from "./HydrationDetail";
+import {
+  HydrationReplica,
+  runningEpisodeSoFar,
+  transformObjectHydrationSpans,
+} from "./hydrationModel";
 import { HydrationTable } from "./HydrationTable";
 import {
   findUnrecordedHydrations,
@@ -591,7 +599,10 @@ const ReplicasNow = ({
   );
 };
 
-/** The objects a hydrating replica is working on, read from the replica. */
+/**
+ * The objects a hydrating replica is working on, and the ones it has hydrated
+ * so far, read from the replica.
+ */
 const LiveObjects = ({
   clusterName,
   replicaId,
@@ -612,35 +623,61 @@ const LiveObjects = ({
   // The progress above already says how far the replica has got.
   if (isError || !snapshotComplete) return null;
   const working = objects.filter(({ state }) => state === "working");
-  if (working.length === 0) return null;
+  const soFar = runningEpisodeSoFar(objects);
+  const namesByGlobalId = new Map(
+    objects.map(({ globalId, name }) => [globalId, name]),
+  );
   return (
-    <VStack
-      as="ul"
-      aria-label={`Objects ${replicaName} is hydrating`}
-      listStyleType="none"
-      spacing={1}
-      alignItems="start"
-    >
-      {working.slice(0, MAX_LIVE_OBJECTS).map((object) => (
-        <Text as="li" key={object.globalId} textStyle="text-small">
-          Working on{" "}
-          <Text as="span" fontFamily="mono">
-            {object.name}
-          </Text>
-          {object.startedAt &&
-            ` for ${formatDurationExact(nowMs - object.startedAt.getTime())}`}
-        </Text>
-      ))}
-      {working.length > MAX_LIVE_OBJECTS && (
-        <Text
-          as="li"
-          textStyle="text-small"
-          color={colors.foreground.secondary}
+    <>
+      {working.length > 0 && (
+        <VStack
+          as="ul"
+          aria-label={`Objects ${replicaName} is hydrating`}
+          listStyleType="none"
+          spacing={1}
+          alignItems="start"
         >
-          and {working.length - MAX_LIVE_OBJECTS} more working
-        </Text>
+          {working.slice(0, MAX_LIVE_OBJECTS).map((object) => (
+            <Text as="li" key={object.globalId} textStyle="text-small">
+              Working on{" "}
+              <Text as="span" fontFamily="mono">
+                {object.name}
+              </Text>
+              {object.startedAt &&
+                ` for ${formatDurationExact(nowMs - object.startedAt.getTime())}`}
+            </Text>
+          ))}
+          {working.length > MAX_LIVE_OBJECTS && (
+            <Text
+              as="li"
+              textStyle="text-small"
+              color={colors.foreground.secondary}
+            >
+              and {working.length - MAX_LIVE_OBJECTS} more working
+            </Text>
+          )}
+        </VStack>
       )}
-    </VStack>
+      {soFar && (
+        <Box
+          role="group"
+          aria-label={`Objects ${replicaName} has hydrated so far`}
+          width="100%"
+        >
+          <ObjectWaterfall
+            key={soFar.startedAt.getTime()}
+            spans={transformObjectHydrationSpans(
+              soFar.objects,
+              soFar.startedAt,
+            ).map((span) => ({
+              ...span,
+              name: namesByGlobalId.get(span.globalId) ?? span.globalId,
+            }))}
+            durationMs={soFar.finishedAt.getTime() - soFar.startedAt.getTime()}
+          />
+        </Box>
+      )}
+    </>
   );
 };
 

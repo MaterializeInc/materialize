@@ -20,6 +20,7 @@ import {
   replicaBootTimes,
   ReplicaTransition,
   restartsReadingAsFinished,
+  runningEpisodeSoFar,
   transformHydrations,
   transformObjectHydrationSpans,
 } from "./hydrationModel";
@@ -599,28 +600,31 @@ describe("transformObjectHydrationSpans", () => {
   });
 });
 
-describe("latestFinishedEpisode", () => {
-  const object = (
-    globalId: string,
-    installedAt: string,
-    hydratedAt: string | null,
-  ) => ({
-    globalId,
-    objectId: globalId,
-    installedAt: at(installedAt),
-    startedAt: at(installedAt),
-    hydratedAt: hydratedAt === null ? null : at(hydratedAt),
-  });
-  const summary = (objects: Parameters<typeof latestFinishedEpisode>[0]) => {
-    const latest = latestFinishedEpisode(objects);
-    return (
-      latest && {
-        startedAt: latest.startedAt,
-        finishedAt: latest.finishedAt,
-        globalIds: latest.objects.map(({ globalId }) => globalId),
-      }
-    );
+const episodeObject = (
+  globalId: string,
+  installedAt: string,
+  hydratedAt: string | null,
+) => ({
+  globalId,
+  objectId: globalId,
+  installedAt: at(installedAt),
+  startedAt: at(installedAt),
+  hydratedAt: hydratedAt === null ? null : at(hydratedAt),
+});
+
+const summarizeEpisode = (
+  replicaEpisode: ReturnType<typeof latestFinishedEpisode>,
+) =>
+  replicaEpisode && {
+    startedAt: replicaEpisode.startedAt,
+    finishedAt: replicaEpisode.finishedAt,
+    globalIds: replicaEpisode.objects.map(({ globalId }) => globalId),
   };
+
+describe("latestFinishedEpisode", () => {
+  const object = episodeObject;
+  const summary = (objects: Parameters<typeof latestFinishedEpisode>[0]) =>
+    summarizeEpisode(latestFinishedEpisode(objects));
 
   it("joins objects whose hydrations overlap, through a chain, into one episode", () => {
     expect(
@@ -661,6 +665,42 @@ describe("latestFinishedEpisode", () => {
 
   it("has nothing before an object finishes", () => {
     expect(latestFinishedEpisode([object("u1", "10:00:00", null)])).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("runningEpisodeSoFar", () => {
+  const object = episodeObject;
+
+  it("takes what the running episode has hydrated, from its first installation", () => {
+    expect(
+      summarizeEpisode(
+        runningEpisodeSoFar([
+          object("u1", "09:00:00", "09:01:00"),
+          object("u2", "09:58:00", "10:02:00"),
+          object("u3", "10:00:00", null),
+          object("u4", "10:05:00", "10:06:00"),
+        ]),
+      ),
+    ).toEqual({
+      startedAt: at("09:58:00"),
+      finishedAt: at("10:06:00"),
+      globalIds: ["u2", "u4"],
+    });
+  });
+
+  it("has nothing until an object of the running episode hydrates", () => {
+    expect(
+      runningEpisodeSoFar([
+        object("u1", "09:00:00", "09:01:00"),
+        object("u2", "10:00:00", null),
+      ]),
+    ).toBe(undefined);
+  });
+
+  it("has nothing once every object has hydrated", () => {
+    expect(runningEpisodeSoFar([object("u1", "10:00:00", "10:01:00")])).toBe(
       undefined,
     );
   });
