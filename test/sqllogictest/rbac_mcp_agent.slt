@@ -599,6 +599,57 @@ SELECT c.name FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE 
 agent_compute
 COMPLETE 1
 
+# DEX-71: when the index cluster is hidden, the read falls back to persist,
+# so hydration describes the view's own cluster. A hidden zero-replica index
+# cluster must not make the product look unreadable.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_dead_idx REPLICAS ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.fallback_mv IN CLUSTER agent_serving AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX fallback_mv_idx IN CLUSTER agent_dead_idx ON agent_objects.fallback_mv (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.fallback_mv TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, (hydration->>'replica_count')::int FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."fallback_mv"';
+----
+NULL,1
+COMPLETE 1
+
+# A visible index cluster keeps reporting the index's own readiness.
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER agent_dead_idx TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, (hydration->>'replica_count')::int FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."fallback_mv"';
+----
+agent_dead_idx,0
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_dead_idx CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP MATERIALIZED VIEW agent_objects.fallback_mv;
+----
+COMPLETE 0
+
 # mz_session_role_memberships() is callable in a restricted session (it only
 # exposes the current session's role chain, not the full system graph).
 # Verify it walks the full transitive chain: grant agent membership in a parent

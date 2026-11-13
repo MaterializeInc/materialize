@@ -10123,99 +10123,133 @@ Explained Query:
                 Key: (#2{database_id})
         →Arranged l8
     cte l33 =
+      →One-Shot Delta Join [%0:l32 » %1[#1] » %2:l16[#0] » %3[#0]]
+        path %0:
+          after %1:
+            Project: #0, #2, #5, #6, #3, #8, #9
+            Filter: ((#1{type} = "materialized-view") OR ((#8) IS NOT NULL AND (#1{type} = "view")))
+            Map: (#6) IS NULL, case when #7 then null else #4 end, case when #7 then null else #5 end
+          after %3:
+            Project: #1, #0, #5, #6, #4, #9
+            Map: case when (#3) IS NULL then case when (#8) IS NULL then null else #7 end else coalesce(#2, case when (#8) IS NULL then null else #7 end) end
+        →Unarranged Raw Stream
+          →Fused with Child Map/Filter/Project
+            Filter: ((#2{type} = "view") OR (#2{type} = "materialized-view")) AND (#4{name} != "mz_catalog") AND (#4{name} != "pg_catalog") AND (#4{name} != "mz_internal") AND (#4{name} != "mz_introspection") AND (#4{name} != "information_schema")
+              →Read l32
+        →Arrange (#1) (case when (#3) IS NULL then null else #2 end)
+          →Union
+            →Stream l15
+            →Map/Filter/Project
+              Project: #1, #0, #2, #3
+              Map: null, null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l14
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Read l32
+        →Arranged l16
+        →Arrange (#0)
+          →Union
+            →Stream l13
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l12
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Union
+                            →Fused with Child Map/Filter/Project
+                              Project: #3
+                                →Read l32
+                            →Constant (1 row)
+    cte l34 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #5
+            →Read l33
+    cte l35 =
+      →Distinct GroupAggregate
+        →Stream l18
+    cte l36 =
+      →Differential Join %0:l34[#0] » %1:l35[#0]
+        →Arranged l34
+        →Arranged l35
+    cte l37 =
       →Distinct GroupAggregate
         Key:
-          Project: #12, #13, #15, #16
-          Map: (((((("\"" || #4{name}) || "\".\"") || #3{name}) || "\".\"") || #1{name}) || "\""), case when (#9) IS NULL then case when (#11) IS NULL then null else #10 end else coalesce(#8, case when (#11) IS NULL then null else #10 end) end, (#7) IS NULL, case when #14 then #0{id} else coalesce(#5, #0{id}) end, case when #14 then #2{cluster_id} else coalesce(#6, #2{cluster_id}) end
-        →One-Shot Delta Join [%0:l32 » %1[#1] » %2:l16[#0] » %3[#0]]
-          path %0:
-            after %1:
-              Project: #0, #1, #3..=#8
-              Filter: ((#2{type} = "materialized-view") OR ((case when (#8) IS NULL then null else #6 end) IS NOT NULL AND (#2{type} = "view")))
-          →Unarranged Raw Stream
-            →Fused with Child Map/Filter/Project
-              Filter: ((#2{type} = "view") OR (#2{type} = "materialized-view")) AND (#4{name} != "mz_catalog") AND (#4{name} != "pg_catalog") AND (#4{name} != "mz_internal") AND (#4{name} != "mz_introspection") AND (#4{name} != "information_schema")
-                →Read l32
-          →Arrange (#1) (case when (#3) IS NULL then null else #2 end)
-            →Union
-              →Stream l15
-              →Map/Filter/Project
-                Project: #1, #0, #2, #3
-                Map: null, null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l14
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Read l32
-          →Arranged l16
+          Project: #4, #5, #7, #8
+          Map: case when #6{visible} then coalesce(#2{index_id}, #0{object_id}) else #0{object_id} end, case when #6{visible} then coalesce(#3{index_cluster_id}, #1{object_cluster_id}) else #1{object_cluster_id} end
+        →Differential Join %0:l33[#5] » %1[#0]
+          →Arrange (#5)
+            →Stream l33
           →Arrange (#0)
             →Union
-              →Stream l13
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Map: true
+                  →Read l36
               →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l12
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Union
-                              →Fused with Child Map/Filter/Project
-                                Project: #3
-                                  →Read l32
-                              →Constant (1 row)
-    cte l34 =
+                Project: #0, #1
+                Map: false
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Stream l36
+                    →Unarranged Raw Stream
+                      →Arranged l34
+    cte l38 =
       →Arrange (#3{cluster_id})
         →Fused with Child Map/Filter/Project
           Filter: (#3{cluster_id}) IS NOT NULL
-            →Arranged l33
+            →Arranged l37
               Key: (#0..=#3)
-    cte l35 =
-      →Differential Join %0:l34[#3{cluster_id}] » %1:mz_cluster_replicas[#1{cluster_id}]
-        →Arranged l34
+    cte l39 =
+      →Differential Join %0:l38[#3{cluster_id}] » %1:mz_cluster_replicas[#1{cluster_id}]
+        →Arranged l38
         →Arrange (#1{cluster_id})
           →Fused with Child Map/Filter/Project
             Project: #0, #2
               →Arranged mz_catalog.mz_cluster_replicas
                 Key: (#0{id})
-    cte l36 =
+    cte l40 =
       →Union
         →Map/Filter/Project
           Project: #0..=#3
           Map: null
             →Consolidating Union
               →Negate Diffs
-                →Differential Join %1[#0] » %0:l34[#3{cluster_id}]
-                  →Arranged l34
+                →Differential Join %1[#0] » %0:l38[#3{cluster_id}]
+                  →Arranged l38
                   →Distinct GroupAggregate
                     →Fused with Child Map/Filter/Project
                       Project: #3
-                        →Read l35
+                        →Read l39
               →Fused with Child Map/Filter/Project
                 Project: #0..=#2
-                  →Arranged l33
+                  →Arranged l37
                     Key: (#0..=#3)
         →Fused with Child Map/Filter/Project
           Project: #0..=#2, #4
-            →Read l35
-    cte l37 =
-      →Differential Join %1:mz_hydration_statuses[#0{object_id}, #1{replica_id}] » %0:l36[#2{hydration_object_id}, #3{id}]
+            →Read l39
+    cte l41 =
+      →Differential Join %1:mz_hydration_statuses[#0{object_id}, #1{replica_id}] » %0:l40[#2{hydration_object_id}, #3{id}]
         →Arrange (#2{hydration_object_id}, #3{id})
           →Fused with Child Map/Filter/Project
             Filter: (#3{id}) IS NOT NULL
-              →Read l36
+              →Read l40
         →Arranged mz_internal.mz_hydration_statuses
-    cte l38 =
+    cte l42 =
       →Fused with Child Map/Filter/Project
         Project: #0..=#4
         Map: (#1) IS NULL
-          →Read l36
-    cte l39 =
+          →Read l40
+    cte l43 =
       →Differential Join %0:l31[#0{object_name}] » %1[#0{object_name}]
         after %1:
           Project: #0..=#3, #5, #6
@@ -10244,28 +10278,28 @@ Explained Query:
                       Map: null
                         →Consolidating Union
                           →Negate Diffs
-                            →Differential Join %1[#0, #1] » %0:l38[#2{hydration_object_id}, #3{id}]
+                            →Differential Join %1[#0, #1] » %0:l42[#2{hydration_object_id}, #3{id}]
                               →Arrange (#2{hydration_object_id}, #3{id})
                                 →Fused with Child Map/Filter/Project
                                   Project: #0..=#3
                                   Filter: (#3{id}) IS NOT NULL AND (#4 OR NOT(#4))
-                                    →Read l38
+                                    →Read l42
                               →Distinct GroupAggregate
                                 →Fused with Child Map/Filter/Project
                                   Project: #2, #3
-                                    →Read l37
+                                    →Read l41
                           →Fused with Child Map/Filter/Project
                             Project: #0, #1, #3
                             Filter: (#4 OR NOT(#4))
-                              →Read l38
+                              →Read l42
                     →Fused with Child Map/Filter/Project
                       Project: #0, #1, #3, #4
                       Filter: (#5 OR NOT(#5))
                       Map: (#1) IS NULL
-                        →Read l37
-    cte l40 =
+                        →Read l41
+    cte l44 =
       →Union
-        →Stream l39
+        →Stream l43
         →Map/Filter/Project
           Project: #0..=#5
           Map: null, null
@@ -10275,39 +10309,38 @@ Explained Query:
                   →Distinct GroupAggregate
                     →Fused with Child Map/Filter/Project
                       Project: #0..=#3
-                        →Read l39
+                        →Read l43
               →Stream l31
-    cte l41 =
+    cte l45 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
           Project: #1
-            →Read l40
-    cte l42 =
-      →Differential Join %0:l41[#0] » %1[#0]
-        →Arranged l41
-        →Distinct GroupAggregate
-          →Stream l18
+            →Read l44
+    cte l46 =
+      →Differential Join %0:l45[#0] » %1:l35[#0]
+        →Arranged l45
+        →Arranged l35
   →Return
-    →Differential Join %0:l40[#1] » %1[#0]
+    →Differential Join %0:l44[#1] » %1[#0]
       after %1:
         Project: #1, #7, #2, #3, #8
         Map: case when #6 then #0{cluster} else null end, jsonb_build_object("hydrated", jsonbable_to_jsonb(coalesce(((#4{replica_count} = #5{hydrated_replica_count}) AND (#4{replica_count} > 0)), false)), "replica_count", jsonbable_to_jsonb(integer_to_numeric(coalesce(#4{replica_count}, 0))), "hydrated_replica_count", jsonbable_to_jsonb(integer_to_numeric(coalesce(#5{hydrated_replica_count}, 0))))
       →Arrange (#1)
-        →Stream l40
+        →Stream l44
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
             Project: #0, #1
             Map: true
-              →Read l42
+              →Read l46
           →Map/Filter/Project
             Project: #0, #1
             Map: false
               →Consolidating Union
                 →Negate Diffs
-                  →Stream l42
+                  →Stream l46
                 →Unarranged Raw Stream
-                  →Arranged l41
+                  →Arranged l45
 
 Source mz_catalog.mz_index_columns
   project=(#0, #2)
