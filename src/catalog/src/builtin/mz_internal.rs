@@ -2198,9 +2198,11 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         WHERE replica_id = '<source>'
             OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
             OR status = 'paused'
-        -- One TopK level instead of the default eight. Startup trims history to
-        -- `keep_n_source_status_history_entries` rows per replica.
-        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
+        -- NOTE: Sized for about a day of restart loop (3 rows every ~5 s per
+        -- replica), since `partially_truncate_status_history` trims only at
+        -- startup. Past the hint each update rereads group size / 4096 rows.
+        -- Smaller hints, like the advice view's for healthy histories, reread more.
+        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 65535)
         ORDER BY source_id, replica_id, occurred_at DESC
     ),
     latest_per_replica_events AS
@@ -2493,9 +2495,11 @@ latest_per_replica_status AS
     WHERE replica_id = '<sink>'
         OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
         OR status = 'paused'
-    -- One TopK level instead of the default eight. Startup trims history to
-    -- `keep_n_sink_status_history_entries` rows per replica.
-    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
+    -- NOTE: Sized for about a day of restart loop (3 rows every ~5 s per
+    -- replica), since `partially_truncate_status_history` trims only at
+    -- startup. Past the hint each update rereads group size / 4096 rows.
+    -- Smaller hints, like the advice view's for healthy histories, reread more.
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 65535)
     ORDER BY sink_id, replica_id, occurred_at DESC
 ),
 latest_per_replica_events AS
