@@ -1,5 +1,7 @@
 # Materialize Platform: Database Architecture
 
+> Superseded by [`doc/developer/architecture/README.md`](../architecture/README.md). This document is kept as a record of the 2021 design and is not maintained.
+
 ## How to read this document
 
 The architecture proposed in this document is "firm", in that we are relatively
