@@ -24,14 +24,14 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy};
 use k8s_openapi::api::core::v1::{
-    Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-    NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
-    ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
-    PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
-    SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Sysctl, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
-    WeightedPodAffinityTerm,
+    Affinity, Capabilities, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource,
+    EphemeralVolumeSource, KeyToPath, NodeAffinity, NodeSelector, NodeSelectorRequirement,
+    NodeSelectorTerm, ObjectFieldSelector, ObjectReference, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm,
+    PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm,
+    ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext,
+    Service as K8sService, ServicePort, ServiceSpec, Sysctl, Toleration, TopologySpreadConstraint,
+    Volume, VolumeMount, VolumeResourceRequirements, WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
@@ -45,6 +45,7 @@ use kube::error::Error as K8sError;
 use kube::runtime::{WatchStreamExt, watcher};
 use maplit::btreemap;
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cloud_resources::crd::materialize::{AdditionalTrustBundle, TrustBundleSource};
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
@@ -124,6 +125,65 @@ pub struct KubernetesOrchestratorConfig {
     /// Whether to run service pods in a Kubernetes user namespace by setting
     /// `hostUsers: false`.
     pub enable_user_namespaces: bool,
+    /// CA certificates that services trust in addition to the CAs in their
+    /// image.
+    pub additional_trust_bundle: Option<AdditionalTrustBundle>,
+}
+
+/// Where pods mount the certificates of an [`AdditionalTrustBundle`], for
+/// passing to `--additional-trust-bundle`.
+pub const ADDITIONAL_TRUST_BUNDLE_PATH: &str = "/etc/materialize/additional-trust-bundle/ca.crt";
+
+/// The volume and mount that place the certificates of `bundle` at
+/// [`ADDITIONAL_TRUST_BUNDLE_PATH`].
+pub fn additional_trust_bundle_volume(
+    bundle: &AdditionalTrustBundle,
+) -> Result<(Volume, VolumeMount), anyhow::Error> {
+    const VOLUME_NAME: &str = "additional-trust-bundle";
+    let path = std::path::Path::new(ADDITIONAL_TRUST_BUNDLE_PATH);
+    let dir = path.parent().and_then(|dir| dir.to_str());
+    let file = path.file_name().and_then(|file| file.to_str());
+    let (Some(dir), Some(file)) = (dir, file) else {
+        unreachable!("{ADDITIONAL_TRUST_BUNDLE_PATH} names a file in a directory");
+    };
+    // Project only the referenced key, so that pointing at a Secret that also
+    // holds a private key, as cert-manager's do, does not mount that key.
+    let items = |key: &str| {
+        Some(vec![KeyToPath {
+            key: key.to_owned(),
+            path: file.to_owned(),
+            mode: None,
+        }])
+    };
+    let volume = match bundle.source()? {
+        TrustBundleSource::ConfigMap(key_ref) => Volume {
+            name: VOLUME_NAME.to_owned(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: key_ref.name.clone(),
+                items: items(&key_ref.key),
+                default_mode: None,
+                optional: Some(false),
+            }),
+            ..Default::default()
+        },
+        TrustBundleSource::Secret(key_ref) => Volume {
+            name: VOLUME_NAME.to_owned(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(key_ref.name.clone()),
+                items: items(&key_ref.key),
+                default_mode: None,
+                optional: Some(false),
+            }),
+            ..Default::default()
+        },
+    };
+    let mount = VolumeMount {
+        name: VOLUME_NAME.to_owned(),
+        mount_path: dir.to_owned(),
+        read_only: Some(true),
+        ..Default::default()
+    };
+    Ok((volume, mount))
 }
 
 impl KubernetesOrchestratorConfig {
@@ -1055,7 +1115,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
+        let mut volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
             (true, Some(ephemeral_volume_storage_class)) => {
                 volume_mounts.push(VolumeMount {
                     name: "scratch".to_string(),
@@ -1102,6 +1162,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }
             (false, _) => None,
         };
+
+        if let Some(bundle) = &self.config.additional_trust_bundle {
+            let (volume, volume_mount) = additional_trust_bundle_volume(bundle)?;
+            volumes.get_or_insert_with(Vec::new).push(volume);
+            volume_mounts.push(volume_mount);
+            args.push(format!(
+                "--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"
+            ));
+        }
 
         if let Some(name_prefix) = &self.config.name_prefix {
             args.push(format!("--secrets-reader-name-prefix={}", name_prefix));
@@ -1893,6 +1962,52 @@ mod tests {
         assert_eq!(topology_spread_min_domains(false, true, Some(3)), None);
         // suppressed when both
         assert_eq!(topology_spread_min_domains(true, true, Some(3)), None);
+    }
+
+    #[mz_ore::test]
+    fn additional_trust_bundle_volume_projects_only_the_referenced_key() {
+        use mz_cloud_resources::crd::materialize::TrustBundleKeyRef;
+
+        let key_ref = TrustBundleKeyRef {
+            name: "private-ca".to_owned(),
+            key: "ca.crt".to_owned(),
+        };
+        let items = Some(vec![KeyToPath {
+            key: "ca.crt".to_owned(),
+            path: "ca.crt".to_owned(),
+            mode: None,
+        }]);
+
+        let (volume, mount) = additional_trust_bundle_volume(&AdditionalTrustBundle {
+            config_map_key_ref: None,
+            secret_key_ref: Some(key_ref.clone()),
+        })
+        .unwrap();
+        let secret = volume.secret.expect("secret volume");
+        assert_eq!(secret.secret_name.as_deref(), Some("private-ca"));
+        assert_eq!(secret.items, items);
+        assert_eq!(
+            format!("{}/ca.crt", mount.mount_path),
+            ADDITIONAL_TRUST_BUNDLE_PATH
+        );
+        assert_eq!(mount.name, volume.name);
+
+        let (volume, _) = additional_trust_bundle_volume(&AdditionalTrustBundle {
+            config_map_key_ref: Some(key_ref),
+            secret_key_ref: None,
+        })
+        .unwrap();
+        let config_map = volume.config_map.expect("config map volume");
+        assert_eq!(config_map.name, "private-ca");
+        assert_eq!(config_map.items, items);
+
+        assert!(
+            additional_trust_bundle_volume(&AdditionalTrustBundle {
+                config_map_key_ref: None,
+                secret_key_ref: None,
+            })
+            .is_err()
+        );
     }
 
     #[mz_ore::test]

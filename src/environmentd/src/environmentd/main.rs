@@ -39,6 +39,7 @@ use mz_auth::password::Password;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_cloud_resources::crd::materialize::AdditionalTrustBundle;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
@@ -175,6 +176,10 @@ pub struct Args {
     /// TLS arguments.
     #[clap(flatten)]
     tls: TlsCliArgs,
+    /// A file of PEM-encoded CA certificates that outbound TLS connections
+    /// trust in addition to the system's CAs.
+    #[clap(long, env = "ADDITIONAL_TRUST_BUNDLE", value_name = "PATH")]
+    additional_trust_bundle: Option<PathBuf>,
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
@@ -263,6 +268,11 @@ pub struct Args {
     /// by setting `hostUsers: false` on their pod specs.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_ENABLE_USER_NAMESPACES")]
     orchestrator_kubernetes_enable_user_namespaces: bool,
+    /// The Materialize resource's `additionalTrustBundle`, as JSON, to mount
+    /// into service (clusterd) pods and pass to their
+    /// `--additional-trust-bundle`.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_ADDITIONAL_TRUST_BUNDLE")]
+    orchestrator_kubernetes_additional_trust_bundle: Option<String>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -686,6 +696,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // idempotent, so ignore the result.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+    if let Some(path) = &args.additional_trust_bundle {
+        // SAFETY: no threads exist yet. The enhanced panic handler spawns a
+        // thread only on panic, and the Tokio runtime is built below.
+        unsafe { mz_tls_util::install_additional_trust_bundle(path) }
+            .context("installing additional trust bundle")?;
+    }
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
@@ -834,6 +851,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 );
             }
 
+            let additional_trust_bundle = args
+                .orchestrator_kubernetes_additional_trust_bundle
+                .as_deref()
+                .map(|json| {
+                    let bundle: AdditionalTrustBundle = serde_json::from_str(json)?;
+                    bundle.source()?;
+                    Ok::<_, anyhow::Error>(bundle)
+                })
+                .transpose()
+                .context("invalid --orchestrator-kubernetes-additional-trust-bundle")?;
+
             let orchestrator = Arc::new(
                 runtime
                     .block_on(KubernetesOrchestrator::new(
@@ -873,6 +901,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                 .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
                             enable_user_namespaces: args
                                 .orchestrator_kubernetes_enable_user_namespaces,
+                            additional_trust_bundle,
                         },
                         &metrics_registry,
                     ))
