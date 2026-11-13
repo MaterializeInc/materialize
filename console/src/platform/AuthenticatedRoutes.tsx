@@ -65,6 +65,9 @@ import { assert } from "~/util";
 import UsageRoutes from "./billing/UsageRoutes";
 import SinksList from "./sinks/SinksList";
 
+const OntologyRoutes = React.lazy(
+  () => import("~/platform/ontology/OntologyRoutes"),
+);
 const InternalRoutes = React.lazy(
   () => import("~/platform/internal/InternalRoutes"),
 );
@@ -360,6 +363,16 @@ const EnvironmentRoutes = () => {
           />
         )}
 
+        {flags["ontology-explorer"] && (
+          <Route
+            path="ontology/*"
+            element={
+              <BaseLayout collapseNav>
+                <OntologyRoutes />
+              </BaseLayout>
+            }
+          />
+        )}
         <Route path="freshness">
           <Route
             index
