@@ -41,7 +41,6 @@ use mz_repr::{
     Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, SqlRelationType,
     preserves_order,
 };
-use mz_sql::plan::MaterializedIndexDesc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span};
@@ -449,27 +448,6 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-/// Materialized indexes on `on`, each with the [`GlobalId`] to read it from.
-///
-/// NOTE(poc): walks `on`'s dependents, so it costs a catalog scan per call.
-pub fn materialized_indexes_on(
-    state: &crate::catalog::CatalogState,
-    on: GlobalId,
-) -> Vec<(GlobalId, MaterializedIndexDesc)> {
-    let Some(entry) = state.try_get_entry_by_global_id(&on) else {
-        return Vec::new();
-    };
-    entry
-        .used_by()
-        .iter()
-        .filter_map(|item_id| {
-            let mv = state.get_entry(item_id).materialized_view()?;
-            let mi = mv.materialized_index.as_ref()?;
-            (mi.on == on).then(|| (mv.global_id_writes(), mi.clone()))
-        })
-        .collect()
-}
-
 pub fn create_fast_path_plan(
     dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr>,
     view_id: GlobalId,
@@ -477,7 +455,6 @@ pub fn create_fast_path_plan(
     persist_fast_path_limit: usize,
     persist_fast_path_order: bool,
     persist_sorted_prefix: &dyn Fn(GlobalId) -> Option<usize>,
-    materialized_indexes: &dyn Fn(GlobalId) -> Vec<(GlobalId, MaterializedIndexDesc)>,
 ) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -549,39 +526,6 @@ pub fn create_fast_path_plan(
                                 None,
                                 permute_oneshot_mfp_around_index(mfp, &desc.key)?,
                             )));
-                        }
-                    }
-
-                    // NOTE(poc): with no arrangement, a materialized index whose leading key
-                    // columns are pinned to literals serves the read from its sorted shard.
-                    // The peek sequencer holds every materialized index on the storage
-                    // collections a query reads, so `mi_id` is readable at the as_of.
-                    for (mi_id, mi) in materialized_indexes(*get_id) {
-                        let on_arity = mfp.input_arity;
-                        let mut position = vec![0; on_arity];
-                        for (stored, on_column) in
-                            mi.stored_columns(on_arity).into_iter().enumerate()
-                        {
-                            position[on_column] = stored;
-                        }
-                        let mut mi_mfp = mfp_to_safe_plan(mfp.clone())?;
-                        mi_mfp.permute_fn(|c| position[c], on_arity);
-                        let (_maps, mi_filters, _projection) = mi_mfp.as_map_filter_project();
-                        let mut row = Row::default();
-                        let mut packer = row.packer();
-                        for idx in 0..mi.key.len() {
-                            let col_expr = MirScalarExpr::column(idx);
-                            let Some((literal, _)) = mi_filters
-                                .iter()
-                                .filter_map(|f| f.expr_eq_literal(&col_expr))
-                                .next()
-                            else {
-                                break;
-                            };
-                            packer.extend_by_row(&literal);
-                        }
-                        if !row.is_empty() {
-                            return Ok(Some(FastPathPlan::PeekPersist(mi_id, Some(row), mi_mfp)));
                         }
                     }
 

@@ -3340,7 +3340,8 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | MaterializedIndex | Type | Func | Secret
+            | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4477,7 +4478,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | MaterializedIndex | Type | Func | Secret | Connection => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -6380,7 +6381,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection => true,
-            CatalogItemType::Index => false,
+            CatalogItemType::Index | CatalogItemType::MaterializedIndex => false,
         },
     }
 }

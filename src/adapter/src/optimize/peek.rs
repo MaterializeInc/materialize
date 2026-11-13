@@ -37,6 +37,7 @@ use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
+use crate::optimize::materialized_index::MaterializedIndexRoutes;
 use crate::optimize::{
     MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
     optimize_mir_local, trace_plan,
@@ -61,9 +62,19 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// Relations to read through a materialized index, chosen before the
+    /// query's timestamp.
+    materialized_index_routes: MaterializedIndexRoutes,
 }
 
 impl Optimizer {
+    /// Reads the given relations through their materialized indexes. The
+    /// caller must have chosen the timestamp with these routes applied.
+    pub fn with_materialized_index_routes(mut self, routes: MaterializedIndexRoutes) -> Self {
+        self.materialized_index_routes = routes;
+        self
+    }
+
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
@@ -83,6 +94,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            materialized_index_routes: Default::default(),
         }
     }
 
@@ -186,7 +198,11 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(&mut self.metrics),
             Some(self.select_id),
         );
-        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let mut mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        crate::optimize::materialized_index::apply_routes(
+            &mut mir_expr,
+            &self.materialized_index_routes,
+        );
         let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
@@ -343,9 +359,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 .and_then(|entry| entry.materialized_view())
                 .and_then(|mv| mv.partition_by)
         };
-        let mi_catalog = Arc::clone(&self.catalog);
-        let materialized_indexes =
-            move |id: GlobalId| crate::coord::peek::materialized_indexes_on(mi_catalog.state(), id);
         let use_fast_path_optimizer = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
@@ -353,7 +366,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
             &sorted_prefix,
-            &materialized_indexes,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
             Err(OptimizerError::InternalUnsafeMfpPlan(_)) => {
@@ -390,7 +402,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
             &sorted_prefix,
-            &materialized_indexes,
         )? {
             Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {

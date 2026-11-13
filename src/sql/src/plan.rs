@@ -280,7 +280,10 @@ impl Plan {
             StatementKind::CreateClusterReplica => &[PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => &[PlanKind::CreateConnection],
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
-            StatementKind::CreateIndex => &[PlanKind::CreateIndex],
+            // `CREATE MATERIALIZED INDEX` plans as a materialized view.
+            StatementKind::CreateIndex => {
+                &[PlanKind::CreateIndex, PlanKind::CreateMaterializedView]
+            }
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateRole => &[PlanKind::CreateRole],

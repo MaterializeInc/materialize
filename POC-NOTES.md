@@ -74,25 +74,36 @@ honoring it would change existing MVs that set it. The POC leaves user
   `CREATE MATERIALIZED VIEW <name> AS SELECT <key cols>, <rest> FROM obj`
   through the normal MV planner, then sets `create_sql` back to the
   `CREATE MATERIALIZED INDEX` text, `partition_by = key.len()` and
-  `materialized_index = { on, key }`. Restarts re-plan through the same path.
-  **Shortcut:** the catalog item is a materialized view. It shows up in
-  `mz_materialized_views`, `SHOW MATERIALIZED VIEWS`, and is dropped with
-  `DROP MATERIALIZED VIEW`. A real version needs its own item kind.
+  `materialized_index = { on, key }`. Restarts re-plan through the same path
+  (verified: restart without `--reset` keeps serving lookups).
+- Catalog: a real item type, `CatalogItemType::MaterializedIndex`, reported
+  by `CatalogItem::typ()` for MVs with `materialized_index` set and by the
+  durable catalog's `item_type(create_sql)`. Users see an index: its
+  `ObjectType` is `Index`, so `DROP INDEX` works and `DROP MATERIALIZED VIEW`
+  refuses it; `CREATE` returns `CREATE INDEX`; `mz_objects` says `index`;
+  `SHOW INDEXES` lists it and `SHOW MATERIALIZED VIEWS` does not. Internally
+  it is still a `CatalogItem::MaterializedView` (storage collection plus
+  compute sink), which is the machinery it needs. Remaining shortcuts: the
+  durable proto `CatalogItemType` has no variant for it (only system object
+  mappings serialize item types, so it maps to `MaterializedView`), `SHOW
+  INDEXES` shows an empty key list, and selecting from it by name works.
 - Sink: `partition_by` flows plan -> catalog -> MV optimizer ->
   `MaterializedViewSinkConnection::partition_by` (serde, no proto change).
   The sink (v1 and v2) passes `max_runs = Some(4)` to persist's batch builders
   through `PersistApi`, including the shared cross-worker builder.
   `PersistClient::batch_builder` already had this per-builder override.
-- Reads: `create_fast_path_plan` gets two catalog callbacks.
-  - A `Get` of a relation with a materialized index and literals on its
-    leading key columns becomes `PeekPersist(mi_id, literal, permuted mfp)`.
-  - A `Get` of the materialized index itself takes the persist lookup with
-    any literal key prefix (no unique key required).
-- Read holds: `peek_sequencing` adds every materialized index on the storage
-  collections a query reads to the timestamp/read-hold bundle. **Cost:** every
-  unindexed read of `obj` now waits for the materialized index to catch up
-  (MV lag), even when the query doesn't use it. A real version would choose
-  the collection before timestamp selection.
+- Routing (`src/adapter/src/optimize/materialized_index.rs`): chosen
+  before the timestamp. For a `SELECT` whose dependencies have a materialized
+  index, peek sequencing locally optimizes the query first (like `EXPLAIN
+  TIMESTAMP` already does), and `choose_routes` picks a materialized index for
+  each relation whose leading key column is pinned by a literal filter or a
+  join equivalence, unless the cluster has an in-memory index on it. The
+  timestamp and read holds come from the routed plan's dependencies, and the
+  peek optimizer applies the same routes (`Get t` becomes a permuted
+  `Get mi`). The fast path then sees `Get mi` and uses the persist lookup on
+  any literal key prefix. Verified: with the materialized index's cluster at
+  zero replicas, a non-key query on `t` still returns immediately, and a key
+  lookup waits for the index and then sees the latest write.
 - Durable catalog: `item_type(create_sql)` asserted `MATERIALIZED` is
   followed by `VIEW` and crashed the coordinator on the first
   `CREATE MATERIALIZED INDEX`. Mapped to `MaterializedView`.
@@ -119,7 +130,15 @@ honoring it would change existing MVs that set it. The POC leaves user
    persist even outside this POC (re-sort a batch with many unordered runs).
 3. **MV `PARTITION BY` is accepted and silently ignored** (see above). Either
    document it as a no-op or wire it to sort-on-write behind its own flag.
-4. **Bare `psql` timing with `echo '\timing on'` in zsh** turns `\t` into a
+4. **`statement_timeout` does not fire while a peek waits on a stalled
+   collection.** With `statement_timeout = '5s'` and the maintaining cluster
+   at zero replicas, `SELECT count(*) FROM t_plain` (a plain MV, no POC code
+   on its path) waited 128 s until the replica came back. Verify on a `main`
+   build before filing.
+5. **Durable catalog infers item types from `create_sql` words.** Any new
+   `CREATE <words>` statement form needs `item_type()` updated, or the
+   coordinator panics on the first create.
+6. **Bare `psql` timing with `echo '\timing on'` in zsh** turns `\t` into a
    tab. Not an MZ bug, just a trap for benchmark scripts.
 
 ## Measurements so far (Docker v26.50, local-file blob, no S3 latency)

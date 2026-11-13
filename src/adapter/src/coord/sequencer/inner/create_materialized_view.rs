@@ -695,6 +695,11 @@ impl Coordinator {
 
         let local_mir_for_cache = local_mir_plan.expr();
 
+        let created = if materialized_index.is_some() {
+            ExecuteResponse::CreatedIndex
+        } else {
+            ExecuteResponse::CreatedMaterializedView
+        };
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -858,7 +863,7 @@ impl Coordinator {
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
-                Ok(ExecuteResponse::CreatedMaterializedView)
+                Ok(created)
             }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
@@ -871,7 +876,7 @@ impl Coordinator {
                         name: name.item,
                         ty: "materialized view",
                     });
-                Ok(ExecuteResponse::CreatedMaterializedView)
+                Ok(created)
             }
             Err(err) => Err(err),
         }

@@ -1841,6 +1841,9 @@ impl CatalogItem {
             CatalogItem::Log(_) => CatalogItemType::Source,
             CatalogItem::Sink(_) => CatalogItemType::Sink,
             CatalogItem::View(_) => CatalogItemType::View,
+            CatalogItem::MaterializedView(mv) if mv.materialized_index.is_some() => {
+                CatalogItemType::MaterializedIndex
+            }
             CatalogItem::MaterializedView(_) => CatalogItemType::MaterializedView,
             CatalogItem::Index(_) => CatalogItemType::Index,
             CatalogItem::Type(_) => CatalogItemType::Type,
@@ -3235,7 +3238,7 @@ impl CatalogEntry {
             Sink => CommentObjectId::Sink(self.id),
             View => CommentObjectId::View(self.id),
             MaterializedView => CommentObjectId::MaterializedView(self.id),
-            Index => CommentObjectId::Index(self.id),
+            Index | MaterializedIndex => CommentObjectId::Index(self.id),
             Func => CommentObjectId::Func(self.id),
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),

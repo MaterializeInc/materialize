@@ -762,7 +762,41 @@ impl PeekClient {
             })
             .transpose()?;
 
-        let source_ids = depends_on;
+        let mut source_ids = depends_on;
+        // Materialized index routes change which collections the query reads, so they are chosen
+        // from a locally optimized plan before the timestamp, which is picked from the routed
+        // plan's dependencies. The peek optimizer applies the same routes below.
+        let materialized_index_routes = match &query_plan {
+            QueryPlan::Select(s)
+                if optimize::materialized_index::any_materialized_index(
+                    catalog.state(),
+                    source_ids.iter().copied(),
+                ) =>
+            {
+                let mut optimizer = optimize::view::Optimizer::new(
+                    optimize::OptimizerConfig::from(catalog.system_config()),
+                    None,
+                );
+                let raw_plan = s.source.clone();
+                let optimized = mz_ore::task::spawn_blocking(
+                    || "optimize materialized index routes",
+                    move || optimizer.catch_unwind_optimize(raw_plan),
+                )
+                .await?;
+                let routes = optimize::materialized_index::choose_routes(
+                    optimized.as_inner(),
+                    catalog.state(),
+                    cluster.id(),
+                );
+                if !routes.is_empty() {
+                    let mut routed = optimized.into_inner();
+                    optimize::materialized_index::apply_routes(&mut routed, &routes);
+                    source_ids = routed.depends_on();
+                }
+                routes
+            }
+            _ => Default::default(),
+        };
         // TODO(peek-seq): validate_timeline_context can be expensive in real scenarios (not in
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
@@ -819,18 +853,7 @@ impl PeekClient {
 
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
-        let mut input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
-        // NOTE(poc): a materialized index on a storage collection the query reads may
-        // serve it (see `create_fast_path_plan`), so it needs a read hold and must be
-        // readable at the chosen timestamp. This makes every such read wait for the
-        // materialized index to catch up, even when the query doesn't use it.
-        let materialized_index_ids: Vec<_> = input_id_bundle
-            .storage_ids
-            .iter()
-            .flat_map(|id| crate::coord::peek::materialized_indexes_on(catalog.state(), *id))
-            .map(|(id, _)| id)
-            .collect();
-        input_id_bundle.storage_ids.extend(materialized_index_ids);
+        let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
 
         // Warning: This will be false for AS OF queries, even if we are otherwise inside a
         // multi-statement transaction. (It's also false for FreshestTableWrite, which is currently
@@ -1191,7 +1214,8 @@ impl PeekClient {
                     index_id,
                     optimizer_config,
                     self.optimizer_metrics.clone(),
-                );
+                )
+                .with_materialized_index_routes(materialized_index_routes);
 
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",

@@ -2265,6 +2265,7 @@ impl CatalogState {
             | CatalogItemType::MetricSink
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
+            | CatalogItemType::MaterializedIndex
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection => schema.items[builtin.name()],
