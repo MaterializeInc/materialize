@@ -2034,6 +2034,8 @@ impl Instance {
         drop(peek.read_hold);
     }
 
+    /// Routes a peek's terminal notification to its lifecycle, or to the
+    /// coordinator if it has none. Must run before `finish_peek` removes the peek.
     fn deliver_peek_notification(
         &self,
         uuid: Uuid,
@@ -3092,6 +3094,7 @@ impl RefreshIntrospectionState {
 /// A note of an outstanding peek response.
 #[derive(Debug)]
 struct PendingPeek {
+    /// Receives the peek's terminal notification. If `None`, the coordinator does.
     lifecycle: Option<Arc<PeekLifecycle>>,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
     ///

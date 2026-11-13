@@ -221,15 +221,14 @@ impl InstanceClient {
         .await?
     }
 
-    /// Issues a peek on the instance task, ordered against cancellation when a lifecycle is supplied.
+    /// Issues a peek on the instance task.
     ///
-    /// Without a lifecycle, terminal notifications go to the coordinator. With one,
-    /// the caller must retain ownership until retirement, including on issue errors,
-    /// instance shutdown, or abandonment of this future. Dropping the lifecycle does
-    /// not retire it. On an issue error, the caller must complete or cancel it.
-    ///
-    /// Cancellation before issue sends its response through `peek_response_tx`
-    /// without issuing compute work and returns `Ok(())`.
+    /// With a `lifecycle`, issue is ordered against cancellation and terminal
+    /// notifications go to the lifecycle, not the coordinator. If the peek was
+    /// already retired, sends the saved response through `peek_response_tx`
+    /// without issuing compute work and returns `Ok(())`. The caller must retire
+    /// the lifecycle if this returns `Err`, if it drops this future, or if the
+    /// instance shuts down.
     pub async fn peek(
         &self,
         peek_target: PeekTarget,
@@ -244,12 +243,9 @@ impl InstanceClient {
         peek_response_tx: oneshot::Sender<PeekResponse>,
         lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
-        let cancellation = lifecycle.map(|lifecycle| (lifecycle, self.clone()));
+        let client = self.clone();
         self.call_sync(move |i| {
             let mut response_tx = Some(peek_response_tx);
-            let issued_lifecycle = cancellation
-                .as_ref()
-                .map(|(lifecycle, _)| Arc::clone(lifecycle));
             let issue = || {
                 i.peek(
                     peek_target,
@@ -262,32 +258,27 @@ impl InstanceClient {
                     target_read_hold,
                     target_replica,
                     response_tx.take().expect("peek issued once"),
-                    issued_lifecycle,
+                    lifecycle.clone(),
                 )
             };
-            if let Some((lifecycle, cancellation_client)) = cancellation {
-                // Run the ordering critical section on the instance task, not
-                // around call_sync's await, which would block cancellation.
-                let canceled = lifecycle.issue(issue, move |reason| {
-                    cancellation_client.cancel_peek(uuid, reason);
-                })?;
-                if let Some(response) = canceled {
-                    let _ = response_tx
-                        .take()
-                        .expect("canceled peek was not issued")
-                        .send(response);
-                }
-                Ok(())
-            } else {
-                issue()
+            let Some(lifecycle) = &lifecycle else {
+                return issue();
+            };
+            // Run the ordering critical section on the instance task, not
+            // around call_sync's await, which would block cancellation.
+            let retired = lifecycle.issue(issue, move |reason| {
+                // A shut down instance has no peek left to cancel.
+                let _ = client.call(move |i| i.cancel_peek(uuid, reason));
+            })?;
+            if let Some(response) = retired {
+                let _ = response_tx
+                    .take()
+                    .expect("retired peek was not issued")
+                    .send(response);
             }
+            Ok(())
         })
         .await?
-    }
-
-    /// Enqueues cancellation of an issued peek. Instance shutdown is harmless.
-    pub fn cancel_peek(&self, uuid: Uuid, reason: PeekResponse) {
-        let _ = self.call(move |i| i.cancel_peek(uuid, reason));
     }
 }
 
@@ -352,7 +343,7 @@ mod tests {
             futures::pin_mut!(peek);
             assert!(matches!(futures::poll!(&mut peek), Poll::Pending));
             let issue = command_rx.try_recv().expect("issue queued");
-            assert!(lifecycle.cancel(response.clone()));
+            lifecycle.cancel(response.clone());
             assert_eq!(retired_rx.try_recv().unwrap(), PeekNotification::Canceled);
             issue(&mut instance);
             peek.await

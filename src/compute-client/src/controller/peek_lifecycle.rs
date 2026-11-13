@@ -18,22 +18,21 @@ type Retire = Box<dyn FnOnce(PeekNotification) + Send>;
 type Cancel = Box<dyn FnOnce(PeekResponse) + Send>;
 
 enum State {
-    Registered(Retire),
-    Issued { retire: Retire, cancel: Cancel },
+    /// `cancel` is set once compute work is issued.
+    Pending {
+        retire: Retire,
+        cancel: Option<Cancel>,
+    },
+    /// Holds the response for an issue attempt that arrives after retirement.
     Retired(PeekResponse),
 }
 
-/// A single retirement obligation shared with cancellation and compute.
+/// A peek's exactly-once retirement, ordered against compute issue and cancellation.
 ///
-/// The owner must arrange completion or cancellation on every terminal path.
-/// Dropping this handle does not invoke retirement. Callbacks run synchronously
-/// and must not block waiting for the compute instance task.
-///
-/// # Panics
-///
-/// State-changing methods panic if the lifecycle lock is poisoned. Callback
-/// panics propagate to the caller. Callbacks must not panic if retirement is
-/// to be guaranteed: a panic after marking the lifecycle retired is not retried.
+/// Dropping the handle does not retire the peek. The owner must call
+/// [`Self::complete`] or [`Self::cancel`] on every path where compute will not.
+/// Callbacks run synchronously on the retiring thread, which can be the compute
+/// instance task, so they must not block on that task.
 #[derive(derivative::Derivative)]
 #[derivative(Debug)]
 pub struct PeekLifecycle {
@@ -42,126 +41,91 @@ pub struct PeekLifecycle {
 }
 
 impl PeekLifecycle {
-    /// Creates an unissued peek whose terminal metadata is delivered to `retire`.
-    ///
-    /// The first completion or cancellation takes ownership of `retire` and
-    /// invokes it outside the lifecycle lock, on the thread performing that
-    /// operation. The callback receives execution metadata, not the query rows.
+    /// Creates an unissued peek that reports its terminal notification to `retire`.
     pub fn new(retire: impl FnOnce(PeekNotification) + Send + 'static) -> Self {
         Self {
-            state: Mutex::new(State::Registered(Box::new(retire))),
+            state: Mutex::new(State::Pending {
+                retire: Box::new(retire),
+                cancel: None,
+            }),
         }
     }
 
-    /// Issues compute work unless retirement has already won.
+    /// Runs `issue` unless the peek is already retired.
     ///
-    /// Call on the compute instance task. `issue` runs synchronously under the
-    /// lifecycle lock and must not reenter this handle. It must return `Err`
-    /// only if no compute peek was issued. On success, `cancel` is retained to
-    /// enqueue cancellation on that task with the response supplied to
-    /// [`Self::cancel`] if cancellation wins retirement.
+    /// `issue` runs under the lifecycle lock and must not call back into this
+    /// handle. It must return `Err` only if no compute peek was issued. In that
+    /// case the peek stays unissued and the caller still owes retirement.
     ///
-    /// Returns `Ok(None)` after successful issue. If already retired, invokes
-    /// neither callback and returns `Ok(Some(response))` for the caller to send
-    /// through the peek's result channel. This is the saved cancellation response,
-    /// or `PeekResponse::Canceled` if retirement came from [`Self::complete`].
-    /// An issue error is returned unchanged and leaves the peek unissued, with
-    /// retirement still owed by the caller.
+    /// Returns `Ok(None)` once issued. A later [`Self::cancel`] then passes its
+    /// response to `cancel`. If already retired, calls neither callback and
+    /// returns the response to send on the peek's result channel.
     ///
     /// # Panics
     ///
-    /// Panics if already issued but not retired. A panic in `issue` poisons the
-    /// lifecycle lock.
+    /// Panics if the peek is already issued.
     pub(super) fn issue<E>(
         &self,
         issue: impl FnOnce() -> Result<(), E>,
         cancel: impl FnOnce(PeekResponse) + Send + 'static,
     ) -> Result<Option<PeekResponse>, E> {
         let mut state = self.state.lock().expect("peek lifecycle lock poisoned");
-        match &*state {
-            State::Retired(outcome) => return Ok(Some(outcome.clone())),
-            State::Issued { .. } => panic!("peek issued twice"),
-            State::Registered(_) => {}
+        match &mut *state {
+            State::Retired(response) => Ok(Some(response.clone())),
+            State::Pending { cancel: slot, .. } => {
+                assert!(slot.is_none(), "peek issued twice");
+                issue()?;
+                *slot = Some(Box::new(cancel));
+                Ok(None)
+            }
         }
-        issue()?;
-        let State::Registered(retire) =
-            std::mem::replace(&mut *state, State::Retired(PeekResponse::Canceled))
-        else {
-            unreachable!("registration checked while holding the lock");
-        };
-        *state = State::Issued {
-            retire,
-            cancel: Box::new(cancel),
-        };
-        Ok(None)
     }
 
-    /// Delivers terminal metadata to the retirement callback without canceling compute.
-    ///
-    /// `outcome` describes the controller's result, or an error that prevented
-    /// issue. This method does not deliver a query result or clean up compute
-    /// resources. The caller remains responsible for those.
-    ///
-    /// Returns `true` if this call performed retirement, or `false` if another
-    /// completion or cancellation already retired the peek.
-    pub fn complete(&self, outcome: PeekNotification) -> bool {
-        self.retire(outcome, None)
+    /// Retires the peek with `outcome` without canceling compute. No-op if already
+    /// retired.
+    pub fn complete(&self, outcome: PeekNotification) {
+        self.retire(outcome, None);
     }
 
-    /// Retires the peek as canceled and prevents or cancels compute issue.
+    /// Retires the peek as canceled. No-op if already retired.
     ///
-    /// `response` is the requested cancellation result for the query, either
-    /// `PeekResponse::Canceled` or `PeekResponse::Error`. In both cases the
-    /// retirement callback receives `PeekNotification::Canceled`, so a
-    /// dependency-drop error can be returned to the query but logged as cancellation.
-    ///
-    /// Before issue, saves `response` for the issue caller to deliver. After
-    /// successful issue, passes it to the compute-cancellation callback before
-    /// invoking retirement. Both callbacks run outside the lifecycle lock.
-    /// This does not wait for compute cancellation: an issued peek can deliver
-    /// its result before the queued cancellation is processed.
-    ///
-    /// Returns `true` if this call performed retirement. Returns `false` without
-    /// invoking callbacks if the peek was already retired.
+    /// `response` is what the query receives: `Canceled`, or `Error` for a dropped
+    /// dependency. The retirement callback receives `PeekNotification::Canceled`
+    /// in both cases. An unissued peek is never issued. An issued peek gets a
+    /// queued compute cancellation and can still deliver its result first.
     ///
     /// # Panics
     ///
-    /// Panics for any other response variant, even if already retired.
-    pub fn cancel(&self, response: PeekResponse) -> bool {
-        assert!(matches!(
-            &response,
-            PeekResponse::Canceled | PeekResponse::Error(_)
-        ));
-        self.retire(PeekNotification::Canceled, Some(response))
+    /// Panics if `response` is neither `Canceled` nor `Error`.
+    pub fn cancel(&self, response: PeekResponse) {
+        assert!(
+            matches!(&response, PeekResponse::Canceled | PeekResponse::Error(_)),
+            "peek canceled with a non-cancellation response"
+        );
+        self.retire(PeekNotification::Canceled, Some(response));
     }
 
-    /// Claims retirement and delivers `outcome`, forwarding `cancellation` to
-    /// compute only for an issued peek. Returns whether this call claimed retirement.
-    fn retire(&self, outcome: PeekNotification, cancellation: Option<PeekResponse>) -> bool {
+    /// Retires the peek with `outcome` unless already retired. A `cancellation`
+    /// response additionally cancels compute if the peek was issued.
+    fn retire(&self, outcome: PeekNotification, cancellation: Option<PeekResponse>) {
         let previous = {
             let mut state = self.state.lock().expect("peek lifecycle lock poisoned");
             if matches!(&*state, State::Retired(_)) {
-                return false;
+                return;
             }
-            std::mem::replace(
-                &mut *state,
-                State::Retired(cancellation.clone().unwrap_or(PeekResponse::Canceled)),
-            )
+            let response = cancellation.clone().unwrap_or(PeekResponse::Canceled);
+            std::mem::replace(&mut *state, State::Retired(response))
         };
-        // Callbacks can remove registry entries and enqueue compute commands.
-        // Keep both out of the lifecycle lock to avoid lock-order inversions.
-        let retire = match previous {
-            State::Registered(retire) => retire,
-            State::Issued { retire, cancel } => {
-                if let Some(response) = cancellation {
-                    cancel(response);
-                }
-                retire
-            }
-            State::Retired(_) => unreachable!("terminal state checked under lock"),
+        let State::Pending { retire, cancel } = previous else {
+            unreachable!("retired state returns above");
         };
+        // The callbacks remove registry entries and enqueue compute commands.
+        // Running them under the lifecycle lock would invert lock order with
+        // those structures.
+        if let (Some(cancel), Some(response)) = (cancel, cancellation) {
+            cancel(response);
+        }
         retire(outcome);
-        true
     }
 }
 
@@ -188,13 +152,13 @@ mod tests {
         let lifecycle = PeekLifecycle::new(move |outcome| {
             captured.lock().expect("test lock poisoned").push(outcome)
         });
-        assert!(lifecycle.cancel(PeekResponse::Canceled));
+        lifecycle.cancel(PeekResponse::Canceled);
         let result = lifecycle.issue::<()>(
             || panic!("canceled peek issued"),
             |_| panic!("unissued peek canceled"),
         );
         assert_eq!(result, Ok(Some(PeekResponse::Canceled)));
-        assert!(!lifecycle.complete(success()));
+        lifecycle.complete(success());
         assert_eq!(
             *outcomes.lock().expect("test lock poisoned"),
             vec![PeekNotification::Canceled]
@@ -219,9 +183,9 @@ mod tests {
             ),
             Ok(None)
         );
-        assert!(lifecycle.cancel(PeekResponse::Canceled));
-        assert!(!lifecycle.cancel(PeekResponse::Canceled));
-        assert!(!lifecycle.complete(success()));
+        lifecycle.cancel(PeekResponse::Canceled);
+        lifecycle.cancel(PeekResponse::Canceled);
+        lifecycle.complete(success());
         assert_eq!(
             *events.lock().expect("test lock poisoned"),
             vec!["issue", "cancel", "retire"]
@@ -239,9 +203,9 @@ mod tests {
             lifecycle.issue::<()>(|| Ok(()), |_| panic!("completed peek canceled")),
             Ok(None)
         );
-        assert!(lifecycle.complete(success()));
-        assert!(!lifecycle.cancel(PeekResponse::Canceled));
-        assert!(!lifecycle.complete(success()));
+        lifecycle.complete(success());
+        lifecycle.cancel(PeekResponse::Canceled);
+        lifecycle.complete(success());
         assert_eq!(
             *outcomes.lock().expect("test lock poisoned"),
             vec![success()]
@@ -260,8 +224,8 @@ mod tests {
             Err("issue failed")
         );
         let error = PeekNotification::Error("issue failed".into());
-        assert!(lifecycle.complete(error.clone()));
-        assert!(!lifecycle.cancel(PeekResponse::Canceled));
+        lifecycle.complete(error.clone());
+        lifecycle.cancel(PeekResponse::Canceled);
         assert_eq!(*outcomes.lock().expect("test lock poisoned"), vec![error]);
     }
 
@@ -300,13 +264,13 @@ mod tests {
                     Err(std::sync::TryLockError::WouldBlock)
                 );
                 locked_tx.send(locked).expect("issue thread alive");
-                canceling.cancel(PeekResponse::Canceled)
+                canceling.cancel(PeekResponse::Canceled);
             });
             let locked = locked_rx.recv().expect("cancellation thread alive");
             release.wait();
             assert!(locked, "issue must hold the lifecycle lock");
             assert_eq!(issue.join().expect("test thread panicked"), Ok(None));
-            assert!(cancel.join().expect("test thread panicked"));
+            cancel.join().expect("test thread panicked");
         });
         assert_eq!(
             *events.lock().expect("test lock poisoned"),
@@ -322,7 +286,7 @@ mod tests {
             captured.lock().expect("test lock poisoned").push(outcome)
         });
         let response = PeekResponse::Error(PeekError::unstructured("dependency dropped"));
-        assert!(lifecycle.cancel(response.clone()));
+        lifecycle.cancel(response.clone());
         assert_eq!(
             lifecycle.issue::<()>(
                 || panic!("dropped peek issued"),
