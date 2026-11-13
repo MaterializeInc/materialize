@@ -217,6 +217,9 @@ const NewTicketForm = ({
     name: "files",
     rules: { validate: (files) => attachmentError(files) ?? true },
   });
+  // Picked files that may repeat earlier ones join the form once their
+  // contents are compared; the ticket waits for them.
+  const [checkingFiles, setCheckingFiles] = React.useState(false);
   const severity = watch("severity");
   const environmentType = watch("environmentType");
   const targetKey = watch("target");
@@ -280,7 +283,13 @@ const NewTicketForm = ({
   return (
     <Flex
       as="form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={(event) => {
+        if (checkingFiles) {
+          event.preventDefault();
+          return;
+        }
+        void handleSubmit(onSubmit)(event);
+      }}
       noValidate
       direction="column"
       height="100%"
@@ -474,6 +483,7 @@ const NewTicketForm = ({
             onChange={(files) =>
               setValue("files", files, { shouldValidate: true })
             }
+            onCheckingChange={setCheckingFiles}
           />
 
           {sentDetails.length > 0 && (
@@ -523,7 +533,11 @@ const NewTicketForm = ({
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" variant="primary" isLoading={submit.isPending}>
+        <Button
+          type="submit"
+          variant="primary"
+          isLoading={submit.isPending || checkingFiles}
+        >
           {isOutage ? "Report outage" : "Open ticket"}
         </Button>
       </DrawerFooter>

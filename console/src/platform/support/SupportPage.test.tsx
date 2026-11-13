@@ -1437,6 +1437,81 @@ describe("SupportPage", () => {
       );
     });
 
+    it("waits for picked files to be checked before opening the ticket", async () => {
+      let createdWith: unknown;
+      let attachedWith: Record<string, unknown> | undefined;
+      server.use(
+        ticketsHandler([]),
+        createHandler((body) => {
+          createdWith = body;
+        }),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      const log = () =>
+        new File(["hi"], "error.txt", { type: "text/plain", lastModified: 1 });
+      await user.upload(input, log());
+      await fillTicketForm(user);
+
+      // Hold the reads that compare the new error.txt with the first one.
+      const held: (() => void)[] = [];
+      const read = FileReader.prototype.readAsArrayBuffer;
+      const readSpy = vi
+        .spyOn(FileReader.prototype, "readAsArrayBuffer")
+        .mockImplementation(function (this: FileReader, blob: Blob) {
+          held.push(() => read.call(this, blob));
+        });
+      try {
+        await user.upload(input, [
+          log(),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ]);
+        await waitFor(() => expect(held).toHaveLength(2));
+
+        // Loading, so its name starts with the spinner's.
+        expect(
+          screen.getByRole("button", { name: /Open ticket/ }),
+        ).toBeDisabled();
+        // Enter in a field doesn't send it either.
+        await user.click(screen.getByRole("textbox", { name: /Subject/ }));
+        await user.keyboard("{Enter}");
+        expect(createdWith).toBeUndefined();
+        // Files can still be removed meanwhile.
+        expect(
+          screen.getByRole("button", { name: "Remove error.txt" }),
+        ).toBeEnabled();
+      } finally {
+        readSpy.mockRestore();
+      }
+      held.forEach((release) => release());
+
+      await screen.findByRole("button", { name: "Remove screen.png" });
+      expect(
+        screen.getAllByRole("button", { name: "Remove error.txt" }),
+      ).toHaveLength(1);
+      const open = screen.getByRole("button", { name: "Open ticket" });
+      await waitFor(() => expect(open).toBeEnabled());
+      await user.click(open);
+
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attachedWith).toEqual({
+          ticketId: "42",
+          files: [
+            { name: "error.txt", data: window.btoa("hi") },
+            { name: "screen.png", data: window.btoa("png") },
+          ],
+        }),
+      );
+    });
+
     it("sends file names without hidden characters", async () => {
       let attachedWith: Record<string, unknown> | undefined;
       server.use(

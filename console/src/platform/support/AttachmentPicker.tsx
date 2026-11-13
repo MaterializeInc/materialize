@@ -76,6 +76,20 @@ const newFiles = async (files: File[], picked: File[]) => {
   return added;
 };
 
+/** Whether any picked file shares metadata with a file before it. */
+const mayRepeat = (files: File[], picked: File[]) => {
+  const ids = new Set(files.map(fileId));
+  return picked.some((file) => {
+    const id = fileId(file);
+    if (ids.has(id)) return true;
+    ids.add(id);
+    return false;
+  });
+};
+
+const sameFiles = (a: File[], b: File[]) =>
+  a.length === b.length && a.every((file, i) => file === b[i]);
+
 /**
  * Files to add to the ticket once it's open. The button's tooltip gives the
  * limits; the global API checks them again.
@@ -85,12 +99,18 @@ export const AttachmentPicker = ({
   error,
   isDisabled,
   onChange,
+  onCheckingChange,
 }: {
   files: File[];
   error: string | undefined;
   /** While the ticket opens: the files it will get are already set. */
   isDisabled: boolean;
   onChange: (files: File[]) => void;
+  /**
+   * Whether picked files are still being compared with ones already picked.
+   * They aren't in `files` until that's done, so the ticket should wait.
+   */
+  onCheckingChange: (checking: boolean) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const input = React.useRef<HTMLInputElement>(null);
@@ -101,9 +121,48 @@ export const AttachmentPicker = ({
   React.useEffect(() => {
     latestFiles.current = files;
   });
+  // Picks wait for any check before them, so they're added in order and each
+  // is compared with every file picked earlier.
+  const checks = React.useRef(Promise.resolve());
+  const pendingChecks = React.useRef(0);
+
+  const setFiles = (next: File[]) => {
+    latestFiles.current = next;
+    onChange(next);
+  };
+
+  const addFiles = (picked: File[]) => {
+    if (
+      pendingChecks.current === 0 &&
+      !mayRepeat(latestFiles.current, picked)
+    ) {
+      setFiles([...latestFiles.current, ...picked]);
+      return;
+    }
+    // Only files that share metadata need their contents compared.
+    pendingChecks.current += 1;
+    onCheckingChange(true);
+    checks.current = checks.current.then(async () => {
+      let compared: File[];
+      let added: File[];
+      // Files can be removed while the contents are read: if so, compare
+      // again with the files that are left.
+      do {
+        compared = latestFiles.current;
+        added = await newFiles(compared, picked);
+      } while (!sameFiles(compared, latestFiles.current));
+      if (added.length > 0) {
+        setFiles([...latestFiles.current, ...added]);
+      }
+      pendingChecks.current -= 1;
+      // In the same update as the files, so the ticket never sees one
+      // without the other.
+      if (pendingChecks.current === 0) onCheckingChange(false);
+    });
+  };
 
   const removeFile = (index: number) => {
-    onChange(files.filter((_, i) => i !== index));
+    setFiles(latestFiles.current.filter((_, i) => i !== index));
     // Keep keyboard focus in the picker after the removed control unmounts:
     // on the next file's remove button, else the last one, else Attach files.
     queueMicrotask(() => {
@@ -129,23 +188,7 @@ export const AttachmentPicker = ({
           const picked = Array.from(event.target.files ?? []);
           // Lets the same file be picked again after it's removed.
           event.target.value = "";
-          const ids = new Set(files.map(fileId));
-          const mayRepeat = picked.some((file) => {
-            const id = fileId(file);
-            if (ids.has(id)) return true;
-            ids.add(id);
-            return false;
-          });
-          if (mayRepeat) {
-            // Only files that share metadata need their contents compared.
-            void newFiles(files, picked).then((added) => {
-              if (added.length > 0) {
-                onChange([...latestFiles.current, ...added]);
-              }
-            });
-          } else {
-            onChange([...files, ...picked]);
-          }
+          addFiles(picked);
         }}
       />
       <Tooltip label={ATTACHMENT_LIMITS} lineHeight={1.2} hasArrow>
