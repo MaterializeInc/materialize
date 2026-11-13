@@ -67,7 +67,7 @@ impl SharedBatchWriter {
             },
             shared_batches: persist_api.persist_batches.clone(),
             max_bytes,
-            max_runs: persist_api.max_runs,
+            max_runs: persist_api.sorted_writes.map(|sorted| sorted.max_runs),
         }
     }
 

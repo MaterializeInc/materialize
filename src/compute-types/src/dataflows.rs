@@ -743,10 +743,12 @@ pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
 /// one-shot dataflows, whose `as_of` is their only time.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LookupImport {
-    /// An object of the same dataflow whose rows are single-column keys.
+    /// An object of the same dataflow whose rows are keys, one column per entry
+    /// of `key_columns`.
     pub keys_from: GlobalId,
-    /// The column of the import's storage collection the keys refer to.
-    pub key_column: usize,
+    /// The columns of the import's storage collection the keys refer to, in
+    /// key order.
+    pub key_columns: Vec<usize>,
 }
 
 /// An association of a global identifier to an expression.

@@ -105,22 +105,36 @@ honoring it would change existing MVs that set it. The POC leaves user
   zero replicas, a non-key query on `t` still returns immediately, and a key
   lookup waits for the index and then sees the latest write.
 - Lookup join (`plan_lookup_join` in `materialized_index.rs`, `PendingLookup`
-  in `src/compute/src/render.rs`): when a peek dataflow joins a routed
-  materialized index at its key with one other input, the optimizer adds a
-  keys object (`Distinct` of the probe side's join key) ahead of the joining
-  object and marks the index's source import with
-  `SourceImport::lookup = { keys_from, key_column }`. Rendering withholds the
-  import's start signal until a collector operator has seen every key at the
-  `as_of` (keys are broadcast to all workers), then a part filter on
-  `persist_source` drops parts whose key-column stats hold none of the keys.
-  The join operator is the normal one: the lookup is a gated persist source
-  with a dynamic part filter, so the join stays exact on a superset of rows.
-  Dropped parts use a new `FilterResult::Skip`, which persist does not audit:
-  the pushdown audit re-checks only the MFP and panics (`panic_on_audit_failure`)
-  on parts dropped for any other reason. Limits: two-input joins, first key
-  column, probe side computed twice, applies only when the index is read once
-  in the dataflow, no cutover to a scan for wide key sets, recursive dataflows
-  fall back to an unfiltered read.
+  in `src/compute/src/render.rs`): for each routed materialized index whose
+  every read is a join input with its leading key columns pinned by another
+  input of that join, the optimizer adds a keys object (distinct union of the
+  pinned key columns from every probing input) ahead of the joining object and
+  marks the index's import with `SourceImport::lookup = { keys_from,
+  key_columns }`. Rendering withholds the import's start until a collector has
+  seen every key at the `as_of` (broadcast to all workers), then a part filter
+  on `persist_source` drops parts whose stats, column by column, hold none of
+  the keys. The join operator is the normal one, so it stays exact on a
+  superset of rows. Dropped parts use a new `FilterResult::Skip`, which persist
+  does not audit: the pushdown audit re-checks only the MFP and panics on parts
+  dropped for any other reason.
+  - Multi-way joins: each index input takes keys from whichever other input
+    pins the longest prefix of its key. Inputs that read a lookup index or a
+    let binding cannot probe, which rules out chains like `p -> t -> d` on
+    `t`'s columns; equivalence classes usually let `d` probe from `p` instead.
+  - Multi-column keys: keys carry as many leading key columns as the join pins.
+  - Probe computed once: a probe input that is a read with filters, maps and
+    projections is read again for the keys. Anything costlier is hoisted into
+    its own object read by both the join and the keys.
+  - Several reads: allowed when every read is a lookup, including reads
+    through a let binding (the optimizer CSEs repeated reads into one).
+  - Limits: no cost cutoff for key sets spread over the whole range; all reads
+    of an index must sit in one dataflow object; recursive dataflows fall back
+    to an unfiltered read.
+- Part size: `PersistConfig::blob_target_size_override` and
+  `PersistClient::with_blob_target_size_override`. The MV sink's `PersistApi`
+  hands materialized indexes a client with 1 MiB parts, which applies to the
+  batches it writes and to compactions its writer runs (compaction reads the
+  writing handle's config).
 - Durable catalog: `item_type(create_sql)` asserted `MATERIALIZED` is
   followed by `VIEW` and crashed the coordinator on the first
   `CREATE MATERIALIZED INDEX`. Mapped to `MaterializedView`.
@@ -227,3 +241,30 @@ in every case. Five runs each, first run cold.
 Spread keys touch most parts, so the lookup degrades to a scan. A real
 version needs a cost cutoff that falls back to the plain read, and smaller
 parts (or ranged reads within parts) to keep spread lookups selective.
+
+## Parity pass (default 128 MiB parts globally, materialized indexes at 1 MiB)
+
+Part layout after creation: materialized indexes 0.5 to 0.8 MB parts, all
+runs sorted; plain MVs of the same data 18 MB and 37 MB parts in unsorted
+runs.
+
+Joins from the `serving` cluster, results identical to the plain queries, 3
+runs each:
+
+| Case | Materialized index | Plain MV |
+|---|---|---|
+| A: 2-way, 5 keys | 87 to 178 ms, 16 parts | about 1.1 s, 721 parts |
+| B: 3-way, `p -> t -> d`, two indexes | about 200 ms, 25 parts | about 1.7 s |
+| C: 2-column key `(a, b)` | about 90 ms, 12 parts | about 760 ms |
+| D: aggregated probe (hoisted) | 82 to 141 ms, 16 parts | about 1.1 s |
+| E: same index read twice (let-bound) | 91 to 118 ms, 16 parts | about 1.1 s |
+
+Point lookup through the fast path: 13 to 17 ms, 5 parts.
+
+Against in-memory indexes on the same serving cluster (`t_plain (k)`,
+`d_plain (dk)`, `t2_plain (a, b)`, 4.0 s to hydrate 6.4M rows): every case
+above ran in 6 to 8 ms. So the shapes are at parity, but a warm in-memory
+index is 10 to 25 times faster per query, on local disk. Not profiled yet.
+Likely contributors: building the keys object and collector per query, the
+gated source's snapshot and listing, fetching about one part per run per key
+serially per worker, and arranging the fetched rows for the join.

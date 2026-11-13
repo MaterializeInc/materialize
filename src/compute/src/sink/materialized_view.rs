@@ -202,14 +202,10 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
 
         let read_only_rx = collection_state.read_only_rx.clone();
 
-        // NOTE(poc): sorted shards bound each batch to a handful of sorted
-        // runs. Persist rejects values below 2 (that disables write-time
-        // compaction), and 4 kept a 2M-row snapshot at 6 runs.
-        let max_runs = self.partition_by.map(|_| 4);
         let token = persist_sink(
             sink_id,
             &self.storage_metadata,
-            max_runs,
+            self.partition_by,
             ok_collection,
             err_collection,
             as_of,
@@ -246,7 +242,7 @@ pub(super) type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    max_runs: Option<usize>,
+    partition_by: Option<usize>,
     ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
     err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
@@ -260,7 +256,7 @@ where
         return materialized_view_v2::persist_sink(
             sink_id,
             target,
-            max_runs,
+            partition_by,
             ok_collection,
             err_collection,
             as_of,
@@ -283,7 +279,7 @@ where
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
-        max_runs,
+        sorted_writes: partition_by.map(|_| SortedWrites::default()),
     };
 
     let (desired, descs, sink_frontier, mint_token) = mint::render(
@@ -369,16 +365,43 @@ pub(super) struct PersistApi {
     pub(super) collection: CollectionMetadata,
     pub(super) shard_name: String,
     pub(super) purpose: String,
-    /// See [`crate::sink::shared_batch::SharedBatchWriter`].
-    pub(super) max_runs: Option<usize>,
+    /// Set for shards sorted by a key (`partition_by`), which serve point reads.
+    pub(super) sorted_writes: Option<SortedWrites>,
+}
+
+/// How the sink writes a shard that is sorted by a key and read by key.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SortedWrites {
+    /// Passed to persist's batch builders, so each batch lands as a few sorted runs. Persist
+    /// rejects values below 2, which disables write-time compaction.
+    pub(super) max_runs: usize,
+    /// Target part size for batches and for compactions this sink's writer runs. A lookup fetches
+    /// about one part per run, so this bounds the bytes it reads.
+    pub(super) blob_target_size: usize,
+}
+
+impl Default for SortedWrites {
+    fn default() -> Self {
+        // NOTE(poc): 4 kept a 2M-row snapshot at 6 runs. 1 MiB parts are a guess, unmeasured
+        // against S3 request costs.
+        Self {
+            max_runs: 4,
+            blob_target_size: 1 << 20,
+        }
+    }
 }
 
 impl PersistApi {
     pub(super) async fn open_client(&self) -> PersistClient {
-        self.persist_clients
+        let client = self
+            .persist_clients
             .open(self.collection.persist_location.clone())
             .await
-            .unwrap_or_else(|error| panic!("error opening persist client: {error}"))
+            .unwrap_or_else(|error| panic!("error opening persist client: {error}"));
+        match self.sorted_writes {
+            Some(sorted) => client.with_blob_target_size_override(sorted.blob_target_size),
+            None => client,
+        }
     }
 
     pub(super) async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {

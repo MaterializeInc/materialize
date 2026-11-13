@@ -208,6 +208,18 @@ pub struct PersistClient {
 }
 
 impl PersistClient {
+    /// Returns a client that writes parts of about `bytes` bytes, ignoring
+    /// `persist_blob_target_size`.
+    ///
+    /// Applies to batches built through this client and to compactions run by write handles it
+    /// opens, because compaction uses the writing handle's config. Shards meant for point reads
+    /// use it to keep the bytes fetched per lookup small.
+    pub fn with_blob_target_size_override(&self, bytes: usize) -> Self {
+        let mut client = self.clone();
+        client.cfg.blob_target_size_override = Some(bytes);
+        client
+    }
+
     /// Returns a new client for interfacing with persist shards made durable to
     /// the given [Blob] and [Consensus].
     ///

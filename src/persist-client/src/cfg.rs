@@ -145,6 +145,10 @@ pub struct PersistConfig {
     /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
     /// number of threads.
     pub isolated_runtime_worker_threads: usize,
+    /// Overrides `persist_blob_target_size` for batches written, and compactions run, by handles
+    /// opened from a client with this config. See
+    /// [`crate::PersistClient::with_blob_target_size_override`].
+    pub blob_target_size_override: Option<usize>,
 }
 
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
@@ -186,6 +190,7 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             isolated_runtime_worker_threads: num_cpus::get(),
+            blob_target_size_override: None,
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is

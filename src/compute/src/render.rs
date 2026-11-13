@@ -301,14 +301,20 @@ pub fn build_compute_dataflow(
                             let read_desc = read_schema
                                 .as_ref()
                                 .unwrap_or(&import.desc.storage_metadata.relation_desc);
-                            let (pending, keys_ready, part_filter) = PendingLookup::new(
-                                read_desc,
-                                import
-                                    .desc
-                                    .storage_metadata
-                                    .relation_desc
-                                    .get_name(lookup.key_column),
-                            );
+                            let key_names: Vec<_> = lookup
+                                .key_columns
+                                .iter()
+                                .map(|c| {
+                                    import
+                                        .desc
+                                        .storage_metadata
+                                        .relation_desc
+                                        .get_name(*c)
+                                        .clone()
+                                })
+                                .collect();
+                            let (pending, keys_ready, part_filter) =
+                                PendingLookup::new(read_desc, &key_names);
                             pending_lookups.insert(lookup.keys_from, pending);
                             let start = async move {
                                 import_start.await;
@@ -2324,27 +2330,41 @@ struct PendingLookup {
 
 impl PendingLookup {
     /// Returns the pending lookup, a future that resolves once its keys are known (or it is
-    /// dropped), and a part filter that keeps parts whose stats for `key_name` may contain a key.
+    /// dropped), and a part filter that keeps parts whose stats may contain some key, column by
+    /// column over `key_names`.
     fn new(
         read_desc: &mz_repr::RelationDesc,
-        key_name: &mz_repr::ColumnName,
+        key_names: &[mz_repr::ColumnName],
     ) -> (Self, oneshot::Receiver<()>, persist_source::PartFilter) {
         let keys: Rc<RefCell<Option<Vec<Row>>>> = Rc::default();
         let (ready, keys_ready) = oneshot::channel();
-        let key_column = read_desc
-            .iter_all()
-            .find(|(_, name, _)| *name == key_name)
-            .map(|(idx, _, _)| *idx);
+        // A key column the read omits can't be checked, so it matches anything.
+        let key_columns: Vec<_> = key_names
+            .iter()
+            .map(|key_name| {
+                read_desc
+                    .iter_all()
+                    .find(|(_, name, _)| *name == key_name)
+                    .map(|(idx, _, _)| *idx)
+            })
+            .collect();
         let part_filter: persist_source::PartFilter = Box::new({
             let keys = Rc::clone(&keys);
             move |stats| {
                 let keys = keys.borrow();
-                let (Some(key_column), Some(keys)) = (key_column, keys.as_ref()) else {
+                let Some(keys) = keys.as_ref() else {
                     return true;
                 };
                 let arena = RowArena::new();
-                let range = stats.col_stats(&key_column, &arena);
-                keys.iter().any(|key| range.may_contain(key.unpack_first()))
+                let ranges: Vec<_> = key_columns
+                    .iter()
+                    .map(|idx| idx.map(|idx| stats.col_stats(&idx, &arena)))
+                    .collect();
+                keys.iter().any(|key| {
+                    key.iter().zip(&ranges).all(|(datum, range)| {
+                        range.as_ref().is_none_or(|range| range.may_contain(datum))
+                    })
+                })
             }
         });
         (Self { keys, ready }, keys_ready, part_filter)
