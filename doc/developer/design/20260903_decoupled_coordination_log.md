@@ -10,13 +10,14 @@ Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish verification of the approved compute replay-history removal, then run
-current-binary metrics/proxy acceptance and the repaired upsert load-test. Return
+Finish the running repaired upsert load-test, including both formerly combined
+scenarios with unchanged workloads. Replay removal is committed and its current-
+binary metrics/proxy acceptance passed. Return
 to distinct-version compatible-upgrade acceptance after this bounded cleanup.
 Do not present same-build promotion as distinct-version or migration coverage.
 
-The replay buffer, cloning/compaction, implementation tests and two exported
-history gauges are removed in the worktree. Execution uses no history reader.
+Commit `8c09eb6c` removes the replay buffer, cloning/compaction, implementation
+tests and two exported history gauges. Execution uses no history reader.
 Independent review found no blocking issue. Cluster coverage now checks live
 collections and command processing, with existing hydration/drop assertions
 preserved. The regenerated metric catalog also removes stale entries from prior
@@ -38,18 +39,35 @@ package union triggered unnecessary dependency recompilation. Evidence:
 Source: `native-history-source-sha256.json`. A later local Rust edit only removes
 an empty comment heading from compute metrics.
 
-Rust removal and upsert fixture changes are not committed yet. The fixture now
+Upsert fixture changes are not committed yet. The fixture now
 has two separate scenarios with unchanged settings, workloads and assertions.
 The existing launcher test now traverses all five configurations. Its negative
 control reproduces the malformed tuple in memory without editing the worktree.
 Both repaired runtime scenarios still need to run.
 
-The rebuild inputs were applied after tests stopped and their full source
-manifest matched. `aj-native-history-build.service` is building sequentially. Inputs: `native-history-final-source.tar.gz`,
+The current default-dev build passed with a matching source manifest and unchanged
+Cargo.lock. Peak build memory was 28.2 GiB. Inputs: `native-history-final-source.tar.gz`,
 `native-history-runtime-source.tar.gz`, `native-history-build-source-sha256.json`,
 `native-history-build.sh` and `native_history_runtime_verify.py`. The runner supports metrics, HTTP proxy, full upsert load-test and prior smoke/
 subscription workflows. It uses `native-history-candidate/`, preserving the
-previous verified candidate. The runtime runs have not executed yet.
+previous verified candidate. Replica metrics and HTTP proxy workflows passed, with cleanup complete and no
+aggregate OOM increase. Receipts: `native-history-metrics-runtime.log`,
+`native-history-proxy-runtime.log`, `aj-native-current-f0be52f2` and
+`aj-native-current-785104f2`. Evidence is being copied locally in
+`native-history-metrics-evidence.tar.gz`. The sole post-build source difference
+is removal of one blank line, recorded in `native-history-final-format-delta.txt`.
+The full upsert run is active as `aj-native-history-upsert.service`, with the
+previous fixture caps and original workload. Log: `native-history-upsert-runtime.log`.
+Current artifacts are being copied and hash-verified locally by task 127.
+
+For the subsequent distinct-version local walkthrough, reuse
+`../lifecycle/witness.py` and the existing version-only build mechanism in
+`native-compatible-current/build-pair.py`, but refresh their stale provenance,
+paths, current catalog assertions and resource guards before execution. The
+witness uses real `bin/controllerd` launches, checks both writers around promotion,
+warmed execution, separate retirement and survivor protection. It lacks sink/CDC
+workloads, so complementary current-version coverage is still required. Do not
+run either old script unchanged or count same-build subscription coverage instead.
 
 ## Approved scope and verified outcomes
 
