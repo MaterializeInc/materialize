@@ -241,8 +241,19 @@ mod tests {
                 )
             });
             entered.wait();
-            let cancel = scope.spawn(|| lifecycle.cancel(PeekResponse::Canceled));
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            let canceling = &lifecycle;
+            let cancel = scope.spawn(move || {
+                let locked = matches!(
+                    canceling.state.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                );
+                locked_tx.send(locked).expect("issue thread alive");
+                canceling.cancel(PeekResponse::Canceled)
+            });
+            let locked = locked_rx.recv().expect("cancellation thread alive");
             release.wait();
+            assert!(locked, "issue must hold the lifecycle lock");
             assert_eq!(issue.join().expect("test thread panicked"), Ok(None));
             assert!(cancel.join().expect("test thread panicked"));
         });
