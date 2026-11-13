@@ -103,9 +103,18 @@ export const OntologyCanvas = ({
 
   const selectedPosition =
     selection?.type === "node" ? layout.nodes.get(selection.id) : undefined;
-  const selectedNode = selectedPosition
-    ? { ...selectedPosition, width: NODE_WIDTH, height: NODE_HEIGHT }
-    : null;
+  const selectedX = selectedPosition?.x;
+  const selectedY = selectedPosition?.y;
+  // NOTE: `Canvas` pans to the selected node whenever this object changes, and
+  // the page re-renders every second as freshness ticks. A new object per
+  // render would yank the camera back to the selection mid-pan.
+  const selectedNode = React.useMemo(
+    () =>
+      selectedX !== undefined && selectedY !== undefined
+        ? { x: selectedX, y: selectedY, width: NODE_WIDTH, height: NODE_HEIGHT }
+        : null,
+    [selectedX, selectedY],
+  );
 
   return (
     <Canvas
