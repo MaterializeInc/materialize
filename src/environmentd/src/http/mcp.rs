@@ -41,7 +41,7 @@ use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
     ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
-    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_UNIFIED, MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -781,6 +781,9 @@ impl From<McpRequestError> for McpError {
 enum McpEndpointType {
     Agent,
     Developer,
+    /// Serves the agent endpoint's tools and instructions until `/api/mcp`
+    /// gets its own (DEX-109, DEX-110).
+    Unified,
 }
 
 impl McpEndpointType {
@@ -790,6 +793,7 @@ impl McpEndpointType {
         match self {
             McpEndpointType::Agent => "agent",
             McpEndpointType::Developer => "developer",
+            McpEndpointType::Unified => "unified",
         }
     }
 }
@@ -846,6 +850,29 @@ pub async fn handle_mcp_developer(
         McpHeaders::from_map(&headers),
         body,
         McpEndpointType::Developer,
+        metrics,
+    )
+    .await
+    .into_response()
+}
+
+/// Unified endpoint at `/api/mcp`.
+pub async fn handle_mcp_unified(
+    headers: HeaderMap,
+    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
+    client: AuthedClient,
+    body: Bytes,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
+        return resp;
+    }
+    handle_mcp_request(
+        client,
+        parse_mcp_request(&headers, &body),
+        McpHeaders::from_map(&headers),
+        body,
+        McpEndpointType::Unified,
         metrics,
     )
     .await
@@ -991,6 +1018,7 @@ async fn handle_mcp_request(
     let enabled = match endpoint_type {
         McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
+        McpEndpointType::Unified => ENABLE_MCP_UNIFIED.get(dyncfgs),
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
@@ -1003,7 +1031,9 @@ async fn handle_mcp_request(
     // signatures unchanged since each handler invocation is already bound to a
     // single endpoint.
     let query_tool_enabled = match endpoint_type {
-        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
+        McpEndpointType::Agent | McpEndpointType::Unified => {
+            ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs)
+        }
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
     };
     // Only meaningful on the agent endpoint; the developer endpoint doesn't
@@ -1026,6 +1056,7 @@ async fn handle_mcp_request(
     let app_name = match endpoint_type {
         McpEndpointType::Agent => "mz_mcp_agents",
         McpEndpointType::Developer => "mz_mcp_developer",
+        McpEndpointType::Unified => "mz_mcp",
     };
     client
         .client
@@ -1313,7 +1344,7 @@ fn endpoint_instructions(
     read_data_product_tool_enabled: bool,
 ) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => {
+        McpEndpointType::Agent | McpEndpointType::Unified => {
             // Only reference tools that are actually exposed by tools/list.
             // Both flags off is a valid (if unusual) config where the agent
             // can only discover products, not read them — we say so instead
@@ -1449,7 +1480,7 @@ fn handle_tools_list(
     );
 
     let tools = match endpoint_type {
-        McpEndpointType::Agent => {
+        McpEndpointType::Agent | McpEndpointType::Unified => {
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
@@ -1598,7 +1629,11 @@ async fn handle_tools_call(
     // Drop-recording so metrics survive task cancellation.
     let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
 
-    let result = match (endpoint_type, params) {
+    let tool_set = match endpoint_type {
+        McpEndpointType::Unified => McpEndpointType::Agent,
+        other => other,
+    };
+    let result = match (tool_set, params) {
         (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
@@ -1652,9 +1687,9 @@ async fn handle_tools_call(
             .await
         }
         // Tool called on wrong endpoint
-        (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
+        (_, tool) => Err(McpRequestError::ToolNotFound(format!(
             "{} is not available on {} endpoint",
-            tool, endpoint
+            tool, endpoint_type
         ))),
     };
 
