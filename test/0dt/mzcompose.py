@@ -421,6 +421,10 @@ def workflow_read_only(c: Composition) -> None:
             contains: cannot write in read-only mode
             ! ALTER SOURCE postgres_source REFRESH REFERENCES;
             contains: cannot write in read-only mode
+            ! CREATE CONNECTION readonly_conn TO KAFKA (BROKER 'localhost:1', SECURITY PROTOCOL = 'PLAINTEXT');
+            contains: cannot write in read-only mode
+            ! ALTER CONNECTION kafka_conn SET (BROKER 'localhost:1');
+            contains: cannot write in read-only mode
             > SELECT 1;
             1
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
