@@ -396,6 +396,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
         .add(&crate::fetch::PART_DECODE_BATCH_ROWS)
+        .add(&crate::fetch::CONSOLIDATOR_DECODE_BATCHED)
         .add(&crate::write::COMBINE_INLINE_WRITES)
         .add(&crate::write::VALIDATE_PART_BOUNDS_ON_WRITE)
 }

@@ -3082,6 +3082,15 @@
       "dyncfg": true
     },
     {
+      "name": "persist_consolidator_decode_batched",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether the consolidator decodes parts of structured-order runs in batches of persist_part_decode_batch_rows rows instead of whole.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "persist_enable_incremental_compaction",
       "typeName": "boolean",
       "default": "on",

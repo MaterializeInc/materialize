@@ -1328,20 +1328,28 @@ mod tests {
         updates.is_sorted_by_key(|((k, v), t, _)| (k.clone(), v.clone(), *t))
     }
 
-    /// Compacts unsorted user batches, then the compacted output with another user batch, with
-    /// and without sorting user parts on write. Parts are small and hollow so that batches span
-    /// many single-part runs.
+    /// Compacts unsorted user batches, then the compacted output with another user batch, under
+    /// every combination of sorting user parts on write and decoding consolidator parts in
+    /// batches. Parts are small and hollow so that batches span many single-part runs and parts
+    /// span several decode batches.
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compact_sorted_user_parts(dyncfgs: ConfigUpdates) {
         use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, SORT_UNORDERED_PARTS};
+        use crate::fetch::{CONSOLIDATOR_DECODE_BATCHED, PART_DECODE_BATCH_ROWS};
 
         let data = unsorted_user_updates();
-        for sort_parts in [false, true] {
+        for (sort_parts, decode_batched) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let cache = new_test_client_cache(&dyncfgs);
             cache.cfg.set_config(&BLOB_TARGET_SIZE, 1000);
             cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
             cache.cfg.set_config(&SORT_UNORDERED_PARTS, sort_parts);
+            cache
+                .cfg
+                .set_config(&CONSOLIDATOR_DECODE_BATCHED, decode_batched);
+            cache.cfg.set_config(&PART_DECODE_BATCH_ROWS, Some(7));
             let (mut write, _) = cache
                 .open(PersistLocation::new_in_mem())
                 .await
@@ -1391,14 +1399,16 @@ mod tests {
             assert_eq!(
                 read_hollow_batch(&write, &first).await,
                 all_ok(first_data, 3),
-                "sort_parts={sort_parts}"
+                "sort_parts={sort_parts} decode_batched={decode_batched}"
             );
 
+            // The first output is a structured-order run, so the second compaction decodes it
+            // in batches when enabled.
             let second = compact_batches(&write, vec![first, b2], 5).await;
             assert_eq!(
                 read_hollow_batch(&write, &second).await,
                 all_ok(&data, 5),
-                "sort_parts={sort_parts}"
+                "sort_parts={sort_parts} decode_batched={decode_batched}"
             );
         }
     }
