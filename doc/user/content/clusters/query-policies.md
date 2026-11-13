@@ -1,6 +1,6 @@
 ---
 title: "Query policies"
-description: "Protect a cluster from runaway ad hoc queries by warning about or rejecting queries that build temporary dataflows or read from object storage."
+description: "Protect a cluster from running out of resources by rejecting queries that build temporary dataflows or read from object storage."
 menu:
   main:
     parent: "clusters"
