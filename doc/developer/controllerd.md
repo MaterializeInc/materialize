@@ -222,16 +222,17 @@ Inventory distinguishes this controller's `generation` from the catalog's
 `active_generation`. Promotion changes active execution authority, not SQL write
 permission for other admitted deployments.
 
-Promotion does not retire the previous deployment. To retire generation 1 through
+Promotion does not retire the previous deployment. After promoting generation 1,
+retire generation 0 through
 an active controller listening on port 6883, then stop that generation's local
 processes:
 
 ```sh
-bin/controllerd --retire-generation 1 --controller-url http://127.0.0.1:6883
+bin/controllerd --retire-generation 0 --controller-url http://127.0.0.1:6883
 ```
 
 Use the same `--controller-data-directory` as startup. The launcher sends the
-selected environment ID to `POST /api/deployments/1/retire`. Controllerd rejects a
+selected environment ID to `POST /api/deployments/0/retire`. Controllerd rejects a
 mismatched environment or an attempt to retire the active generation. A successful
 response acknowledges durable retirement, not completed process cleanup.
 
