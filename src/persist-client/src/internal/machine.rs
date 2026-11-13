@@ -302,7 +302,11 @@ where
         let (_seqno, mut schema_id, mut maintenance) = register().await;
         // `None` is a no-op that never reaches consensus, so our cached state
         // may lack a schema another process added with `compare_and_evolve_schema`.
-        if schema_id.is_none() {
+        // Refetching without a seqno hint always reads consensus, so one retry
+        // sees every schema registered before this call. A tombstone's `None`
+        // is final, because `Applier::compute_next_state_locked` rejects
+        // schema commits on tombstones.
+        if schema_id.is_none() && !self.applier.is_tombstone() {
             self.applier.fetch_and_update_state(None).await;
             (_, schema_id, maintenance) = register().await;
         }

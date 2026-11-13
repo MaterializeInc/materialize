@@ -818,28 +818,31 @@ mod tests {
         assert_eq!(res, CaESchema::Ok(SchemaId(1)));
     }
 
+    /// A client with its own metrics and state cache and without PubSub, like
+    /// a separate process.
+    fn new_process(blob: &Arc<dyn Blob>, consensus: &Arc<dyn Consensus>) -> PersistClient {
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        PersistClient::new(
+            cfg,
+            Arc::clone(blob),
+            Arc::clone(consensus),
+            metrics,
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            Arc::new(StateCache::new_no_metrics()),
+            Arc::new(NoopPubSubSender),
+        )
+        .expect("client construction failed")
+    }
+
     /// Regression test for PER-130.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn append_with_schema_evolved_by_other_process() {
-        let cfg = PersistConfig::new_for_tests();
-        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
-        // Separate state caches without PubSub, like two processes.
-        let new_process = || {
-            PersistClient::new(
-                cfg.clone(),
-                Arc::clone(&blob),
-                Arc::clone(&consensus),
-                Arc::clone(&metrics),
-                Arc::new(IsolatedRuntime::new_for_tests()),
-                Arc::new(StateCache::new_no_metrics()),
-                Arc::new(NoopPubSubSender),
-            )
-            .expect("client construction failed")
-        };
-        let (evolver, appender) = (new_process(), new_process());
+        let evolver = new_process(&blob, &consensus);
+        let appender = new_process(&blob, &consensus);
         let d = Diagnostics::for_tests();
         let shard_id = ShardId::new();
         let schema1 = StringsSchema(vec![false, true]);
@@ -889,6 +892,52 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(write1.schema_id(), Some(SchemaId(1)));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn register_schema_on_tombstone_skips_refetch() {
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        // The registerer's metrics count only its own state fetches.
+        let finalizer = new_process(&blob, &consensus);
+        let registerer = new_process(&blob, &consensus);
+        let d = Diagnostics::for_tests();
+        let shard_id = ShardId::new();
+
+        let (mut write, mut read) = finalizer
+            .open::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(StringsSchema(vec![false])),
+                Arc::new(UnitSchema),
+                d.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+        read.downgrade_since(&Antichain::new()).await;
+        write.advance_upper(&Antichain::new()).await;
+        write.expire().await;
+        read.expire().await;
+
+        let machine = registerer
+            .make_machine::<Strings, (), u64, i64>(shard_id, d)
+            .await
+            .unwrap();
+        assert!(machine.applier.is_tombstone());
+        let state = &registerer.metrics.state;
+        let fetches = || {
+            state.update_state_noop_path.get()
+                + state.update_state_empty_path.get()
+                + state.update_state_fast_path.get()
+                + state.update_state_slow_path.get()
+        };
+        let before = fetches();
+        let (schema_id, _) = machine
+            .register_schema(&StringsSchema(vec![false, true]), &UnitSchema)
+            .await;
+        assert_eq!(schema_id, None);
+        assert_eq!(fetches(), before, "tombstone should skip the refetch");
     }
 
     fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {
