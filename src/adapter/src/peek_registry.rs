@@ -67,28 +67,27 @@ impl PeekRegistry {
         connection
     }
 
-    pub(crate) fn close_connection(&self, id: &ConnectionId) {
+    /// Cancels the connection's peeks and rejects its later registrations.
+    /// Returns the number of peeks canceled.
+    pub(crate) fn close_connection(&self, id: &ConnectionId) -> usize {
         let connection = self
             .connections
             .lock()
             .expect("peek registry lock poisoned")
             .remove(id)
             .and_then(|connection| connection.upgrade());
-        if let Some(connection) = connection {
-            connection.close();
-        }
+        connection.map_or(0, |connection| connection.cancel_all(true))
     }
 
-    pub(crate) fn cancel_connection(&self, id: &ConnectionId) {
+    /// Cancels the connection's peeks. Returns the number of peeks canceled.
+    pub(crate) fn cancel_connection(&self, id: &ConnectionId) -> usize {
         let connection = self
             .connections
             .lock()
             .expect("peek registry lock poisoned")
             .get(id)
             .and_then(Weak::upgrade);
-        if let Some(connection) = connection {
-            connection.cancel();
-        }
+        connection.map_or(0, |connection| connection.cancel_all(false))
     }
 
     /// Catalog invalidation must be published before taking this snapshot.
@@ -154,11 +153,7 @@ impl ConnectionPeeks {
         self.cancel_all(false);
     }
 
-    fn close(&self) {
-        self.cancel_all(true);
-    }
-
-    fn cancel_all(&self, close: bool) {
+    fn cancel_all(&self, close: bool) -> usize {
         let peeks = {
             let mut state = self.state.lock().expect("connection peek lock poisoned");
             state.closed |= close;
@@ -168,11 +163,13 @@ impl ConnectionPeeks {
                 .expect("peek cancellation epoch overflow");
             std::mem::take(&mut state.peeks)
         };
+        let canceled = peeks.len();
         for peek in peeks.into_values() {
             if let Some(lifecycle) = peek.lifecycle.upgrade() {
                 lifecycle.cancel(PeekResponse::Canceled);
             }
         }
+        canceled
     }
 
     fn invalidate(
@@ -291,7 +288,7 @@ mod tests {
     #[mz_ore::test]
     fn closed_connection_never_registers_again() {
         let connection = ConnectionPeeks::default();
-        connection.close();
+        connection.cancel_all(true);
         let lifecycle = Arc::new(PeekLifecycle::new(|_| panic!("unregistered peek retired")));
         assert_eq!(
             connection.register(

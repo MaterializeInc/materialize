@@ -718,8 +718,10 @@ impl Coordinator {
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
-                self.handle_peek_notification(uuid, response, otel_ctx);
+            ControllerResponse::PeekNotification(uuid, _, _) => {
+                // The adapter issues every peek with a lifecycle, which
+                // receives the notification in place of the coordinator.
+                soft_panic_or_log!("unexpected notification for peek {uuid}");
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =

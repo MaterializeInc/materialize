@@ -28,6 +28,7 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::memory::objects::{
     CatalogItem, DataSourceDesc, Role, Source, Table, TableDataSource,
 };
+use mz_ore::cast::CastFrom;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
@@ -1974,7 +1975,10 @@ impl Coordinator {
     /// interactive work for the named `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
-        self.peek_registry.cancel_connection(&conn_id);
+        let canceled_peeks = self.peek_registry.cancel_connection(&conn_id);
+        self.metrics
+            .canceled_peeks
+            .inc_by(u64::cast_from(canceled_peeks));
         if let Some(conn) = self.active_conns.get(&conn_id) {
             conn.frontend_cancel_tx.send_replace(());
         }
@@ -2067,7 +2071,6 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
         }
 
-        self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
         let retire_notify = self.cancel_compute_sinks_for_conn(&conn_id).await;
         // SQL cancellation has no success response to delay. Each subscribe
@@ -2094,7 +2097,10 @@ impl Coordinator {
             self.active_conns.contains_key(&conn_id),
             "unknown connection: {conn_id:?}"
         );
-        self.peek_registry.close_connection(&conn_id);
+        let canceled_peeks = self.peek_registry.close_connection(&conn_id);
+        self.metrics
+            .canceled_peeks
+            .inc_by(u64::cast_from(canceled_peeks));
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
@@ -2116,7 +2122,6 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.cancel_pending_peeks(conn.conn_id());
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
