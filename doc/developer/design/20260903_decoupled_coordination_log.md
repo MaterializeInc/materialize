@@ -9,10 +9,19 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Prepare a current default-development runtime candidate and verify native
+A current default-development runtime candidate is building on scratch
+(`aj-native-current-build`, one Cargo job, 32-GiB/no-swap/4-CPU job cap). Then verify native
 lifecycle/progress across real processes, including split/unified topology and
 query churn. Existing mounted binaries predate the latest ownership removals.
-Keep heavy work sequential on capped scratch. Pending deployment/upgrade scope
+Keep heavy work sequential on capped scratch.
+Build evidence: `native-driver-scratch/native-current-build.log`, runner
+`native-current-build.sh` and `native-current-build-source-sha256.json`. Outputs
+will be `native-current-candidate/`. The inspected `native_current_runtime_verify.py` runner is staged for unchanged
+profiling and full multi-process smoke workflows, with explicit split/unified
+topology and capped containers. No services have started. The current introspection audit found native passive relays, not an additional
+legacy frontier fallback. Their direct-owner opportunities and SQL/consumer
+dependencies are recorded in the follow-up inventory, not added to this cleanup.
+Detailed evidence: `native-introspection-current-audit.md`. Pending deployment/upgrade scope
 decisions below remain explicit, not implicit test deferrals.
 
 Storage-local restart, sink reconstruction and async drop alternatives are

@@ -302,6 +302,13 @@ changes. This is not an all-shard cleanup sweep.
 
 ## Direct-owner opportunities
 
+These remaining relays consume native observations or committed catalog state.
+They are not alternate lifecycle owners. The public frontier views have no
+legacy fallback. Remove each relay together with its dependent SQL input only
+when a replacement preserves the complete observation contract. Idle upper
+advancement does not repair stale observations, but removing it while retaining
+SQL dependencies can strand reads.
+
 ### Remaining unified compute introspection
 
 `src/adapter/src/coord/introspection.rs` subscribes to replicas and relays batches
@@ -313,10 +320,17 @@ identities, with separate public reductions. Preserve predecessor suppression,
 unknown-after-replacement behavior, cumulative/history contracts and freshness.
 Frontier reduction rules do not automatically apply to other metrics.
 
+Hydration also feeds arrangement-history sampling in
+`src/adapter/src/coord/message_handler.rs`. That consumer obtains freshness from
+the introspection subscription and reads `mz_compute_hydration_times_raw`.
+Moving only the public view would leave this dependency behind. Native frontier
+observations do not contain hydration durations or operator-level status.
+
 ### Storage statistics and webhook contributions
 
 `src/storage-controller/src/lib.rs` receives replica statistics, and
-`src/storage-controller/src/statistics.rs` periodically publishes controller maps.
+`src/storage-controller/src/collection_mgmt.rs` starts scrapers that publish
+controller maps.
 Replica-produced statistics are candidates for direct execution publication.
 Webhook contributions remain adapter-owned and need aggregation, not relocation
 to replicas or a designated adapter.
@@ -324,6 +338,22 @@ to replicas or a designated adapter.
 Preserve cumulative counters across restart and retirement, inactive-stat
 retention and webhook accounting. The relay boundary is clear. The smallest
 complete conversion still needs investigation.
+
+### Maintained physical dependencies and MV refresh state
+
+`src/adapter/src/coord/introspection/frontiers.rs` publishes selected physical
+imports and refresh observations through differential introspection collections.
+The maintained dependency branch of `mz_compute_dependencies` still reads
+`mz_maintained_compute_dependencies`. Materialization dependency and lag views
+consume it. Subscription physical imports are a separate, valid adapter-owned
+branch and must survive any change.
+
+A replacement must expose actual selected imports, not substitute logical object
+dependencies. Establish whether committed plan metadata supports a projection
+before choosing a mechanism. MV refresh observations combine committed schedules
+and initial as-ofs with storage write progress. Preserve unknown progress and
+completed schedules. Remove both old sources and their adapter-local publication
+state only with complete replacement inputs, not by stopping the frontier timer.
 
 ### Catalog-derived projections and lifecycle history
 
