@@ -553,6 +553,58 @@ def test_controller_stop_rejects_stale_and_invalid_identities(tmp_path, generati
         process.wait(timeout=10)
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux zombie process semantics")
+def test_controller_stop_accepts_exited_non_child(monkeypatch):
+    # The owner deliberately waits to reap its child until after --stop returns.
+    # A stopped process must not require cooperation from that unrelated owner.
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys; "
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            "print(p.pid, flush=True); sys.stdin.readline(); p.wait()",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    child = None
+    try:
+        assert parent.stdout is not None
+        child = psutil.Process(int(parent.stdout.readline()))
+        wait_procs = psutil.wait_procs
+        monkeypatch.setattr(
+            psutil,
+            "wait_procs",
+            lambda processes, timeout: wait_procs(processes, timeout=0.1),
+        )
+        run._terminate_controller_processes([child])
+        assert child.status() == psutil.STATUS_ZOMBIE
+        run._terminate_controller_processes([child])
+        assert parent.poll() is None
+    finally:
+        if child is not None:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        parent.communicate("reap\n", timeout=10)
+
+
+def test_controller_stop_rejects_process_that_remains_live(monkeypatch):
+    process = MagicMock(spec=psutil.Process)
+    process.is_running.return_value = True
+    process.status.return_value = psutil.STATUS_RUNNING
+    monkeypatch.setattr(
+        psutil, "wait_procs", lambda processes, timeout: ([], processes)
+    )
+    with pytest.raises(UIError, match="some environment processes did not stop"):
+        run._terminate_controller_processes([process])
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+
+
 def test_controller_metadata_location_survives_shell_changes(tmp_path):
     data = tmp_path / "environment"
     data.mkdir()

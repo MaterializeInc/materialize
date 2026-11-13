@@ -758,6 +758,15 @@ def _command_option(command: list[str], name: str) -> str | None:
 
 
 def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
+    def live(process: psutil.Process) -> bool:
+        # A non-child can remain a zombie until its owner reaps it. It has
+        # already stopped and cannot respond to another signal.
+        try:
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+
+    processes = [process for process in processes if live(process)]
     # psutil retains creation times and checks identity again before signaling.
     for process in processes:
         try:
@@ -765,13 +774,14 @@ def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
         except psutil.NoSuchProcess:
             pass
     _, alive = psutil.wait_procs(processes, timeout=10)
+    alive = [process for process in alive if live(process)]
     for process in alive:
         try:
             process.kill()
         except psutil.NoSuchProcess:
             pass
     _, alive = psutil.wait_procs(alive, timeout=10)
-    if alive:
+    if any(live(process) for process in alive):
         raise UIError("some environment processes did not stop")
 
 
