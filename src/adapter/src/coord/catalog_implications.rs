@@ -39,7 +39,6 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_controller::clusters::{ClusterRole, ReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -66,7 +65,7 @@ use crate::coord::catalog_implications::parsed_state_updates::{
 };
 use crate::coord::peek::DroppedDependency;
 use crate::coord::timeline::TimelineState;
-use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
+use crate::statement_logging::StatementLoggingId;
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
 pub mod parsed_state_updates;
@@ -260,7 +259,6 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut cluster_replicas_to_create = vec![];
         let mut active_compute_sinks_to_drop = BTreeMap::new();
-        let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
         // Maps for storing names of dropped objects for error messages.
@@ -914,26 +912,6 @@ impl Coordinator {
         // Clean up any pending peeks that rely on dropped relations or clusters.
         self.peek_registry
             .invalidate(&dropped_item_names, &dropped_cluster_names);
-        for (uuid, pending_peek) in &self.pending_peeks {
-            if let Some(id) = pending_peek
-                .depends_on
-                .iter()
-                .find(|id| readable_collections_to_drop.contains(id))
-            {
-                let name = dropped_item_names
-                    .get(id)
-                    .cloned()
-                    .expect("missing relation name");
-                peeks_to_drop.push((DroppedDependency::Relation { name }, uuid.clone()));
-            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
-                let name = dropped_cluster_names
-                    .get(&pending_peek.cluster_id)
-                    .cloned()
-                    .expect("missing cluster name");
-                peeks_to_drop.push((DroppedDependency::Cluster { name }, uuid.clone()));
-            }
-        }
-
         // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
         for (conn_id, pending_copy) in &self.active_copies {
             let dropping_table = tables_to_drop
@@ -1037,24 +1015,6 @@ impl Coordinator {
                     .await;
                 if let Some(ctx) = ctx {
                     ctx.delay_response_until(retire_notify);
-                }
-            }
-
-            if !peeks_to_drop.is_empty() {
-                for (dep, uuid) in peeks_to_drop {
-                    if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        let cancel_reason = PeekResponse::Error(PeekError::unstructured(
-                            dep.query_terminated_error(),
-                        ));
-                        self.controller
-                            .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
-                            .unwrap_or_terminate("unable to cancel peek");
-                        self.retire_execution(
-                            StatementEndedExecutionReason::Canceled,
-                            pending_peek.ctx_extra.defuse(),
-                        );
-                    }
                 }
             }
 
