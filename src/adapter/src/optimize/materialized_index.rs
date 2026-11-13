@@ -291,7 +291,7 @@ fn plan_lookup(
                 &offsets,
                 lookup_input,
                 route.desc.key.len(),
-                &inputs,
+                inputs,
                 &lookups,
             ) else {
                 continue;

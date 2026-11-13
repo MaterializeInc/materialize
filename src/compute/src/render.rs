@@ -2377,7 +2377,7 @@ impl PendingLookup {
                     .map(|idx| idx.map(|idx| stats.col_stats(&idx, &arena)))
                     .collect();
                 keys.iter().any(|key| {
-                    key.iter().zip(&ranges).all(|(datum, range)| {
+                    key.iter().zip_eq(&ranges).all(|(datum, range)| {
                         range.as_ref().is_none_or(|range| range.may_contain(datum))
                     })
                 })

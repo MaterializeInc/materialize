@@ -1257,7 +1257,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     /// that actually produces error rows. See database-issues#9656.
     ///
     /// Which expressions a row reaches is decided by
-    /// [`Self::mfp_expressions_may_fail`]. Counting every expression instead
+    /// `ColumnSpecs::mfp_expressions_may_fail`. Counting every expression instead
     /// keeps every part whose projection calls a fallible function such as
     /// `char_length`, even when the predicates rule out all of its rows.
     fn mfp_filter<X: Interpretable + OptimizableExpr>(
