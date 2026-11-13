@@ -101,8 +101,8 @@ pub enum InternalStorageCommand {
 
     /// Suspend and restart the dataflow identified by the `GlobalId`.
     SuspendAndRestart {
-        /// Native execution that observed the failure. None in controller mode.
-        execution: Option<u64>,
+        /// Native execution that observed the failure.
+        execution: u64,
         /// The id of the dataflow that should be restarted.
         id: GlobalId,
         /// The reason for the restart request.
@@ -111,7 +111,7 @@ pub enum InternalStorageCommand {
     /// Render an ingestion dataflow at the given resumption frontier.
     CreateIngestionDataflow {
         /// Native admission sequence, retained across async startup.
-        execution: Option<u64>,
+        execution: u64,
         /// ID of the ingestion/sourve.
         id: GlobalId,
         /// The description of the ingestion/source.
@@ -128,16 +128,10 @@ pub enum InternalStorageCommand {
     },
     /// Render a sink dataflow.
     RunSinkDataflow(
-        Option<u64>,
+        u64,
         GlobalId,
         StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     ),
-    /// Drop all state and operators for a dataflow. This is a vec because some
-    /// dataflows have their state spread over multiple IDs (i.e. sources that
-    /// spawn subsources); this means that actions taken in response to this
-    /// command should be permissive about missing state.
-    DropDataflow(Vec<GlobalId>),
-
     /// Update the configuration for rendering dataflows.
     UpdateConfiguration {
         /// The new configuration parameters.

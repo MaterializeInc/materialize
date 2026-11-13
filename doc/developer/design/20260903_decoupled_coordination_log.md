@@ -9,66 +9,45 @@ load separately. Do not change Persist or the 60s publication default.
 
 ## Next concrete action
 
-Remove the remaining storage-local restart, sink reconstruction and async drop
-alternatives next. The focused audit has exact callers, invariants and fixture
-migrations: `native-storage-restart-drop-audit.md`. Require admitted execution
-identities on maintained commands. Preserve two-phase construction, query
-oneshots, ingestion recovery and optional compaction-bound format compatibility.
+Prepare a current default-development runtime candidate and verify native
+lifecycle/progress across real processes, including split/unified topology and
+query churn. Existing mounted binaries predate the latest ownership removals.
+Keep heavy work sequential on capped scratch. Pending deployment/upgrade scope
+decisions below remain explicit, not implicit test deferrals.
 
-Storage transport lifecycle/replay and query-only role-client conversion are
-verified together with the committed native fixtures (`0679833f`). Final
-all-target checks passed without warnings. Targeted tests passed for query
-isolation, native attempt/restart fencing, real-loop process lifetime, shared
-ordering, role admission and partition aggregation. The corrected native-runtime
-filter executed its tests. Review found no blocking production issue. Its test
-finding is fixed: a receive error ends the client's lifetime.
+Storage-local restart, sink reconstruction and async drop alternatives are
+removed. Maintained commands require execution identities. Ingestion recovery,
+replacement fencing, query isolation, lifetime and shared-ordering tests pass.
+Independent review found no concrete issue. Catalog-backed sink tests initially
+overflowed the default test stack, reproduced exactly, then all passed with the
+repository's existing 8-MiB test-stack setting. Production stacks and memory caps
+are unchanged. Final all-target checks pass without warnings after import-only
+cleanup. These are targeted outcomes, not full native-only acceptance.
 
-Exact evidence: `native-driver-scratch/native-storage-final-check.log`,
-`native-storage-final-check.sh` and `native-storage-final-source-sha256.json`.
-The default-development run peaked at 27 GiB with no swap within scratch caps.
-These are targeted checks, not rebuilt-image CI or full native-only acceptance.
-Scratch SSO expired on the post-run resource check. The completed run log is
-local, but current worker resource state and cleanup need renewed access.
+Evidence under `native-driver-scratch/`: `native-storage-restart-check.log`,
+`native-storage-restart-source-sha256.json`, `native-sink-reproduce.log`,
+`native-sink-standard-stack.log`, `native-storage-restart-final-check.log` and
+`native-storage-restart-final-source-sha256.json`. Audit:
+`native-storage-restart-drop-audit.md`.
 
-Compute lifecycle removal is committed as `b3a88e96`. Public constructors are
-native-only, and compute replay, lifecycle routing, trace padding and unused
-reconciliation counters are removed. Exact-source all-target and targeted runtime
-checks pass without warnings. Query multiplexing, cancellation, shared ordering,
-delayed endpoints and peek fairness remain. Evidence:
-`native-driver-scratch/native-compute-final-check.log` and its source hashes.
-This is targeted Rust coverage, not broad CI or rebuilt-image lifecycle acceptance.
-See `native-ingress-current-audit.md` for remaining boundaries.
+Cluster profiling now declares native replica inventory and retains its launch
+override. Managed reconfiguration no longer starts an unused external process
+(`7231bb96`). Launcher boundary tests and Black/Ruff pass. AST comparison confirms
+all profiling requests/assertions and managed reconfiguration assertions are
+unchanged. Actual profiling HTTP acceptance on rebuilt binaries is not verified.
 
-The mandatory startup contract is committed and verified by all-target checks,
-executed parser/reconciliation tests and independent review. Evidence:
-`native-driver-scratch/native-ingress-check.log`, `native-ingress-tests.log` and
-`native-ingress-source-sha256.json`. The unoptimized test build reached its
-32-GiB job cap with no new OOMs or swap. Use one Cargo job for heavy builds.
-The limits launchers now declare inventory before starting every process and
-refresh IDs after catalog resets. Generator definitions and counts are unchanged.
-Unit checks cover ordering, missing inventory, nonleader context and fresh IDs.
-Independent review found no correctness issues. The actual helper passed the
-original Tables workload and replica-targeted queries across its seven-process
-layout on capped scratch. This does not cover the full limits suite,
-authentication setup or rebuilt-image CI. Evidence:
-`native-driver-scratch/limits-launcher-evidence/aj-native-cluster-faf2e302/`.
+Recent completed removals cover mandatory native startup (`c27eabf8`), compute
+transport lifecycle (`b3a88e96`), and storage lifecycle/query-only role clients
+(`f6ad2178`, fixtures `0679833f`). Targeted all-target and native runtime checks
+pass. Exact logs and source manifests live under `native-driver-scratch/` with
+prefixes `native-ingress-`, `native-compute-final-` and `native-storage-final-`.
+These are not rebuilt-image CI or full native-only acceptance.
 
-Platform launch migration also passes targeted actual indexed read/write actions
-across external replica restart, container restart and managed-replica kills.
-Historical launches and the unsupported-upgrade guard remain unchanged. This is
-not full platform-scenario acceptance. Evidence:
-`native-driver-scratch/platform-action-evidence/aj-native-cluster-dfe8ab86/`.
-
-The upsert load-test launcher migration passes its boundary test and independent
-review. The unchanged full input, initial ingestion and reachable rehydration
-scenarios passed on scratch. The workflow then failed at the pre-existing
-four-element scenario tuple. Approval to split it remains pending. Do not call
-this full-workflow acceptance. Source, original SQL payload, unchanged OOM
-counters and teardown receipts are preserved in
-`native-driver-scratch/upsert-load-evidence/aj-native-cluster-f8933d08/`.
-See `native-external-launcher-audit.md`, `native-replica-execution-boundary.md`
-and `final-preflight-boundary-research.md` for the remaining boundaries. The current
-production-ingress caller audit is `native-ingress-current-audit.md`.
+Limits, platform restart actions and upsert load-test launchers now establish
+native inventory before process startup. Targeted runtime evidence is under
+`native-driver-scratch/{limits-launcher-evidence,platform-action-evidence,upsert-load-evidence}/`.
+The full upsert load-test remains incomplete because of its malformed scenario
+tuple. Current remaining harness inventory: `native-remaining-launchers-current.md`.
 
 Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
 expiry recorded in `native-driver-scratch/worker.json`. Connect through its
@@ -139,11 +118,17 @@ reproduces the old overflow. These are local outcomes, not broad CI acceptance.
   guards or change them into ordinary promotion tests to claim preserved coverage.
   Evidence and native continuity assertion options:
   `native-builtin-migration-assertions.md`. Approval remains pending.
-- Catalog-free production replica ingress remains. The programmable native driver
-  replacement is verified. External launchers still need native context and
-  refreshed IDs on replica recreation. Preserve historical-image-only paths.
+- Catalog-free production ingress and the two remaining cluster launches are
+  repaired. Current-build cloudtest, operator and Terraform deployment harnesses
+  still target monolithic environmentd. Asked whether to defer these native
+  deployment families explicitly for M3. Do not disable them without approval.
+  Current inventory: `native-remaining-launchers-current.md`. Preserve
+  historical-image-only paths.
   The dormant final-preflight hook also needs its boundary decision. See
   `native-external-launcher-audit.md` and `final-preflight-boundary-research.md`.
+- The manual upsert load-test has a four-element tuple unpacked as two values.
+  Approval to split it into the intended two scenarios remains pending. Native
+  launch, original input and reachable rehydration passed, not the full workflow.
 - Forced-migration cases and some platform/stress workflows remain unconverted.
   Preserve source/sink workloads, predecessors and compatible-image coverage.
   Pre-native-to-native upgrades are unsupported, not reset or converted.
@@ -197,7 +182,8 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
   and `../logical-component-load/` are the performance baseline, not a claim about
   cleanup's performance impact.
 
-All completed runtime fixtures are removed. The owned scratch worker is idle. Obsolete 26.47 demo binaries were reclaimed,
+All completed runtime fixtures are removed. See the current action for active
+scratch validation. Obsolete 26.47 demo binaries were reclaimed,
 with their manifests and evidence retained. Verify the earlier baseline artifact locations before reuse. The identity-fixed production candidate is preserved
 locally with matching source and binary manifests. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB
 available-memory reserves, and use one low-priority Cargo job. Preserve baseline

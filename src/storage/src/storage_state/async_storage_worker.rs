@@ -28,7 +28,6 @@ use mz_repr::{GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::RunIngestionCommand;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
@@ -55,18 +54,11 @@ pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
 pub enum AsyncStorageWorkerCommand<T> {
     /// Calculate a recent resumption frontier for the ingestion.
     UpdateIngestionFrontiers(
-        Option<u64>,
+        u64,
         GlobalId,
         IngestionDescription<CollectionMetadata>,
         Option<Antichain<T>>,
     ),
-
-    /// Calculate a recent resumption frontier for the Sink.
-    UpdateSinkFrontiers(GlobalId, StorageSinkDesc<CollectionMetadata, T>),
-
-    /// This command is used to properly order create and drop of dataflows.
-    /// Currently, this is a no-op in AsyncStorageWorker.
-    ForwardDropDataflow(GlobalId),
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -75,7 +67,7 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
     /// An `IngestionDescription` with recent as-of and resume upper frontiers.
     IngestionFrontiersUpdated {
         /// Native admission sequence.
-        execution: Option<u64>,
+        execution: u64,
         /// ID of the ingestion/source.
         id: GlobalId,
         /// The description of the ingestion/source.
@@ -90,16 +82,6 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         /// have already been durably ingested.
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
-    /// A `StorageSinkDesc` with recent as-of frontier.
-    ExportFrontiersUpdated {
-        /// ID of the sink.
-        id: GlobalId,
-        /// The updated description of the sink.
-        description: StorageSinkDesc<CollectionMetadata, T>,
-    },
-
-    /// Indicates data flow can be dropped.
-    DropDataflow(GlobalId),
 }
 
 async fn reclock_resume_uppers<C, IntoTime>(
@@ -402,58 +384,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             break;
                         }
                     }
-                    AsyncStorageWorkerCommand::UpdateSinkFrontiers(id, mut description) => {
-                        let metadata = description.to_storage_metadata.clone();
-                        let client = persist_clients
-                            .open(metadata.persist_location.clone())
-                            .await
-                            .expect("error creating persist client");
-
-                        let mut write_handle = client
-                            .open_writer::<SourceData, (), T, StorageDiff>(
-                                metadata.data_shard,
-                                Arc::new(metadata.relation_desc),
-                                Arc::new(UnitSchema),
-                                Diagnostics {
-                                    shard_name: id.to_string(),
-                                    handle_purpose: format!("resumption data {}", id),
-                                },
-                            )
-                            .await
-                            .unwrap();
-                        // Choose an as-of frontier for this execution of the sink. If the write
-                        // frontier of the sink is strictly larger than its read hold, it must have
-                        // at least written out its snapshot, and we can skip reading it; otherwise
-                        // assume we may have to replay from the beginning.
-                        let upper = write_handle.fetch_recent_upper().await;
-                        let mut read_hold = Antichain::from_iter(
-                            upper
-                                .iter()
-                                .map(|t| t.step_back().unwrap_or_else(T::minimum)),
-                        );
-                        read_hold.join_assign(&description.as_of);
-                        description.with_snapshot = description.with_snapshot
-                            && !PartialOrder::less_than(&description.as_of, upper);
-                        description.as_of = read_hold;
-                        let res =
-                            response_tx.send(AsyncStorageWorkerResponse::ExportFrontiersUpdated {
-                                id,
-                                description,
-                            });
-
-                        if let Err(_err) = res {
-                            // Receiver must have hung up.
-                            break;
-                        }
-                    }
-                    AsyncStorageWorkerCommand::ForwardDropDataflow(id) => {
-                        if let Err(_) =
-                            response_tx.send(AsyncStorageWorkerResponse::DropDataflow(id))
-                        {
-                            // Receiver hang up
-                            break;
-                        }
-                    }
                 }
             }
             tracing::trace!("shutting down async storage worker task");
@@ -465,21 +395,9 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
         }
     }
 
-    /// Calculates a readable ingestion as-of respecting the command's remap permission,
-    /// and recent resumption frontiers for its exports.
-    pub fn update_ingestion_frontiers(&self, ingestion: RunIngestionCommand)
-    where
-        T: From<mz_repr::Timestamp>,
-    {
-        self.update_ingestion_frontiers_for(ingestion, None);
-    }
-
     /// Calculates frontiers without losing the native admission identity.
-    pub fn update_ingestion_frontiers_for(
-        &self,
-        ingestion: RunIngestionCommand,
-        execution: Option<u64>,
-    ) where
+    pub fn update_ingestion_frontiers_for(&self, ingestion: RunIngestionCommand, execution: u64)
+    where
         T: From<mz_repr::Timestamp>,
     {
         let RunIngestionCommand {
@@ -495,22 +413,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
             description,
             remap_compaction_bound,
         ))
-    }
-
-    /// Updates the frontiers associated with the provided `StorageSinkDesc` to recent values.
-    /// Currently this will calculate a fresh as-of for the ingestion.
-    pub fn update_sink_frontiers(
-        &self,
-        id: GlobalId,
-        sink: StorageSinkDesc<CollectionMetadata, T>,
-    ) {
-        self.send(AsyncStorageWorkerCommand::UpdateSinkFrontiers(id, sink))
-    }
-
-    /// Enqueue a drop dataflow in the async storage worker channel to ensure proper
-    /// ordering of creating and dropping data flows.
-    pub fn drop_dataflow(&self, id: GlobalId) {
-        self.send(AsyncStorageWorkerCommand::ForwardDropDataflow(id))
     }
 
     fn send(&self, cmd: AsyncStorageWorkerCommand<T>) {
@@ -689,13 +591,19 @@ mod tests {
                 150,
             ),
             (
-                "legacy new export",
+                "new export without compaction bound",
                 None,
                 vec![0, 151],
                 ordinary.clone(),
                 10,
             ),
-            ("legacy restart", None, vec![151, 201], ordinary, 150),
+            (
+                "restart without compaction bound",
+                None,
+                vec![151, 201],
+                ordinary,
+                150,
+            ),
             (
                 "CDCv2 full replay",
                 Some(100),
@@ -745,20 +653,23 @@ mod tests {
                     },
                 );
             }
-            worker.update_ingestion_frontiers(RunIngestionCommand {
-                id: GlobalId::User(1),
-                description: IngestionDescription {
-                    desc: SourceDesc {
-                        connection: GenericSourceConnection::LoadGenerator(connection.clone()),
-                        timestamp_interval: Duration::from_secs(1),
+            worker.update_ingestion_frontiers_for(
+                RunIngestionCommand {
+                    id: GlobalId::User(1),
+                    description: IngestionDescription {
+                        desc: SourceDesc {
+                            connection: GenericSourceConnection::LoadGenerator(connection.clone()),
+                            timestamp_interval: Duration::from_secs(1),
+                        },
+                        source_exports,
+                        instance_id: StorageInstanceId::system(0).unwrap(),
+                        remap_collection_id: GlobalId::User(10),
+                        remap_metadata: remap_metadata.clone(),
                     },
-                    source_exports,
-                    instance_id: StorageInstanceId::system(0).unwrap(),
-                    remap_collection_id: GlobalId::User(10),
-                    remap_metadata: remap_metadata.clone(),
+                    remap_compaction_bound: permission.map(frontier),
                 },
-                remap_compaction_bound: permission.map(frontier),
-            });
+                42,
+            );
             let response = tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
                     match worker.try_recv() {
@@ -773,14 +684,13 @@ mod tests {
             .await
             .expect(name);
             let AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                execution,
                 as_of,
                 resume_uppers,
                 source_resume_uppers,
                 ..
-            } = response
-            else {
-                panic!("unexpected response: {response:?}")
-            };
+            } = response;
+            assert_eq!(execution, 42);
             assert_eq!(as_of, frontier(expected_as_of), "{name}");
             for (index, upper) in uppers.into_iter().enumerate() {
                 let id = GlobalId::User(u64::try_from(index).unwrap() + 1);

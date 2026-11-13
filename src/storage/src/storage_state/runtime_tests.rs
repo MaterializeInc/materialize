@@ -440,3 +440,125 @@ fn native_drop_does_not_complete_pending_startup() {
         }
     });
 }
+
+#[mz_ore::test]
+fn native_replacement_fences_pending_startup() {
+    use crate::replica::ReplicaCommand::Storage;
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    timely::execute_directly(|timely| {
+        let (_clients, clients) = mpsc::unbounded_channel();
+        let mut worker = super::query_tests::worker(timely, clients);
+        let (commands, mut responses) = worker.enable_replica();
+        let id = GlobalId::User(401);
+        let remap = GlobalId::User(402);
+        let run = ingestion(id, remap);
+        commands
+            .send(Storage(0, StorageCommand::AllowWrites))
+            .unwrap();
+        commands.send(Storage(1, run.clone())).unwrap();
+
+        // Hold A's real Persist result before it enters the rendering sequencer.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let old_startup = loop {
+            step(&mut worker, false);
+            if let Ok(response) = worker.storage_state.async_worker.try_recv() {
+                break response;
+            }
+            assert!(Instant::now() < deadline, "A startup timed out");
+        };
+        assert!(matches!(
+            &old_startup,
+            AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                execution: 1,
+                id: actual,
+                ..
+            } if *actual == id
+        ));
+        assert_eq!(worker.storage_state.execution(id), Some(1));
+        assert!(!worker.storage_state.source_tokens.contains_key(&id));
+
+        commands.send(Storage(2, run)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while worker.storage_state.execution(id) != Some(2) {
+            step(&mut worker, false);
+            assert!(Instant::now() < deadline, "B admission timed out");
+        }
+        while let Ok((_, response)) = responses.try_recv() {
+            assert!(
+                !matches!(
+                    response.response,
+                    ReplicaStorageResponse::ExecutionStarted { .. }
+                        | ReplicaStorageResponse::ExecutionInput { .. }
+                ),
+                "pending startup completed early"
+            );
+        }
+
+        let dataflows = worker.timely_worker.next_dataflow_index();
+        worker.handle_async_worker_response(old_startup);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut old_started = false;
+        let mut old_complete = false;
+        while !old_complete {
+            // B's async response stays queued until A's fencing is observable.
+            step(&mut worker, false);
+            while let Ok((_, response)) = responses.try_recv() {
+                match response.response {
+                    ReplicaStorageResponse::ExecutionStarted { execution } => {
+                        assert_eq!(execution, 1);
+                        assert!(!old_started, "duplicate A startup completion");
+                        old_started = true;
+                    }
+                    ReplicaStorageResponse::ExecutionInput {
+                        execution,
+                        input,
+                        frontier,
+                    } => {
+                        assert_eq!((execution, input), (1, remap));
+                        assert!(old_started);
+                        assert!(frontier.is_empty());
+                        old_complete = true;
+                    }
+                    _ => (),
+                }
+            }
+            assert!(Instant::now() < deadline, "A fencing timed out");
+        }
+        assert_eq!(worker.timely_worker.next_dataflow_index(), dataflows);
+        assert!(!worker.storage_state.source_tokens.contains_key(&id));
+        assert_eq!(worker.storage_state.execution(id), Some(2));
+        // Replacement changes the execution, not the output generation.
+        assert_eq!(
+            worker.storage_state.executions.as_ref().unwrap().outputs.0[&id],
+            1
+        );
+
+        let mut new_started = false;
+        until(&mut worker, &mut responses, |response| {
+            if let ReplicaStorageResponse::ExecutionStarted { execution } = response {
+                assert_eq!(execution, 2);
+                assert!(!new_started, "duplicate B startup completion");
+                new_started = true;
+                return false;
+            }
+            input(response, 2, false)
+        });
+        assert!(new_started);
+        assert!(worker.storage_state.source_tokens.contains_key(&id));
+        assert_eq!(worker.storage_state.execution(id), Some(2));
+        assert!(worker.timely_worker.next_dataflow_index() > dataflows);
+
+        commands
+            .send(Storage(
+                3,
+                StorageCommand::AllowCompaction(id, Antichain::new()),
+            ))
+            .unwrap();
+        until(&mut worker, &mut responses, |r| input(r, 2, true));
+        for index in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(index);
+        }
+    });
+}

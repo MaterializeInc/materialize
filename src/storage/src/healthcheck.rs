@@ -316,9 +316,12 @@ impl HealthOperator for DefaultWriter {
     }
 
     fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
+        let Some(execution) = self.execution else {
+            return;
+        };
         self.command_tx
             .send(InternalStorageCommand::SuspendAndRestart {
-                execution: self.execution,
+                execution,
                 // Suspend and restart is expected to operate on the primary object and
                 // not any of the sub-objects
                 id,
