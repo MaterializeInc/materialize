@@ -6,8 +6,12 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Collect `index-four-retained-launch.json` next. Then continue bounded
-current-native acceptance of the unrun harnesses below. Keep original workloads and
+Collect `index-four-retained-repeat-launch.json` next and investigate publication
+starvation before the remaining harnesses. The first four-index run failed after
+unpausing publication: the writer's committed bound stayed unchanged for 300s.
+The preceding post-DROP advancement took 291s. Replica logs repeatedly report
+unapplied catalog updates preventing protection publication. This is evidence,
+not yet a causal diagnosis. Keep original workloads and
 bounds. Do not increase retries or timeouts to claim acceptance.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
@@ -77,7 +81,7 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
   simultaneous accounting. Do not raise limits or shrink workloads to hide this.
 - Data-ingest, randomized zippy/restore and bumped-version platform acceptance
   remain incomplete. Parallel stress and one-index publication now have current
-  passes, but their earlier intermittent failures remain unexplained. The source
+  passes, but the current four-index case fails and earlier intermittent failures remain unexplained. The source
   status latency repeat passes. Adapter-loss needs a Persist CLI/jobs artifact.
 - Positive native builtin-schema migrations, pre-native conversion and current-native
   Kubernetes/operator/Terraform integration are unsupported within M3. Keep guards
@@ -100,8 +104,9 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`. The
-stress, one-index and source-status runs completed and cleaned up. The four-index workflow is
-active, without a concurrent build. Python-only harness changes have a separate
+stress, one-index, source-status and failed four-index runs cleaned up. The exact
+four-index repeat is active, without a concurrent build. Worker expiry is now
+03:00 UTC November 14. Python-only harness changes have a separate
 source-exception manifest. Compiled Rust remains unchanged.
 No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
@@ -131,6 +136,11 @@ Essential pointers, relative to the evidence root:
   Passing current stress: `parallel-retirement-policy-evidence.tar.gz`.
   Current index protection/publication: `index-retained-evidence.tar.gz`.
   Current source lifecycle/status latency: `source-status-retained-evidence.tar.gz`.
+  Failed four-index release: `index-four-retained-evidence.tar.gz`. Its private
+  failure-only probe has a port-helper argument error, so limiting-grant state
+  was not captured. `native_index_four_probe_fixed.py` corrects that probe only
+  and is not used in the unchanged repeat.
+  Remaining zippy artifacts and restore-contract audit: `zippy-acceptance-audit.md`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
 - Fixed-binary stress failure:
