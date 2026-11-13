@@ -2,213 +2,116 @@
 
 ## Current objective
 
-Make the branch native-only while preserving adapter policy, validated catalog
-transactions, shared query/table machinery, durable protection and compatible
-multi-version writers with explicit retirement. Assess remaining architecture
-load separately. Do not change Persist or the 60s publication default.
+Finish native-only ownership, execution and harness cleanup. Preserve adapter
+policy, validated catalog transactions, durable protection, compatible full
+writers and explicit retirement. Keep shared query, table and subscription
+machinery. Assess architecture-generated load separately, without changing
+Persist or the 60s publication default.
 
 ## Next concrete action
 
-The current default-development runtime candidate built successfully on scratch
-(one Cargo job, 32-GiB/no-swap/4-CPU job cap, unchanged Cargo.lock). Verify native
-lifecycle/progress across real processes, including split/unified topology and
-query churn. Existing mounted binaries predate the latest ownership removals.
-Keep heavy work sequential on capped scratch.
-Build evidence: `native-driver-scratch/native-current-build.log`, runner
-`native-current-build.sh` and `native-current-build-source-sha256.json`. Outputs
-are in `native-current-candidate/`. The inspected `native_current_runtime_verify.py` runner is staged for unchanged
-profiling and full multi-process smoke workflows, with explicit split/unified
-topology and capped containers. Profiling passed on both HTTP surfaces and the
-full multi-process smoke workflow passed with both unified and split topology. The initial profiling attempt omitted Cargo
-from PATH and failed before startup. Its exact rerun reproduced that harness
-error, then the corrected environment passed. Production stacks are unchanged.
-Evidence directories: `aj-native-current-c1d90f28` (profiling),
-`aj-native-current-9587e603` (unified smoke), and `aj-native-current-80d7cc03`
-(split). Receipts were copied locally in `native-current-runtime-evidence.tar.gz`.
-Completed fixtures were cleaned up, with no aggregate OOM increment. Live executable paths
-in the split fixture confirm controllerd, adapterd, clusterd and pubsubd all run
-from `/candidate`. These are mounted-binary outcomes, not rebuilt-image CI. Agent 304 is inspecting
-kept 0dt writer/promotion/retirement workflows for current-candidate acceptance.
-The adapter-loss workflow additionally needs a Persist CLI/jobs artifact not
-currently available among the local scratch images.
-The current introspection audit found native passive relays, not an additional
-legacy frontier fallback. Their direct-owner opportunities and SQL/consumer
-dependencies are recorded in the follow-up inventory, not added to this cleanup.
-Detailed evidence: `native-introspection-current-audit.md`. Pending deployment/upgrade scope
-decisions below remain explicit, not implicit test deferrals.
+Finish verification of the approved compute replay-history removal, then run
+current-binary metrics/proxy acceptance and the repaired upsert load-test. Return
+to distinct-version compatible-upgrade acceptance after this bounded cleanup.
+Do not present same-build promotion as distinct-version or migration coverage.
 
-Storage-local restart, sink reconstruction and async drop alternatives are
-removed. Maintained commands require execution identities. Ingestion recovery,
-replacement fencing, query isolation, lifetime and shared-ordering tests pass.
-Independent review found no concrete issue. Catalog-backed sink tests initially
-overflowed the default test stack, reproduced exactly, then all passed with the
-repository's existing 8-MiB test-stack setting. Production stacks and memory caps
-are unchanged. Final all-target checks pass without warnings after import-only
-cleanup. These are targeted outcomes, not full native-only acceptance.
+The replay buffer, cloning/compaction, implementation tests and two exported
+history gauges are removed in the worktree. Execution uses no history reader.
+Independent review found no blocking issue. Cluster coverage now checks live
+collections and command processing, with existing hydration/drop assertions
+preserved. The regenerated metric catalog also removes stale entries from prior
+native-only removals. No memory improvement has been measured.
 
-Evidence under `native-driver-scratch/`: `native-storage-restart-check.log`,
-`native-storage-restart-source-sha256.json`, `native-sink-reproduce.log`,
-`native-sink-standard-stack.log`, `native-storage-restart-final-check.log` and
-`native-storage-restart-final-source-sha256.json`. Audit:
-`native-storage-restart-drop-audit.md`.
+Scratch task `aj-native-history-check.service` is running the affected library
+suites after successful all-target checks. Evidence under
+`native-driver-scratch/`: `native-history-check.log`, `native-history-check.sh`,
+`native-history-source-sha256.json` and `native-history-metrics.yml`.
+A later local edit only removes an empty comment heading from compute metrics.
+Rust removal and upsert fixture changes are not committed yet. The fixture now
+has two separate scenarios with unchanged settings, workloads and assertions.
+Its launcher unit check passes. Both repaired runtime scenarios still need to run.
 
-Cluster profiling now declares native replica inventory and retains its launch
-override. Managed reconfiguration no longer starts an unused external process
-(`7231bb96`). Launcher boundary tests and Black/Ruff pass. AST comparison confirms
-all profiling requests/assertions and managed reconfiguration assertions are
-unchanged. Actual profiling HTTP acceptance on rebuilt binaries is not verified.
+## Approved scope and verified outcomes
 
-Recent completed removals cover mandatory native startup (`c27eabf8`), compute
-transport lifecycle (`b3a88e96`), and storage lifecycle/query-only role clients
-(`f6ad2178`, fixtures `0679833f`). Targeted all-target and native runtime checks
-pass. Exact logs and source manifests live under `native-driver-scratch/` with
-prefixes `native-ingress-`, `native-compute-final-` and `native-storage-final-`.
-These are not rebuilt-image CI or full native-only acceptance.
+Positive native builtin-schema migrations are deferred beyond M3. Keep the
+rejection guard. Kubernetes, operator and Terraform current-native integration
+are also deferred under local-only M3. These are explicit capability gaps, not
+claims of passing coverage. Historical-only and unrelated workflows remain enabled.
 
-Limits, platform restart actions and upsert load-test launchers now establish
-native inventory before process startup. Targeted runtime evidence is under
-`native-driver-scratch/{limits-launcher-evidence,platform-action-evidence,upsert-load-evidence}/`.
-The full upsert load-test remains incomplete because of its malformed scenario
-tuple. Current remaining harness inventory: `native-remaining-launchers-current.md`.
-
-Owned worker `i-064fa517ec1d8bbdb` is available for this next unit, with a one-day
-expiry recorded in `native-driver-scratch/worker.json`. Connect through its
-instance-specific `native-driver-scratch/remote.py`. No access rules changed.
-Completed runtime fixtures, including the upsert load test, are removed.
-Keep the compiled candidate and evidence before releasing the worker.
-Unused local Docker images were pruned. Local disk headroom is 39 GiB. Volumes
-and retained candidate binaries were preserved.
-
-Do not run heavy suites or builds on the local VM. Polling reserves did not prevent
-an overload that required a restart. Scratch test containers must share the
-`aj-native-tests.slice` hard budget: 40 GiB memory, no swap, eight CPUs. The runner
-verifies kernel limits, container membership and aggregate OOM counters. Keep the
-2 GiB RAM and 30 GiB disk reserves as additional guards, not the primary limit.
-See `native-driver-scratch/scratch-hard-budget-effective.txt` and
-`isolation_verify_capped.py`. Local interrupted fixtures were removed with logs
-preserved in `native-driver-scratch/local-restart-cleanup/`.
-
-
-## Verified outcome
+Commit `1380f0ba` adds visible unsupported results and bounds optional final
+preflight before process mutation. It checks running, target, rollback and
+restored-definition provenance. Unknown CI/development artifacts do not count as
+historical releases. Operator image-copy ordering uses the real modifiers.
+Independent review found both edge cases, and negative-control tests reproduced
+them before repair. Combined Python tests and changed-file Black/Ruff pass.
+Evidence: `native-bounded-harness-tests.log`, `native-boundary-review-negative.log`
+and `native-boundary-review-fixed.log`. Docker boundaries are mocked here, not
+runtime deployment acceptance.
 
 Controllerd owns processes, replica followers own maintained execution, and
-adapters retain policy, transactions, serving protection and transient queries.
-Legacy combined/read-only serving, private migration execution, alternate
-protection catalogs and exclusive age-based process cleanup are removed.
+adapters retain policy, transactions, protection and transient queries. Mandatory
+native startup, transport ownership removal, storage restart fencing and native
+profiling inventory are committed and pass targeted checks. Temporary objects
+have execution ownership while retaining session visibility. Subscription IDs
+are execution-qualified through observations, logging and dependencies.
 
-Selected native debug checks cover startup/restart, protection, queries,
-compatible full writers, promotion and explicit retirement, warmed replicas,
-source/sink handover, temporary-object ownership, pruning and table preservation.
-Temporary objects retain session visibility and execution ownership. Promotion
-preserves them. Disconnect, confirmed replacement and retirement reclaim them.
-Format 97 requires fresh experimental state, with no ownership backfill.
+The last verified default-development candidate passes full multi-process smoke
+in both topologies, profiling HTTP, and same-build two-writer promotion with
+surviving sessions/subscriptions, independent cleanup and explicit retirement.
+These are mounted-binary outcomes, not rebuilt-image CI. Current replay-history
+removal postdates those binaries. Evidence: `native-current-build.log`,
+`native-current-runtime-evidence.tar.gz`, `native-current-subscriptions-success.tar.gz`
+and `native-current-subscriptions-metadata-fixed.log`.
 
-Subscription IDs are execution-qualified across public observations, compute
-logging and physical-dependency joins. Two-adapter default-dev coverage verifies
-colliding local IDs, per-replica and merged progress, independent cleanup,
-promotion survival and explicit retirement. Cold native SLT startup and targeted
-catalog SQL checks pass with the existing test-harness stack budget on both
-hosting contexts. Production stacks, Persist and publication settings are unchanged.
-Commits: `8c9e18f0d7` (subscriptions), `917c98e010` (SLT harness).
-Evidence and review dispositions: `native-subscription-frontier-assessment.md`.
-These checks used mounted candidate binaries, not rebuilt-image CI.
+Two subscription attempts OOMed metadata PostgreSQL because the runner omitted
+its established 500-connection setting. Exact retry reproduced the failure.
+Restoring that setting passed without changing workloads or memory caps. Failure
+receipts remain in `aj-native-current-1abefc00` and `aj-native-current-4781f0b7`.
+This does not establish rejection of a retired INSERT or distinct-version compatibility.
 
-Native renderer and external benchmark launch/restart checks pass in both
-Timely topologies, preserving historical-image comparisons. Replica isolation,
-connection metrics/death detection, tracing, Kafka resumption, limiter recreation
-and original upsert rehydration/failpoint workflows pass with native ownership.
-Bounded-memory table hydration and logical backpressure pass at their original
-limits, including post-restart checks. Their payloads, budgets and crash coverage
-remain intact. These are targeted mounted default-debug candidate outcomes,
-not full-suite or rebuilt-image CI acceptance. Evidence directories under
-`native-driver-scratch/`: `verified/`, `benchmark-verified/`, `isolation-verified/`,
-`tracing-evidence/`, `cluster-launcher-evidence/`, `upsert-launcher-evidence/` and
-`bounded-memory-evidence/`. Kafka evidence: `aj-native-kafka-resumption-55360511/`.
+## Live blockers and unverified outcomes
 
-The pinned 26.46/26.47 prototype pair shares implementation and plan encoding,
-not arbitrary release compatibility. Its lifecycle runs precede the isolated
-pgwire stack fix. That fix separately passes initial and resumed subscription
-FETCH through both protocols with production worker stacks. The kept workflow
-reproduces the old overflow. These are local outcomes, not broad CI acceptance.
+- Distinct-version acceptance after the latest removals is incomplete. Earlier
+  26.46/26.47 prototype evidence shares implementation and plan encoding, not
+  arbitrary release compatibility.
+- Bounded-memory upsert-index hydration reproducibly OOMs at its original
+  3.5-GiB limit. Cause remains unproven. Do not shrink workloads or raise limits
+  to hide it. Receipts: `bounded-memory-evidence/aj-native-cluster-6ed29d27/`
+  and `aj-native-cluster-c74e55f5/`.
+- Full upsert stress previously exceeded the local memory cap. Current
+  data-ingest/parallel stress, randomized zippy/restore and bumped-version
+  platform acceptance remain incomplete. Earlier index-publication and slow
+  source-status cases remain unexplained.
+- Adapter-loss acceptance needs a Persist CLI/jobs artifact not present among
+  the retained local scratch images.
+- Broad CI is not green. Last reviewed broad evidence is
+  [Build141419](https://buildkite.com/materialize/test/builds/141419), including
+  the unpublished pubsubd image gate. Registry visibility, merge skew, Persist
+  JSON-order checking and stale hydration expectations remain unresolved.
+  Full bin/fmt also reports unchanged long lines in catalog files. The PR stays draft.
 
-## Live blockers and decisions
+## Worker and essential evidence
 
-- Asked whether to explicitly defer positive forced builtin-migration coverage
-  for M3 and mark its two nightly workflows unsupported while keeping rejection
-  and compatible-promotion coverage. These are current-build workflows, not
-  pre-native upgrades. Native startup rejects their force flags. Do not remove
-  guards or change them into ordinary promotion tests to claim preserved coverage.
-  Evidence and native continuity assertion options:
-  `native-builtin-migration-assertions.md`. Approval remains pending.
-- Catalog-free production ingress and the two remaining cluster launches are
-  repaired. Current-build cloudtest, operator and Terraform deployment harnesses
-  still target monolithic environmentd. Asked whether to defer these native
-  deployment families explicitly for M3. Do not disable them without approval.
-  Current inventory: `native-remaining-launchers-current.md`. Preserve
-  historical-image-only paths.
-  The dormant final-preflight hook also needs its boundary decision. See
-  `native-external-launcher-audit.md` and `final-preflight-boundary-research.md`.
-- The manual upsert load-test has a four-element tuple unpacked as two values.
-  Approval to split it into the intended two scenarios remains pending. Native
-  launch, original input and reachable rehydration passed, not the full workflow.
-- Forced-migration cases and some platform/stress workflows remain unconverted.
-  Preserve source/sink workloads, predecessors and compatible-image coverage.
-  Pre-native-to-native upgrades are unsupported, not reset or converted.
-- Bounded-memory upsert-index hydration reproducibly OOMs the external replica
-  at its unchanged 3.5-GiB limit. Last samples show roughly 3.0–3.1 GiB anonymous
-  memory and little file cache. A source audit found no omitted native memory or
-  backpressure setting, but no matched successful legacy configuration capture
-  exists. Do not attribute causality or raise the limit without evidence.
-  Failure receipts: `native-driver-scratch/bounded-memory-evidence/`
-  `aj-native-cluster-6ed29d27/` and `aj-native-cluster-c74e55f5/`.
-  Fixtures are removed. Cleanup now runs even when resource assertions fail.
-- Full upsert stress exceeded the local deployment memory cap. Worker cleanup is
-  repaired, but full-stress acceptance remains blocked. Do not shrink the workload
-  or raise caps blindly. The full workload still needs a measured retry, not a
-  smaller substitute.
-- Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
-  runtime acceptance remain incomplete. Selected same-build table preservation
-  passed. An earlier index-publication stall and a 673-second source-status query
-  remain unexplained. Passing retries do not resolve them. Startup/readiness and
-  other unresolved cases remain in the
-  [follow-up inventory](20260903_decoupled_coordination_followups.md).
+Evidence root: `~/.local/share/aj/m3-evidence/native-only/`. Runtime and check
+filenames above are relative to `native-driver-scratch/`.
+Owned worker: `i-064fa517ec1d8bbdb`, expiry recorded in that directory's
+`worker.json`. Use its instance-specific `remote.py`. Check expiry before long work.
+All completed runtime fixtures are removed. The last verified candidate was
+copied locally and all four hashes matched. Superseded binaries were removed,
+with manifests/evidence retained. Local disk headroom was 39 GiB at last check.
 
-Broad CI is not green. Last reviewed broad evidence is
-[Build141419](https://buildkite.com/materialize/test/builds/141419), including the
-unpublished pubsubd image gate. Registry visibility, merge skew, Persist JSON-order
-checking and stale hydration expectations remain unresolved. Full bin/fmt fails
-on unchanged long lines in `src/catalog/src/catalog.rs` and
-`src/catalog/tests/read-write/oracle.rs`. Changed-file checks pass. The PR stays
-draft.
+Keep heavy work sequential on scratch, never the local VM. Aggregate slice:
+40 GiB, no swap, eight CPUs. Build: one Cargo job, 32 GiB, four CPUs. Runtime
+containers must stay in the guarded slice. Preserve 30 GiB disk and 2 GiB RAM
+headroom. Do not overlap builds and runtime fixtures. Clean owned resources when
+finished. Preserve the unrelated `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.
 
-## Essential evidence and local state
-
-Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
-
-- Cursor fix, negative control and review:
-  `native-compatible-current/subscription-cursors-verification.md`.
-  Latest fixed binaries and manifests: `native-compatible-current/subscription-stack-fixed/`.
-- Pinned compatible lifecycle, basic coexistence and inactive-predecessor coverage:
-  `native-compatible-current/verification.md`, `basic-verification.md` and
-  `offline-candidate-verification.md` in that directory.
-- Pruning, selected platform preservation and the blocked stress case:
-  `native-compatible-current/forward-pruning-verification.md`,
-  `platform-tables-verification.md` and `upsert-verification.md` there.
-- Ownership/removal evidence: `native-follower-only-verification.md`,
-  `native-temporary-owner-verification.md`, `native-retirement-verification.md`
-  and `native-cdc-runtime-verification.md`.
-- Detailed earlier evidence pointers are preserved in
-  `native-handoff-before-subscription-stack-final.md` and the
-  [archive](20260903_decoupled_coordination_log_archive.md). The
-  [publication comparison](20260903_decoupled_coordination_publication_interval.md)
-  and `../logical-component-load/` are the performance baseline, not a claim about
-  cleanup's performance impact.
-
-All completed runtime fixtures are removed. See the current action for active
-scratch validation. Obsolete 26.47 demo binaries were reclaimed,
-with their manifests and evidence retained. Verify the earlier baseline artifact locations before reuse. The identity-fixed production candidate is preserved
-locally with matching source and binary manifests. Keep heavy work sequential, enforce 30 GiB disk and 2 GiB
-available-memory reserves, and use one low-priority Cargo job. Preserve baseline
-artifacts,
-third-party caches, the persist-traffic worktree and unrelated
-`tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.
+Earlier detailed evidence pointers: `native-handoff-before-approved-deferrals.md`
+and the [archive](20260903_decoupled_coordination_log_archive.md). Remaining
+architectural opportunities and unresolved cases are in the
+[follow-up inventory](20260903_decoupled_coordination_followups.md).
+`native-introspection-current-audit.md` distinguishes native relays from removed
+legacy ownership. Do not remove their SQL inputs without replacement.
+The [publication comparison](20260903_decoupled_coordination_publication_interval.md)
+and `../logical-component-load/` remain the performance baseline, not measured
+benefits from this cleanup.
