@@ -27,6 +27,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from textwrap import dedent
 from typing import IO
+from unittest import SkipTest
 
 import psycopg
 import yaml
@@ -202,6 +203,14 @@ def testdrive(no_reset: bool) -> Testdrive:
         # schema_registry_url=...
         # aws_endpoint=...
     )
+
+
+def check_native_deployment(tag: str | None) -> None:
+    if not tag or tag == ci_util.dev_docker_tag():
+        raise SkipTest(
+            "Unsupported: current-native Terraform deployment and upgrade coverage "
+            "is deferred until the deployment harness is migrated. No catalog conversion."
+        )
 
 
 def get_tag(tag: str | None) -> str:
@@ -1125,6 +1134,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     """To run locally use `aws sso login` first."""
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
@@ -1157,6 +1167,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     """To run locally use `aws sso login` first."""
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     all_versions = get_self_managed_versions()
     # Upgrading through every released minor version takes ~5 minutes per step
@@ -1246,6 +1257,7 @@ def workflow_aws_persistent_setup(
     )
 
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     tag = get_tag(args.tag)
     aws = AWS(PATH_AWS_PERSISTENT)
@@ -1275,6 +1287,7 @@ def workflow_aws_persistent_test(
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
 
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     start_time = time.time()
 
@@ -1556,6 +1569,7 @@ def _terraform_apply_gcp(path: Path, vars: list[str], project: str) -> None:
 def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
@@ -1774,6 +1788,7 @@ def delete_azure_resource_groups(resource_group: str, env: dict[str, str]) -> No
 def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"

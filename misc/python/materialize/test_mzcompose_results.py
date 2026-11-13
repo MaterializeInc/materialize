@@ -1131,21 +1131,29 @@ def test_platform_default_continues_after_skip_and_keeps_native_failures(
         def actions(self):
             return [mzcompose_actions.StartMz(self, force_migrations="replacement")]
 
+    class DNativeFailure(Scenario):
+        def actions(self):
+            return [mzcompose_actions.StartMz(self)]
+
     monkeypatch.setattr(
         platform_checks,
         "all_subclasses",
         lambda cls: (
-            {AUnsupported, BNative, CNativeForced} if cls is Scenario else set()
+            {AUnsupported, BNative, CNativeForced, DNativeFailure}
+            if cls is Scenario
+            else set()
         ),
     )
 
     sql_report = tmp_path / "sql-failure.xml"
     sql_report.write_text(
-        '<testsuite><testcase name="check.td"><failure message="check.td:23:1: native forced migration rejected"/></testcase></testsuite>'
+        '<testsuite><testcase name="check.td"><failure message="check.td:23:1: native SQL assertion failed"/></testcase></testsuite>'
     )
 
     def execute(action, executor):
-        if isinstance(action, mzcompose_actions.StartMz) and action.force_migrations:
+        if isinstance(action, mzcompose_actions.StartMz) and isinstance(
+            action.scenario, DNativeFailure
+        ):
             raise FailedTestExecutionError(
                 composition._read_testdrive_junit_errors(sql_report)
             )
@@ -1158,7 +1166,7 @@ def test_platform_default_continues_after_skip_and_keeps_native_failures(
     ):
         monkeypatch.setattr(cls, "execute", execute)
         monkeypatch.setattr(cls, "join", lambda action, executor: None)
-    with pytest.raises(UIError, match="CNativeForced failed"):
+    with pytest.raises(UIError, match="DNativeFailure failed"):
         platform_checks.workflow_default(
             composition, WorkflowArgumentParser("default", "", [])
         )
@@ -1169,12 +1177,14 @@ def test_platform_default_continues_after_skip_and_keeps_native_failures(
     failures = [
         case for case in report.findall(".//testcase") if case.find("error") is not None
     ]
-    assert [case.attrib["name"] for case in failures] == ["CNativeForced/check.td:23"]
-    assert "native forced migration rejected" in failures[0].find("error").text
+    assert [case.attrib["name"] for case in failures] == ["DNativeFailure/check.td:23"]
+    assert "native SQL assertion failed" in failures[0].find("error").text
     assert composition.test_results["AUnsupported"].skipped_reason
     assert composition.test_results["BNative"].is_successful()
-    assert composition.test_results["CNativeForced"].errors
-    assert composition.test_results["CNativeForced"].skipped_reason is None
+    assert composition.test_results["CNativeForced"].skipped_reason
+    assert not composition.test_results["CNativeForced"].errors
+    assert composition.test_results["DNativeFailure"].errors
+    assert composition.test_results["DNativeFailure"].skipped_reason is None
     assert platform_checks.setup.call_count == 2
     composition.down.assert_called_once_with(
         destroy_volumes=True, sanity_restart_mz=False

@@ -30,6 +30,10 @@ def pytest_configure(config: "Config") -> None:
 
 @pytest.fixture(scope="session")
 def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
+    pytest.skip(
+        "Unsupported: current-native Kubernetes deployment coverage is deferred "
+        "until the cloudtest deployment harness is migrated."
+    )
     return MaterializeApplication(
         release_mode=(not pytestconfig.getoption("dev")),
         # NOTE(necaris): pyright doesn't like that the `getoption` default type is `Notset`

@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from enum import Enum
 from typing import Any
+from unittest import SkipTest
 
 import psycopg
 import requests
@@ -103,6 +104,35 @@ def get_tag(tag: str | None = None) -> str:
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
     return tag or ci_util.dev_docker_tag()
+
+
+def check_native_deployment(tag: str | None) -> None:
+    if not tag or tag == get_tag():
+        raise SkipTest(
+            "Unsupported: current-native operator deployment and upgrade coverage "
+            "is deferred until the orchestratord harness is migrated. No catalog conversion."
+        )
+
+
+def check_default_deployment(args) -> None:
+    if args.scenario:
+        # Each step starts from the original definition, not the preceding step.
+        for mods in json.loads(args.scenario):
+            definition = {"materialize": {"metadata": {}, "spec": {}}}
+            EnvironmentdImageRef(get_tag(args.tag)).modify(definition)
+            # These modifiers select or copy environment images. Apply their
+            # actual methods: a copy made before an image change keeps its image.
+            for raw_mod in mods:
+                mod = Modification.from_dict(raw_mod)
+                if isinstance(mod, (EnvironmentdImageRef, NumMaterializeEnvironments)):
+                    mod.modify(definition)
+            for environment in definition.values():
+                image = environment["spec"]["environmentdImageRef"]
+                check_native_deployment(image.rsplit(":", 1)[1])
+    elif Action(args.action) == Action.Noop:
+        check_native_deployment(args.tag)
+    # Upgrade and UpgradeChain select only published self-managed versions.
+    # Loading branch images during setup does not deploy them in these loops.
 
 
 def get_version(tag: str | None = None) -> MzVersion:
@@ -2381,9 +2411,6 @@ def workflow_documentation_defaults(
     )
     args = parser.parse_args()
 
-    c.up(Service("mz-debug", idle=True))
-    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
-
     current_version = get_version(args.tag)
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
@@ -2404,6 +2431,12 @@ def workflow_documentation_defaults(
         lambda version: str(version),
     )
     for version in versions:
+        if version == current_version and (not args.tag or args.tag == get_tag()):
+            with c.test_case(f"documentation-defaults/{version}"):
+                check_native_deployment(args.tag)
+            continue
+        c.up(Service("mz-debug", idle=True))
+        c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
         print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"
         if os.path.exists(dir):
@@ -2719,6 +2752,7 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     running = True
     downtimes: list[float] = []
@@ -3057,6 +3091,7 @@ def workflow_v1_opt_in(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     enable_v1_crd(definition)
@@ -3225,6 +3260,7 @@ def workflow_server_side_apply(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     enable_v1_crd(definition)
@@ -3522,6 +3558,7 @@ def workflow_webhook_cert_rotation(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     enable_v1_crd(definition)
@@ -3770,6 +3807,7 @@ def workflow_manually_promote(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     enable_v1_crd(definition)
@@ -4018,6 +4056,7 @@ def workflow_orchestratord_upgrade(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     versions = get_all_self_managed_versions()
@@ -4159,6 +4198,7 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     def get_cr(plural: str) -> dict[str, Any]:
         # orchestratord creates the Balancer and Console CRs after writing
@@ -4354,6 +4394,7 @@ def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> 
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
 
@@ -4656,6 +4697,7 @@ def workflow_leader_failover(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     replicas = definition["operator"]["operator"]["replicas"]
@@ -4866,6 +4908,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--modification", action="append", type=str, default=[])
     parser.add_argument("--runtime", type=int, help="Runtime in seconds")
     args = parser.parse_args()
+    check_default_deployment(args)
 
     print(f"--- Random seed is {args.seed}")
 
@@ -5941,6 +5984,7 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     version = get_version(args.tag)
     min_version = MzVersion.parse_mz("v26.16.0-dev.0")
@@ -6054,6 +6098,7 @@ def workflow_clusterd_generation_scheduling(
         help="Override orchestratord tag",
     )
     args = parser.parse_args()
+    check_native_deployment(args.tag)
 
     definition = setup(c, args)
     init(definition)

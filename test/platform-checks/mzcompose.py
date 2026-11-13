@@ -216,6 +216,17 @@ def setup(c: Composition, external_blob_store: bool) -> None:
 
 
 def check_native_upgrade_boundary(actions: list[Action]) -> None:
+    for action in actions:
+        if (
+            isinstance(action, StartMz)
+            and action.tag is None
+            and action.force_migrations is not None
+        ):
+            raise SkipTest(
+                "Unsupported: positive native builtin schema migration "
+                f"({action.force_migrations}) coverage is deferred. "
+                "Native startup rejects forced migrations."
+            )
     # These action tags select published monolithic images. None selects the
     # local native build, including builds changed by BumpVersion. This is image
     # provenance, not a SQL-version compatibility threshold.

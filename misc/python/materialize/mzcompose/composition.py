@@ -52,6 +52,7 @@ from psycopg.sql import Composed
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.docker import image_registry
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import (
@@ -248,6 +249,7 @@ class Composition:
                     raise UIError(f"network {network_name!r} specified more than once")
                 self.compose["networks"][network_name] = network_def
 
+        self._preflight_native_images: set[str] = set()
         # The CLI driver will handle acquiring these dependencies.
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
@@ -349,6 +351,8 @@ class Composition:
             for _name, config in services:
                 if "mzbuild" in config:
                     config["image"] = deps[config["mzbuild"]].spec()
+                    if config["mzbuild"] == "materialized":
+                        self._preflight_native_images.add(config["image"])
                     del config["mzbuild"]
         else:
             deps = mzbuild.DependencySet([])
@@ -1327,6 +1331,128 @@ class Composition:
 
         return None
 
+    def _preflight_image_family(self, image: str) -> str:
+        if image in self._preflight_native_images:
+            return "native"
+        repository, _, tag = image.rpartition(":")
+        # Unqualified release tags identify historical artifacts on this branch.
+        # SemVer-valid CI and development tags can also contain native builds.
+        version = MzVersion.try_parse(tag)
+        if (
+            repository
+            in (
+                "materialize/materialized",
+                "ghcr.io/materializeinc/materialize/materialized",
+            )
+            and version is not None
+            and version.prerelease is None
+            and version.build is None
+        ):
+            return "historical"
+        return "unknown"
+
+    @staticmethod
+    def _preflight_packaged_binary(config: dict, mounts: list[str]) -> bool:
+        # Data/config mounts are normal. Other mounts can replace executables
+        # or their libraries, so this optional check cannot establish provenance.
+        data_paths = (
+            "/mzdata",
+            "/scratch",
+            "/share/tmp",
+            "/var/lib/mysql-files",
+            "/coverage",
+            "/listeners_config",
+            "/config_sync.json",
+            "/license_key",
+        )
+        if any(
+            not any(path == root or path.startswith(root + "/") for root in data_paths)
+            for path in map(os.path.normpath, mounts)
+        ):
+            return False
+        environment = config.get("environment", [])
+        if isinstance(environment, dict):
+            environment = [f"{key}={value}" for key, value in environment.items()]
+        if any(
+            item.split("=", 1)[0]
+            in ("PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "MZ_ADAPTERD_IMAGE")
+            for item in environment
+        ):
+            return False
+        command = config.get("command", []) or []
+        if isinstance(command, str):
+            return False
+        return not config.get("entrypoint") and not any(
+            "--adapterd-image" in arg for arg in command
+        )
+
+    def _final_preflight_skip_reason(
+        self, container: str, target: str, rollback: bool
+    ) -> str | None:
+        outer = self.compose["services"]["materialized"]
+        path = {"source": "unknown", "target": self._preflight_image_family(target)}
+        if rollback:
+            path["rollback"] = "native"  # Materialized(), not the running source.
+        path["restored outer definition"] = self._preflight_image_family(
+            outer.get("image", "")
+        )
+        mounts = []
+        for volume in outer.get("volumes", []):
+            mounts.append(
+                volume.split(":")[1]
+                if isinstance(volume, str) and ":" in volume
+                else volume.get("target", "") if isinstance(volume, dict) else ""
+            )
+        if (
+            outer.get("entrypoint") is not None
+            or outer.get("configs")
+            or outer.get("secrets")
+            or not self._preflight_packaged_binary(outer, mounts)
+        ):
+            path["restored outer definition"] = "unknown"
+        try:
+            running = json.loads(spawn.capture(["docker", "inspect", container]))[0]
+            image = json.loads(
+                spawn.capture(
+                    ["docker", "image", "inspect", running["Config"]["Image"]]
+                )
+            )[0]
+            config = running["Config"]
+            # Check the actual container, not the service restored after override.
+            # A retagged image is not evidence about the running image ID.
+            overrides = {
+                "entrypoint": config.get("Entrypoint")
+                != image["Config"].get("Entrypoint"),
+                "command": config.get("Cmd"),
+                "environment": [
+                    entry
+                    for entry in config.get("Env", [])
+                    if entry not in image["Config"].get("Env", [])
+                ],
+            }
+            if running["Image"] == image["Id"] and self._preflight_packaged_binary(
+                overrides, [mount["Destination"] for mount in running["Mounts"]]
+            ):
+                path["source"] = self._preflight_image_family(config["Image"])
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ):
+            # Inspection failure leaves coverage unknown, not the workload failed.
+            pass
+        detail = ", ".join(f"{leg}={family}" for leg, family in path.items())
+        if "unknown" in path.values():
+            return (
+                f"Optional final preflight cannot classify image provenance: {detail}"
+            )
+        if len(set(path.values())) > 1:
+            return f"Unsupported: pre-native published images and local native images share a final preflight path: {detail}"
+        return None
+
     def final_preflight_check(self) -> None:
         """Check if Mz can do the preflight-check and upgrade/rollback with specified version."""
         version = os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION")
@@ -1340,10 +1466,22 @@ class Composition:
                 print("Service materialized not running, will not upgrade it.")
                 return
 
+            target = f"{image_registry()}/materialized:{version}"
+            reason = self._final_preflight_skip_reason(
+                ps.stdout.strip(), target, rollback
+            )
+            if reason is not None:
+                index = 1
+                while f"final-preflight-{index}" in self.test_results:
+                    index += 1
+                with self.test_case(f"final-preflight-{index}"):
+                    raise SkipTest(reason)
+                return
+
             self.kill("materialized")
             with self.override(
                 Materialized(
-                    image=f"{image_registry()}/materialized:{version}",
+                    image=target,
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
