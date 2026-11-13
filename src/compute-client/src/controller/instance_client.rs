@@ -243,8 +243,40 @@ impl InstanceClient {
         peek_response_tx: oneshot::Sender<PeekResponse>,
         lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
+        let issue = self.peek_command(
+            peek_target,
+            literal_constraints,
+            uuid,
+            timestamp,
+            result_desc,
+            finishing,
+            map_filter_project,
+            target_read_hold,
+            target_replica,
+            peek_response_tx,
+            lifecycle,
+        );
+        self.call_sync(issue).await?
+    }
+
+    /// Returns the instance-task command behind [`Self::peek`], which documents
+    /// the `lifecycle` contract.
+    pub(super) fn peek_command(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: Timestamp,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
+    ) -> impl FnOnce(&mut Instance) -> Result<(), PeekError> + Send + 'static {
         let client = self.clone();
-        self.call_sync(move |i| {
+        move |i| {
             let mut response_tx = Some(peek_response_tx);
             let issue = || {
                 i.peek(
@@ -264,8 +296,9 @@ impl InstanceClient {
             let Some(lifecycle) = &lifecycle else {
                 return issue();
             };
-            // Run the ordering critical section on the instance task, not
-            // around call_sync's await, which would block cancellation.
+            // The lifecycle's critical section must run on the instance task.
+            // Holding it across a caller's await of this command would block
+            // cancellation for as long as the command is queued.
             let retired = lifecycle.issue(issue, move |reason| {
                 // A shut down instance has no peek left to cancel.
                 let _ = client.call(move |i| i.cancel_peek(uuid, reason));
@@ -277,8 +310,7 @@ impl InstanceClient {
                     .send(response);
             }
             Ok(())
-        })
-        .await?
+        }
     }
 }
 

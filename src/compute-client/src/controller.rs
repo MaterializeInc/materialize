@@ -91,6 +91,7 @@ pub mod error;
 pub mod instance_client;
 pub mod peek_lifecycle;
 pub use instance_client::InstanceClient;
+use peek_lifecycle::PeekLifecycle;
 
 pub(crate) type StorageCollections =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
@@ -1035,6 +1036,9 @@ impl ComputeController {
     /// [`ComputeController::acquire_read_hold`] for `PeekTarget::Index`, or via the storage
     /// collections for `PeekTarget::Persist`. The hold keeps the collection's `since` at
     /// `<= timestamp` until the peek completes.
+    ///
+    /// `lifecycle` has the contract documented on [`InstanceClient::peek`]. The
+    /// caller must also retire it if this returns `Err`.
     pub fn peek(
         &self,
         instance_id: ComputeInstanceId,
@@ -1048,6 +1052,7 @@ impl ComputeController {
         read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1069,22 +1074,20 @@ impl ComputeController {
             return Err(SinceViolation(peek_target.id()));
         }
 
-        instance.call(move |i| {
-            i.peek(
-                peek_target,
-                literal_constraints,
-                uuid,
-                timestamp,
-                result_desc,
-                finishing,
-                map_filter_project,
-                read_hold,
-                target_replica,
-                peek_response_tx,
-                None,
-            )
-            .expect("validated")
-        });
+        let issue = instance.client.peek_command(
+            peek_target,
+            literal_constraints,
+            uuid,
+            timestamp,
+            result_desc,
+            finishing,
+            map_filter_project,
+            read_hold,
+            target_replica,
+            peek_response_tx,
+            lifecycle,
+        );
+        instance.call(move |i| issue(i).expect("validated"));
 
         Ok(())
     }
