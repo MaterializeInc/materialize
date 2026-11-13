@@ -217,12 +217,16 @@ where
         start_signal,
         error_handler,
         None,
+        None,
     )
 }
 
 /// A predicate on a part's stats that can rule out fetching it. Parts that may hold errors are
 /// fetched regardless.
 pub type PartFilter = Box<dyn for<'a> FnMut(&RelationPartStats<'a>) -> bool>;
+
+/// A predicate on a decoded row, in the read schema's column order, that drops it before the MFP.
+pub type RowFilter = Box<dyn FnMut(&Row) -> bool>;
 
 /// Like [`persist_source`], but also skips parts for which `part_filter` returns false.
 ///
@@ -243,6 +247,7 @@ pub fn persist_source_with_part_filter<'scope, E, CB, X>(
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
     part_filter: Option<PartFilter>,
+    row_filter: Option<RowFilter>,
 ) -> (
     Stream<'scope, mz_repr::Timestamp, CB::Container>,
     StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
@@ -324,6 +329,7 @@ where
                 until.clone(),
                 map_filter_project,
                 |time| time.0,
+                row_filter,
             );
 
             // The handle's frontier is the meet of what its clones report, so both streams
@@ -437,6 +443,7 @@ where
         until,
         map_filter_project,
         |time| time,
+        None,
     );
     (oks, errs, token)
 }
@@ -631,6 +638,7 @@ fn decode_and_mfp<'scope, E, RT, CB, X>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan<X>>,
     record_time: fn(RefinedTime) -> RT,
+    mut row_filter: Option<RowFilter>,
 ) -> (
     Stream<'scope, RefinedTime, CB::Container>,
     StreamVec<'scope, RefinedTime, (E, RT, Diff)>,
@@ -706,6 +714,7 @@ where
                     &name,
                     &until,
                     map_filter_project.as_ref(),
+                    row_filter.as_mut(),
                     &mut datum_vec,
                     &mut row_builder,
                     &mut work,
@@ -778,6 +787,7 @@ fn decode_part<E, F, X>(
     name: &str,
     until: &Antichain<Timestamp>,
     map_filter_project: Option<&MfpPlan<X>>,
+    mut row_filter: Option<&mut RowFilter>,
     datum_vec: &mut DatumVec,
     row_builder: &mut Row,
     work: &mut usize,
@@ -799,6 +809,10 @@ where
             continue;
         }
         match (key, val) {
+            (SourceData(Ok(row)), ()) if row_filter.as_mut().is_some_and(|keep| !keep(&row)) => {
+                *work += 1;
+                row_buf.replace(SourceData(Ok(row)));
+            }
             (SourceData(Ok(row)), ()) => {
                 if let Some(mfp) = map_filter_project {
                     // We originally accounted work as the number of outputs, to give downstream

@@ -193,8 +193,8 @@ pub fn apply_routes(expr: &mut MirRelationExpr, routes: &MaterializedIndexRoutes
 /// Reads routed materialized indexes as lookups where every read of one is a
 /// join input whose leading key columns another input of that join pins.
 ///
-/// For each such index, adds an object holding the distinct keys the probing
-/// inputs produce, ahead of the object with the joins, and marks the index's
+/// For each such index, adds an object holding the keys the probing inputs
+/// produce, ahead of the object with the joins, and marks the index's
 /// import as a lookup on it. Rendering then fetches only parts whose key ranges
 /// may hold a key. That keeps a superset of the rows the joins can match, so the
 /// joins stay exact.
@@ -343,7 +343,10 @@ fn plan_lookup(
         })
         .collect();
     let typ = parts[0].typ();
-    let keys = MirRelationExpr::union_many(parts, typ).distinct();
+    // No `Distinct`: the render-side collector deduplicates, and stops consuming
+    // once there are too many keys to be worth a lookup. A `Distinct` would cost a
+    // full arrangement of the probe keys even then.
+    let keys = MirRelationExpr::union_many(parts, typ);
     df_desc.objects_to_build.insert(
         position + hoisted_count,
         BuildDesc {

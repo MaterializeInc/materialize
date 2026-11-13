@@ -242,7 +242,6 @@ pub fn build_compute_dataflow(
     let name = format!("Dataflow: {}", dataflow.debug_name);
     let input_name = format!("InputRegion: {}", dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", dataflow.debug_name);
-
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         let scope = scope.with_label();
 
@@ -296,7 +295,7 @@ pub fn build_compute_dataflow(
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                     let import_start = start_signal.clone().into_send_future();
-                    let (source_start, part_filter) = match &import.lookup {
+                    let (source_start, lookup_filters) = match &import.lookup {
                         Some(lookup) => {
                             let read_desc = read_schema
                                 .as_ref()
@@ -313,7 +312,7 @@ pub fn build_compute_dataflow(
                                         .clone()
                                 })
                                 .collect();
-                            let (pending, keys_ready, part_filter) =
+                            let (pending, keys_ready, filters) =
                                 PendingLookup::new(read_desc, &key_names);
                             pending_lookups.insert(lookup.keys_from, pending);
                             let start = async move {
@@ -321,9 +320,13 @@ pub fn build_compute_dataflow(
                                 // A dropped sender also starts the import, unfiltered.
                                 let _ = keys_ready.await;
                             };
-                            (start.boxed(), Some(part_filter))
+                            (start.boxed(), Some(filters))
                         }
                         None => (import_start.boxed(), None),
+                    };
+                    let (part_filter, row_filter) = match lookup_filters {
+                        Some((part, row)) => (Some(part), Some(row)),
+                        None => (None, None),
                     };
                     let (mut ok_stream, err_stream, token) =
                         persist_source::persist_source_with_part_filter::<
@@ -345,6 +348,7 @@ pub fn build_compute_dataflow(
                             source_start,
                             ErrorHandler::Halt("compute_import"),
                             part_filter,
+                            row_filter,
                         );
 
                     // If `mfp` is non-identity, we need to apply what remains.
@@ -2324,19 +2328,23 @@ impl Pairer {
 /// NOTE(poc): dropping a `PendingLookup` without collecting keys starts its source unfiltered,
 /// which keeps lookups correct in shapes the render loop doesn't hook, like recursive dataflows.
 struct PendingLookup {
-    keys: Rc<RefCell<Option<Vec<Row>>>>,
+    keys: Rc<RefCell<Option<BTreeSet<Row>>>>,
     ready: oneshot::Sender<()>,
 }
 
 impl PendingLookup {
     /// Returns the pending lookup, a future that resolves once its keys are known (or it is
-    /// dropped), and a part filter that keeps parts whose stats may contain some key, column by
-    /// column over `key_names`.
+    /// dropped), a part filter that keeps parts whose stats may contain some key, and a row filter
+    /// that keeps rows whose key columns, `key_names` in order, form a key.
     fn new(
         read_desc: &mz_repr::RelationDesc,
         key_names: &[mz_repr::ColumnName],
-    ) -> (Self, oneshot::Receiver<()>, persist_source::PartFilter) {
-        let keys: Rc<RefCell<Option<Vec<Row>>>> = Rc::default();
+    ) -> (
+        Self,
+        oneshot::Receiver<()>,
+        (persist_source::PartFilter, persist_source::RowFilter),
+    ) {
+        let keys: Rc<RefCell<Option<BTreeSet<Row>>>> = Rc::default();
         let (ready, keys_ready) = oneshot::channel();
         // A key column the read omits can't be checked, so it matches anything.
         let key_columns: Vec<_> = key_names
@@ -2346,6 +2354,14 @@ impl PendingLookup {
                     .iter_all()
                     .find(|(_, name, _)| *name == key_name)
                     .map(|(idx, _, _)| *idx)
+            })
+            .collect();
+        let key_positions: Option<Vec<usize>> = key_names
+            .iter()
+            .map(|key_name| {
+                read_desc
+                    .get_by_name(key_name)
+                    .map(|(position, _)| position)
             })
             .collect();
         let part_filter: persist_source::PartFilter = Box::new({
@@ -2367,7 +2383,21 @@ impl PendingLookup {
                 })
             }
         });
-        (Self { keys, ready }, keys_ready, part_filter)
+        let row_filter: persist_source::RowFilter = Box::new({
+            let keys = Rc::clone(&keys);
+            let mut key = Row::default();
+            let mut datum_vec = mz_repr::DatumVec::new();
+            move |row| {
+                let keys = keys.borrow();
+                let (Some(keys), Some(positions)) = (keys.as_ref(), key_positions.as_ref()) else {
+                    return true;
+                };
+                let datums = datum_vec.borrow_with(row);
+                key.packer().extend(positions.iter().map(|p| datums[*p]));
+                keys.contains(&key)
+            }
+        });
+        (Self { keys, ready }, keys_ready, (part_filter, row_filter))
     }
 
     /// Gathers every key in `keys` at `as_of` on every worker, then starts the lookup's source.
@@ -2386,20 +2416,35 @@ impl PendingLookup {
             Pipeline,
             "LookupKeys",
             move |(input, frontier)| {
+                // NOTE(poc): past this many keys, checking every part and row costs more than
+                // reading the whole collection. Measured on 2.4M rows: 1M keys took 2.7 s
+                // filtered vs 1.55 s unfiltered, while 2000 spread keys took 0.31 s vs 1.1 s.
+                const MAX_LOOKUP_KEYS: usize = 100_000;
                 input.for_each(|_time, data| {
-                    for (row, _time, diff) in data.drain(..) {
-                        *counts.entry(row).or_default() += diff;
+                    if ready.is_some() {
+                        for (row, _time, diff) in data.drain(..) {
+                            *counts.entry(row).or_default() += diff;
+                        }
                     }
                 });
-                // Every key is known once no update at or before `as_of` can still arrive.
-                if ready.is_some() && frontier.frontier().iter().all(|t| *t > as_of) {
-                    let rows = std::mem::take(&mut counts)
+                let Some(sender) = ready.take() else {
+                    return;
+                };
+                if counts.len() > MAX_LOOKUP_KEYS {
+                    // Start the source unfiltered now, without waiting for the remaining keys.
+                    counts = BTreeMap::new();
+                    let _ = sender.send(());
+                } else if frontier.frontier().iter().all(|t| *t > as_of) {
+                    // Every key is known once no update at or before `as_of` can still arrive.
+                    let rows: BTreeSet<Row> = std::mem::take(&mut counts)
                         .into_iter()
                         .filter(|(_, diff)| diff.is_positive())
                         .map(|(row, _)| row)
                         .collect();
                     *shared.borrow_mut() = Some(rows);
-                    let _ = ready.take().expect("checked").send(());
+                    let _ = sender.send(());
+                } else {
+                    ready = Some(sender);
                 }
             },
         );

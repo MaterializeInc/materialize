@@ -268,3 +268,41 @@ index is 10 to 25 times faster per query, on local disk. Not profiled yet.
 Likely contributors: building the keys object and collector per query, the
 gated source's snapshot and listing, fetching about one part per run per key
 serially per worker, and arranging the fetched rows for the join.
+
+## Profiling and the row filter
+
+Statement lifecycle logging (`mz_internal.mz_statement_lifecycle_history`)
+showed the adapter is not the cost: a 2-way lookup join finishes optimization,
+including the routing pre-pass, in 4 to 5 ms, and spends the rest executing.
+Stage timestamps on the replica put the lookup source's part listing at 12 to
+19 ms after the dataflow starts rendering. The rest went to fetching, decoding
+and arranging the kept parts: at about 13k rows per 0.5 MB part, 5 keys
+pulled about 200k rows into the join to find 5.
+
+Fix: a row filter next to the part filter (`persist_source::RowFilter`,
+applied in `decode_part` before the MFP) drops rows whose key columns don't
+form a probe key, so the join arranges only matching rows.
+
+Cutoff: past 100k keys the collector starts the source unfiltered right
+away, and the keys object has no `Distinct` (the collector deduplicates), so
+an oversized probe costs little more than projecting its keys.
+
+| Case | Before row filter | After | In-memory index | Plain MV scan |
+|---|---|---|---|---|
+| A: 2-way, 5 keys | 79 to 86 ms | 26 to 29 ms | 6 to 8 ms | about 1.1 s |
+| B: 3-way, two indexes | 180 to 190 ms | 52 to 57 ms | 7 to 8 ms | about 1.7 s |
+| C: 2-column key | 94 to 100 ms | 37 to 52 ms | 6 to 7 ms | about 760 ms |
+| D: hoisted probe | 86 to 100 ms | 29 to 37 ms | | about 1.1 s |
+| E: same index twice | 91 to 118 ms | 28 to 35 ms | 6 to 7 ms | about 1.1 s |
+| 2000 contiguous keys | 31 ms | 28 to 38 ms | | about 1.1 s |
+| 2000 keys spread over range | about 900 ms | 312 to 316 ms | | about 1.1 s |
+| 1M keys | | 1.62 to 1.67 s (cutoff) | | 1.52 to 1.55 s |
+
+Remaining gap to a warm in-memory index, about 20 ms per query:
+- Adapter: 4 to 5 ms, including a second local optimization for routing.
+- Source startup: about 13 ms to reach part listing (opening a leased reader,
+  which registers with consensus, then the snapshot), plus waiting on keys.
+- Fetch and decode: every row of each kept part is decoded before the row
+  filter runs. Decoding only the key column first, or binary searching the
+  sorted part, would cut this.
+Not done. These are the next places to look.
