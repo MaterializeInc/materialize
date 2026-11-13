@@ -281,7 +281,10 @@ where
             // Only do this once any of the `remap_input` frontier has passed `as_of`.
             // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
             if !PartialOrder::less_equal(&frontiers[0].frontier(), &as_of.borrow()) {
-                for ((into, from), diff) in remap_accum_buffer.drain() {
+                // Taking the buffer releases its capacity. A replay of the remap history from an
+                // old as-of fills it once, and every export's operator would hold that capacity
+                // for good.
+                for ((into, from), diff) in std::mem::take(&mut remap_accum_buffer).into_inner() {
                     pending_remap.push(Reverse((into, from, diff)));
                 }
             }
@@ -302,6 +305,10 @@ where
                     })
                 });
                 remap_trace.push(into.clone(), updates);
+            }
+            // Releases what a replay leaves behind, like `remap_accum_buffer` above.
+            if pending_remap.len() < pending_remap.capacity() / 4 {
+                pending_remap.shrink_to(pending_remap.len() * 2);
             }
 
             // STEP 3. Receive new data updates
@@ -1873,6 +1880,43 @@ mod test {
                 });
                 println!("info = {info2:?}");
                 assert!(info2.bytes_current < 0);
+            },
+        );
+    }
+
+    #[cfg(feature = "count-allocations")]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_replay_releases_buffers() {
+        let replayed = 10_000_u64;
+
+        // The source frontier is beyond every replayed binding, so the trace keeps none of them
+        // and what stays allocated after the replay is buffer capacity.
+        harness::<FromTime, u64, _, _>(
+            Antichain::from_elem(0),
+            move |worker, mut bindings, (_data, mut data_cap), reclocked| {
+                data_cap.downgrade(&Partitioned::new_singleton(0, replayed));
+                step(worker);
+                let info = allocation_counter::measure(|| {
+                    for ts in 0..replayed {
+                        if ts > 0 {
+                            bindings.update_at(
+                                Partitioned::new_singleton(0, ts - 1),
+                                ts,
+                                Diff::MINUS_ONE,
+                            );
+                        }
+                        bindings.update_at(Partitioned::new_singleton(0, ts), ts, Diff::ONE);
+                    }
+                    bindings.advance_to(replayed);
+                    bindings.flush();
+                    step(worker);
+                    reclocked.try_iter().for_each(drop);
+                });
+                assert!(
+                    info.bytes_current < i64::try_from(info.bytes_max / 10).expect("fits"),
+                    "replay buffers kept their capacity: {info:?}"
+                );
             },
         );
     }
