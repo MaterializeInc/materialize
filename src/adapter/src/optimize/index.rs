@@ -146,7 +146,9 @@ impl Optimize<Index> for Optimizer {
 
         let mut df_builder = {
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute)
+                .with_config(&self.config)
+                .read_views_from_materialized_indexes()
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 

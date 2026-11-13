@@ -332,3 +332,30 @@ local-file blob. Results identical across configurations in every row.
 
 Serving cluster cost: in-memory indexes took 4.0 s to hydrate and hold
 293 MB of arrangements; materialized indexes need neither.
+
+## In-memory indexes hydrated from a materialized index
+
+`DataflowBuilder::read_views_from_materialized_indexes` (enabled only in the
+index optimizer): when an index dataflow would inline a view that has a
+materialized index, it reads the materialized index's shard instead, projected
+back to the view's column order. The view's result is stored once, so serving
+clusters hydrate in-memory indexes without recomputing it. Not enabled for
+the MV optimizer, since a materialized index's own dataflow would read itself,
+or for peeks, whose timestamp bundle comes from the SQL plan's dependencies.
+
+Test view: `vexp = SELECT t.k, count(*), max(d.dv), sum(length(t.v)) FROM t
+JOIN d ON d.dk = t.k % 2000000 GROUP BY t.k` (2.4M result rows), index on
+`vexp (k)` on `serving`, local-file blob:
+
+| | Index computes the view | Index reads the materialized index |
+|---|---|---|
+| Hydration | 20.0 to 28.4 s | 2.7 s |
+| Serving cluster arrangement memory | 833 MB | 61 MB |
+| Point lookup | | 1.1 to 2.2 ms |
+
+Results matched a fresh computation of the view on another cluster. The
+materialized index itself took 13.9 s to hydrate on `producer`, paid once
+rather than per serving cluster. For an index on an MV or table there is
+little to gain: hydration already only reads persist, and the arrangement is
+hash-distributed and sorted by encoded `Row`, so the key-sorted shard doesn't
+save that work.
