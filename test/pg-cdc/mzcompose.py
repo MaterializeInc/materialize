@@ -205,6 +205,39 @@ def workflow_slot_creation_timeout(
         c.run_testdrive_files("--no-reset", "override/slot-creation-timeout-part-2.td")
 
 
+def workflow_replication_slot_failover(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that the FAILOVER source option decides whether a slot is a failover slot.
+    """
+    pg_version = get_targeted_pg_version(parser)
+    if pg_version is not None and int(pg_version.split(".")[0]) < 17:
+        return
+    with c.override(create_postgres(pg_version=pg_version)):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("override/replication-slot-failover.td")
+
+        pg_conn = psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+        expected = {"implied": True, "explicit_true": True, "explicit_false": False}
+        slots = c.sql_query("""
+            SELECT s.name, p.replication_slot
+            FROM mz_sources s JOIN mz_internal.mz_postgres_sources p USING (id)
+            """)
+        failover = dict(
+            pg_conn.execute(
+                "SELECT slot_name, failover FROM pg_replication_slots"
+            ).fetchall()
+        )
+        actual = {name: failover.get(slot) for name, slot in slots}
+        assert actual == expected, f"expected {expected}, found {actual}"
+
+
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
     pg_version = get_targeted_pg_version(parser)
     for wal_level in ["replica", "minimal"]:

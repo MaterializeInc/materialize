@@ -550,6 +550,7 @@ generate_extracted_config!(
     PgConfigOption,
     (Details, String),
     (Publication, String),
+    (Failover, bool, Default(false)),
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
     (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
@@ -1173,6 +1174,7 @@ fn plan_postgres_source_connection(
     let PgConfigOptionExtracted {
         details,
         publication,
+        failover,
         // text columns are already part of the source-exports and are only included
         // in these options for round-tripping of a `CREATE SOURCE` statement. This should
         // be removed once we drop support for implicitly created subsources.
@@ -1181,8 +1183,11 @@ fn plan_postgres_source_connection(
         // in these options for round-tripping of a `CREATE SOURCE` statement. This should
         // be removed once we drop support for implicitly created subsources.
         exclude_columns: _,
-        seen: _,
+        seen,
     } = options.clone().try_into()?;
+    if seen.contains(&PgConfigOptionName::Failover) {
+        scx.require_feature_flag(&vars::ENABLE_POSTGRES_SOURCE_FAILOVER)?;
+    }
     let details = details
         .as_ref()
         .ok_or_else(|| internal_err!("Postgres source missing details"))?;
@@ -1197,6 +1202,7 @@ fn plan_postgres_source_connection(
         // Validated during purification.
         publication: publication.ok_or_else(|| internal_err!("PUBLICATION option is required"))?,
         publication_details,
+        failover,
     })
 }
 
