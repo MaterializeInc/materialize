@@ -7,7 +7,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 409
+  linenumber: 406
   dependency: ""
   isglobal: false
 - key: balancerd.defaultResources.limits
@@ -19,7 +19,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 425
+  linenumber: 426
   dependency: ""
   isglobal: false
 - key: balancerd.defaultResources.requests
@@ -31,7 +31,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 429
+  linenumber: 430
   dependency: ""
   isglobal: false
 - key: balancerd.enabled
@@ -43,7 +43,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 401
+  linenumber: 398
   dependency: ""
   isglobal: false
 - key: balancerd.nodeSelector
@@ -55,7 +55,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 405
+  linenumber: 402
   dependency: ""
   isglobal: false
 - key: balancerd.readinessProbePath
@@ -67,7 +67,19 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 420
+  linenumber: 417
+  dependency: ""
+  isglobal: false
+- key: balancerd.terminationGracePeriodSeconds
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`600`'
+  autodescription: Termination grace period for balancerd pods. Keep it at least `balancerd_sigterm_listen_wait` plus `balancerd_sigterm_connection_wait` (10 minutes by default), or open connections are cut before they drain.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 421
   dependency: ""
   isglobal: false
 - key: balancerd.tolerations
@@ -79,7 +91,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 413
+  linenumber: 410
   dependency: ""
   isglobal: false
 - key: clusterd.affinity
@@ -91,7 +103,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 389
+  linenumber: 386
   dependency: ""
   isglobal: false
 - key: clusterd.nodeSelector
@@ -103,7 +115,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 373
+  linenumber: 370
   dependency: ""
   isglobal: false
 - key: clusterd.priorityClassName
@@ -115,7 +127,7 @@
   description: PriorityClass to use for clusterd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
   section: ""
   column: 3
-  linenumber: 397
+  linenumber: 394
   dependency: ""
   isglobal: false
 - key: clusterd.scratchfsNodeSelector
@@ -127,7 +139,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 378
+  linenumber: 375
   dependency: ""
   isglobal: false
 - key: clusterd.swapNodeSelector
@@ -139,7 +151,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 384
+  linenumber: 381
   dependency: ""
   isglobal: false
 - key: clusterd.tolerations
@@ -151,7 +163,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 393
+  linenumber: 390
   dependency: ""
   isglobal: false
 - key: console.affinity
@@ -163,7 +175,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 445
+  linenumber: 446
   dependency: ""
   isglobal: false
 - key: console.defaultResources.limits
@@ -175,7 +187,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 454
+  linenumber: 455
   dependency: ""
   isglobal: false
 - key: console.defaultResources.requests
@@ -187,7 +199,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 458
+  linenumber: 459
   dependency: ""
   isglobal: false
 - key: console.enabled
@@ -199,7 +211,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 435
+  linenumber: 436
   dependency: ""
   isglobal: false
 - key: console.imageTagMapOverride
@@ -211,7 +223,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 437
+  linenumber: 438
   dependency: ""
   isglobal: false
 - key: console.nodeSelector
@@ -223,7 +235,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 441
+  linenumber: 442
   dependency: ""
   isglobal: false
 - key: console.tolerations
@@ -235,7 +247,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 449
+  linenumber: 450
   dependency: ""
   isglobal: false
 - key: environmentd.affinity
@@ -247,7 +259,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 322
+  linenumber: 319
   dependency: ""
   isglobal: false
 - key: environmentd.defaultLivenessProbe
@@ -259,7 +271,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 359
+  linenumber: 356
   dependency: ""
   isglobal: false
 - key: environmentd.defaultReadinessProbe
@@ -271,7 +283,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 351
+  linenumber: 348
   dependency: ""
   isglobal: false
 - key: environmentd.defaultResources.limits
@@ -283,7 +295,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 335
+  linenumber: 332
   dependency: ""
   isglobal: false
 - key: environmentd.defaultResources.requests
@@ -295,7 +307,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 339
+  linenumber: 336
   dependency: ""
   isglobal: false
 - key: environmentd.defaultStartupProbe
@@ -307,7 +319,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 367
+  linenumber: 364
   dependency: ""
   isglobal: false
 - key: environmentd.nodeSelector
@@ -319,7 +331,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 318
+  linenumber: 315
   dependency: ""
   isglobal: false
 - key: environmentd.priorityClassName
@@ -331,7 +343,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 330
+  linenumber: 327
   dependency: ""
   isglobal: false
 - key: environmentd.tolerations
@@ -343,7 +355,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 326
+  linenumber: 323
   dependency: ""
   isglobal: false
 - key: networkPolicies.egress.cidrs
@@ -355,7 +367,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 520
+  linenumber: 521
   dependency: ""
   isglobal: false
 - key: networkPolicies.egress.enabled
@@ -367,7 +379,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 518
+  linenumber: 519
   dependency: ""
   isglobal: false
 - key: networkPolicies.enabled
@@ -379,7 +391,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 505
+  linenumber: 506
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.cidrs
@@ -391,7 +403,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 514
+  linenumber: 515
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.enabled
@@ -403,7 +415,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 512
+  linenumber: 513
   dependency: ""
   isglobal: false
 - key: networkPolicies.internal.enabled
@@ -415,7 +427,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 508
+  linenumber: 509
   dependency: ""
   isglobal: false
 - key: observability.enabled
@@ -427,7 +439,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 484
+  linenumber: 485
   dependency: ""
   isglobal: false
 - key: observability.podMetrics.enabled
@@ -439,7 +451,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 489
+  linenumber: 490
   dependency: ""
   isglobal: false
 - key: observability.prometheus.scrapeAnnotations.enabled
@@ -451,7 +463,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 493
+  linenumber: 494
   dependency: ""
   isglobal: false
 - key: operator.additionalMaterializeCRDColumns
@@ -463,7 +475,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 90
+  linenumber: 87
   dependency: ""
   isglobal: false
 - key: operator.affinity
@@ -475,7 +487,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 293
+  linenumber: 290
   dependency: ""
   isglobal: false
 - key: operator.args.enableDatabaseNetworkPolicies
@@ -487,7 +499,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 66
+  linenumber: 63
   dependency: ""
   isglobal: false
 - key: operator.args.enableInternalStatementLogging
@@ -523,7 +535,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 76
+  linenumber: 73
   dependency: ""
   isglobal: false
 - key: operator.args.installV1CRD
@@ -535,19 +547,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 81
-  dependency: ""
-  isglobal: false
-- key: operator.args.licenseKeyIntermediateCerts
-  type: list
-  notationtype: ""
-  autodefault: ""
-  default: '`[]`'
-  autodescription: Root-signed intermediate certificates whose keys may also sign license keys. Requires an operator built from v26.49.0-dev.0 or later.
-  description: ""
-  section: ""
-  column: 5
-  linenumber: 61
+  linenumber: 78
   dependency: ""
   isglobal: false
 - key: operator.args.startupLogFilter
@@ -595,7 +595,7 @@
   description: How often orchestratord reloads its webhook TLS certificate from disk and, when the CA changes, refreshes the conversion webhook's CA bundle. Must be shorter than the certificate's lifetime. Accepts a humantime duration (e.g. "1h", "30m"). Leave null to use the binary default. Only used if `installV1CRD` is true.
   section: ""
   column: 5
-  linenumber: 87
+  linenumber: 84
   dependency: ""
   isglobal: false
 - key: operator.certificate.caDuration
@@ -607,7 +607,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 109
+  linenumber: 106
   dependency: ""
   isglobal: false
 - key: operator.certificate.caRenewBefore
@@ -619,7 +619,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 112
+  linenumber: 109
   dependency: ""
   isglobal: false
 - key: operator.certificate.secretName
@@ -631,7 +631,7 @@
   description: Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret".
   section: ""
   column: 5
-  linenumber: 104
+  linenumber: 101
   dependency: ""
   isglobal: false
 - key: operator.certificate.source
@@ -643,7 +643,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 102
+  linenumber: 99
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.accountID
@@ -655,7 +655,7 @@
   description: ""
   section: ""
   column: 9
-  linenumber: 129
+  linenumber: 126
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.enabled
@@ -667,7 +667,7 @@
   description: ""
   section: ""
   column: 9
-  linenumber: 127
+  linenumber: 124
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.iam.roles.connection
@@ -679,7 +679,7 @@
   description: ""
   section: ""
   column: 13
-  linenumber: 135
+  linenumber: 132
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.iam.roles.environment
@@ -691,7 +691,7 @@
   description: ""
   section: ""
   column: 13
-  linenumber: 133
+  linenumber: 130
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp
@@ -703,7 +703,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 138
+  linenumber: 135
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterLocation
@@ -715,7 +715,7 @@
   description: ""
   section: ""
   column: 11
-  linenumber: 157
+  linenumber: 154
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterName
@@ -727,7 +727,7 @@
   description: ""
   section: ""
   column: 11
-  linenumber: 155
+  linenumber: 152
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.notificationSubscription
@@ -739,7 +739,7 @@
   description: ""
   section: ""
   column: 11
-  linenumber: 153
+  linenumber: 150
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.watchedNodePools
@@ -751,7 +751,7 @@
   description: ""
   section: ""
   column: 11
-  linenumber: 159
+  linenumber: 156
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.region
@@ -763,7 +763,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 121
+  linenumber: 118
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.type
@@ -775,7 +775,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 118
+  linenumber: 115
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.analytics
@@ -787,7 +787,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 284
+  linenumber: 281
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.probe
@@ -799,7 +799,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 282
+  linenumber: 279
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.support
@@ -811,7 +811,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 283
+  linenumber: 280
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.system
@@ -823,7 +823,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 281
+  linenumber: 278
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.analytics
@@ -835,7 +835,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 279
+  linenumber: 276
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.catalogServer
@@ -847,7 +847,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 278
+  linenumber: 275
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.default
@@ -859,7 +859,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 274
+  linenumber: 271
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.probe
@@ -871,7 +871,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 276
+  linenumber: 273
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.support
@@ -883,7 +883,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 277
+  linenumber: 274
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.system
@@ -895,7 +895,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 275
+  linenumber: 272
   dependency: ""
   isglobal: false
 - key: operator.clusters.swap_enabled
@@ -907,7 +907,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 166
+  linenumber: 163
   dependency: ""
   isglobal: false
 - key: operator.image.pullPolicy
@@ -938,7 +938,7 @@
   type: string
   notationtype: ""
   autodefault: ""
-  default: '`"v26.49.1"`'
+  default: '`"v26.51.0-rc.1"`'
   autodescription: The tag/version of the operator image to be used
   description: ""
   section: ""
@@ -955,7 +955,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 289
+  linenumber: 286
   dependency: ""
   isglobal: false
 - key: operator.podDisruptionBudget.enabled
@@ -1003,7 +1003,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 305
+  linenumber: 302
   dependency: ""
   isglobal: false
 - key: operator.resources.requests
@@ -1015,7 +1015,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 301
+  linenumber: 298
   dependency: ""
   isglobal: false
 - key: operator.secretsController
@@ -1027,7 +1027,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 312
+  linenumber: 309
   dependency: ""
   isglobal: false
 - key: operator.tolerations
@@ -1039,7 +1039,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 297
+  linenumber: 294
   dependency: ""
   isglobal: false
 - key: rbac.create
@@ -1051,7 +1051,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 465
+  linenumber: 466
   dependency: ""
   isglobal: false
 - key: schedulerName
@@ -1063,7 +1063,7 @@
   description: Optionally use a non-default kubernetes scheduler.
   section: ""
   column: 1
-  linenumber: 468
+  linenumber: 469
   dependency: ""
   isglobal: false
 - key: serviceAccount.annotations
@@ -1075,7 +1075,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 479
+  linenumber: 480
   dependency: ""
   isglobal: false
 - key: serviceAccount.create
@@ -1087,7 +1087,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 473
+  linenumber: 474
   dependency: ""
   isglobal: false
 - key: serviceAccount.name
@@ -1099,7 +1099,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 475
+  linenumber: 476
   dependency: ""
   isglobal: false
 - key: storage.storageClass.allowVolumeExpansion
@@ -1111,7 +1111,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 561
+  linenumber: 562
   dependency: ""
   isglobal: false
 - key: storage.storageClass.create
@@ -1123,7 +1123,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 547
+  linenumber: 548
   dependency: ""
   isglobal: false
 - key: storage.storageClass.name
@@ -1135,7 +1135,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 550
+  linenumber: 551
   dependency: ""
   isglobal: false
 - key: storage.storageClass.parameters
@@ -1147,7 +1147,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 556
+  linenumber: 557
   dependency: ""
   isglobal: false
 - key: storage.storageClass.provisioner
@@ -1159,7 +1159,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 553
+  linenumber: 554
   dependency: ""
   isglobal: false
 - key: storage.storageClass.reclaimPolicy
@@ -1171,7 +1171,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 562
+  linenumber: 563
   dependency: ""
   isglobal: false
 - key: storage.storageClass.volumeBindingMode
@@ -1183,7 +1183,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 563
+  linenumber: 564
   dependency: ""
   isglobal: false
 - key: telemetry.enabled
@@ -1195,7 +1195,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 496
+  linenumber: 497
   dependency: ""
   isglobal: false
 - key: tls.defaultCertificateSpecs
@@ -1207,6 +1207,6 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 524
+  linenumber: 525
   dependency: ""
   isglobal: false
