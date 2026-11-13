@@ -5087,7 +5087,7 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         with c.sql_cursor() as control:
             assert peeker_ready.wait(timeout=30), "peeker failed to connect"
             # Arm: every fast-path peek now parks right after registering.
-            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=pause'")
             failpoint_armed.set()
             # Give the peeker time to issue its SELECT and park. It stays parked
             # until we turn the failpoint off, so this only has to outlast plan +
@@ -5099,7 +5099,7 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             # Resume the peek: `client.peek()` now fails (cluster gone) and the
             # frontend asks the coordinator to retire the already-retired peek,
             # which must be a no-op.
-            control.execute(f"SET failpoints = '{failpoint}=off'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=off'")
 
         peek_thread.join(timeout=30)
 
@@ -5193,7 +5193,7 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         with c.sql_cursor() as control:
             assert subscriber_ready.wait(timeout=30), "subscriber failed to connect"
             # Arm: every subscribe now parks right after sequencing.
-            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=pause'")
             failpoint_armed.set()
             # Give the subscriber time to sequence its SUBSCRIBE and park. It
             # stays parked until we turn the failpoint off, so this only has to
@@ -5205,7 +5205,7 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
             # Resume the subscribe: shipping its dataflow now fails on the
             # missing index collection, which must surface as an error on the
             # subscribing session, not a coordinator panic.
-            control.execute(f"SET failpoints = '{failpoint}=off'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=off'")
 
         subscribe_thread.join(timeout=30)
 
@@ -5275,8 +5275,8 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     # would never get to append. The window has to outlast a peek, one subscribe
     # dataflow installation, and the UPDATE's own wait for the oracle.
     failpoint = "group_commit_before_apply_write"
-    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
-    disarm = f"SET failpoints = '{failpoint}=off'"
+    arm = f"SET unsafe_failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET unsafe_failpoints = '{failpoint}=off'"
 
     def occ_writes() -> tuple[int, int]:
         """Session read-then-writes sequenced through OCC, and how many of their
@@ -5549,7 +5549,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
             for statement, failpoints in cases:
                 for failpoint in failpoints:
                     cur.execute(
-                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                        f"SET unsafe_failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
                     )
                     try:
                         cur.execute(statement.encode())
@@ -5564,7 +5564,9 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
                             f"{statement!r} succeeded with {failpoint} set to panic"
                         )
                     finally:
-                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+                        cur.execute(
+                            f"SET unsafe_failpoints = '{failpoint}=off'".encode()
+                        )
             # The statements failed on their own; the process they ran in did not.
             cur.execute("SELECT count(*) FROM t")
             assert cur.fetchall() == [(1,)]
@@ -6803,7 +6805,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
         ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
         ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
         ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
-        SET failpoints = 'cluster_controller_hold_readiness=return';
+        SET unsafe_failpoints = 'cluster_controller_hold_readiness=return';
         """,
         user="mz_system",
         port=6877,
@@ -6870,7 +6872,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
               AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
             """)
         c.sql(
-            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            "SET unsafe_failpoints = 'cluster_controller_hold_readiness=off'",
             user="mz_system",
             port=6877,
         )
@@ -6898,7 +6900,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
     finally:
         c.exec("materialized", "kill", "-CONT", pid)
         c.sql(
-            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            "SET unsafe_failpoints = 'cluster_controller_hold_readiness=off'",
             user="mz_system",
             port=6877,
         )

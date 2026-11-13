@@ -601,6 +601,9 @@ impl Value for Failpoints {
                     invalid_values: input.to_vec(),
                     reason: "missing failpoint action".into(),
                 })?;
+            // NOTE: This configures the failpoint for the whole process, so the
+            // unsafe-mode gate on the variable only protects paths that check
+            // visibility before parsing.
             fail::cfg(failpoint, action).map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: input.to_vec(),
                 reason: e.to_string(),
