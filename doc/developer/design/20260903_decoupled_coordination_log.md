@@ -38,8 +38,10 @@ isolated shutdown negative control pass. This is not a full parallel stress run.
 Replay-history cloning, compaction, implementation tests and both history gauges
 are removed (`8c09eb6c`). Independent review found no execution/recovery consumer.
 All-target checks, compute tests and real current-binary replica-metrics/HTTP-proxy
-workflows pass. Other affected library tests passed except the exact-size failure
-below, whose expectation is now updated. The regenerated metrics catalog also removes previously retired entries.
+workflows pass. The accepted 48-byte `ComputeCommand` expectation is now rebuilt
+and verified. The complete compute-client library suite passes without skips.
+Other affected library tests passed in the earlier remainder run. The regenerated
+metrics catalog also removes previously retired entries.
 No memory improvement has been measured.
 
 The repaired upsert load-test runs all original scenarios, including the two
@@ -87,12 +89,6 @@ distinct-version walkthrough and sink/CDC run.
   also deferred. Commit `1380f0ba` exposes unsupported coverage while preserving
   historical-only and unrelated workflows. Optional final preflight skips unknown
   or unsupported provenance before stopping processes.
-- The user accepted the 48-byte `ComputeCommand` size from the subscription
-  incarnation field in `8c9e18f0d7`. The exact-size assertion now expects 48,
-  matching the actual value in the prior reproduced failure. Rustfmt and diff
-  checks pass. The Rust test has not been rebuilt/rerun after this assertion-only
-  edit. The earlier remainder run explicitly skipped this test, so it is not
-  evidence of a fully green library suite.
 - Bounded-memory upsert-index hydration reproducibly OOMs at its original 3.5-GiB
   replica limit, including with current debug binaries. The current first run
   and exact retry record clusterd exit 137 and OOMKilled, with about 60 GB host
@@ -133,7 +129,9 @@ Both versioned candidates are copied locally and hashes verified. The old versio
 is in `native-history-candidate/`, the new in
 `native-history-compatible/artifacts/26.47.0-dev.0/`. Source/build/version manifests
 are in `native-history-compatible/`. Superseded binaries and redundant archives
-were removed. Local disk headroom was 37 GiB at last check.
+were removed. Local disk headroom is 33 GiB after the focused Rust rebuild.
+Its transient units are inactive. The local check used one Cargo job, a 6-GiB
+memory cap, two CPUs and disk/time guards.
 
 The completed DDL fixture uses pinned mounted binaries and the existing dependency
 images. SQL Server uses the same upstream CU21 base as the repository image,
@@ -144,6 +142,9 @@ override separately from the unchanged Rust build inputs.
 Essential receipts:
 - Replay checks: `native-history-check.log`, `native-history-reproduce.log`,
   `native-history-remainder.log`, `native-history-final-format-delta.txt`.
+- Accepted command size and complete compute-client suite:
+  `native-command-size-local.log`, `native-compute-client-final.log` and their
+  corresponding `-result.json` resource-guard receipts.
 - Metrics/proxy: `native-history-metrics-evidence.tar.gz`.
 - Upsert: `native-history-upsert-evidence.tar.gz` and
   `native-history-upsert-reproduce.log`.
