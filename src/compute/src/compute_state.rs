@@ -389,11 +389,13 @@ impl ComputeState {
         use mz_compute_types::dyncfgs::*;
 
         let config = &self.worker_config;
+        // The one scratch path every scratch consumer below is fed from.
+        let scratch = self.context.scratch_directory.clone();
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
         if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
+            if let Some(path) = &scratch {
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
                 let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
                 let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
@@ -435,7 +437,7 @@ impl ComputeState {
         // on every `apply_worker_config` tick is safe. The pager module is
         // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
         #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
+        if let Some(path) = &scratch {
             mz_ore::pager::set_scratch_dir(path.clone());
             mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
         } else {
@@ -484,7 +486,7 @@ impl ComputeState {
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
             let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
 
-            let backend = if self.context.scratch_directory.is_some() {
+            let backend = if scratch.is_some() {
                 Backend::File
             } else {
                 Backend::Swap
@@ -523,7 +525,7 @@ impl ComputeState {
         {
             use mz_storage_types::dyncfgs::{ENABLE_UPSERT_PAGED_SPILL, ENABLE_UPSERT_V2};
             use mz_timely_util::pool_config::{
-                PoolPagerConfig, apply_pool_config, spill_threads_for_workers,
+                ExtentBackend, PoolPagerConfig, apply_pool_config, spill_threads_for_workers,
             };
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
@@ -561,12 +563,32 @@ impl ComputeState {
                 // write then pages out immediately, the pre-tier behavior.
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-                let applied = apply_pool_config(PoolPagerConfig {
-                    budget_bytes: total,
-                    spill_threads,
-                    eager_backing,
-                    rss_target_bytes: rss_target,
-                });
+                // The file store lives in its own subdirectory so its files
+                // cannot collide with other scratch users. It sizes itself to
+                // the volume's free space, so it assumes no other writer fills
+                // the volume. lgalloc and the pager's file backend use the
+                // same directory, but are not enabled alongside the store.
+                let backend = match &scratch {
+                    Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
+                        ExtentBackend::File {
+                            dir: scratch.join("pool"),
+                            capacity_bytes: None,
+                        }
+                    }
+                    _ => ExtentBackend::Swap,
+                };
+                let applied = apply_pool_config(
+                    PoolPagerConfig {
+                        budget_bytes: total,
+                        spill_threads,
+                        eager_backing,
+                        rss_target_bytes: rss_target,
+                        file_release_interval: COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL
+                            .get(config),
+                        file_release_bytes: COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES.get(config),
+                    },
+                    backend,
+                );
                 if applied {
                     info!(
                         compute_spill,
