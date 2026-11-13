@@ -6,10 +6,12 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next run bounded current-binary parallel-workload promotion acceptance with the
-strict native error policy. Then reconcile the remaining index-publication and
-source-status cases before claiming broader acceptance. The error-filter unit
-checks and shutdown negative control pass, but are not a full stress run.
+Parallel-workload promotion acceptance now reproducibly fails the sealed-collection
+query with `invalid catalog JSON: expected string or object`. The strict error
+policy exposes the failure. Next inspect the bounded post-failure catalog probes
+and actual query plan, then repair the identified expression without weakening
+decoders or ignored-error policy. The relevant source audit found heterogeneous
+numeric and enum-object IDs, but premature decoding is not yet established.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -44,6 +46,10 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 ## Live gaps and approved deferrals
 
+- Native parallel promotion stress fails before completing its lifecycle checks.
+  Both unchanged seed-42 attempts fail on the same frontier query, without a
+  resource-guard failure. Cleanup completes. The diagnostic attempt adds read-only
+  probes after failure, before teardown. No production fix is implemented yet.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
@@ -67,18 +73,24 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
 Owned worker `i-0b3699392b71bd7d2` expires at
 `2026-11-13T20:31:57.921677+00:00`. Its helper and receipts are in
-`upsert-oom-investigation/`. No test runtime or build remains. The baseline build
-succeeded with one Cargo job and unchanged lockfile. SSO refresh expired, but
+`upsert-oom-investigation/`. Diagnostic project `aj-native-parallel-2696ddf7`
+is running under the existing aggregate budget. Its supervisor has an independent
+systemd post-stop cleanup, verified with a real SIGKILL. The baseline build
+succeeded and its binaries are preserved locally. SSO refresh expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
 in memory, expiring at 20:23 UTC. No access rules changed. The prior worker
 `i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
 40 GiB, eight CPUs and no swap. Builds use one job, 32 GiB and four CPUs.
-Preserve 30 GiB disk and 2 GiB available RAM. All investigation containers were
-removed and raw evidence copied locally. Do not overlap builds with test runtimes.
+Preserve 30 GiB disk and 2 GiB available RAM. Completed runs' containers are removed.
+Do not overlap builds with test runtimes.
 
 Essential pointers, relative to the evidence root:
+- Parallel failure: `upsert-oom-investigation/parallel-first-evidence.tar.gz`,
+  `parallel-runtime-repeat.log`, and the current project's `catalog-probes.json`.
+  `parallel-provenance-review.md` documents exact source-guard exceptions.
+  The missing mc fixture was built from its unchanged repository recipe.
 - Upsert diagnosis, controls and independent review:
   `upsert-oom-investigation/findings.md` and `comparison-review.md` there.
   Its native/baseline profile archives, repeated-baseline archive, function-level
