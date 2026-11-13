@@ -6,12 +6,15 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Parallel-workload promotion acceptance now reproducibly fails the sealed-collection
-query with `invalid catalog JSON: expected string or object`. The strict error
-policy exposes the failure. Next inspect the bounded post-failure catalog probes
-and actual query plan, then repair the identified expression without weakening
-decoders or ignored-error policy. The relevant source audit found heterogeneous
-numeric and enum-object IDs, but premature decoding is not yet established.
+The unindexed frontier query pushes an ID predicate into heterogeneous catalog
+input and fails decoding numeric IDs from other record kinds. A scoped SQL CASE
+guard fixes the full query in a side-by-side live comparison. The added regression
+query fails before the guard and returns the expected MV observations with it.
+Both changes remain uncommitted pending compiled verification.
+
+Next finish the guarded native/sqllogictest build, run the full frontier testdrive
+file, check the catalog plan golden through its harness, and rerun unchanged
+parallel promotion stress. Keep malformed matching-kind decoder errors intact.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -48,8 +51,9 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 - Native parallel promotion stress fails before completing its lifecycle checks.
   Both unchanged seed-42 attempts fail on the same frontier query, without a
-  resource-guard failure. Cleanup completes. The diagnostic attempt adds read-only
-  probes after failure, before teardown. No production fix is implemented yet.
+  resource-guard failure. Cleanup completes. The SQL guard has live query-level
+  proof, but the rebuilt workload has not run. Additional three-second probes
+  timed out in one attempt, separately from the successful full-query comparison.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
@@ -73,10 +77,11 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
 Owned worker `i-0b3699392b71bd7d2` expires at
 `2026-11-13T20:31:57.921677+00:00`. Its helper and receipts are in
-`upsert-oom-investigation/`. Diagnostic project `aj-native-parallel-2696ddf7`
-is running under the existing aggregate budget. Its supervisor has an independent
-systemd post-stop cleanup, verified with a real SIGKILL. The baseline build
-succeeded and its binaries are preserved locally. SSO refresh expired, but
+`upsert-oom-investigation/`. Build `aj-native-frontier-build` is running without a
+test runtime. Reused baseline outputs had stale generated keywords. The exact
+failure was reproduced, then only packages with changed generated inputs were
+invalidated. No parser or Persist source changed. Runtime supervision has an
+independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
 in memory, expiring at 20:23 UTC. No access rules changed. The prior worker
 `i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
@@ -88,7 +93,9 @@ Do not overlap builds with test runtimes.
 
 Essential pointers, relative to the evidence root:
 - Parallel failure: `upsert-oom-investigation/parallel-first-evidence.tar.gz`,
-  `parallel-runtime-repeat.log`, and the current project's `catalog-probes.json`.
+  `parallel-runtime-repeat.log`, and `frontier-decoding-proof-evidence.tar.gz`.
+  Build: `frontier-build-cache-fixed.log`, `guard_frontier_build.py` and
+  `build_frontier_candidate.sh`. The output includes sqllogictest for golden checks.
   `parallel-provenance-review.md` documents exact source-guard exceptions.
   The missing mc fixture was built from its unchanged repository recipe.
 - Upsert diagnosis, controls and independent review:
