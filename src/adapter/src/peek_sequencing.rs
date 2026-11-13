@@ -797,6 +797,8 @@ impl PeekClient {
             }
             _ => Default::default(),
         };
+        let lookup_keys_id =
+            (!materialized_index_routes.is_empty()).then(|| self.transient_id_gen.allocate_id().1);
         // TODO(peek-seq): validate_timeline_context can be expensive in real scenarios (not in
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
@@ -1215,7 +1217,7 @@ impl PeekClient {
                     optimizer_config,
                     self.optimizer_metrics.clone(),
                 )
-                .with_materialized_index_routes(materialized_index_routes);
+                .with_materialized_index_routes(materialized_index_routes, lookup_keys_id);
 
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",

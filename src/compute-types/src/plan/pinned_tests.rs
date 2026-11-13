@@ -95,6 +95,7 @@ fn imports_only() -> LirDataflowDescription {
             monotonic: true,
             with_snapshot: true,
             upper: Antichain::new(),
+            lookup: None,
         },
     );
     df.index_imports.insert(

@@ -307,7 +307,10 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
                     monotonic,
                     with_snapshot,
                     upper: _,
+                    lookup,
                 } = import;
+                // Pinned plans belong to long-lived dataflows, and lookups only to one-shot ones.
+                assert!(lookup.is_none(), "pinned dataflow with a lookup import");
                 (
                     id,
                     PinnedSourceImport {
@@ -588,6 +591,7 @@ impl PinnedDataflow {
                 monotonic,
                 with_snapshot,
                 upper: Antichain::new(),
+                lookup: None,
             };
             rebuilt_source_imports.insert(id, import);
         }

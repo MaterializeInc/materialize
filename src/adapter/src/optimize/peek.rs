@@ -65,13 +65,20 @@ pub struct Optimizer {
     /// Relations to read through a materialized index, chosen before the
     /// query's timestamp.
     materialized_index_routes: MaterializedIndexRoutes,
+    /// A transient id for the probe keys of a lookup join, if one is planned.
+    lookup_keys_id: Option<GlobalId>,
 }
 
 impl Optimizer {
     /// Reads the given relations through their materialized indexes. The
     /// caller must have chosen the timestamp with these routes applied.
-    pub fn with_materialized_index_routes(mut self, routes: MaterializedIndexRoutes) -> Self {
+    pub fn with_materialized_index_routes(
+        mut self,
+        routes: MaterializedIndexRoutes,
+        lookup_keys_id: Option<GlobalId>,
+    ) -> Self {
         self.materialized_index_routes = routes;
+        self.lookup_keys_id = lookup_keys_id;
         self
     }
 
@@ -95,6 +102,7 @@ impl Optimizer {
             metrics,
             duration: Default::default(),
             materialized_index_routes: Default::default(),
+            lookup_keys_id: None,
         }
     }
 
@@ -430,6 +438,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     !use_fast_path_optimizer || self.config.no_fast_path,
                     "The fast_path_optimizer shouldn't make a fast path plan slow path."
                 );
+
+                if let Some(keys_id) = self.lookup_keys_id {
+                    crate::optimize::materialized_index::plan_lookup_join(
+                        &mut df_desc,
+                        &self.materialized_index_routes,
+                        keys_id,
+                    );
+                }
 
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {

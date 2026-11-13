@@ -67,6 +67,11 @@ pub enum FilterResult {
     Keep,
     /// This dataflow is guaranteed to filter out all records in this part.
     Discard,
+    /// This dataflow does not need this part, for a reason its stats filter cannot
+    /// check, such as the part holding none of a lookup's keys. Dropped like
+    /// [`FilterResult::Discard`], but never audited, because an audit re-checks
+    /// only the stats filter.
+    Skip,
     /// This dataflow will keep all the rows, but the values are irrelevant:
     /// include the given single-row KV data instead.
     ReplaceWith {
@@ -622,6 +627,11 @@ where
                                 );
                                 continue;
                             }
+                        }
+                        FilterResult::Skip => {
+                            metrics.pushdown.parts_filtered_count.inc();
+                            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                            continue;
                         }
                         FilterResult::ReplaceWith { key, val } => {
                             part_desc.maybe_optimize(&cfg, key, val);

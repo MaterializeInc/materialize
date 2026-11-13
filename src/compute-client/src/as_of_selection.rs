@@ -1094,6 +1094,7 @@ mod tests {
                         monotonic: Default::default(),
                         with_snapshot: true,
                         upper: Default::default(),
+                        lookup: None,
                     },
                 )
             })

@@ -168,6 +168,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 monotonic,
                 with_snapshot: true,
                 upper: Antichain::new(),
+                lookup: None,
             },
         );
     }
@@ -292,6 +293,7 @@ impl<P, S, O> DataflowDescription<P, S, O> {
                     monotonic,
                     with_snapshot,
                     upper,
+                    lookup,
                 } = import;
                 let desc = SourceInstanceDesc {
                     arguments: SourceInstanceArguments {
@@ -305,6 +307,7 @@ impl<P, S, O> DataflowDescription<P, S, O> {
                     monotonic,
                     with_snapshot,
                     upper,
+                    lookup,
                 };
                 Ok((id, import))
             })
@@ -726,6 +729,24 @@ pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
     pub with_snapshot: bool,
     /// The initial known upper frontier for the source.
     pub upper: Antichain<Timestamp>,
+    /// Set when the import is read only at the keys another object of the
+    /// dataflow produces, like the lookup side of a join.
+    #[serde(default)]
+    pub lookup: Option<LookupImport>,
+}
+
+/// Reading a source import only at a set of keys.
+///
+/// NOTE(poc): rendering withholds the import's start until the `keys_from`
+/// object has produced every key at the dataflow's `as_of`, then fetches only
+/// parts whose stats for `key_column` may contain one of them. Only valid for
+/// one-shot dataflows, whose `as_of` is their only time.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LookupImport {
+    /// An object of the same dataflow whose rows are single-column keys.
+    pub keys_from: GlobalId,
+    /// The column of the import's storage collection the keys refer to.
+    pub key_column: usize,
 }
 
 /// An association of a global identifier to an expression.
@@ -771,6 +792,7 @@ mod tests {
             monotonic: false,
             with_snapshot: true,
             upper: Antichain::from_elem(Timestamp::MIN),
+            lookup: None,
         };
 
         let mut df = MirDataflowDescription::new("test".to_string());

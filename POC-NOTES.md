@@ -41,9 +41,9 @@ from serving it:
 
 Tradeoffs: lookups take tens of milliseconds instead of single milliseconds,
 plus object store round trips. Freshness follows the maintaining dataflow's
-lag, like an MV. Today it only serves lookups with literals on the leading
-key columns. Ad hoc joins need the lookup join (not built yet), and full
-scans are no faster than reading an MV.
+lag, like an MV. It serves lookups with literals on the leading key column
+and two-input ad hoc joins on it. Joins whose probe keys spread over the
+whole key range, and full scans, are no faster than reading an MV.
 
 ## SQL surface
 
@@ -104,6 +104,23 @@ honoring it would change existing MVs that set it. The POC leaves user
   any literal key prefix. Verified: with the materialized index's cluster at
   zero replicas, a non-key query on `t` still returns immediately, and a key
   lookup waits for the index and then sees the latest write.
+- Lookup join (`plan_lookup_join` in `materialized_index.rs`, `PendingLookup`
+  in `src/compute/src/render.rs`): when a peek dataflow joins a routed
+  materialized index at its key with one other input, the optimizer adds a
+  keys object (`Distinct` of the probe side's join key) ahead of the joining
+  object and marks the index's source import with
+  `SourceImport::lookup = { keys_from, key_column }`. Rendering withholds the
+  import's start signal until a collector operator has seen every key at the
+  `as_of` (keys are broadcast to all workers), then a part filter on
+  `persist_source` drops parts whose key-column stats hold none of the keys.
+  The join operator is the normal one: the lookup is a gated persist source
+  with a dynamic part filter, so the join stays exact on a superset of rows.
+  Dropped parts use a new `FilterResult::Skip`, which persist does not audit:
+  the pushdown audit re-checks only the MFP and panics (`panic_on_audit_failure`)
+  on parts dropped for any other reason. Limits: two-input joins, first key
+  column, probe side computed twice, applies only when the index is read once
+  in the dataflow, no cutover to a scan for wide key sets, recursive dataflows
+  fall back to an unfiltered read.
 - Durable catalog: `item_type(create_sql)` asserted `MATERIALIZED` is
   followed by `VIEW` and crashed the coordinator on the first
   `CREATE MATERIALIZED INDEX`. Mapped to `MaterializedView`.
@@ -138,7 +155,13 @@ honoring it would change existing MVs that set it. The POC leaves user
 5. **Durable catalog infers item types from `create_sql` words.** Any new
    `CREATE <words>` statement form needs `item_type()` updated, or the
    coordinator panics on the first create.
-6. **Bare `psql` timing with `echo '\timing on'` in zsh** turns `\t` into a
+6. **A peek that panics a replica crash-loops the cluster.** While building
+   the lookup join, a render panic in a one-shot SELECT made the serving
+   replica abort, and after each relaunch the controller replayed the same
+   peek, so the replica crashed every ~6 s until the query was cancelled. A
+   bad ad hoc query can take a cluster down indefinitely. Worth checking how
+   the controller treats peeks across replica restarts.
+7. **Bare `psql` timing with `echo '\timing on'` in zsh** turns `\t` into a
    tab. Not an MZ bug, just a trap for benchmark scripts.
 
 ## Measurements so far (Docker v26.50, local-file blob, no S3 latency)
@@ -185,3 +208,22 @@ unsorted through 80 writes.
 Caveat: no S3. Each lookup touches about one part per run, so on S3 expect
 roughly one round trip per run (fetched in parallel), plus 256 KiB parts here
 vs 128 MiB by default.
+
+## Lookup join measurements (same setup, `serving` cluster)
+
+`SELECT ... FROM probe p JOIN t ON t.k = p.pk` with `t_k_mi` on `t`, against the
+same join on the plain MV `t_plain` (2.4M rows, 721 parts). Results identical
+in every case. Five runs each, first run cold.
+
+| Probe | Path | Parts fetched / skipped | Latency |
+|---|---|---|---|
+| 5 keys | lookup join | 4 / 717 | 15 to 37 ms (1.07 s cold) |
+| 5 keys | plain MV join | 721 / 0 | about 1.1 s |
+| 2000 keys, contiguous | lookup join | 2 / 720 | 31 ms |
+| 2000 keys, contiguous | plain MV join | 722 / 0 | about 1.1 s |
+| 2000 keys, spread over the range | lookup join | 640 / 82 | about 0.9 s |
+| 2000 keys, spread over the range | plain MV join | 722 / 0 | about 1.1 s |
+
+Spread keys touch most parts, so the lookup degrades to a scan. A real
+version needs a cost cutoff that falls back to the plain read, and smaller
+parts (or ranged reads within parts) to keep spread lookups selective.

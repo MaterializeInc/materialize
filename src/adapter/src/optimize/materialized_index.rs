@@ -21,10 +21,11 @@
 //! routed plan's dependencies, and hands the routes to the peek optimizer, which
 //! applies them with [`apply_routes`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use mz_compute_types::dataflows::{BuildDesc, LookupImport, MirDataflowDescription};
 use mz_controller_types::ClusterId;
-use mz_expr::{Columns, Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Columns, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::{GlobalId, ReprRelationType};
 use mz_sql::plan::MaterializedIndexDesc;
 
@@ -133,10 +134,7 @@ fn pinned_columns(expr: &MirRelationExpr) -> Vec<(GlobalId, usize)> {
             let mut offset = 0;
             for input in inputs {
                 let arity = input.arity();
-                if let MirRelationExpr::Get {
-                    id: Id::Global(on), ..
-                } = input
-                {
+                if let Some(on) = global_get(input) {
                     for column in 0..arity {
                         let column_expr = MirScalarExpr::column(offset + column);
                         let related = equivalences.iter().any(|class| {
@@ -149,7 +147,7 @@ fn pinned_columns(expr: &MirRelationExpr) -> Vec<(GlobalId, usize)> {
                                 })
                         });
                         if related {
-                            pinned.push((*on, column));
+                            pinned.push((on, column));
                         }
                     }
                 }
@@ -186,4 +184,134 @@ pub fn apply_routes(expr: &mut MirRelationExpr, routes: &MaterializedIndexRoutes
         }
         *e = MirRelationExpr::global_get(route.id, route.typ.clone()).project(position);
     });
+}
+
+/// Reads a routed materialized index as a lookup when an object of the
+/// dataflow joins it, at its leading key column, with one other input.
+///
+/// Adds an object `keys_id` holding the distinct probe-side keys, ahead of the
+/// joining object, and marks the materialized index's import as a lookup on it.
+/// Rendering then fetches only parts whose key range may hold a probe key. That
+/// keeps a superset of the rows the join can match, so the join stays exact.
+///
+/// NOTE(poc): the probe side is computed twice, once for the keys and once in
+/// the join. Applies only when the materialized index is read exactly once in
+/// the dataflow, so no other reader sees the restricted import.
+pub fn plan_lookup_join(
+    df_desc: &mut MirDataflowDescription,
+    routes: &MaterializedIndexRoutes,
+    keys_id: GlobalId,
+) -> bool {
+    let lookups: BTreeSet<GlobalId> = routes.values().map(|route| route.id).collect();
+    let mut found: Option<(usize, GlobalId, MirRelationExpr)> = None;
+    for (position, object) in df_desc.objects_to_build.iter().enumerate() {
+        object.plan.as_inner().visit_pre(|e| {
+            if found.is_some() {
+                return;
+            }
+            let MirRelationExpr::Join {
+                inputs,
+                equivalences,
+                ..
+            } = e
+            else {
+                return;
+            };
+            if inputs.len() != 2 {
+                return;
+            }
+            let arities = [inputs[0].arity(), inputs[1].arity()];
+            for (lookup_side, probe_side) in [(0, 1), (1, 0)] {
+                let Some(mi) = global_get(&inputs[lookup_side]).filter(|id| lookups.contains(id))
+                else {
+                    continue;
+                };
+                let offset = |side: usize| if side == 0 { 0 } else { arities[0] };
+                let key_column = MirScalarExpr::column(offset(lookup_side));
+                let probe_columns = offset(probe_side)..offset(probe_side) + arities[probe_side];
+                let probe_key = equivalences
+                    .iter()
+                    .filter(|class| class.contains(&key_column))
+                    .flat_map(|class| class.iter())
+                    .find(|expr| {
+                        let support = expr.support();
+                        !support.is_empty() && support.iter().all(|c| probe_columns.contains(c))
+                    });
+                let Some(probe_key) = probe_key else {
+                    continue;
+                };
+                let mut probe_key = probe_key.clone();
+                probe_key.visit_pre_mut(|e| {
+                    if let MirScalarExpr::Column(c, _) = e {
+                        *c -= probe_columns.start;
+                    }
+                });
+                let probe = match &inputs[probe_side] {
+                    MirRelationExpr::ArrangeBy { input, .. } => (**input).clone(),
+                    other => other.clone(),
+                };
+                let mut has_locals = false;
+                probe.visit_pre(|e| {
+                    has_locals |= matches!(
+                        e,
+                        MirRelationExpr::Get {
+                            id: Id::Local(_),
+                            ..
+                        }
+                    );
+                });
+                if has_locals {
+                    continue;
+                }
+                let keys = probe
+                    .map_one(probe_key)
+                    .project(vec![arities[probe_side]])
+                    .distinct();
+                found = Some((position, mi, keys));
+                return;
+            }
+        });
+    }
+    let Some((position, mi, keys)) = found else {
+        return false;
+    };
+    let mut reads = 0;
+    for object in &df_desc.objects_to_build {
+        object.plan.as_inner().visit_pre(|e| {
+            if global_get(e) == Some(mi) && matches!(e, MirRelationExpr::Get { .. }) {
+                reads += 1;
+            }
+        });
+    }
+    let Some(import) = df_desc.source_imports.get_mut(&mi) else {
+        return false;
+    };
+    if reads != 1 {
+        return false;
+    }
+    import.lookup = Some(LookupImport {
+        keys_from: keys_id,
+        key_column: 0,
+    });
+    df_desc.objects_to_build.insert(
+        position,
+        BuildDesc {
+            id: keys_id,
+            plan: OptimizedMirRelationExpr::declare_optimized(keys),
+        },
+    );
+    true
+}
+
+/// The collection `expr` reads, looking through operators that keep its columns.
+fn global_get(expr: &MirRelationExpr) -> Option<GlobalId> {
+    match expr {
+        MirRelationExpr::Get {
+            id: Id::Global(id), ..
+        } => Some(*id),
+        MirRelationExpr::ArrangeBy { input, .. } | MirRelationExpr::Filter { input, .. } => {
+            global_get(input)
+        }
+        _ => None,
+    }
 }

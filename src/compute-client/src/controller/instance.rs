@@ -1552,6 +1552,7 @@ impl Instance {
                     monotonic: import.monotonic,
                     with_snapshot: import.with_snapshot,
                     upper: frontiers.write_frontier,
+                    lookup: import.lookup,
                 },
             );
         }

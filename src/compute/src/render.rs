@@ -170,7 +170,7 @@ use crate::logging::compute::{
 };
 use crate::render::columnar::{
     ColCollection, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
-    concat_many, flat_map_datums,
+    columnar_to_vec, concat_many, flat_map_datums,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
@@ -251,6 +251,8 @@ pub fn build_compute_dataflow(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         let mut imported_sources = Vec::new();
+        // Lookup imports waiting for their keys, by the object that produces the keys.
+        let mut pending_lookups: BTreeMap<GlobalId, PendingLookup> = BTreeMap::new();
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = MzProbeHandle::default();
 
@@ -293,25 +295,51 @@ pub fn build_compute_dataflow(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
-                        DataflowErrorSer,
-                        ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
-                        _,
-                    >(
-                        inner,
-                        *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        import.desc.storage_metadata.clone(),
-                        read_schema,
-                        dataflow.as_of.clone(),
-                        snapshot_mode,
-                        until.clone(),
-                        mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone().into_send_future(),
-                        ErrorHandler::Halt("compute_import"),
-                    );
+                    let import_start = start_signal.clone().into_send_future();
+                    let (source_start, part_filter) = match &import.lookup {
+                        Some(lookup) => {
+                            let read_desc = read_schema
+                                .as_ref()
+                                .unwrap_or(&import.desc.storage_metadata.relation_desc);
+                            let (pending, keys_ready, part_filter) = PendingLookup::new(
+                                read_desc,
+                                import
+                                    .desc
+                                    .storage_metadata
+                                    .relation_desc
+                                    .get_name(lookup.key_column),
+                            );
+                            pending_lookups.insert(lookup.keys_from, pending);
+                            let start = async move {
+                                import_start.await;
+                                // A dropped sender also starts the import, unfiltered.
+                                let _ = keys_ready.await;
+                            };
+                            (start.boxed(), Some(part_filter))
+                        }
+                        None => (import_start.boxed(), None),
+                    };
+                    let (mut ok_stream, err_stream, token) =
+                        persist_source::persist_source_with_part_filter::<
+                            DataflowErrorSer,
+                            ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
+                            _,
+                        >(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            import.desc.storage_metadata.clone(),
+                            read_schema,
+                            dataflow.as_of.clone(),
+                            snapshot_mode,
+                            until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            source_start,
+                            ErrorHandler::Halt("compute_import"),
+                            part_filter,
+                        );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -523,6 +551,19 @@ pub fn build_compute_dataflow(
                                 .leave_region(context.scope)
                         },
                     );
+                    if let (Some(pending), Some(as_of)) = (
+                        pending_lookups.remove(&object.id),
+                        dataflow.as_of.as_ref().and_then(|a| a.as_option().copied()),
+                    ) {
+                        // A `Distinct` renders only as an arrangement, so read the keys out of
+                        // one when the bundle has no unarranged collection.
+                        let key = match &bundle.collection {
+                            Some(_) => None,
+                            None => bundle.arranged.keys().next().cloned(),
+                        };
+                        let (oks, _errs) = bundle.as_specific_collection(key.as_deref());
+                        pending.collect_keys(columnar_to_vec(oks), as_of);
+                    }
                     let global_id = object.id;
                     context.log_dataflow_global_id(
                         *bundle
@@ -2269,5 +2310,78 @@ impl Pairer {
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)
+    }
+}
+
+/// A lookup import whose source waits for the keys another object of the dataflow produces.
+///
+/// NOTE(poc): dropping a `PendingLookup` without collecting keys starts its source unfiltered,
+/// which keeps lookups correct in shapes the render loop doesn't hook, like recursive dataflows.
+struct PendingLookup {
+    keys: Rc<RefCell<Option<Vec<Row>>>>,
+    ready: oneshot::Sender<()>,
+}
+
+impl PendingLookup {
+    /// Returns the pending lookup, a future that resolves once its keys are known (or it is
+    /// dropped), and a part filter that keeps parts whose stats for `key_name` may contain a key.
+    fn new(
+        read_desc: &mz_repr::RelationDesc,
+        key_name: &mz_repr::ColumnName,
+    ) -> (Self, oneshot::Receiver<()>, persist_source::PartFilter) {
+        let keys: Rc<RefCell<Option<Vec<Row>>>> = Rc::default();
+        let (ready, keys_ready) = oneshot::channel();
+        let key_column = read_desc
+            .iter_all()
+            .find(|(_, name, _)| *name == key_name)
+            .map(|(idx, _, _)| *idx);
+        let part_filter: persist_source::PartFilter = Box::new({
+            let keys = Rc::clone(&keys);
+            move |stats| {
+                let keys = keys.borrow();
+                let (Some(key_column), Some(keys)) = (key_column, keys.as_ref()) else {
+                    return true;
+                };
+                let arena = RowArena::new();
+                let range = stats.col_stats(&key_column, &arena);
+                keys.iter().any(|key| range.may_contain(key.unpack_first()))
+            }
+        });
+        (Self { keys, ready }, keys_ready, part_filter)
+    }
+
+    /// Gathers every key in `keys` at `as_of` on every worker, then starts the lookup's source.
+    fn collect_keys<'scope>(
+        self,
+        keys: VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
+        as_of: mz_repr::Timestamp,
+    ) {
+        let Self {
+            keys: shared,
+            ready,
+        } = self;
+        let mut ready = Some(ready);
+        let mut counts: BTreeMap<Row, Diff> = BTreeMap::new();
+        timely::dataflow::operators::vec::Broadcast::broadcast(keys.inner).sink(
+            Pipeline,
+            "LookupKeys",
+            move |(input, frontier)| {
+                input.for_each(|_time, data| {
+                    for (row, _time, diff) in data.drain(..) {
+                        *counts.entry(row).or_default() += diff;
+                    }
+                });
+                // Every key is known once no update at or before `as_of` can still arrive.
+                if ready.is_some() && frontier.frontier().iter().all(|t| *t > as_of) {
+                    let rows = std::mem::take(&mut counts)
+                        .into_iter()
+                        .filter(|(_, diff)| diff.is_positive())
+                        .map(|(row, _)| row)
+                        .collect();
+                    *shared.borrow_mut() = Some(rows);
+                    let _ = ready.take().expect("checked").send(());
+                }
+            },
+        );
     }
 }
