@@ -21,11 +21,12 @@ need. This page covers three ways to reduce the number of nodes required:
 - [Move a replica off a node](#move-a-replica-off-a-node), when a single pod is
   keeping an otherwise idle node running.
 
-## Materialize pods aren't consolidated
+## Why bin packing strategies are required
 
-Node autoscalers can save cost by evicting pods from underused nodes and
-removing the nodes. Materialize opts its pods out of this: every `environmentd`
-and `clusterd` pod carries these annotations:
+**Materialize pods aren't consolidated.** Node autoscalers can save cost by
+evicting pods from underused nodes and removing the nodes, but Materialize opts
+its pods out of this. Every `environmentd` and `clusterd` pod carries these
+annotations:
 
 ```yaml
 cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
@@ -238,10 +239,10 @@ gcloud container clusters update <cluster-name> \
 
 The autoscaling profile applies to the whole GKE cluster, not just to
 Materialize, and it also makes the cluster autoscaler remove underused nodes
-sooner. Materialize pods are protected from this, as described in [Materialize
-pods aren't consolidated](#materialize-pods-arent-consolidated). Other workloads
-in the cluster are not: their pods are evicted and restarted on other nodes more
-often.
+sooner. Materialize pods are protected from this, as described in [Why bin
+packing strategies are required](#why-bin-packing-strategies-are-required).
+Other workloads in the cluster are not: their pods are evicted and restarted on
+other nodes more often.
 
 Before you enable the profile, check that everything else running in the
 cluster tolerates being restarted. To protect a workload that doesn't, give it
