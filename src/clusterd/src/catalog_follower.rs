@@ -300,25 +300,18 @@ pub(crate) async fn run(
         config.connection_context,
         persist.clone(),
     );
-    let opened = Catalog::open_committed(state_config, storage).await?;
+    let opened = Catalog::open_committed(state_config, storage, Some(build.clone())).await?;
     let mut catalog = opened.catalog;
     let initial = opened.initial_updates;
     let txns_shard = opened.txn_wal_shard;
-    let shard = opened
-        .expression_cache_shard
-        .context("catalog has no expression shard")?;
     // Admission above uses the real deployment build. Only plan selection and
     // decoding use the native prototype's shared namespace.
     let namespace = catalog
         .state()
         .written_plan_namespace_for_build(&build.to_string());
-    let store = ExpressionCacheHandle::open_plan_store_in_namespace(
-        build,
-        namespace.clone(),
-        &persist,
-        shard,
-    )
-    .await;
+    let store = opened
+        .plan_store
+        .context("native catalog has no plan store")?;
     let build = namespace;
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);

@@ -769,7 +769,7 @@ impl Fixture {
             .join()
             .await
             .expect("join after shutdown");
-        let opened = Box::pin(Catalog::open_committed(state_config, storage))
+        let opened = Box::pin(Catalog::open_committed(state_config, storage, None))
             .await
             .expect("reconstruct native catalog");
         Self {

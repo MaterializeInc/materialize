@@ -259,6 +259,7 @@ async fn catalog_positions_use_actual_commit_upper() {
     let mut opened = Catalog::open_committed(
         Catalog::diagnostic_state_config(&catalog.diagnostic_config),
         storage,
+        None,
     )
     .await
     .expect("reconstruct committed prefix");
@@ -501,7 +502,7 @@ async fn check_joined_serving_open(
         .expect("open committed replica reader");
     let mut replica_state = Catalog::diagnostic_state_config(&active.diagnostic_config);
     replica_state.build_info = build_info;
-    let replica = Catalog::open_committed(replica_state, replica_storage)
+    let replica = Catalog::open_committed(replica_state, replica_storage, None)
         .await
         .expect("reconstruct committed replica with compatible builtins")
         .catalog;
@@ -673,6 +674,7 @@ async fn committed_replay_rejects_builtin_fingerprint_mismatch() {
     let result = Catalog::open_committed(
         Catalog::diagnostic_state_config(&catalog.diagnostic_config),
         storage,
+        None,
     )
     .await;
     assert!(matches!(result, Err(CatalogError::Internal(message))
@@ -1030,7 +1032,7 @@ async fn exercise_dry_run_contention() {
         catalog.config().connection_context.clone(),
         persist,
     );
-    let mut peer = Box::pin(Catalog::open_committed(state, storage))
+    let mut peer = Box::pin(Catalog::open_committed(state, storage, None))
         .await
         .expect("open peer")
         .catalog;

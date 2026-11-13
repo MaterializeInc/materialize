@@ -47,6 +47,7 @@ async fn open_follower(active: &Catalog, persist: PersistClient, organization: U
     Catalog::open_committed(
         Catalog::diagnostic_state_config(&active.diagnostic_config),
         storage,
+        None,
     )
     .await
     .expect("reconstruct follower")

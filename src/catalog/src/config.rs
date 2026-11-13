@@ -159,7 +159,8 @@ pub struct StateConfig {
 /// handles and credentials are supplied locally and are never serialized here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicaCatalogConfig {
-    /// Written-plan namespace supplied by the provisioning writer. In development,
+    /// Expression build supplied by the provisioning writer, used for local-cache
+    /// reads and written-plan selection. In development,
     /// the provisioner must pair compatible sibling binaries. Version equality
     /// and successful plan decoding do not establish compatibility.
     pub plan_build: String,

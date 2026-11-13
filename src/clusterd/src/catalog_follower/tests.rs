@@ -140,6 +140,7 @@ pub(super) async fn committed(
             persist.clone(),
         ),
         storage,
+        None,
     ))
     .await
     .expect("reconstruct committed catalog");

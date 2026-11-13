@@ -3134,8 +3134,9 @@ impl CatalogState {
     /// The namespace for maintained plans, not a deployment identity. The
     /// prototype assumes both builds understand the full current encoding,
     /// including MIR. Replace this assertion with upstream pinned-plan format
-    /// compatibility once available. Best-effort expression caches remain local
-    /// to the exact build, and admission always uses the real build identity.
+    /// compatibility once available. Best-effort expression caches remain keyed
+    /// by the exact writer build, including for paired replicas reading them.
+    /// Admission always uses the real build identity.
     pub fn written_plan_namespace_for_build(&self, build: &str) -> String {
         if self.catalog_read_protection_enabled() {
             crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE.to_owned()

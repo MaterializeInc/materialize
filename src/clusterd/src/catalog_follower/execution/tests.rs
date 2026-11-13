@@ -512,6 +512,10 @@ impl Fixture {
             .join()
             .await
             .unwrap();
+        let build = config
+            .reconstruction
+            .plan_build_version(config.build_info)
+            .unwrap();
         let opened = Box::pin(Catalog::open_committed(
             writer.replica_config().into_state(
                 config.build_info,
@@ -520,23 +524,14 @@ impl Fixture {
                 persist.clone(),
             ),
             storage,
+            Some(build),
         ))
         .await
         .unwrap();
-        let build = config
-            .reconstruction
-            .plan_build_version(config.build_info)
-            .unwrap();
         let namespace = writer.state().written_plan_namespace();
-        let store = ExpressionCacheHandle::open_plan_store_in_namespace(
-            build,
-            namespace.clone(),
-            &persist,
-            opened
-                .expression_cache_shard
-                .expect("named expression shard"),
-        )
-        .await;
+        let store = opened
+            .plan_store
+            .expect("native reconstruction opens the plan store");
         let observer = opened.catalog;
         let mut mir = DataflowDescription::new("native source index".into());
         mir.import_source(source, desc.typ().clone(), true);

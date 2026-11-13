@@ -121,6 +121,7 @@ async fn exercise_liveness() {
             fixture.persist.clone(),
         ),
         storage,
+        None,
     ))
     .await
     .unwrap();

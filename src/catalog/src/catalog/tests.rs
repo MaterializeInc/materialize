@@ -110,7 +110,7 @@ async fn observed_catalog_progress_recovers_without_notifications() {
         .expect("catalog progress test operation");
     let mut config = Catalog::diagnostic_state_config(&writer.diagnostic_config);
     config.persist_client = observer;
-    let mut reader = Catalog::open_committed(config, storage)
+    let mut reader = Catalog::open_committed(config, storage, None)
         .await
         .expect("catalog progress test operation")
         .catalog;
@@ -1236,6 +1236,7 @@ async fn prewarming_denied_configuration_preserves_live_dyncfg() {
     let mut pending = Catalog::open_committed(
         Catalog::diagnostic_state_config(&writer.diagnostic_config),
         storage,
+        None,
     )
     .await
     .expect("reconstruct pending catalog")
@@ -1411,6 +1412,7 @@ async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
     let pending = Catalog::open_committed(
         Catalog::diagnostic_state_config(&writer.diagnostic_config),
         pending,
+        None,
     )
     .await
     .expect("reconstruct pending deployment");
@@ -2609,6 +2611,7 @@ async fn test_multi_subscriber_catalog() {
     let mut foreign_catalog = Catalog::open_committed(
         Catalog::diagnostic_state_config(&writer_catalog.diagnostic_config),
         foreign_storage,
+        None,
     )
     .await
     .expect("reconstruct foreign deployment follower")
@@ -2827,9 +2830,16 @@ async fn test_multi_subscriber_catalog() {
     config.remote_system_parameters = Some(BTreeMap::from([("max_tables".into(), "999".into())]));
     config.external_login_password_mz_system = Some("not-a-committed-password".into());
     config.enable_expression_cache_override = Some(true);
-    let opened = Catalog::open_committed(config, joined)
-        .await
-        .expect("open independent committed catalog");
+    let opened = Catalog::open_committed(
+        config,
+        joined,
+        Some(Catalog::expression_build_version(
+            writer_catalog.config().build_info,
+        )),
+    )
+    .await
+    .expect("open independent committed catalog");
+    assert!(opened.plan_store.is_some());
     let mut writer_catalog_peer = opened.catalog;
     let initial_updates = opened.initial_updates;
     let initial = crate::memory::implications::CatalogImplications::from_updates(

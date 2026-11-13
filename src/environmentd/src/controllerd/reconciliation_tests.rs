@@ -89,6 +89,7 @@ async fn disconnected_catalogs() -> (Catalog, Catalog, MetricsRegistry) {
             observer,
         ),
         storage,
+        None,
     ))
     .await
     .expect("reconstruct controller catalog")

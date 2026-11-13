@@ -277,6 +277,36 @@ impl ExpressionCache {
         ),
         mz_durable_cache::Error,
     > {
+        let (local_expressions, global_expressions, keys_to_remove) =
+            self.select_cached_expressions(current_items, remove_prior_versions, true);
+        let keys_to_remove: Vec<_> = keys_to_remove.iter().map(|key| (key, None)).collect();
+        self.durable_cache.try_set_many(&keys_to_remove).await?;
+
+        if remove_prior_versions {
+            self.durable_cache.upgrade_version().await;
+        }
+        if compact_shard {
+            let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
+            let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
+            self.durable_cache
+                .dangerous_compact_shard(move || fuel.get(), move || wait.get())
+                .await;
+        }
+        Ok((local_expressions, global_expressions))
+    }
+
+    /// Selects expressions for the caller's catalog prefix without changing the store.
+    /// A lagging reader may reject a newer entry but must not delete it.
+    fn select_cached_expressions(
+        &self,
+        current_items: &BTreeMap<GlobalId, RelationVersion>,
+        remove_prior_versions: bool,
+        include_global: bool,
+    ) -> (
+        BTreeMap<GlobalId, LocalExpressions>,
+        BTreeMap<GlobalId, GlobalExpressions>,
+        Vec<CacheKey>,
+    ) {
         let mut keys_to_remove = Vec::new();
         let mut local_expressions = BTreeMap::new();
         let mut global_expressions = BTreeMap::new();
@@ -292,7 +322,7 @@ impl ExpressionCache {
                 Ok(build_version) => build_version,
                 Err(err) => {
                     warn!("unable to parse build version: {key:?}: {err:?}");
-                    keys_to_remove.push((key.clone(), None));
+                    keys_to_remove.push(key.clone());
                     continue;
                 }
             };
@@ -313,12 +343,13 @@ impl ExpressionCache {
                         // A missing id means the item is gone, a different item version means the
                         // entry was optimized for another definition of it.
                         if current_items.get(&key.id) != Some(&expressions.item_version) {
-                            keys_to_remove.push((key.clone(), None));
+                            keys_to_remove.push(key.clone());
                         } else {
                             local_expressions.insert(key.id, expressions);
                         }
                     }
                     ExpressionType::Written { .. } => unreachable!("handled above"),
+                    ExpressionType::Global if !include_global => continue,
                     ExpressionType::Global => {
                         let expressions: GlobalExpressions = match bincode::deserialize(expressions)
                         {
@@ -338,7 +369,7 @@ impl ExpressionCache {
                                 .index_imports()
                                 .all(|id| current_items.contains_key(id))
                         {
-                            keys_to_remove.push((key.clone(), None));
+                            keys_to_remove.push(key.clone());
                         } else {
                             global_expressions.insert(key.id, expressions);
                         }
@@ -346,30 +377,10 @@ impl ExpressionCache {
                 }
             } else if remove_prior_versions {
                 // Remove expressions from previous build versions.
-                keys_to_remove.push((key.clone(), None));
+                keys_to_remove.push(key.clone());
             }
         }
-        let keys_to_remove: Vec<_> = keys_to_remove
-            .iter()
-            .map(|(key, expressions)| (key, expressions.as_ref()))
-            .collect();
-        self.durable_cache.try_set_many(&keys_to_remove).await?;
-
-        if remove_prior_versions {
-            // We've purged old build versions from the cache. Upgrade the backing Persist version
-            // as well.
-            self.durable_cache.upgrade_version().await;
-        }
-
-        if compact_shard {
-            let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
-            let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
-            self.durable_cache
-                .dangerous_compact_shard(move || fuel.get(), move || wait.get())
-                .await;
-        }
-
-        Ok((local_expressions, global_expressions))
+        (local_expressions, global_expressions, keys_to_remove)
     }
 
     fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
@@ -595,6 +606,26 @@ impl ExpressionCacheHandle {
         (Self::spawn(cache), local_expressions, global_expressions)
     }
 
+    /// Opens the plan store and reads valid local expressions without cache maintenance.
+    /// The supplied build identifies the paired writer, including its development
+    /// binary identity. Written-plan compatibility already authorizes its MIR encoding.
+    /// A stale catalog prefix may reject entries but must not delete them.
+    pub async fn open_plan_store_with_local_expressions(
+        build_version: Version,
+        written_plan_namespace: String,
+        persist: &PersistClient,
+        shard_id: ShardId,
+        current_items: &BTreeMap<GlobalId, RelationVersion>,
+    ) -> (Self, BTreeMap<GlobalId, LocalExpressions>) {
+        let cache = ExpressionCache {
+            build_version,
+            written_plan_namespace,
+            durable_cache: DurableCache::new(persist, shard_id, "expressions").await,
+        };
+        let (local, _, _) = cache.select_cached_expressions(current_items, false, false);
+        (Self::spawn(cache), local)
+    }
+
     /// Opens the per-build plan store without cache reconciliation or speculative deletion.
     /// Only binaries supporting written plans may share this shard.
     pub async fn open_plan_store(
@@ -607,7 +638,7 @@ impl ExpressionCacheHandle {
     }
 
     /// Opens immutable plans under an explicitly authorized namespace. Ordinary
-    /// local/global expression caches still belong to the exact build. Sharing a
+    /// local/global expression caches still belong to the exact writer build. Sharing a
     /// namespace asserts compatible encodings, not deployment admission.
     pub async fn open_plan_store_in_namespace(
         build_version: Version,
@@ -1009,6 +1040,61 @@ mod tests {
             store.read_plans(vec![(id, revision)]).await,
             Err(PlanStoreError::Codec(_))
         ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn cache_reads_do_not_reconcile_peer_entries() {
+        let persist = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+        let build: Version = "0.1.0+writer".parse().unwrap();
+        let id = GlobalId::User(1_000_000);
+        let local = gen_local_expressions();
+        let global = gen_global_expressions();
+        let writer =
+            ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard_id).await;
+        writer
+            .update(vec![(id, local.clone())], Vec::new(), BTreeSet::new())
+            .await;
+        let revision = Uuid::new_v4();
+        writer
+            .write_plans(vec![(id, revision, global.clone())])
+            .await
+            .unwrap();
+        let current = BTreeMap::from([(id, RelationVersion::root())]);
+        for (reader_build, items) in [
+            (build.clone(), BTreeMap::new()),
+            (
+                build.clone(),
+                BTreeMap::from([(id, RelationVersion::root().bump())]),
+            ),
+            ("0.1.0+other".parse().unwrap(), current.clone()),
+        ] {
+            let (_, locals) = ExpressionCacheHandle::open_plan_store_with_local_expressions(
+                reader_build,
+                build.to_string(),
+                &persist,
+                shard_id,
+                &items,
+            )
+            .await;
+            assert!(locals.is_empty());
+        }
+        // Stale and foreign readers did not remove the writer's entries. The
+        // retained handle also serves immutable revisions without another open.
+        let (reader, locals) = ExpressionCacheHandle::open_plan_store_with_local_expressions(
+            build.clone(),
+            build.to_string(),
+            &persist,
+            shard_id,
+            &current,
+        )
+        .await;
+        assert_eq!(locals, BTreeMap::from([(id, local)]));
+        assert_eq!(
+            reader.read_plans(vec![(id, revision)]).await.unwrap(),
+            BTreeMap::from([((id, revision), global)])
+        );
     }
 
     #[mz_ore::test(tokio::test)]

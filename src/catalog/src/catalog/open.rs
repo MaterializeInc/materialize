@@ -189,22 +189,17 @@ impl Catalog {
         config: StateConfig,
         input: crate::durable::CatalogSnapshot,
     ) -> Result<CatalogState, CatalogError> {
-        Self::reconstruct_state_and_updates(config, input)
+        Self::reconstruct_state_and_updates(config, input, None)
             .await
-            .map(|(state, _)| state)
+            .map(|result| result.state)
     }
 
     /// Replays a committed snapshot without committing or accepting durable changes.
     pub(super) async fn reconstruct_state_and_updates(
         config: StateConfig,
         input: crate::durable::CatalogSnapshot,
-    ) -> Result<
-        (
-            CatalogState,
-            Vec<crate::memory::implications::ParsedStateUpdate>,
-        ),
-        CatalogError,
-    > {
+        cache_build: Option<semver::Version>,
+    ) -> Result<InitializeStateResult, CatalogError> {
         let mut config = Self::diagnostic_state_config(&config);
         config.boot_ts = input.upper;
         let before = input.snapshot;
@@ -215,16 +210,21 @@ impl Catalog {
             false,
             input.deployment_generation,
         )?;
-        let (result, cleanup) =
-            Self::initialize_state_from_updates(config, input.updates, txn.transaction_mut(), None)
-                .await?;
+        let (result, cleanup) = Self::initialize_state_from_updates(
+            config,
+            input.updates,
+            txn.transaction_mut(),
+            None,
+            cache_build,
+        )
+        .await?;
         drop(cleanup);
         if txn.current_snapshot() != before {
             return Err(CatalogError::Internal(
                 "catalog reconstruction requires durable changes".into(),
             ));
         }
-        Ok((result.state, result.catalog_updates))
+        Ok(result)
     }
 
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
@@ -290,7 +290,8 @@ impl Catalog {
                 let mut config = config;
                 config.skip_migrations = true;
                 let (mut result, cleanup) =
-                    Self::initialize_state_from_updates(config, updates, &mut txn, None).await?;
+                    Self::initialize_state_from_updates(config, updates, &mut txn, None, None)
+                        .await?;
                 cleanup.await;
                 if txn.current_snapshot() != before {
                     return Err(CatalogError::Internal(
@@ -438,6 +439,7 @@ impl Catalog {
                 updates,
                 &mut txn,
                 Some((deploy_generation, reconciled)),
+                None,
             )
             .await?;
             if before
@@ -474,6 +476,7 @@ impl Catalog {
         mut updates: Vec<StateUpdate>,
         txn: &mut Transaction<'_>,
         bootstrap: Option<(u64, Vec<GlobalId>)>,
+        cache_build: Option<semver::Version>,
     ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), CatalogError> {
         for builtin_role in BUILTIN_ROLES {
             assert!(
@@ -712,50 +715,73 @@ impl Catalog {
         let expr_cache_enabled = config
             .enable_expression_cache_override
             .unwrap_or(enable_expr_cache_dyncfg);
-        let (mut expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled
-        {
-            info!(
-                ?config.enable_expression_cache_override,
-                ?enable_expr_cache_dyncfg,
-                "using expression cache for startup"
-            );
-            let current_items = txn
-                .get_items()
-                .flat_map(|item| {
-                    let item_version = latest_item_version(&item.extra_versions);
-                    std::iter::once(item.global_id)
-                        .chain(item.extra_versions.into_values())
-                        .map(move |gid| (gid, item_version))
-                })
-                .chain(
-                    txn.get_system_object_mappings()
-                        .map(|som| (som.unique_identifier.global_id, RelationVersion::root())),
-                )
-                .collect();
-            let dyncfgs = config.persist_client.dyncfgs().clone();
-            let build_version = Self::expression_build_version(config.build_info);
-            let expr_cache_config = ExpressionCacheConfig {
-                build_version,
-                written_plan_namespace: state.written_plan_namespace(),
-                shard_id: txn
-                    .get_expression_cache_shard()
-                    .expect("expression cache shard should exist for opened catalogs"),
-                persist: config.persist_client.clone(),
-                current_items,
-                remove_prior_versions: !config.read_only,
-                compact_shard: config.read_only && deploy_generation.is_some(),
-                dyncfgs,
-            };
-            let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
-                ExpressionCacheHandle::spawn_expression_cache(expr_cache_config).await;
-            (
-                Some(expr_cache_handle),
-                cached_local_exprs,
-                cached_global_exprs,
+        let current_items: BTreeMap<_, _> = txn
+            .get_items()
+            .flat_map(|item| {
+                let item_version = latest_item_version(&item.extra_versions);
+                std::iter::once(item.global_id)
+                    .chain(item.extra_versions.into_values())
+                    .map(move |gid| (gid, item_version))
+            })
+            .chain(
+                txn.get_system_object_mappings()
+                    .map(|som| (som.unique_identifier.global_id, RelationVersion::root())),
             )
-        } else {
-            (None, BTreeMap::new(), BTreeMap::new())
-        };
+            .collect();
+        let (mut expr_cache_handle, cached_local_exprs, cached_global_exprs) =
+            if let Some(build) = cache_build {
+                let namespace = state.written_plan_namespace_for_build(&build.to_string());
+                let shard = txn
+                    .get_expression_cache_shard()
+                    .expect("committed catalog has an expression shard");
+                if enable_expr_cache_dyncfg {
+                    let (handle, local) =
+                        ExpressionCacheHandle::open_plan_store_with_local_expressions(
+                            build,
+                            namespace,
+                            &config.persist_client,
+                            shard,
+                            &current_items,
+                        )
+                        .await;
+                    (Some(handle), local, BTreeMap::new())
+                } else {
+                    let handle = ExpressionCacheHandle::open_plan_store_in_namespace(
+                        build,
+                        namespace,
+                        &config.persist_client,
+                        shard,
+                    )
+                    .await;
+                    (Some(handle), BTreeMap::new(), BTreeMap::new())
+                }
+            } else if expr_cache_enabled {
+                info!(?config.enable_expression_cache_override, ?enable_expr_cache_dyncfg,
+                "using expression cache for startup");
+                let dyncfgs = config.persist_client.dyncfgs().clone();
+                let build_version = Self::expression_build_version(config.build_info);
+                let expr_cache_config = ExpressionCacheConfig {
+                    build_version,
+                    written_plan_namespace: state.written_plan_namespace(),
+                    shard_id: txn
+                        .get_expression_cache_shard()
+                        .expect("expression cache shard should exist for opened catalogs"),
+                    persist: config.persist_client.clone(),
+                    current_items,
+                    remove_prior_versions: !config.read_only,
+                    compact_shard: config.read_only && deploy_generation.is_some(),
+                    dyncfgs,
+                };
+                let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
+                    ExpressionCacheHandle::spawn_expression_cache(expr_cache_config).await;
+                (
+                    Some(expr_cache_handle),
+                    cached_local_exprs,
+                    cached_global_exprs,
+                )
+            } else {
+                (None, BTreeMap::new(), BTreeMap::new())
+            };
         let mut local_expr_cache = LocalExpressionCache::new(cached_local_exprs);
         info!(
             "startup: coordinator init: catalog open: expr cache open complete in {:?}",

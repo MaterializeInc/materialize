@@ -6,20 +6,19 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-The frontier decoder guard passes its compiled unindexed-query regression and
-the complete catalog plan snapshot with standard SLT defaults. The earlier live
-negative control failed without the guard. Only the affected plan changed.
-Next finish the unchanged parallel promotion workload on these binaries.
+Native startup reuses local expression-cache entries during native
+replica reconstruction without cache reconciliation. It retains the same store
+for written-plan reads, uses the existing paired-writer build identity and leaves
+independent consistency reconstruction uncached. Independent review, targeted
+cache/catalog/follower tests and the debug build pass. The complete frontier
+test passes twice at its original retry budget. New replica startup falls from
+31–33s to roughly 5s in this fixture. Next run the unchanged parallel promotion
+workload on the cache-enabled binaries, then reconcile remaining acceptance gaps.
 
-The guarded native/sqllogictest build passes. Full frontier testdrive repeatedly
-fails at its first replica-frontier assertion, before the new regression query.
-Post-failure probes find both replica observations and return the expected rows,
-including with the same user and cluster. Tracing excludes slow certification in
-that run. The test returns one replica row before exhausting its retry budget,
-and new replicas first complete reconciliation about 28s after launch. Startup
-and query progress latency remain unexplained. Do not increase the timeout to
-claim success. Return to that progress failure after parallel acceptance. The
-decoder still rejects malformed matching-kind IDs.
+The committed frontier decoder guard passes its compiled unindexed regression
+and full catalog plan snapshot. An unchanged parallel promotion repeat passes
+final and lifecycle checks. The preceding run failed on a catalog-server query
+connection timeout, which remains an unexplained flake, not a decoder regression.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -54,11 +53,10 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 ## Live gaps and approved deferrals
 
-- Native parallel promotion stress fails before completing its lifecycle checks.
-  Both unchanged seed-42 attempts fail on the same frontier query, without a
-  resource-guard failure. Cleanup completes. The rebuilt workload is running.
-  The SQL guard has compiled query-level proof. Additional three-second probes
-  timed out in one attempt, separately from the successful full-query comparison.
+- Native parallel promotion has a passing fixed-binary seed-42 repeat, but the
+  preceding run fails on `SHOW CLUSTER REPLICAS` with a catalog-server receive
+  timeout. No resource guard fires. The repeat's resource observations show CPU
+  throttling, which does not establish the cause of the earlier timeout.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
@@ -81,14 +79,15 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
 Owned worker `i-0b3699392b71bd7d2` expires at
-`2026-11-13T20:31:57.921677+00:00`. Its helper and receipts are in
+`2026-11-13T22:31:57.921677+00:00`. Its helper and receipts are in
 `upsert-oom-investigation/`. Build receipts and binaries are in
 `frontier-build-receipts.tar.gz` and worker directory `native-frontier-candidate`.
-The current stress run is recorded in `parallel-fixed-launch.json`.
-No build is running. No parser or Persist source changed. Supervision has an
+Cache binaries are in `native-cache-candidate`, verified by
+`cache-build-source-sha256.json` and `native-cache-binaries.json`. No build is
+running. No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
-in memory, expiring at 20:23 UTC. No access rules changed. The prior worker
+in memory, now expiring at 08:19 UTC November 14. No access rules changed. The prior worker
 `i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
@@ -97,6 +96,13 @@ Preserve 30 GiB disk and 2 GiB available RAM. Completed runs' containers are rem
 Do not overlap builds with test runtimes.
 
 Essential pointers, relative to the evidence root:
+- Cache implementation checks and complete frontier passes:
+  `upsert-oom-investigation/cache-build-evidence.tar.gz`,
+  `frontier-cached-evidence.tar.gz`, and `frontier-cached-repeat-evidence.tar.gz`.
+- Passing unchanged stress repeat and observed resource pressure:
+  `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
+- Fixed-binary stress failure:
+  `upsert-oom-investigation/parallel-fixed-failure-evidence.tar.gz`.
 - Compiled decoder and full plan verification:
   `upsert-oom-investigation/compiled-decoder-regression-evidence.tar.gz` and
   `frontier-slt-defaults-evidence.tar.gz`. Earlier SLT probes omitted standard

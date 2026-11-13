@@ -209,6 +209,7 @@ pub struct OpenCommittedCatalog {
     pub catalog: Catalog,
     pub initial_updates: Vec<ParsedStateUpdate>,
     pub expression_cache_shard: Option<mz_persist_client::ShardId>,
+    pub plan_store: Option<ExpressionCacheHandle>,
     pub txn_wal_shard: Option<mz_persist_client::ShardId>,
 }
 
@@ -1558,9 +1559,13 @@ impl Catalog {
     /// executable dataflow plans. It rejects reconstruction that would require durable changes.
     /// The caller owns generation admission and any downstream runtime setup.
     /// Initial parsed updates are returned before subsequent stream updates.
+    /// `cache_build` identifies a provisioner-validated compatible writer whose
+    /// local expressions may be reused. Its store is returned for written-plan
+    /// reads without cache reconciliation. `None` keeps diagnostic replay uncached.
     pub async fn open_committed(
         config: StateConfig,
         mut storage: Box<dyn DurableCatalogState>,
+        cache_build: Option<semver::Version>,
     ) -> Result<OpenCommittedCatalog, CatalogError> {
         use mz_storage_client::controller::StorageTxn;
         let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config));
@@ -1586,7 +1591,7 @@ impl Catalog {
                 Err(error) => return Err(error.into()),
             }
         };
-        let (state, catalog_updates) = Self::reconstruct_state_and_updates(
+        let result = Self::reconstruct_state_and_updates(
             config,
             crate::durable::CatalogSnapshot {
                 snapshot,
@@ -1595,6 +1600,7 @@ impl Catalog {
                 deployment_generation,
                 is_bootstrap_complete,
             },
+            cache_build,
         )
         .await?;
         storage.mark_bootstrap_complete().await;
@@ -1605,7 +1611,7 @@ impl Catalog {
         });
         Ok(OpenCommittedCatalog {
             catalog: Self {
-                state,
+                state: result.state,
                 expr_cache_handle: None,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
                 transient_revision: 1,
@@ -1616,7 +1622,8 @@ impl Catalog {
                 #[cfg(test)]
                 before_commit: None,
             },
-            initial_updates: catalog_updates,
+            initial_updates: result.catalog_updates,
+            plan_store: result.expr_cache_handle,
             expression_cache_shard,
             txn_wal_shard,
         })

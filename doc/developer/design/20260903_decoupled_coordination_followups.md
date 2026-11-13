@@ -186,18 +186,21 @@ expression caching alone does not remove the raw store because fallback opens
 remain. Preserve admin validation, committed selection, cross-cluster producer
 schemas and catalog-authorized retirement. No measured saving is claimed yet.
 
-Fresh debug replicas also pay startup reconstruction cost. In the bounded
-frontier test, one replica snapshots the catalog in 186 ms, then spends about
-26s between expression-cache setup and compute initialization, with builtin-view
-parsing logged in between. `Catalog::open_committed` reconstructs with
-`enable_expression_cache_override: Some(false)` before the follower opens its
-written-plan store. This interval exceeds the test's 20s retry budget. It is not
-a CPU profile and does not separate parsing, scheduling and other startup work.
-Profile that interval before choosing between narrower reconstruction and reuse
-of existing cached expressions. Cache reuse must preserve multi-writer admission
-and plan compatibility, not introduce a new cache owner. Do not mask this with a
-longer frontier assertion timeout. Evidence: `frontier-trace2-evidence.tar.gz`
-under the handoff's `upsert-oom-investigation/` directory.
+Native startup now reads valid Local expressions under the paired writer's build
+identity without reconciling the cache. It retains the same store for written
+plans. Independent consistency checks still reconstruct without cached expressions.
+In the bounded debug frontier fixture, boot to first completed reconciliation fell
+from 31–33s to 5.2–5.5s for the two new replicas. The complete frontier file passes
+at its original retry budget. These are wall times, not a CPU or memory benchmark.
+Evidence: `frontier-cached-evidence.tar.gz` and the earlier
+`frontier-testdrive-failure-evidence.tar.gz` under the handoff's
+`upsert-oom-investigation/` directory.
+
+Incremental committed replay still uses `LocalExpressionCache::Closed` when
+rebuilding changed objects. Reusing cached expressions there is a separate
+opportunity. Validate against each transaction's item versions and optimizer
+settings, retaining the existing incremental reader rather than adding shard
+scans. No incremental-replay cache change or measured saving is claimed here.
 
 ## Temporary-item cleanup after native retirement
 
