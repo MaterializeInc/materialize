@@ -21,19 +21,26 @@ attach a policy to a cluster, and it applies to every role that runs queries on
 that cluster. A cluster can have at most one policy, and many clusters can share
 a policy.
 
+## Background: the query lifecycle
+
+Materialize answers a `SELECT` in one of two ways. An indexed read returns
+results directly from an existing index on the cluster, which is cheap. Any
+other query builds a temporary dataflow on the cluster, which can read inputs
+from object storage and hold intermediate state in memory until the query
+finishes. Query policies inspect the plan before execution and decide which of
+these plans the cluster accepts. See [Understand the query
+lifecycle](/serve-results/query-lifecycle/).
+
 ## Choosing a rule
 
 Each rule rejects queries whose execution plan includes one feature.
 
-| Rule value | Rejects | Use it to |
-|------------|---------|-----------|
-| `temporary_dataflow` | Queries that build a [temporary dataflow](/sql/explain-plan/#fast-path-queries), even if the dataflow reads only from indexes. For example, aggregations, joins, and `SUBSCRIBE`. | Allow only fast path reads, so every query is served directly from an existing index. |
-| `storage_read` | Queries that read from object storage. For example, reads from a table, source, or materialized view that is not indexed on the cluster. | Allow queries to compute over indexes, but stop them from reading unindexed data. |
+| Rule value | Rejects |
+|------------|---------|
+| `temporary_dataflow` | Queries that build a [temporary dataflow](/sql/explain-plan/#fast-path-queries), even if the dataflow reads only from indexes. For example, aggregations, joins, and `SUBSCRIBE`. |
+| `storage_read` | Queries that read from object storage. For example, reads from a table, source, or materialized view that is not indexed on the cluster. |
 
-To allow only [fast path](/sql/explain-plan/#fast-path-queries) reads from
-indexes, include both rules. A `temporary_dataflow` rule alone still allows a
-fast path read directly from a materialized view, for example `SELECT * FROM
-my_mv LIMIT 10`, because that read does not build a dataflow.
+To pick rules for a common goal, see [Recommended rules](#recommended-rules).
 
 To check which rule a query would match, run [`EXPLAIN`](/sql/explain-plan/).
 An `Explained Query (fast path)` plan builds no temporary dataflow. A plan with
@@ -55,7 +62,7 @@ Query policies are not resource limits. A fast path read from a large index can
 still be expensive. A policy also does not cancel queries that are already
 running when you attach or change it.
 
-## Set up a query policy
+## Tutorial: Set up a query policy
 
 This tutorial protects a cluster named `serving` so that it only serves fast
 path reads from indexes. It uses `warn` mode to find affected queries before
@@ -163,6 +170,46 @@ To remove the policy from the cluster:
 
 ```mzsql
 ALTER CLUSTER serving RESET (QUERY POLICY);
+```
+
+## Recommended rules
+
+### Allow only indexed reads, without joins
+
+Include both rules. Queries must be [fast path](/sql/explain-plan/#fast-path-queries)
+reads from an index on the cluster, such as point lookups and filters on a
+single indexed object. Joins and aggregations need their own view and index.
+This is the strictest option, and the one the [tutorial](#tutorial-set-up-a-query-policy)
+uses.
+
+### Allow indexed reads, with joins
+
+Include only `storage_read`. Queries can join, aggregate, and filter indexed
+objects in a temporary dataflow, but cannot read unindexed tables, sources, or
+materialized views. Use this when ad hoc queries over indexed data are
+acceptable, but loading unindexed data into memory is not.
+
+```mzsql
+CREATE QUERY POLICY indexed_inputs_only (
+  RULES (
+    no_storage_reads (action = 'reject', metric = 'query_plan_includes', value = 'storage_read')
+  )
+);
+```
+
+### Allow direct reads, without computation
+
+Include only `temporary_dataflow`. Queries cannot build a temporary dataflow,
+but can still read directly from an unindexed materialized view, for example
+`SELECT * FROM my_mv LIMIT 10`, because that read does not build a dataflow.
+Use this to block joins and aggregations while still allowing quick lookups.
+
+```mzsql
+CREATE QUERY POLICY no_ad_hoc_dataflows (
+  RULES (
+    no_temporary_dataflows (action = 'reject', metric = 'query_plan_includes', value = 'temporary_dataflow')
+  )
+);
 ```
 
 ## Manage query policies
