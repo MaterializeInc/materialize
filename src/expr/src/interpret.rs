@@ -949,6 +949,38 @@ impl<'a> ColumnSpecs<'a> {
         *range = range.clone().intersect(update);
     }
 
+    /// Whether some expression of `mfp` may error on a row that reaches it.
+    ///
+    /// Follows the evaluation order of [`crate::SafeMfpPlan::evaluate_inner`]:
+    /// the expressions within a predicate's support run only once all earlier
+    /// predicates passed, and the remaining expressions only once every
+    /// predicate passed. An expression behind a predicate prefix that cannot be
+    /// true never runs, so it cannot error.
+    fn mfp_expressions_may_fail<X: Interpretable + OptimizableExpr>(
+        &self,
+        mfp_eval: &MfpEval<'_, Self>,
+        mfp: &MapFilterProject<X>,
+    ) -> bool {
+        let mut passed = Vec::with_capacity(mfp.predicates.len());
+        let mut expression = 0;
+        for (support, predicate) in &mfp.predicates {
+            while mfp.input_arity + expression < *support {
+                if mfp_eval.expressions[expression].range.fallible {
+                    return true;
+                }
+                expression += 1;
+            }
+            passed.push(mfp_eval.expr(predicate));
+            let prefix = self.variadic(&And.into(), passed.clone());
+            if !prefix.range.may_contain(Datum::True) {
+                return false;
+            }
+        }
+        mfp_eval.expressions[expression..]
+            .iter()
+            .any(|s| s.range.fallible)
+    }
+
     fn eval_result<'b, E>(&self, result: Result<Datum<'b>, E>) -> ResultSpec<'a> {
         match result {
             Ok(Datum::Null) => ResultSpec {
@@ -1217,14 +1249,17 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     /// surfaces in the result, even when the expression's result column isn't
     /// referenced by a predicate or temporal bound.
     ///
-    /// The runtime MFP evaluator runs every expression once all the preceding
-    /// predicates pass (see [`crate::SafeMfpPlan::evaluate_inner`]), so an
-    /// expression that errors on the actual data will turn the whole row into
-    /// an `Err` — even if no predicate or bound mentions that expression. The
-    /// default `mfp_filter` / `mfp_plan_filter` only AND together the
+    /// An expression that errors on a row that reaches it turns the whole row
+    /// into an `Err`, even if no predicate or bound mentions that expression.
+    /// The default `mfp_filter` / `mfp_plan_filter` only AND together the
     /// predicates and bounds, so the AND result misses the expression's
     /// `fallible` flag and persist filter pushdown can wrongly discard a part
     /// that actually produces error rows. See database-issues#9656.
+    ///
+    /// Which expressions a row reaches is decided by
+    /// [`Self::mfp_expressions_may_fail`]. Counting every expression instead
+    /// keeps every part whose projection calls a fallible function such as
+    /// `char_length`, even when the predicates rule out all of its rows.
     fn mfp_filter<X: Interpretable + OptimizableExpr>(
         &self,
         mfp: &MapFilterProject<X>,
@@ -1236,7 +1271,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             .map(|(_, e)| mfp_eval.expr(e))
             .collect();
         let mut result = self.variadic(&And.into(), predicates);
-        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+        if self.mfp_expressions_may_fail(&mfp_eval, mfp) {
             result.range.fallible = true;
         }
         result
@@ -1265,7 +1300,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             results.push(result);
         }
         let mut result = self.variadic(&And.into(), results);
-        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+        // Bounds are checked after every expression has run, so only the
+        // non-temporal predicates gate which expressions a row reaches.
+        if self.mfp_expressions_may_fail(&mfp_eval, &plan.mfp) {
             result.range.fallible = true;
         }
         result
@@ -2592,6 +2629,153 @@ mod tests {
              fallibility, otherwise persist filter pushdown can wrongly discard \
              a part that produces error rows",
         );
+    }
+
+    /// An MFP over one string column with a UUID cast of that column as
+    /// expression 0, which errors on [`not_a_uuid_specs`].
+    fn uuid_cast_mfp(
+        mut expressions: Vec<MirScalarExpr>,
+        predicates: Vec<(usize, MirScalarExpr)>,
+    ) -> MapFilterProject {
+        use crate::scalar::func::CastStringToUuid;
+
+        expressions.insert(
+            0,
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastStringToUuid(CastStringToUuid),
+                expr: Box::new(MirScalarExpr::column(0)),
+            },
+        );
+        let arity = 1 + expressions.len();
+        MapFilterProject {
+            expressions,
+            predicates,
+            projection: (0..arity).collect(),
+            input_arity: 1,
+        }
+    }
+
+    fn eq_literal(column: usize, value: &str) -> MirScalarExpr {
+        MirScalarExpr::CallBinary {
+            func: Eq.into(),
+            expr1: Box::new(MirScalarExpr::column(column)),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::String(value),
+                ReprScalarType::String,
+            )),
+        }
+    }
+
+    fn not_a_uuid_specs<'a>(
+        relation: &'a ReprRelationType,
+        arena: &'a RowArena,
+    ) -> ColumnSpecs<'a> {
+        let mut interpreter = ColumnSpecs::new(relation, arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
+        );
+        interpreter
+    }
+
+    #[mz_ore::test]
+    fn test_mfp_fallible_expression_behind_false_predicate() {
+        // The predicate only needs column 0, so the cast runs after it, and
+        // the predicate is false on every row of the stats range.
+        let mfp = uuid_cast_mfp(vec![], vec![(1, eq_literal(0, "x"))]);
+        let relation = ReprRelationType::new(vec![ReprScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let interpreter = not_a_uuid_specs(&relation, &arena);
+
+        for (name, spec) in [
+            ("mfp_filter", interpreter.mfp_filter(&mfp)),
+            (
+                "mfp_plan_filter",
+                interpreter.mfp_plan_filter(&mfp.clone().into_plan().unwrap()),
+            ),
+        ] {
+            assert!(
+                !spec.range.may_fail(),
+                "{name}: no row passes the predicate, so the cast never runs",
+            );
+            assert!(
+                !spec.range.may_contain(Datum::True),
+                "{name}: the predicate rules out every row",
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_mfp_fallible_expression_within_predicate_support() {
+        // The predicate reads column 2, so expressions 0 (the cast) and 1 both
+        // run before it, even though it is false on every row.
+        let mfp = uuid_cast_mfp(
+            vec![MirScalarExpr::column(0)],
+            vec![(3, eq_literal(2, "x"))],
+        );
+        let relation = ReprRelationType::new(vec![ReprScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let interpreter = not_a_uuid_specs(&relation, &arena);
+
+        assert!(
+            interpreter.mfp_filter(&mfp).range.may_fail(),
+            "the cast runs before the predicate, so its error reaches the output",
+        );
+    }
+
+    /// Like [`test_mfp_filter_fallibility_equivalence`], but with a predicate
+    /// in front of the expression, checked against the runtime evaluator.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_filter_fallibility_behind_predicate_equivalence() {
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
+
+            let input_arity = relation_type.column_types.len();
+            let predicate = MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(IsNull),
+                expr: Box::new(MirScalarExpr::column(0)),
+            };
+            let mfp = MapFilterProject {
+                expressions: vec![expr],
+                predicates: vec![(input_arity, predicate)],
+                projection: (0..input_arity).collect(),
+                input_arity,
+            };
+
+            let arena = RowArena::new();
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+            let summary = interpreter.mfp_filter(&mfp);
+
+            let plan = mfp
+                .into_plan()
+                .expect("no temporal predicates")
+                .into_nontemporal()
+                .expect("no temporal predicates");
+            for row in &rows {
+                let mut datums: Vec<_> = row.iter().collect();
+                if plan.evaluate_inner(&mut datums, &arena).is_err() {
+                    prop_assert!(
+                        summary.range.may_fail(),
+                        "row {:?} errored at runtime but the interpreter ruled out errors",
+                        row,
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
+        });
     }
 
     /// Proptest companion to [`test_mfp_unreferenced_fallible_expression`]:
