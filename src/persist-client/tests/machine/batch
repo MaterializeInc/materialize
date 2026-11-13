@@ -121,7 +121,7 @@ a 10 1
 ----
 parts=1 len=1
 
-# batches can be written unsorted
+# batches can be written unsorted, and persist_batch_sort_unordered_parts sorts each part
 write-batch output=b0 lower=0 upper=2 consolidate=false
 d 0 1
 a 0 1
@@ -134,10 +134,10 @@ fetch-batch input=b0 stats=lower
 ----
 <part 0>
 <key lower=a>
-d 0 1
 a 0 1
 b 0 1
 c 0 1
+d 0 1
 <run 0>
 part 0
 
@@ -162,8 +162,8 @@ y 0 1
 z 0 1
 <part 1>
 <key lower=m>
-n 0 1
 m 0 1
+n 0 1
 <part 2>
 <key lower=a>
 a 0 1

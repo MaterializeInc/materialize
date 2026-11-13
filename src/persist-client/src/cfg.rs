@@ -312,6 +312,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
         .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::batch::MAX_RUNS)
+        .add(&crate::batch::SORT_UNORDERED_PARTS)
         .add(&BLOB_OPERATION_TIMEOUT)
         .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
         .add(&BLOB_CONNECT_TIMEOUT)

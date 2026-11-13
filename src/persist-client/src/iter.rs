@@ -60,6 +60,23 @@ pub(crate) struct FetchData<T> {
     structured_lower: Option<ArrayBound>,
 }
 
+/// Returns `part` with its updates sorted by key, value, and time, in the order the consolidator
+/// expects of a structured-order run.
+pub(crate) fn sort_part<T: Codec64 + Ord>(part: &Part) -> Part {
+    let key_ord = ArrayOrd::new(part.key.as_ref());
+    let val_ord = ArrayOrd::new(part.val.as_ref());
+    let time = |i: usize| T::decode(part.time.values()[i].to_le_bytes());
+    let mut indices: Vec<usize> = (0..part.len()).collect();
+    indices.sort_by_key(|&i| ((key_ord.at(i), Some(val_ord.at(i))), time(i)));
+    // Diffs are only reordered, so they pass through as their raw encoding.
+    interleave_updates::<T, i64>(
+        &[part],
+        indices
+            .into_iter()
+            .map(|i| ((0, i), time(i), part.diff.values()[i])),
+    )
+}
+
 pub(crate) trait RowSort<T, D> {
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> StructuredUpdates;
 
