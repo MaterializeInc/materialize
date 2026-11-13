@@ -636,6 +636,15 @@ def get_variable_system_parameters(
             if version >= MzVersion.parse_mz("v26.46.0-dev")
             else []
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "persist_batch_sort_unordered_parts", "true", ["true", "false"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.52.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),

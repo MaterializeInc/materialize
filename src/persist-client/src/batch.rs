@@ -268,6 +268,8 @@ where
                         batch_metrics.clone(),
                         Arc::clone(isolated_runtime),
                         updates,
+                        // An inline part was already sorted when it was written, if at all.
+                        false,
                         run_meta.order.unwrap_or(RunOrder::Unordered),
                         ts_rewrite.clone(),
                         D::encode(&diffs_sum),
@@ -370,6 +372,8 @@ pub struct BatchBuilderConfig {
     /// continue to generate one run per part for unordered batches.
     /// See the config definition for details.
     pub(crate) max_runs: Option<usize>,
+    /// See [`SORT_UNORDERED_PARTS`].
+    pub(crate) sort_unordered_parts: bool,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -407,6 +411,19 @@ pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
     usize::MAX,
     "The maximum length a run can have before it will be spilled as a hollow run \
     into the blob store.",
+    ParameterScope::Environment,
+);
+
+/// Whether batch builders that write unordered runs sort each part before writing it.
+///
+/// A sorted part is recorded as a structured-order run, which compaction can merge without first
+/// sorting the part's updates.
+pub(crate) const SORT_UNORDERED_PARTS: Config<bool> = Config::new(
+    "persist_batch_sort_unordered_parts",
+    true,
+    "\
+    Whether batch builders sort each part of an unordered user batch by \
+    key, value, and time, and record it as a structured-order run.",
     ParameterScope::Environment,
 );
 
@@ -476,6 +493,7 @@ impl BatchBuilderConfig {
                 _ => None,
             },
             enable_incremental_compaction: ENABLE_INCREMENTAL_COMPACTION.get(value),
+            sort_unordered_parts: SORT_UNORDERED_PARTS.get(value),
         }
     }
 }
@@ -875,17 +893,25 @@ where
 pub(crate) struct RunWithMeta<T> {
     pub parts: Vec<RunPart<T>>,
     pub num_updates: usize,
+    /// Whether the updates of each part were sorted when it was written, which lets
+    /// [`BatchParts::finish`] record a single-part unordered run as structured-order.
+    pub parts_sorted: bool,
 }
 
 impl<T> RunWithMeta<T> {
     pub fn new(parts: Vec<RunPart<T>>, num_updates: usize) -> Self {
-        Self { parts, num_updates }
+        Self {
+            parts,
+            num_updates,
+            parts_sorted: false,
+        }
     }
 
-    pub fn single(part: RunPart<T>, num_updates: usize) -> Self {
+    pub fn single(part: RunPart<T>, num_updates: usize, parts_sorted: bool) -> Self {
         Self {
             parts: vec![part],
             num_updates,
+            parts_sorted,
         }
     }
 }
@@ -1081,7 +1107,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         )
                         .await;
 
-                        RunWithMeta::single(RunPart::Many(run_ref), total_updates)
+                        RunWithMeta::single(RunPart::Many(run_ref), total_updates, false)
                     }
                     .instrument(debug_span!("batch::spill_run")),
                 );
@@ -1102,6 +1128,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
+    /// Whether [`Self::write`] sorts the parts of this builder's single-part unordered runs.
+    fn sorts_unordered_parts(&self) -> bool {
+        self.cfg.sort_unordered_parts
+            && matches!(
+                self.writing_runs,
+                WritingRuns::Ordered(RunOrder::Unordered, _)
+            )
+    }
+
     pub(crate) fn expected_order(&self) -> RunOrder {
         match self.writing_runs {
             WritingRuns::Ordered(order, _) => order,
@@ -1119,6 +1154,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let batch_metrics = self.batch_metrics.clone();
         let index = self.next_index;
         self.next_index += 1;
+        let sort = self.sorts_unordered_parts();
         let num_updates = updates.len();
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
@@ -1127,8 +1163,16 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         // it twice, once as binary encoded and once as structured.
         let inline_threshold = self.cfg.inline_writes_single_max_bytes;
 
+        let inline = updates.goodbytes() < inline_threshold;
+        // Inline parts are small, so sort them here. A hollow part is sorted on the isolated
+        // runtime with its encoding, see `write_hollow_part`.
+        let updates = if sort && inline {
+            crate::iter::sort_part::<T>(&updates)
+        } else {
+            updates
+        };
         let updates = BlobTraceUpdates::from_part(updates);
-        let (name, write_future) = if updates.goodbytes() < inline_threshold {
+        let (name, write_future) = if inline {
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             (
                 "batch::inline_part",
@@ -1152,6 +1196,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             deprecated_schema_id: None,
                         }),
                         num_updates,
+                        sort,
                     )
                 }
                 .instrument(span)
@@ -1184,13 +1229,14 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         batch_metrics,
                         isolated_runtime,
                         part,
+                        sort,
                         expected_order,
                         ts_rewrite,
                         encoded_diffs_sum,
                         write_schemas_clone,
                     )
                     .await;
-                    RunWithMeta::single(RunPart::Single(part), num_updates)
+                    RunWithMeta::single(RunPart::Single(part), num_updates, sort)
                 }
                 .instrument(write_span)
                 .boxed(),
@@ -1253,6 +1299,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         batch_metrics: BatchWriteMetrics,
         isolated_runtime: Arc<IsolatedRuntime>,
         mut updates: BlobTraceBatchPart<T>,
+        sort: bool,
         run_order: RunOrder,
         ts_rewrite: Option<Antichain<T>>,
         diffs_sum: [u8; 8],
@@ -1266,6 +1313,16 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
         let (stats, key_lower, structured_key_lower, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
+                // Sorting a full part here keeps it off the writer's thread. Writers still see
+                // backpressure, because `write` blocks once
+                // `batch_builder_max_outstanding_parts` parts are pending.
+                if sort {
+                    let part = updates
+                        .updates
+                        .into_part::<K, V>(write_schemas.key.as_ref(), write_schemas.val.as_ref());
+                    updates.updates =
+                        BlobTraceUpdates::from_part(crate::iter::sort_part::<T>(&part));
+                }
                 // Measure the expensive steps of the part build - re-encoding and stats collection.
                 let stats = metrics_.columnar.arrow().measure_part_build(|| {
                     let stats = if cfg.stats_collection_enabled {
@@ -1419,9 +1476,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let mut output = Vec::with_capacity(completed_runs.len());
                 for completed_run in completed_runs {
                     let completed_run = completed_run.into_result().await;
-                    // Each part becomes its own run for unordered case
+                    // Each part becomes its own run for unordered case. A sorted part is a
+                    // structured-order run of its own.
+                    let part_order = if completed_run.parts_sorted {
+                        RunOrder::Structured
+                    } else {
+                        RunOrder::Unordered
+                    };
                     for part in completed_run.parts {
-                        output.push((RunOrder::Unordered, vec![part], completed_run.num_updates));
+                        output.push((part_order, vec![part], completed_run.num_updates));
                     }
                 }
                 output

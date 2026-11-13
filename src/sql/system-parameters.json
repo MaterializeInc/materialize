@@ -2794,6 +2794,15 @@
       "dyncfg": true
     },
     {
+      "name": "persist_batch_sort_unordered_parts",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether batch builders sort each part of an unordered user batch by key, value, and time, and record it as a structured-order run.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "persist_batch_structured_key_lower_len",
       "typeName": "unsigned integer",
       "default": "256",
