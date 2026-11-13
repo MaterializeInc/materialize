@@ -356,6 +356,7 @@ describe("worker CPU subscribe", () => {
 
   it("stops sending idle dataflows' time once rounded", async () => {
     await createIndexedReplica();
+    const dataflowWorker = (row: Row) => `${row.dataflowId}|${row.workerId}`;
     const rounded = await openWorkerCpu();
     const unrounded = await openSubscribe(
       // The per-dataflow rows without their rounding.
@@ -370,26 +371,53 @@ describe("worker CPU subscribe", () => {
         WHERE list_length(a.address) = 1
         GROUP BY 1, 2
       ) WITH (PROGRESS) ENVELOPE UPSERT (KEY ("dataflowId", "workerId"))`),
-      (row) => `${row.dataflowId}|${row.workerId}`,
+      dataflowWorker,
       (row) => row,
     );
     try {
-      let roundedUpdates = 0;
-      let unroundedUpdates = 0;
+      // Drops what the rounded subscribe received while the unrounded one
+      // opened, which falls before the window the unrounded one measures.
+      await Promise.all([rounded.fetch(), unrounded.fetch()]);
+      const startNs = new Map(
+        unrounded
+          .rows()
+          .map((row) => [dataflowWorker(row), Number(row.elapsedNs)]),
+      );
+      const roundedUpdates: Row[] = [];
+      const unroundedUpdates: Row[] = [];
       const until = Date.now() + 5_000;
       while (Date.now() < until) {
         const [fromRounded, fromUnrounded] = await Promise.all([
           rounded.fetch(),
           unrounded.fetch(),
         ]);
-        roundedUpdates += fromRounded.filter(
-          ({ kind }) => kind === "elapsed",
-        ).length;
-        unroundedUpdates += fromUnrounded.length;
+        roundedUpdates.push(
+          ...fromRounded.filter(({ kind }) => kind === "elapsed"),
+        );
+        unroundedUpdates.push(...fromUnrounded);
       }
 
-      expect(unroundedUpdates).toBeGreaterThan(0);
-      expect(roundedUpdates).toBeLessThan(unroundedUpdates / 4);
+      // A busy dataflow's rounded time changes every second too, and these
+      // subscribes' own dataflows read every operator's counter each second,
+      // measured at 2 to 20 ms per second on a worker depending on the host.
+      // So only dataflows that ran under one unit in the window count.
+      const idle = new Set(
+        unrounded
+          .rows()
+          .filter(
+            (row) =>
+              Number(row.elapsedNs) - (startNs.get(dataflowWorker(row)) ?? 0) <
+              ELAPSED_UNIT_NS,
+          )
+          .map(dataflowWorker),
+      );
+      const idleCount = (updates: Row[]) =>
+        updates.filter((row) => idle.has(dataflowWorker(row))).length;
+
+      expect(idleCount(unroundedUpdates)).toBeGreaterThan(0);
+      expect(idleCount(roundedUpdates)).toBeLessThan(
+        idleCount(unroundedUpdates) / 4,
+      );
     } finally {
       await Promise.all([rounded.close(), unrounded.close()]);
     }
