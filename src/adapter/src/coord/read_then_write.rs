@@ -248,6 +248,46 @@ impl Coordinator {
         }
     }
 
+    pub(crate) fn handle_attempt_multi_table_timestamped_write(
+        &self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        writes: BTreeMap<CatalogItemId, (GlobalId, Vec<(Row, Diff)>)>,
+        write_ts: Timestamp,
+        result_tx: tokio::sync::oneshot::Sender<WriteResult>,
+    ) {
+        let result = InternalWriteResponder::new(result_tx);
+        if !self.active_conns.contains_key(&conn_id) {
+            result.send(WriteResult::Canceled);
+            return;
+        }
+        if self.controller.read_only() {
+            result.send(WriteResult::ReadOnly);
+            return;
+        }
+        let mut appends = Vec::new();
+        for (id, (global_id, diffs)) in writes {
+            if self
+                .catalog()
+                .try_get_entry(&id)
+                .map(|entry| entry.latest_global_id())
+                != Some(global_id)
+            {
+                result.send(WriteResult::TargetChanged);
+                return;
+            }
+            appends.push((global_id, vec![TableData::Rows(diffs)]));
+        }
+        let request = TimestampedWriteRequest {
+            appends,
+            target_timestamp: write_ts,
+            result,
+            span: Span::current(),
+        };
+        let _ = self
+            .group_committer_tx
+            .send(TableWriteCmd::TimestampedWrite(request));
+    }
+
     /// Drop an internal subscribe.
     pub(crate) async fn drop_internal_subscribe(&mut self, sink_id: GlobalId) {
         // Use drop_compute_sink instead of remove_active_compute_sink to also

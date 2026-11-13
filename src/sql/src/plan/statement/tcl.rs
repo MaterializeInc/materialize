@@ -12,16 +12,22 @@
 //! This module houses the handlers for statements that manipulate the session's transaction,
 //! like `BEGIN` and `COMMIT`.
 
+use std::time::Duration;
+
+use mz_repr::adt::interval::Interval;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::ast::{
-    CommitStatement, RollbackStatement, SetTransactionStatement, StartTransactionStatement,
-    TransactionAccessMode, TransactionMode,
+    CommitContinualTransactionStatement, CommitStatement, ContinualCommitMode, RollbackStatement,
+    SetTransactionStatement, StartContinualTransactionStatement, StartTransactionStatement,
+    TransactionAccessMode, TransactionMode, Value,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, SetTransactionPlan,
-    StartTransactionPlan, TransactionType,
+    self, AbortTransactionPlan, CommitContinualTransactionPlan, CommitTransactionPlan, Plan,
+    PlanError, SetTransactionPlan, StartContinualTransactionPlan, StartTransactionPlan,
+    TransactionType,
 };
 
 pub fn describe_start_transaction(
@@ -128,4 +134,50 @@ fn verify_chain(chain: bool) -> Result<(), PlanError> {
         bail_unsupported!("CHAIN");
     }
     Ok(())
+}
+
+pub fn describe_start_continual_transaction(
+    _: &StatementContext,
+    _: StartContinualTransactionStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_start_continual_transaction(
+    _: &StatementContext,
+    StartContinualTransactionStatement {}: StartContinualTransactionStatement,
+) -> Result<Plan, PlanError> {
+    Ok(Plan::StartContinualTransaction(
+        StartContinualTransactionPlan {},
+    ))
+}
+
+pub fn describe_commit_continual_transaction(
+    _: &StatementContext,
+    _: CommitContinualTransactionStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_commit_continual_transaction(
+    _: &StatementContext,
+    CommitContinualTransactionStatement { commit_mode }: CommitContinualTransactionStatement,
+) -> Result<Plan, PlanError> {
+    let commit_mode = match commit_mode {
+        ContinualCommitMode::Every(interval_value) => {
+            let interval = Interval::try_from_value(Value::Interval(interval_value))
+                .map_err(|e| PlanError::Unstructured(e.to_string()))?;
+            let micros = interval.as_microseconds();
+            if micros <= 0 {
+                sql_bail!("COMMIT EVERY interval must be positive");
+            }
+            plan::ContinualCommitMode::Every(Duration::from_micros(u64::try_from(micros).map_err(
+                |_| PlanError::Unstructured("COMMIT EVERY interval is too large".into()),
+            )?))
+        }
+        ContinualCommitMode::Asap => plan::ContinualCommitMode::Asap,
+    };
+    Ok(Plan::CommitContinualTransaction(
+        CommitContinualTransactionPlan { commit_mode },
+    ))
 }

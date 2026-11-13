@@ -1721,7 +1721,9 @@ fn generate_rbac_requirements(
         })
         | Plan::Execute(plan::ExecutePlan { name: _, params: _ })
         | Plan::Deallocate(plan::DeallocatePlan { name: _ })
-        | Plan::Raise(plan::RaisePlan { severity: _ }) => Default::default(),
+        | Plan::Raise(plan::RaisePlan { severity: _ })
+        | Plan::StartContinualTransaction(_)
+        | Plan::CommitContinualTransaction(_) => Default::default(),
     }
 }
 

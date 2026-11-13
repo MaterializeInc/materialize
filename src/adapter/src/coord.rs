@@ -527,6 +527,9 @@ impl Message {
                 Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
                 Command::AttemptWrite { .. } => "attempt-write",
                 Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
+                Command::AttemptMultiTableTimestampedWrite { .. } => {
+                    "attempt-multi-table-timestamped-write"
+                }
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

@@ -335,6 +335,7 @@ impl Client {
             peek_client,
             enable_frontend_transaction_completion: false,
             frontend_cancel_rx,
+            continual_transaction_cancel: None,
         };
 
         let session = client.session();
@@ -661,6 +662,7 @@ pub struct SessionClient {
     peek_client: PeekClient,
     enable_frontend_transaction_completion: bool,
     frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
+    continual_transaction_cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl SessionClient {
@@ -875,16 +877,30 @@ impl SessionClient {
         // No frontend path took the statement over, so the coordinator retires
         // whatever entry we hold, or begins its own if we hold none.
         let outer_ctx_extra = logging.release();
-        self.send_with_cancel(
-            |tx, session| Command::Execute {
-                portal_name,
-                session,
-                tx,
-                outer_ctx_extra,
-            },
-            cancel_future,
-        )
-        .await
+        let response = self
+            .send_with_cancel(
+                |tx, session| Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    outer_ctx_extra,
+                },
+                cancel_future,
+            )
+            .await?;
+        if matches!(response, ExecuteResponse::TransactionCommitted { .. }) {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            if let Some((statements, commit_mode)) = session.pending_continual_transaction.take() {
+                let cancel = tokio_util::sync::CancellationToken::new();
+                self.peek_client
+                    .start_continual_transaction(session, statements, commit_mode, cancel.clone())
+                    .await?;
+                if let Some(previous) = self.continual_transaction_cancel.replace(cancel) {
+                    previous.cancel();
+                }
+            }
+        }
+        Ok(response)
     }
 
     /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
@@ -1409,6 +1425,7 @@ impl SessionClient {
                 | Command::RegisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }
                 | Command::AttemptWrite { .. }
+                | Command::AttemptMultiTableTimestampedWrite { .. }
                 | Command::DropInternalSubscribe { .. } => {}
             };
             cmd
@@ -1692,6 +1709,16 @@ impl SessionClient {
             TakeOver::StatementToRun,
         );
 
+        let is_continual = matches!(
+            self.session
+                .as_ref()
+                .expect("SessionClient invariant")
+                .transaction()
+                .inner()
+                .map(|t| &t.ops),
+            Some(crate::session::TransactionOps::ContinualTransaction { .. })
+        );
+
         // Mirror the coordinator's transaction-state gate in `handle_execute`:
         // in a multi-statement transaction (an implicit batch or an explicit
         // block), the only DML allowed is an AST-constant INSERT without
@@ -1725,7 +1752,7 @@ impl SessionClient {
                             source, returning, ..
                         }) if returning.is_empty() && ConstantVisitor::insert_source(source)
                     );
-                    if !constant_insert {
+                    if !constant_insert && !is_continual {
                         return Err(prohibited_in_transaction(&stmt));
                     }
                 }
@@ -1864,7 +1891,7 @@ impl SessionClient {
                 // other time-dependent reads correctly.
                 let has_read_deps = !insert_plan.values.depends_on().is_empty();
 
-                if !has_read_deps {
+                if !has_read_deps && !is_continual {
                     let optimized_mir = if insert_plan.values.as_const().is_some() {
                         // Already constant at HIR level - just lower without optimization
                         let expr = insert_plan
@@ -1960,6 +1987,34 @@ impl SessionClient {
             }
         };
 
+        if is_continual {
+            if !rtw_plan.returning.is_empty() {
+                return Err(AdapterError::Unsupported(
+                    "RETURNING in continual transactions",
+                ));
+            }
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            crate::frontend_read_then_write::validate_read_then_write(
+                &catalog,
+                session,
+                &rtw_plan,
+                target_cluster,
+                crate::coord::read_then_write::DependencyPolicy::UserDml,
+            )?;
+            let response = match rtw_plan.kind {
+                MutationKind::Insert => ExecuteResponse::Inserted(0),
+                MutationKind::Update => ExecuteResponse::Updated(0),
+                MutationKind::Delete => ExecuteResponse::Deleted(0),
+            };
+            session.add_transaction_ops(crate::session::TransactionOps::ContinualTransaction {
+                statements: vec![crate::frontend_continual_transaction::ContinualStatement {
+                    target_global_id: catalog.get_entry(&rtw_plan.id).latest_global_id(),
+                    plan: rtw_plan,
+                }],
+            })?;
+            return Ok(Some(response));
+        }
+
         // The syntactic predicate for "reads persisted state", see the module
         // docs on `session_read_then_write`. Inside a transaction, only a write
         // that reads nothing can run on this path.
@@ -2035,6 +2090,10 @@ fn prohibited_in_transaction(stmt: &Statement<Raw>) -> AdapterError {
 
 impl Drop for SessionClient {
     fn drop(&mut self) {
+        if let Some(cancel) = self.continual_transaction_cancel.take() {
+            cancel.cancel();
+        }
+
         // We may not have a session if this client was dropped while awaiting
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.

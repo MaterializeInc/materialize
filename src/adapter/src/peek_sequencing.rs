@@ -588,6 +588,8 @@ impl PeekClient {
             | Plan::ResetVariable(_)
             | Plan::SetTransaction(_)
             | Plan::StartTransaction(_)
+            | Plan::StartContinualTransaction(_)
+            | Plan::CommitContinualTransaction(_)
             | Plan::CommitTransaction(_)
             | Plan::AbortTransaction(_)
             | Plan::CopyFrom(_)

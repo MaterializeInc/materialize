@@ -253,6 +253,12 @@ pub fn describe(
         Statement::Rollback(stmt) => tcl::describe_rollback(&scx, stmt)?,
         Statement::SetTransaction(stmt) => tcl::describe_set_transaction(&scx, stmt)?,
         Statement::StartTransaction(stmt) => tcl::describe_start_transaction(&scx, stmt)?,
+        Statement::StartContinualTransaction(stmt) => {
+            tcl::describe_start_continual_transaction(&scx, stmt)?
+        }
+        Statement::CommitContinualTransaction(stmt) => {
+            tcl::describe_commit_continual_transaction(&scx, stmt)?
+        }
 
         // Other statements.
         Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
@@ -452,6 +458,12 @@ pub fn plan(
         Statement::Rollback(stmt) => tcl::plan_rollback(scx, stmt),
         Statement::SetTransaction(stmt) => tcl::plan_set_transaction(scx, stmt),
         Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),
+        Statement::StartContinualTransaction(stmt) => {
+            tcl::plan_start_continual_transaction(scx, stmt)
+        }
+        Statement::CommitContinualTransaction(stmt) => {
+            tcl::plan_commit_continual_transaction(scx, stmt)
+        }
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
@@ -1156,6 +1168,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Rollback(_) => TCL,
             Statement::SetTransaction(_) => TCL,
             Statement::StartTransaction(_) => TCL,
+            Statement::StartContinualTransaction(_) => TCL,
+            Statement::CommitContinualTransaction(_) => TCL,
 
             // Other statements.
             Statement::Raise(_) => Other,
