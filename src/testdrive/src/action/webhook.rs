@@ -34,24 +34,11 @@ pub async fn run_append(
 
     println!("$ webhook-append {database}.{schema}.{name}\n{body}\n{headers:?}");
 
-    let client = if state.materialize.use_https {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .unwrap()
-    } else {
-        reqwest::Client::new()
-    };
     let url = format!(
-        "{}://{}/api/webhook/{database}/{schema}/{name}",
-        if state.materialize.use_https {
-            "https"
-        } else {
-            "http"
-        },
-        state.materialize.http_addr
+        "{}/api/webhook/{database}/{schema}/{name}",
+        state.materialize.http_url()
     );
-    let mut builder = client.post(url).body(body);
+    let mut builder = state.materialize.http_client().post(url).body(body);
 
     // Append all of our headers.
     for (name, value) in headers {

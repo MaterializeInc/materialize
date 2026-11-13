@@ -509,9 +509,10 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `testdrive.aws-endpoint`
 
-#### `testdrive.materialize-internal-http-addr`
+#### `testdrive.materialize-http-url`
 
-#### `testdrive.materialize-http-addr`
+The base URL of the HTTP API: `https://` under `--materialize-use-https`, else
+`http://`.
 
 #### `testdrive.materialize-sql-addr`
 

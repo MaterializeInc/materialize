@@ -289,10 +289,9 @@ module "materialize_instance" {
 
   license_key = var.license_key
 
-  # TODO: when enabled portforwarding drops with:
-  # portforward.go:406] an error occurred forwarding 6877 -> 6877: error forwarding port 6877 to pod
-  # : failed to execute portforward in network namespace: writeto tcp4 127.0.0.1:48592->127.0.0.1:6877: read tcp4 127.0.0.1:48592->127.0.0.1:6877: read: connection reset by peer
-  # portforward.go:234] lost connection to pod
+  # TODO: Enable TLS. With `issuer_ref` set, cert-manager never issued the
+  # environmentd certificate in one CI run, so setup timed out. Enabling it
+  # also needs `use_https=True` in `workflow_gcp_temporary`.
   # issuer_ref = {
   #   name = module.self_signed_cluster_issuer.issuer_name
   #   kind = "ClusterIssuer"

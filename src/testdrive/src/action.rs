@@ -236,6 +236,29 @@ pub struct MaterializeState {
     aws_connection_role_arn: Option<String>,
 }
 
+impl MaterializeState {
+    /// The base URL of Materialize's HTTP API, without a trailing slash.
+    pub fn http_url(&self) -> String {
+        let scheme = if self.use_https { "https" } else { "http" };
+        format!("{scheme}://{}", self.http_addr)
+    }
+
+    /// An HTTP client for requests to Materialize's HTTP API.
+    ///
+    /// With `use_https` the client accepts any server certificate, because
+    /// testdrive has no CA to verify Materialize's certificate against.
+    pub fn http_client(&self) -> reqwest::Client {
+        if self.use_https {
+            reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap()
+        } else {
+            reqwest::Client::new()
+        }
+    }
+}
+
 pub struct State {
     // The Config that this `State` was originally created from.
     pub config: Config,
@@ -421,8 +444,8 @@ impl State {
             self.materialize.sasl_sql_addr.clone(),
         );
         self.cmd_vars.insert(
-            "testdrive.materialize-http-addr".into(),
-            self.materialize.http_addr.clone(),
+            "testdrive.materialize-http-url".into(),
+            self.materialize.http_url(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
