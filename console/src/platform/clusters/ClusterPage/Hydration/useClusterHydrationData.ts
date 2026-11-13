@@ -11,6 +11,7 @@ import { greatest } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
 
+import { isSystemId } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import {
   REPLICA_HYDRATION_HISTORY_MIN_VERSION,
@@ -108,10 +109,16 @@ export function useClusterHydrationData({
   // A hydration is full when it covers every object the cluster had, so
   // classifying one needs the objects and when they were created.
   const {
-    data: objects,
+    data: clusterObjects,
     snapshotComplete: hasObjects,
     isError: isObjectsError,
   } = useClusterObjectsLive(cluster.id, COMPUTE_OBJECT_TYPES);
+  // Hydrations leave out the cluster's introspection indexes
+  // (`src/adapter/src/coord/hydration_history.rs`), so its counts must too.
+  const objects = React.useMemo(
+    () => clusterObjects.filter(({ id }) => !isSystemId(id)),
+    [clusterObjects],
+  );
   // Not bound to the window: a replica hydrating an object created before it
   // is dated from that creation.
   const creationTimes = useObjectCreationTimes({

@@ -638,6 +638,12 @@ describe("ClusterHydration", () => {
       data: [
         catalogObject("u10", "orders_idx", "index"),
         catalogObject("u11", "customer_ltv", "materialized-view"),
+        // Every cluster has introspection indexes, which no hydration counts.
+        catalogObject(
+          "si144115188075856385",
+          "mz_active_peeks_per_worker_u9_primary_idx",
+          "index",
+        ),
       ],
       snapshotComplete: true,
       error: undefined,
