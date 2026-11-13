@@ -20,6 +20,36 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.51.0
+*Released to Materialize Cloud: 2026-11-19* <br>
+*Released to Materialize Self-Managed: 2026-11-20* <br>
+
+### Improvements {#v26.51-improvements}
+- **Higher query throughput under concurrency**: Read-only transactions now finish in the session that owns them instead of taking a round trip through the coordinator, which in a staging benchmark at 512 concurrent clients raised throughput by 89% with the default statement-logging sample rate and by 195% with statement logging off, cutting mean latency from 129 ms to 68 ms in the first case.
+- **The new upsert implementation and buffer pool are on by default**: Self-Managed deployments, which have no feature-flag service to turn them on, now get the upsert source implementation and buffer pool that Cloud production already runs, so upsert state on a swap-enabled cluster spills to swap instead of being held in memory; clusters without swap keep the previous implementation, and `ALTER SYSTEM SET enable_upsert_v2 = false` reverts it.
+- **Faster reads from Google Cloud Storage**: Materialize now fetches a stored object in concurrent 8 MiB ranges rather than over a single connection, which took the median read of a 128 MiB object from about 520 ms to about 125 ms in a benchmark on an `n2-standard-16` instance.
+- **A faster Console object explorer**: The workflow graph now draws from a synced copy of the object graph instead of waiting on queries — opening another object's graph went from about 1,261 ms to about 21 ms in a local measurement — it picks up objects created, renamed, or dropped while it is open without a refresh, and the Maintained Objects critical path panel reads only the objects upstream of its probe rather than the whole environment, which cut its median call from about 1,400 ms to about 287 ms at 1,000 objects.
+- **Replicas on disabled sizes are visible again**: `mz_catalog.mz_cluster_replica_sizes` now lists every cluster replica size, including disabled ones, and gains a `disabled` column, so anything that joins replicas to sizes — the Console's replica list, `mz_cluster_replica_utilization`, and `mz_cluster_replica_history` — no longer drops those replicas; queries that list sizes to choose from should now filter on `WHERE NOT disabled`.
+- **Consistent column defaults in the catalog**: `mz_catalog.mz_columns.default` now reports SQL `NULL` rather than the string `'NULL'` for table columns without a default, matching sources, views, and materialized views; if you manage tables with the Materialize Terraform provider, upgrade it to v0.11.13 or later before you upgrade Materialize.
+- **Balancers drain connections on Self-Managed**: The operator now gives balancer pods a 10-minute termination grace period, configurable through the new `balancerd.terminationGracePeriodSeconds` Helm value, so an eviction, rollout, or node drain lets open client connections finish draining instead of cutting them after 30 seconds.
+- **Source creation in a transaction tolerates concurrent DDL**: A transaction that creates a source no longer fails when another session commits an unrelated catalog change while it is running; the statements are replanned against the current catalog and committed atomically.
+- **Iceberg sink schema errors name the offending column**: When an Iceberg sink finds an existing table whose schema does not match, the error now names the first field that differs and how it differs, for example `column_499` having type `string` in the table but `long` in the sink, instead of printing both schemas in full.
+- **A clearer sink overcompaction error**: The error a sink raises when its `FROM` collection has compacted past the point the sink needs now explains the situation, which was previously reported as a possible bug.
+- **`dbt-materialize` 1.9.13**: Version 1.9.13 of the dbt adapter is released, fixing a `refresh_interval` that sets both `at` and `at_creation` rendering without a separating comma and failing to create the materialized view, `deploy_promote` stopping after the swap commits when `git` is not installed, the permission hints `deploy_init` prints not quoting names that need it, the non-empty-schema hint naming an operation that does not exist, and a profile pointing at PostgreSQL retrying instead of failing with a clear message.
+
+### Bug Fixes {#v26.51-bug-fixes}
+- Fixed `environmentd` dropping its connections to every healthy cluster replica at once when it had been too busy to poll them, because a connection read reported a timeout before the keepalives already waiting in its socket buffer.
+- Fixed a cluster process halting with a "cannot serve requested as_of" error, and then repeatedly on replay, after the cluster's only replica reconnected following a network interruption.
+- Fixed a replica crash-looping after a restart when a materialized view with a refresh schedule was being replaced and its replacement carried an error past the last refresh.
+- Fixed a panic at startup when a materialized view awaiting replacement had read further than the view it replaces had written, for example when the replacement reads a table created after the original last wrote.
+- Fixed `environmentd` aborting when the HTTP or WebSocket SQL API returned a `NULL` in an `ARRAY`, `LIST`, or `MAP` built from elements of differing nullability, such as `ARRAY[ROW(1), ROW(x)]`; these constructors now take their element type from all elements rather than the first, as `UNION`, `VALUES`, and `CASE` already do.
+- Fixed `CREATE TABLE` silently accepting a column-level `COLLATE` clause that the planner never applied, which also left such a table unable to be re-planned at startup; unsupported collations are now rejected.
+- Fixed `GRANT` and `REVOKE ... ON ALL ... IN SCHEMA mz_temp` not raising an error, as the other privilege statements against the temporary schema do.
+- Fixed `array_fill` returning a one-dimensional empty array when a requested dimension was zero, and raising an array size error for an empty dimension list; it now returns a zero-dimensional empty array in both cases, matching PostgreSQL.
+- Fixed a refresh schedule or hydration burst being stranded, and an otherwise allowed resize being blocked, when the set of sizes a cluster's owner may use shrank while the cluster controller was realizing a configuration that `ALTER CLUSTER` had already accepted.
+- Fixed the MCP server's catalog-query validation missing three ways to reference a user object — `TABLE t`, a schema-qualified name shadowed by a common table expression, and the `[u1 AS …]` ID form — and rejecting valid catalog queries that use `TABLE` or `WITH MUTUALLY RECURSIVE`.
+- Fixed the Console's role graph breaking every request in the browser tab, until reload, for anyone who opened it after a role named `__proto__` or `cache` was given a member.
+
 ## v26.49.1
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
