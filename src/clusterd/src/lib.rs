@@ -38,6 +38,7 @@ use mz_service::transport;
 use mz_service::transport::ClusterServerMetrics;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::pool_config::SpillBackend;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
@@ -138,9 +139,18 @@ struct Args {
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
 
-    /// The replica runs without swap.
-    #[clap(long)]
-    no_swap: bool,
+    /// Where the buffer pool spills compressed extents: `swap`, `file`, or
+    /// `none`. The controller passes the same value to every process of a
+    /// replica. `file` requires `--scratch-directory`. Defaults to `swap`, so
+    /// a clusterd launched without the argument, for example by hand or by a
+    /// test harness, keeps spilling to swap.
+    #[clap(
+        long,
+        env = "SPILL_BACKEND",
+        value_name = "swap|file|none",
+        default_value = "swap"
+    )]
+    spill_backend: SpillBackend,
 
     /// Memory limit (bytes) of the cluster replica, if known.
     ///
@@ -270,6 +280,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let _failpoint_scenario = FailScenario::setup();
 
     emit_boot_diagnostics!(&BUILD_INFO);
+
+    if args.spill_backend == SpillBackend::File && args.scratch_directory.is_none() {
+        mz_ore::halt!("--spill-backend=file requires --scratch-directory");
+    }
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(
@@ -448,7 +462,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ComputeInstanceContext {
                 scratch_directory: args.scratch_directory.clone(),
                 worker_core_affinity: args.worker_core_affinity,
-                swap_available: !args.no_swap,
+                spill_backend: args.spill_backend,
                 connection_context: connection_context.clone(),
             },
             SYSTEM_TIME.clone(),
@@ -456,7 +470,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             StorageInstanceContext::new(
                 args.scratch_directory,
                 args.announce_memory_limit,
-                !args.no_swap,
+                args.spill_backend,
             ),
         )
         .await?;
@@ -511,7 +525,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         StorageInstanceContext::new(
             args.scratch_directory.clone(),
             args.announce_memory_limit,
-            !args.no_swap,
+            args.spill_backend,
         ),
     )
     .await?;
@@ -543,7 +557,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
-            swap_available: !args.no_swap,
+            spill_backend: args.spill_backend,
             connection_context,
         },
     )

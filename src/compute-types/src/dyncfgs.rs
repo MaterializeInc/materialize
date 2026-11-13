@@ -123,17 +123,6 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Whether the buffer pool may use the scratch directory as its extent
-/// store. Takes effect only at pool installation, see `apply_pool_config` in
-/// `mz_timely_util::pool_config`.
-pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
-    "enable_column_paged_batcher_file_extents",
-    false,
-    "Use the scratch directory as the buffer pool's extent store when one exists. \
-     Read once at pool installation.",
-    ParameterScope::Replica,
-);
-
 /// How often the buffer pool's spill threads release free extent slots of
 /// the file store back to the filesystem. The default follows
 /// [`LGALLOC_BACKGROUND_INTERVAL`].
@@ -915,7 +904,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
         .add(&ENABLE_COLUMNAR_ACCUMULABLE_DIFF)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
-        .add(&ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS)
         .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL)
         .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)

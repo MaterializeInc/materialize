@@ -39,6 +39,7 @@ use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as 
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::pool_config::SpillBackend;
 use mz_txn_wal::operator::TxnsContext;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -60,8 +61,9 @@ pub struct ComputeInstanceContext {
     pub scratch_directory: Option<PathBuf>,
     /// Whether to set core affinity for Timely workers.
     pub worker_core_affinity: bool,
-    /// Whether the replica can swap.
-    pub swap_available: bool,
+    /// Where the buffer pool spills compressed extents. `File` implies a
+    /// scratch directory.
+    pub spill_backend: SpillBackend,
     /// Context required to connect to an external sink from compute,
     /// like the `CopyToS3OneshotSink` compute sink.
     pub connection_context: ConnectionContext,

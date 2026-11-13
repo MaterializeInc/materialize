@@ -148,7 +148,7 @@ impl Pool {
     /// Test hook: the file store of a file-mode pool.
     pub(super) fn file_store(&self) -> Option<Arc<FileStore>> {
         match &self.0.store {
-            ExtentStore::Swap => None,
+            ExtentStore::Swap | ExtentStore::None => None,
             ExtentStore::File(store) => Some(Arc::clone(store)),
         }
     }
