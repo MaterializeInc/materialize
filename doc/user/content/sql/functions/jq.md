@@ -6,7 +6,7 @@ menu:
     parent: 'sql-functions'
 ---
 
-{{< warn-if-unreleased "v26.50" >}}
+{{< warn-if-unreleased "v26.51" >}}
 
 `jq` applies a [jq program](https://jqlang.org/manual/) to a
 [`jsonb`](/sql/types/jsonb/) value and returns the result as `jsonb`. Use it to

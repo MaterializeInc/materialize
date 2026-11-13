@@ -9,7 +9,7 @@ menu:
     identifier: user-defined-functions
 ---
 
-{{< warn-if-unreleased "v26.50" >}}
+{{< warn-if-unreleased "v26.51" >}}
 
 ## `jq()`-based user-defined functions
 

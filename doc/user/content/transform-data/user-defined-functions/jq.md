@@ -7,7 +7,7 @@ menu:
     weight: 10
 ---
 
-{{< warn-if-unreleased "v26.50" >}}
+{{< warn-if-unreleased "v26.51" >}}
 
 In this tutorial, you use the [`jq`](/sql/functions/jq/) function to clean up
 lists stored in a `jsonb` column, and compare its plan with the equivalent SQL.
