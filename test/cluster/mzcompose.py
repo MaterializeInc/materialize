@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from typing import Any
 
 import psycopg
 import requests
@@ -105,11 +106,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
         # and slow-seqno-hold are slow, run in separate CI step
         # concurrent-connections is too flaky
-        # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
             "test-concurrent-connections",
-            "test-memory-limiter",
         ):
             return
 
@@ -7552,6 +7551,86 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
 
         c.kill("clusterd1")
+
+
+def workflow_test_memory_limiter_swap_size(c: Composition) -> None:
+    """
+    Test that the memory limiter enforces the heap limit the controller derives
+    from a swap-enabled replica size. test-memory-limiter passes `--heap-limit`
+    to an unorchestrated clusterd instead, skipping that derivation.
+    """
+
+    def swap_size(limit: str) -> dict[str, Any]:
+        # The heap limit is `memory_limit + disk_limit`, so twice `limit`.
+        return {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": limit,
+            "disk_limit": limit,
+            "swap_enabled": True,
+        }
+
+    with c.override(
+        Materialized(
+            cluster_replica_size={
+                **cluster_replica_size_map(),
+                # Measured peak RSS: ~280 MB for an idle replica, ~1.26 GB for
+                # one hydrating the cross join below.
+                "swap,large": swap_size("2 GiB"),
+                # NOTE: ci_annotate_errors.py recognizes this replica's expected
+                # limiter exit by its 640 MiB heap limit.
+                "swap,small": swap_size("320 MiB"),
+            },
+            additional_system_parameter_defaults={
+                # Check often enough to catch the hydration peak.
+                "memory_limiter_interval": "100ms",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+
+        c.sql("""
+            CREATE CLUSTER large SIZE 'swap,large';
+            CREATE CLUSTER small SIZE 'swap,small';
+            CREATE TABLE t (i int, x text);
+            INSERT INTO t
+                SELECT generate_series, repeat('a', 100) FROM generate_series(1, 1000);
+            SET CLUSTER = large; SELECT * FROM t;
+            SET CLUSTER = small; SELECT * FROM t;
+            """)
+
+        def limiter_exits(cluster: str) -> int:
+            cluster_id = c.sql_query(
+                f"SELECT id FROM mz_clusters WHERE name = '{cluster}'"
+            )[0][0]
+            logs = c.invoke("logs", "materialized", capture=True, silent=True).stdout
+            return len(
+                re.findall(
+                    rf"cluster-{cluster_id}-replica-.*memory utilization exceeded configured limits",
+                    logs,
+                )
+            )
+
+        c.sql("""
+            CREATE MATERIALIZED VIEW mv_large IN CLUSTER large AS
+                SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+            """)
+        c.testdrive("> SELECT count(*) FROM mv_large\n1000000")
+        assert limiter_exits("large") == 0
+        assert limiter_exits("small") == 0, "idle replica exceeded its heap limit"
+
+        c.sql("""
+            CREATE MATERIALIZED VIEW mv_small IN CLUSTER small AS
+                SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+            """)
+        for _ in range(60):
+            if limiter_exits("small") > 0:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("memory limiter did not terminate the small replica")
 
 
 def workflow_test_paused_cluster_readhold_downgrade(c: Composition):

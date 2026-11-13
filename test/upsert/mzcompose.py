@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This mzcompose currently tests `UPSERT` sources with `DISK` configured.
+# This mzcompose tests `UPSERT` sources. The testdrive files run on `,swap`
+# sizes, as cloud replicas do, the other workflows with a scratch disk.
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
 """

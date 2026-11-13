@@ -81,7 +81,7 @@ $ set schema={
     ]
   }
 
-> CREATE CLUSTER test_cluster SIZE 'scale=1,workers=4'
+> CREATE CLUSTER test_cluster SIZE 'scale=1,workers=4,swap'
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
