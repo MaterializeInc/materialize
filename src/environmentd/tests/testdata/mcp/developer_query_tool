@@ -209,3 +209,11 @@ mcp-developer
 ----
 200 OK
 {"jsonrpc":"2.0","id":62,"error":{"code":-32603,"message":"Query execution failed: cluster replica 'quickstart.r99' does not exist","data":{"error_type":"ExecutionError"}}}
+
+# The developer endpoint keeps `cluster` required. Only the agent endpoint
+# reads data products whose cluster discovery hides (DEX-71).
+mcp-developer
+{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"query","arguments":{"sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":63,"error":{"code":-32602,"message":"Query validation failed: cluster is required","data":{"error_type":"ValidationError"}}}
