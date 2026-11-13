@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
+use mz_compute_client::metrics::CommandMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -33,10 +33,6 @@ use prometheus::{Histogram, HistogramVec, IntCounter};
 pub struct ComputeMetrics {
     // Optional workload class label to apply to all metrics in registry.
     workload_class: Arc<Mutex<Option<String>>>,
-
-    // command history
-    history_command_count: raw::UIntGaugeVec,
-    history_dataflow_count: raw::UIntGaugeVec,
 
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
@@ -157,18 +153,6 @@ impl ComputeMetrics {
 
         Self {
             workload_class,
-            history_command_count: registry.register(with_role(metric!(
-                name: "mz_compute_replica_history_command_count",
-                help: "The number of commands in the replica's command history.",
-                var_labels: ["worker_id", "command_type"],
-            ), role)),
-            history_dataflow_count: registry.register(with_role(metric!(
-                name: "mz_compute_replica_history_dataflow_count",
-                help: "The number of dataflows in the replica's command history.",
-                var_labels: ["worker_id"],
-                visibility: MetricVisibility::Public,
-                tags: [MetricTag::Compute],
-            ), role)),
             arrangement_maintenance_seconds_total: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
                 help: "The total time spent maintaining arrangements.",
@@ -491,23 +475,6 @@ impl WorkerMetrics {
                 .metrics
                 .logging_step_duration_seconds
                 .with_label_values(&[&self.worker_label]),
-        }
-    }
-
-    pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
-        let command_counts = CommandMetrics::build(|typ| {
-            self.metrics
-                .history_command_count
-                .with_label_values(&[self.worker_label.as_ref(), typ])
-        });
-        let dataflow_count = self
-            .metrics
-            .history_dataflow_count
-            .with_label_values(&[&self.worker_label]);
-
-        HistoryMetrics {
-            command_counts,
-            dataflow_count,
         }
     }
 

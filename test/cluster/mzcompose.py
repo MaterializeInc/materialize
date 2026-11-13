@@ -2890,25 +2890,6 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_response_count(self, metric: str, response_type: str) -> float:
-        metrics = self.with_name(metric)
-        values = [
-            v for k, v in metrics.items() if f'response_type="{response_type}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-    def get_replica_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_compute_replica_history_command_count", command_type
-        )
-
-    def get_compute_commands_total(self, command_type: str) -> float:
-        return self.get_command_count("mz_compute_commands_total", command_type)
-
-    def get_compute_responses_total(self, response_type: str) -> float:
-        return self.get_response_count("mz_compute_responses_total", response_type)
-
     def get_wallclock_lag_count(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
         values = [
@@ -3077,25 +3058,25 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         # Check that expected metrics exist and have sensible values.
         metrics = fetch_metrics()
 
-        count = metrics.get_replica_history_command_count("hello")
-        assert count == 0, f"unexpected hello count: {count}"
-        count = metrics.get_replica_history_command_count("create_instance")
-        assert count == 1, f"unexpected create_instance count: {count}"
-        # History reduction folds compaction into dataflow frontiers, so there
-        # need not be any retained allow_compaction commands.
-        count = metrics.get_replica_history_command_count("create_dataflow")
-        assert count > 0, f"unexpected create_dataflow count: {count}"
-        count = metrics.get_replica_history_command_count("peek")
-        assert count <= 2, f"unexpected peek count: {count}"
-        count = metrics.get_replica_history_command_count("cancel_peek")
-        assert count <= 2, f"unexpected cancel_peek count: {count}"
-        count = metrics.get_replica_history_command_count("initialization_complete")
-        assert count == 0, f"unexpected initialization_complete count: {count}"
-        count = metrics.get_replica_history_command_count("update_configuration")
-        assert count == 1, f"unexpected update_configuration count: {count}"
-
-        count = metrics.get_value("mz_compute_replica_history_dataflow_count")
-        assert count >= 2, f"unexpected dataflow count: {count}"
+        # Observe live maintained collections and actual command processing,
+        # independently of query connection lifetimes.
+        count = sum(
+            value
+            for labels, value in metrics.with_name(
+                "mz_compute_collection_count"
+            ).items()
+            if 'type="user"' in labels
+        )
+        assert count >= 2, f"expected the index and MV collections: {count}"
+        for command_type in (
+            "create_instance",
+            "create_dataflow",
+            "update_configuration",
+        ):
+            count = metrics.get_command_count(
+                "mz_cluster_handle_command_duration_seconds_count", command_type
+            )
+            assert count > 0, f"no {command_type} commands processed"
 
         maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
         assert (
@@ -3911,7 +3892,7 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     # We don't check for overall equality as we're not guaranteed to capture
     # the exact same snapshot of metrics through both methods.
     key_metrics = [
-        "mz_compute_replica_history_command_count",
+        "mz_cluster_handle_command_duration_seconds_count",
         "mz_arrangement_maintenance_seconds_total",
     ]
     for metric in key_metrics:

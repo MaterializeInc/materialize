@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Metrics for compute commands and their retained history.
-
-use std::borrow::Borrow;
+//! Metrics keyed by compute command type.
 
 use crate::protocol::command::ComputeCommand;
 
@@ -70,26 +68,6 @@ impl<M> CommandMetrics<M> {
         }
     }
 
-    fn for_all<F>(&self, f: F)
-    where
-        F: Fn(&M),
-    {
-        f(&self.hello);
-        f(&self.hello_query);
-        f(&self.set_query_max_result_size);
-        f(&self.create_query_dataflow);
-        f(&self.apply_catalog_position);
-        f(&self.create_instance);
-        f(&self.initialization_complete);
-        f(&self.update_configuration);
-        f(&self.create_dataflow);
-        f(&self.schedule);
-        f(&self.allow_compaction);
-        f(&self.peek);
-        f(&self.cancel_peek);
-        f(&self.allow_writes);
-    }
-
     /// TODO(database-issues#7533): Add documentation.
     pub fn for_command(&self, command: &ComputeCommand) -> &M {
         use ComputeCommand::*;
@@ -110,25 +88,5 @@ impl<M> CommandMetrics<M> {
             CancelPeek { .. } => &self.cancel_peek,
             AllowWrites { .. } => &self.allow_writes,
         }
-    }
-}
-
-/// Metrics tracked by the command history.
-#[derive(Debug)]
-pub struct HistoryMetrics<G> {
-    /// Metrics tracking command counts.
-    pub command_counts: CommandMetrics<G>,
-    /// Metric tracking the dataflow count.
-    pub dataflow_count: G,
-}
-
-impl<G> HistoryMetrics<G>
-where
-    G: Borrow<mz_ore::metrics::UIntGauge>,
-{
-    /// Reset all tracked counts to 0.
-    pub fn reset(&self) {
-        self.command_counts.for_all(|m| m.borrow().set(0));
-        self.dataflow_count.borrow().set(0);
     }
 }

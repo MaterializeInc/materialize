@@ -130,5 +130,4 @@
 //! [`SubscribeResponse::DroppedAt`]: self::response::SubscribeResponse::DroppedAt
 
 pub mod command;
-pub mod history;
 pub mod response;

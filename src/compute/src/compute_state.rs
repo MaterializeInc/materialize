@@ -21,7 +21,6 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
-use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
@@ -36,7 +35,7 @@ use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
@@ -232,8 +231,6 @@ pub struct ComputeState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
-    /// History of commands received by this workers and all its peers.
-    pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
     max_result_size: u64,
     /// Specification for rendering linear joins.
@@ -332,7 +329,6 @@ impl ComputeState {
     ) -> Self {
         let worker_config: Rc<ConfigSet> = mz_dyncfgs::all_dyncfgs().into();
         let traces = TraceManager::new(metrics.clone());
-        let command_history = ComputeCommandHistory::new(metrics.for_history());
         let peek_walk_metrics = PeekWalkMetrics::new(&metrics);
         let peek_budget = InlineBudget::new(&worker_config);
 
@@ -355,7 +351,6 @@ impl ComputeState {
             compute_logger: None,
             persist_clients,
             txns_ctx,
-            command_history,
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),
             metrics,
@@ -703,8 +698,6 @@ impl<'a> ActiveComputeState<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
-
-        self.compute_state.command_history.push(cmd.clone());
 
         // Record the command duration, per worker and command kind.
         let timer = self
