@@ -37,6 +37,7 @@ import { downloadFile } from "~/utils/downloadFile";
 
 import { filterGraph, GraphFilters, matchesSearch } from "./filterGraph";
 import { Freshness } from "./freshness";
+import { keyColumns } from "./keyColumns";
 import { layoutGraph, LayoutMode } from "./layout";
 import { OntologyEdgeKind, OntologyGraph, OntologyNode } from "./model";
 import { OntologyCanvas, Selection } from "./OntologyCanvas";
@@ -184,6 +185,7 @@ export const OntologyExplorer = ({
   const [showEdgeLabels, setShowEdgeLabels] = React.useState(
     defaultShowEdgeLabels,
   );
+  const [showKeyColumns, setShowKeyColumns] = React.useState(true);
   const [highlighted, setHighlighted] =
     React.useState<ReadonlySet<string> | null>(null);
   const svgRef = React.useRef<SVGSVGElement>(null);
@@ -212,15 +214,42 @@ export const OntologyExplorer = ({
       ].join("#"),
     [filtered],
   );
+  // Every relationship counts toward a card's keys, drawn or not, so cards
+  // keep their shape as filters change.
+  const keyColumnsByNode = React.useMemo(
+    () =>
+      showKeyColumns
+        ? new Map(
+            graph.nodes.map((node) => [node.id, keyColumns(node, graph.edges)]),
+          )
+        : null,
+    [graph, showKeyColumns],
+  );
+  // Card heights follow the key rows, which change only when columns load
+  // or relationships change, so they key the layout too.
+  const keyColumnsKey = React.useMemo(
+    () =>
+      keyColumnsByNode
+        ? [...keyColumnsByNode]
+            .map(
+              ([id, keys]) =>
+                `${id}:${keys.map((k) => `${k.name}/${k.role}/${k.missing}`).join(",")}`,
+            )
+            .join(";")
+        : "",
+    [keyColumnsByNode],
+  );
   const layout = React.useMemo(
     () =>
       layoutGraph(filtered.nodes, filtered.edges, {
         mode: layoutMode,
         showEdgeLabels,
+        keyColumns: keyColumnsByNode,
       }),
-    // `filtered` is keyed by `structureKey`.
+    // `filtered` is keyed by `structureKey`, `keyColumnsByNode` by
+    // `keyColumnsKey`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [structureKey, layoutMode, showEdgeLabels],
+    [structureKey, keyColumnsKey, layoutMode, showEdgeLabels],
   );
 
   const recentlyAdded = useRecentlyAdded(
@@ -455,15 +484,19 @@ export const OntologyExplorer = ({
               </MenuOptionGroup>
               <MenuDivider />
               <MenuOptionGroup
-                title="Labels"
+                title="Show"
                 type="checkbox"
-                value={showEdgeLabels ? ["labels"] : []}
-                onChange={(value) =>
-                  setShowEdgeLabels(
-                    Array.isArray(value) && value.includes("labels"),
-                  )
-                }
+                value={[
+                  ...(showKeyColumns ? ["keys"] : []),
+                  ...(showEdgeLabels ? ["labels"] : []),
+                ]}
+                onChange={(value) => {
+                  const checked = Array.isArray(value) ? value : [value];
+                  setShowKeyColumns(checked.includes("keys"));
+                  setShowEdgeLabels(checked.includes("labels"));
+                }}
               >
+                <MenuItemOption value="keys">Key columns</MenuItemOption>
                 <MenuItemOption value="labels">
                   Relationship labels
                 </MenuItemOption>
@@ -554,6 +587,7 @@ export const OntologyExplorer = ({
             highlighted={searchMatches ?? highlighted}
             recentlyAdded={recentlyAdded}
             showEdgeLabels={showEdgeLabels}
+            keyColumns={keyColumnsByNode}
             getFreshness={getFreshness}
             rightOffset={panelWidth}
             svgRef={svgRef}

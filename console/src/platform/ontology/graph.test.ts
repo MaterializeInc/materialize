@@ -13,7 +13,13 @@ import { buildCatalogGraph } from "./catalogGraph";
 import { filterGraph, matchesSearch, neighborhood } from "./filterGraph";
 import { formatLag, freshnessOf } from "./freshness";
 import { buildJoinSql } from "./joinSql";
-import { layoutGraph, maxCardsPerRow, NODE_HEIGHT, NODE_WIDTH } from "./layout";
+import {
+  cardHeight,
+  keyColumns,
+  keyRowOffset,
+  visibleKeyRows,
+} from "./keyColumns";
+import { layoutGraph, maxCardsPerRow, NODE_WIDTH } from "./layout";
 import { OntologyEdge, OntologyGraph, OntologyNode } from "./model";
 
 const node = (id: string, group = "g"): OntologyNode => ({
@@ -283,8 +289,12 @@ describe("freshnessOf", () => {
 });
 
 describe("layoutGraph", () => {
-  const overlaps = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-    Math.abs(a.x - b.x) < NODE_WIDTH && Math.abs(a.y - b.y) < NODE_HEIGHT;
+  const overlaps = (
+    a: { x: number; y: number; height: number },
+    b: { x: number; y: number; height: number },
+  ) =>
+    Math.abs(a.x - b.x) < NODE_WIDTH &&
+    Math.abs(a.y - b.y) < (a.height + b.height) / 2;
 
   const assertNoOverlap = (layout: ReturnType<typeof layoutGraph>) => {
     const positions = [...layout.nodes.values()];
@@ -295,9 +305,9 @@ describe("layoutGraph", () => {
     }
     for (const p of positions) {
       expect(p.x - NODE_WIDTH / 2).toBeGreaterThanOrEqual(0);
-      expect(p.y - NODE_HEIGHT / 2).toBeGreaterThanOrEqual(0);
+      expect(p.y - p.height / 2).toBeGreaterThanOrEqual(0);
       expect(p.x + NODE_WIDTH / 2).toBeLessThanOrEqual(layout.width);
-      expect(p.y + NODE_HEIGHT / 2).toBeLessThanOrEqual(layout.height);
+      expect(p.y + p.height / 2).toBeLessThanOrEqual(layout.height);
     }
   };
 
@@ -306,6 +316,7 @@ describe("layoutGraph", () => {
     const layout = layoutGraph(nodes, [edge("orders", "customers")], {
       mode: "hierarchical",
       showEdgeLabels: true,
+      keyColumns: null,
     });
     const orders = layout.nodes.get("orders");
     const customers = layout.nodes.get("customers");
@@ -318,7 +329,7 @@ describe("layoutGraph", () => {
     const layout = layoutGraph(
       [node("a", "x"), node("b", "y")],
       [edge("a", "b")],
-      { mode: "hierarchical", showEdgeLabels: false },
+      { mode: "hierarchical", showEdgeLabels: false, keyColumns: null },
     );
     expect(layout.groups.map((g) => g.name)).toEqual(["x", "y"]);
   });
@@ -330,6 +341,7 @@ describe("layoutGraph", () => {
     const layout = layoutGraph(nodes, edges, {
       mode: "hierarchical",
       showEdgeLabels: false,
+      keyColumns: null,
     });
     const rows = new Set([...layout.nodes.values()].map((p) => p.y));
     expect(rows.size).toBeGreaterThan(2);
@@ -345,8 +357,104 @@ describe("layoutGraph", () => {
     const layout = layoutGraph(nodes, [edge("a", "b"), edge("c", "c")], {
       mode: "circular",
       showEdgeLabels: true,
+      keyColumns: null,
     });
     expect(layout.edges.size).toBe(2);
     assertNoOverlap(layout);
+  });
+
+  it("sizes cards to their key rows and runs joins between rows", () => {
+    const orders = {
+      ...node("orders"),
+      primaryKey: ["id"],
+      columns: [
+        { name: "id", type: "bigint", description: null, semanticType: null },
+        {
+          name: "customer_id",
+          type: "bigint",
+          description: null,
+          semanticType: null,
+        },
+      ],
+    };
+    const customers = {
+      ...node("customers"),
+      columns: [
+        { name: "id", type: "bigint", description: null, semanticType: null },
+      ],
+    };
+    const join = {
+      ...edge("orders", "customers"),
+      sourceColumns: ["customer_id"],
+    };
+    const lineage = edge("orders", "customers", "lineage");
+    const keys = new Map([
+      ["orders", keyColumns(orders, [join])],
+      ["customers", keyColumns(customers, [join])],
+    ]);
+    const layout = layoutGraph([orders, customers], [join, lineage], {
+      mode: "hierarchical",
+      showEdgeLabels: true,
+      keyColumns: keys,
+    });
+    expect(layout.nodes.get("orders")?.height).toBeGreaterThan(
+      layout.nodes.get("customers")?.height ?? Infinity,
+    );
+    expect(layout.edges.get(join.id)?.anchored).toBe(true);
+    expect(layout.edges.get(lineage.id)?.anchored).toBe(false);
+  });
+});
+
+describe("keyColumns", () => {
+  const columns = ["id", "customer_id", "region", "note"].map((name) => ({
+    name,
+    type: "text",
+    description: null,
+    semanticType: null,
+  }));
+  const orders = { ...node("orders"), columns, primaryKey: ["id"] };
+
+  it("lists keys first, then foreign keys in column order", () => {
+    const keys = keyColumns(orders, [
+      { ...edge("orders", "regions"), sourceColumns: ["region"] },
+      { ...edge("orders", "customers"), sourceColumns: ["customer_id"] },
+      { ...edge("returns", "orders"), targetColumns: ["id"] },
+    ]);
+    expect(keys.map((k) => [k.name, k.role, k.missing])).toEqual([
+      ["id", "pk", false],
+      ["customer_id", "fk", false],
+      ["region", "fk", false],
+    ]);
+  });
+
+  it("marks columns that both key and reference, and missing columns", () => {
+    const keys = keyColumns(orders, [
+      { ...edge("orders", "a"), sourceColumns: ["id"] },
+      { ...edge("orders", "b"), sourceColumns: ["bidder_id"] },
+    ]);
+    expect(keys.map((k) => [k.name, k.role, k.missing])).toEqual([
+      ["id", "pkfk", false],
+      ["bidder_id", "fk", true],
+    ]);
+  });
+
+  it("does not call columns missing before they load", () => {
+    const keys = keyColumns({ ...orders, columns: undefined }, [
+      { ...edge("orders", "b"), sourceColumns: ["anything"] },
+    ]);
+    expect(keys[1]).toMatchObject({ name: "anything", missing: false });
+  });
+
+  it("folds rows past the limit, and anchors folded columns to the fold", () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({
+      name: `k${i}`,
+      type: "int",
+      role: "pk" as const,
+      missing: false,
+    }));
+    expect(visibleKeyRows(many)).toMatchObject({ hidden: 3 });
+    expect(visibleKeyRows(many.slice(0, 5)).hidden).toBe(0);
+    expect(keyRowOffset(many, "k6")).toBe(keyRowOffset(many, "k3") + 18);
+    expect(cardHeight([])).toBeLessThan(cardHeight(many));
   });
 });

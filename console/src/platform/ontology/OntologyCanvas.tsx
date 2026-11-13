@@ -14,7 +14,14 @@ import { Canvas } from "~/components/Graph";
 import { MaterializeTheme, ThemeColors } from "~/theme";
 
 import { Freshness, freshnessColor, freshnessText } from "./freshness";
-import { GraphLayout, labelWidth, NODE_HEIGHT, NODE_WIDTH } from "./layout";
+import {
+  CARD_HEADER_HEIGHT,
+  KEY_ROW_HEIGHT,
+  KeyColumn,
+  KeyRole,
+  visibleKeyRows,
+} from "./keyColumns";
+import { GraphLayout, labelWidth, NODE_WIDTH } from "./layout";
 import { edgeLabel, isErrorEdge, OntologyEdge, OntologyNode } from "./model";
 import { edgeKindStyle, groupColor, nodeKindLabel } from "./style";
 
@@ -33,6 +40,8 @@ export interface OntologyCanvasProps {
   /** Nodes and edges that appeared after the first snapshot. */
   recentlyAdded: ReadonlySet<string>;
   showEdgeLabels: boolean;
+  /** Key columns to draw on each card, or null for compact cards. */
+  keyColumns: Map<string, KeyColumn[]> | null;
   getFreshness: ((node: OntologyNode) => Freshness) | undefined;
   rightOffset: number;
   svgRef: React.RefObject<SVGSVGElement>;
@@ -59,6 +68,7 @@ export const OntologyCanvas = ({
   highlighted,
   recentlyAdded,
   showEdgeLabels,
+  keyColumns,
   getFreshness,
   rightOffset,
   svgRef,
@@ -105,15 +115,23 @@ export const OntologyCanvas = ({
     selection?.type === "node" ? layout.nodes.get(selection.id) : undefined;
   const selectedX = selectedPosition?.x;
   const selectedY = selectedPosition?.y;
+  const selectedHeight = selectedPosition?.height;
   // NOTE: `Canvas` pans to the selected node whenever this object changes, and
   // the page re-renders every second as freshness ticks. A new object per
   // render would yank the camera back to the selection mid-pan.
   const selectedNode = React.useMemo(
     () =>
-      selectedX !== undefined && selectedY !== undefined
-        ? { x: selectedX, y: selectedY, width: NODE_WIDTH, height: NODE_HEIGHT }
+      selectedX !== undefined &&
+      selectedY !== undefined &&
+      selectedHeight !== undefined
+        ? {
+            x: selectedX,
+            y: selectedY,
+            width: NODE_WIDTH,
+            height: selectedHeight,
+          }
         : null,
-    [selectedX, selectedY],
+    [selectedX, selectedY, selectedHeight],
   );
 
   return (
@@ -242,7 +260,8 @@ export const OntologyCanvas = ({
         {showEdgeLabels &&
           edges.map((edge) => {
             const position = layout.edges.get(edge.id);
-            if (!position) return null;
+            // A row-to-row edge already shows which columns it joins.
+            if (!position || position.anchored) return null;
             const label = edgeLabel(edge);
             if (!label) return null;
             const text = truncate(label, 40);
@@ -296,7 +315,9 @@ export const OntologyCanvas = ({
               key={node.id}
               node={node}
               x={position.x - NODE_WIDTH / 2}
-              y={position.y - NODE_HEIGHT / 2}
+              y={position.y - position.height / 2}
+              height={position.height}
+              keyColumns={keyColumns?.get(node.id)}
               color={groupColor(node.group, allGroups, colors)}
               colors={colors}
               isSelected={
@@ -319,6 +340,8 @@ interface OntologyNodeCardProps {
   node: OntologyNode;
   x: number;
   y: number;
+  height: number;
+  keyColumns: KeyColumn[] | undefined;
   color: string;
   colors: ThemeColors;
   isSelected: boolean;
@@ -334,6 +357,8 @@ const OntologyNodeCard = React.memo(
     node,
     x,
     y,
+    height,
+    keyColumns,
     color,
     colors,
     isSelected,
@@ -369,7 +394,7 @@ const OntologyNodeCard = React.memo(
         </title>
         <rect
           width={NODE_WIDTH}
-          height={NODE_HEIGHT}
+          height={height}
           rx={8}
           fill={
             node.isUnresolved
@@ -386,7 +411,7 @@ const OntologyNodeCard = React.memo(
             x={0}
             y={10}
             width={4}
-            height={NODE_HEIGHT - 20}
+            height={height - 20}
             fill={color}
             rx={2}
           />
@@ -437,6 +462,9 @@ const OntologyNodeCard = React.memo(
             </text>
           </g>
         )}
+        {keyColumns && keyColumns.length > 0 && (
+          <KeyRows keys={keyColumns} colors={colors} />
+        )}
         {freshness && status && (
           <g transform={`translate(${NODE_WIDTH - 12}, 40)`}>
             <circle
@@ -466,3 +494,105 @@ const OntologyNodeCard = React.memo(
     );
   },
 );
+
+const KEY_NAME_CHARS = 18;
+const KEY_TYPE_CHARS = 11;
+const MONO = "'Roboto Mono', monospace";
+
+const ROLE_LABELS: Record<KeyRole, string> = {
+  pk: "PK",
+  fk: "FK",
+  pkfk: "PK FK",
+};
+
+const ROLE_TITLES: Record<KeyRole, string> = {
+  pk: "Key: other relations join to this column",
+  fk: "Foreign key: joins to another relation",
+  pkfk: "Key and foreign key",
+};
+
+const KeyRows = ({
+  keys,
+  colors,
+}: {
+  keys: KeyColumn[];
+  colors: ThemeColors;
+}) => {
+  const { rows, hidden } = visibleKeyRows(keys);
+  const rowY = (i: number) =>
+    CARD_HEADER_HEIGHT + i * KEY_ROW_HEIGHT + KEY_ROW_HEIGHT / 2;
+  return (
+    <g>
+      <line
+        x1={1}
+        x2={NODE_WIDTH - 1}
+        y1={CARD_HEADER_HEIGHT - 3}
+        y2={CARD_HEADER_HEIGHT - 3}
+        stroke={colors.border.primary}
+      />
+      {rows.map((key, i) => {
+        const y = rowY(i);
+        const nameColor = key.missing
+          ? colors.accent.red
+          : colors.foreground.primary;
+        return (
+          <g key={key.name}>
+            <title>
+              {key.missing
+                ? `${key.name} is named by a relationship but is not a column`
+                : `${key.name} ${key.type ?? ""}. ${ROLE_TITLES[key.role]}`}
+            </title>
+            <text
+              x={14}
+              y={y + 3.5}
+              fontSize={8.5}
+              fontWeight={700}
+              fill={
+                key.role === "fk" ? colors.accent.purple : colors.accent.orange
+              }
+            >
+              {ROLE_LABELS[key.role]}
+            </text>
+            <text
+              x={key.role === "pkfk" ? 50 : 34}
+              y={y + 4}
+              fontSize={11}
+              fontFamily={MONO}
+              fill={nameColor}
+              textDecoration={key.missing ? "line-through" : undefined}
+            >
+              {truncate(
+                key.name,
+                key.role === "pkfk" ? KEY_NAME_CHARS - 2 : KEY_NAME_CHARS,
+              )}
+            </text>
+            <text
+              x={NODE_WIDTH - 12}
+              y={y + 4}
+              textAnchor="end"
+              fontSize={10}
+              fontFamily={MONO}
+              fill={
+                key.missing ? colors.accent.red : colors.foreground.tertiary
+              }
+            >
+              {key.missing
+                ? "missing"
+                : truncate(key.type ?? "", KEY_TYPE_CHARS)}
+            </text>
+          </g>
+        );
+      })}
+      {hidden > 0 && (
+        <text
+          x={34}
+          y={rowY(rows.length) + 4}
+          fontSize={10.5}
+          fill={colors.foreground.secondary}
+        >
+          +{hidden} more
+        </text>
+      )}
+    </g>
+  );
+};

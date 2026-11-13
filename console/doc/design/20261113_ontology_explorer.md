@@ -102,6 +102,15 @@ object references makes one rank too wide to read, so ranks wider than
 circular layout is the alternative. The canvas fits the graph on load and
 on every layout change.
 
+Cards list their key columns by default, ER diagram style, so a join reads
+as a line from one column's row to another's, without a text label.
+Materialize declares no primary or foreign keys, so they are read from the
+ontology: a column other relations join to is a key, recorded catalog
+primary keys included, and a column that joins to another relation is a
+foreign key. A column a relationship names but the relation lacks is drawn
+struck through in red. Cards show four key rows and fold the rest. The View
+menu turns key columns off for compact cards.
+
 ### Interactions
 
 Selecting an entity or relationship opens it in the side panel and is kept
