@@ -3017,6 +3017,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_batch_sort_unordered_parts"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_consolidator_decode_batched"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_enable_incremental_compaction"] = (
             BOOLEAN_FLAG_VALUES
         )

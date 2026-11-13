@@ -640,7 +640,10 @@ def get_variable_system_parameters(
             [
                 VariableSystemParameter(
                     "persist_batch_sort_unordered_parts", "true", ["true", "false"]
-                )
+                ),
+                VariableSystemParameter(
+                    "persist_consolidator_decode_batched", "true", ["true", "false"]
+                ),
             ]
             if version >= MzVersion.parse_mz("v26.52.0-dev")
             else []
