@@ -3330,6 +3330,27 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
 
 parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER = true);
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source', FAILOVER = true)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }, PgConfigOption { name: Failover, value: Some(Value(Boolean(true))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER false);
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source', FAILOVER = false)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }, PgConfigOption { name: Failover, value: Some(Value(Boolean(false))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', FAILOVER);
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source', FAILOVER)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }, PgConfigOption { name: Failover, value: None }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source')

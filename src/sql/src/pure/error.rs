@@ -61,6 +61,8 @@ pub enum PgSourcePurificationError {
     NotPgConnection(FullItemName),
     #[error("CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
+    #[error("FAILOVER requires the upstream to be a PostgreSQL 17+ primary")]
+    FailoverUnsupported,
     #[error(transparent)]
     InvalidConnection(PostgresConnectionValidationError),
 }

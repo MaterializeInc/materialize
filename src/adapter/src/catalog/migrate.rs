@@ -417,7 +417,9 @@ fn rewrite_sources_to_tables(
         match &mut connection {
             CreateSourceConnection::Postgres { options, .. } => {
                 options.retain(|o| match o.name {
-                    PgConfigOptionName::Details | PgConfigOptionName::Publication => true,
+                    PgConfigOptionName::Details
+                    | PgConfigOptionName::Publication
+                    | PgConfigOptionName::Failover => true,
                     PgConfigOptionName::TextColumns | PgConfigOptionName::ExcludeColumns => false,
                 });
             }

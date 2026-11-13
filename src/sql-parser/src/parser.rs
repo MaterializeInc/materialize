@@ -3858,9 +3858,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION, TEXT, EXCLUDE])? {
+        let keywords = [DETAILS, PUBLICATION, FAILOVER, TEXT, EXCLUDE];
+        let name = match self.expect_one_of_keywords(&keywords)? {
             DETAILS => PgConfigOptionName::Details,
             PUBLICATION => PgConfigOptionName::Publication,
+            FAILOVER => PgConfigOptionName::Failover,
             TEXT => {
                 self.expect_keyword(COLUMNS)?;
 
