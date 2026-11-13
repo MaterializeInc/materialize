@@ -10,11 +10,11 @@ without changing Persist or the 60s publication default.
 The current two-version local `bin/controllerd` walkthrough and complementary
 `0dt ddl` workload passed, including sink authority and singleton CDC handover.
 The current debug bounded-memory upsert-index test still OOMs at its original
-limit in both current runs. The user approved investigating this failure under
-the active goal. Capture raw heap profiles and metrics at the unchanged limit,
-then compare a matched upstream build/workload. The independent launch audit
-found no demonstrated conversion omission. Do not raise limits or shrink the
-workload.
+limit. The user approved investigating this failure under the active goal.
+The profiled reproduction identifies decoded upsert row clones as the dominant
+allocation path. The matched upstream-base debug build is running. Next run its
+original workload and compare startup state, memory and buffering before proposing
+a repair. Do not raise limits or shrink the workload.
 
 Then reconcile remaining native-only acceptance gaps. The owned runtime is
 cleaned up. Proposed residual-load work is ranked in the follow-up inventory,
@@ -97,9 +97,13 @@ distinct-version walkthrough and sink/CDC run.
   `native-bounded-offline-findings.md` confirms active upsert backpressure and
   predominantly anonymous memory growth during ingestion/index startup. It does
   not identify the retaining operator or the actual compaction frontier.
-  Cause remains unproven. This does not establish a regression against optimized
-  upstream. Full upsert stress also exceeded an earlier local cap. Do not shrink
-  workloads or raise limits to hide either failure.
+  New profiling evidence is in `../upsert-oom-investigation/findings.md`:
+  roughly 69% of the sampled heap originated in upsert command row clones.
+  The 256-MiB backpressure controls Persist feedback, not incoming Kafka rows.
+  Some provisional writes completed despite zero indexed-byte counters.
+  The retaining queue and reason this exceeds the cap still need comparison.
+  No upstream regression is established. Full upsert stress also exceeded an
+  earlier local cap. Do not shrink workloads or raise limits to hide either failure.
 - Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
   acceptance remain incomplete. Earlier index-publication and slow source-status
   cases remain unexplained. Adapter-loss acceptance needs a Persist CLI/jobs artifact.
@@ -120,12 +124,15 @@ changed. `remote.py` points to that released worker, not a reusable live host.
 
 The OOM investigation uses new owned worker `i-0b3699392b71bd7d2`, expiring
 `2026-11-13T20:31:57.921677+00:00`. Its evidence and instance-specific `remote.py`
-are in `../upsert-oom-investigation/`. Source setup completed. The retained
-candidate transfer and capped MySQL dependency build are running, recorded in
-`candidate-upload.log` and `fixture-build.log`. Other exact dependency images
-were recovered. Do not overlap a runtime with the dependency build.
-`profile_bounded_memory.py` adds raw jemalloc/metrics capture to the existing
-driver, without workload or memory-limit changes. It has not run yet.
+are in `../upsert-oom-investigation/`. Candidate/dependency setup completed.
+`profile_bounded_memory.py` reproduced the OOM without workload or limit changes.
+`native-profile-evidence.tar.gz` preserves the run and heap captures locally.
+`native-heap-functions.log` is the successful function-level allocation report.
+No runtime remains. The guarded upstream build is `aj-upsert-baseline-build`,
+recorded in `baseline-build.log`. It uses one Cargo job, 32 GiB and four CPUs.
+Its pinned worktree is `/home/ubuntu/materialize-upsert-baseline` at `d9a2c5dc`.
+After it succeeds, use `profile_baseline.py` with that worktree's MZ_ROOT and
+PYTHONPATH. Do not overlap the comparison runtime with the build.
 
 Keep heavy work on scratch, sequentially. Container/build aggregate budget:
 40 GiB, no swap, eight CPUs. Builds use one Cargo job, 32 GiB and four CPUs.
