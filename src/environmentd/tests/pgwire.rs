@@ -805,6 +805,7 @@ fn pg_test_harness(path: &Path, mz_flags: bool, harness: fn() -> test_util::Test
         if mz_flags {
             server.enable_feature_flags(&[
                 "enable_create_table_from_source",
+                "enable_jq",
                 "enable_load_generator_datums",
                 "enable_raise_statement",
                 "unsafe_enable_unorchestrated_cluster_replicas",
@@ -1362,6 +1363,14 @@ fn test_pgtest_mz_copy_binary_unsupported() {
 #[mz_ore::test]
 fn test_pgtest_mz_copy_from_csv() {
     pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_from_unfoldable_default() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/copy-from-unfoldable-default.pt"),
+        true,
+    );
 }
 
 #[mz_ore::test]

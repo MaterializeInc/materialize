@@ -375,9 +375,12 @@ impl Coordinator {
             )?;
             let mir = optimize::Optimize::optimize(&mut optimizer, hir)?;
             let mir_expr = mir.into_inner();
-            let (result_ref, _) = mir_expr
-                .as_const()
-                .expect("optimizer should produce constant");
+            // Constant folding leaves some defaults alone, such as a jq call.
+            let Some((result_ref, _)) = mir_expr.as_const() else {
+                return Err(AdapterError::Unsupported(
+                    "column defaults that do not reduce to a constant in COPY FROM STDIN",
+                ));
+            };
             let result_rows = result_ref
                 .clone()
                 .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("eval error: {e}")))?;
