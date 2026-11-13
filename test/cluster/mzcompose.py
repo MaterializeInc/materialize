@@ -4140,103 +4140,134 @@ def workflow_test_profile_fetch(c: Composition) -> None:
     endpoint.
     """
 
-    c.up("materialized", "clusterd1")
-
-    envd_port = c.port("materialized", 6878)
-    envd_url = f"http://localhost:{envd_port}/prof/"
-    clusterd_port = c.port("clusterd1", 6878)
-    clusterd_url = f"http://localhost:{clusterd_port}/"
-
-    def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
-        resp = requests.post(envd_url, data=data)
-        check(resp.status_code, resp.text)
-
-        resp = requests.post(clusterd_url, data=data)
-        check(resp.status_code, resp.text)
-
-    def test_get(path: str, check: Callable[[int, str], None]) -> None:
-        resp = requests.get(envd_url + path)
-        check(resp.status_code, resp.text)
-
-        resp = requests.get(clusterd_url + path)
-        check(resp.status_code, resp.text)
-
-    def make_check(code: int, contents: str) -> Callable[[int, str], None]:
-        def check(code_: int, text: str) -> None:
-            assert code_ == code, f"expected {code}, got {code_}"
-            assert contents in text, f"'{contents}' not found in text: {text}"
-
-        return check
-
-    def make_ok_check(contents: str) -> Callable[[int, str], None]:
-        return make_check(200, contents)
-
-    def check_profiling_disabled(code: int, text: str) -> None:
-        check = make_check(403, "heap profiling not activated")
-        check(code, text)
-
-    # Test fetching heap profiles. Heap profiling should be activated by default.
-    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
-    test_post(
-        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+    c.up("materialized")
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        user="mz_system",
+        port=6877,
     )
-    test_post(
-        {"action": "mem_fg"},
-        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
-    )
-    test_get("heap", make_ok_check(""))
+    c.sql("""
+        CREATE CLUSTER profile_fetch REPLICAS (
+            r1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            )
+        );
+        """)
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'profile_fetch' AND r.name = 'r1'""")
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *native_catalog_options(c),
+            ],
+        )
+    ):
+        c.up("clusterd1")
 
-    # Test fetching CPU profiles. This disables memory profiling!
-    test_post(
-        {"action": "time_fg", "time_secs": "1", "hz": "1"},
-        make_ok_check(
-            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
-        ),
-    )
+        envd_port = c.port("materialized", 6878)
+        envd_url = f"http://localhost:{envd_port}/prof/"
+        clusterd_port = c.port("clusterd1", 6878)
+        clusterd_url = f"http://localhost:{clusterd_port}/"
 
-    # Regression test for CLU-109: a sampling frequency of zero used to reach
-    # pprof's `Timer::new`, which computes `1_000_000 / hz` and panicked with a
-    # division by zero, crashing the whole process. It must now be rejected with
-    # a clean error response instead. Parameter validation catches it at the
-    # request boundary and returns a 400.
-    test_post(
-        {"action": "time_fg", "time_secs": "1", "hz": "0"},
-        make_check(400, "`hz` must be greater than zero"),
-    )
+        def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
+            resp = requests.post(envd_url, data=data)
+            check(resp.status_code, resp.text)
 
-    # Deactivate memory profiling.
-    test_post(
-        {"action": "deactivate"},
-        make_ok_check("Jemalloc profiling enabled but inactive"),
-    )
+            resp = requests.post(clusterd_url, data=data)
+            check(resp.status_code, resp.text)
 
-    # Test that fetching heap profiles is forbidden.
-    test_post({"action": "dump_jeheap"}, check_profiling_disabled)
-    test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
-    test_post({"action": "mem_fg"}, check_profiling_disabled)
-    test_get("heap", check_profiling_disabled)
+        def test_get(path: str, check: Callable[[int, str], None]) -> None:
+            resp = requests.get(envd_url + path)
+            check(resp.status_code, resp.text)
 
-    # Activate memory profiling again.
-    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
+            resp = requests.get(clusterd_url + path)
+            check(resp.status_code, resp.text)
 
-    # Test fetching heap profiles again.
-    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
-    test_post(
-        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
-    )
-    test_post(
-        {"action": "mem_fg"},
-        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
-    )
-    test_get("heap", make_ok_check(""))
+        def make_check(code: int, contents: str) -> Callable[[int, str], None]:
+            def check(code_: int, text: str) -> None:
+                assert code_ == code, f"expected {code}, got {code_}"
+                assert contents in text, f"'{contents}' not found in text: {text}"
 
-    # Test fetching CPU profiles again.
-    test_post(
-        {"action": "time_fg", "time_secs": "1", "hz": "1"},
-        make_ok_check(
-            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
-        ),
-    )
+            return check
+
+        def make_ok_check(contents: str) -> Callable[[int, str], None]:
+            return make_check(200, contents)
+
+        def check_profiling_disabled(code: int, text: str) -> None:
+            check = make_check(403, "heap profiling not activated")
+            check(code, text)
+
+        # Test fetching heap profiles. Heap profiling should be activated by default.
+        test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+        test_post(
+            {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+        )
+        test_post(
+            {"action": "mem_fg"},
+            make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+        )
+        test_get("heap", make_ok_check(""))
+
+        # Test fetching CPU profiles. This disables memory profiling!
+        test_post(
+            {"action": "time_fg", "time_secs": "1", "hz": "1"},
+            make_ok_check(
+                "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+            ),
+        )
+
+        # Regression test for CLU-109: a sampling frequency of zero used to reach
+        # pprof's `Timer::new`, which computes `1_000_000 / hz` and panicked with a
+        # division by zero, crashing the whole process. It must now be rejected with
+        # a clean error response instead. Parameter validation catches it at the
+        # request boundary and returns a 400.
+        test_post(
+            {"action": "time_fg", "time_secs": "1", "hz": "0"},
+            make_check(400, "`hz` must be greater than zero"),
+        )
+
+        # Deactivate memory profiling.
+        test_post(
+            {"action": "deactivate"},
+            make_ok_check("Jemalloc profiling enabled but inactive"),
+        )
+
+        # Test that fetching heap profiles is forbidden.
+        test_post({"action": "dump_jeheap"}, check_profiling_disabled)
+        test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
+        test_post({"action": "mem_fg"}, check_profiling_disabled)
+        test_get("heap", check_profiling_disabled)
+
+        # Activate memory profiling again.
+        test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
+
+        # Test fetching heap profiles again.
+        test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+        test_post(
+            {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+        )
+        test_post(
+            {"action": "mem_fg"},
+            make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+        )
+        test_get("heap", make_ok_check(""))
+
+        # Test fetching CPU profiles again.
+        test_post(
+            {"action": "time_fg", "time_secs": "1", "hz": "1"},
+            make_ok_check(
+                "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+            ),
+        )
 
 
 def workflow_test_incident_70(c: Composition) -> None:
@@ -6914,7 +6945,6 @@ def workflow_test_zero_downtime_reconfigure(
     ):
         c.up(
             "materialized",
-            "clusterd1",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),
