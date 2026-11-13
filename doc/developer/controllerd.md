@@ -189,6 +189,80 @@ Native prototype deployments can serve SQL, DDL and table writes before promotio
 Both builds must understand the same complete committed-plan encoding. This does
 not establish compatibility between arbitrary releases.
 
+### Start two versions and exercise both writers
+
+Use two fixed binary directories built through `bin/controllerd --build-only`.
+The prototype check uses package versions `26.46.0-dev.0` and `26.47.0-dev.0`
+with identical implementation and committed-plan encoding. A different Git hash
+alone is not a different SQL version. This is not a builtin-schema migration test.
+
+The following commands use one shell, an unused metadata database and free
+controller ports 6882/6883. Create the metadata database first. Do not point this
+example at another environment's database or blobs.
+
+```sh
+export MZDEV_POSTGRES='postgres://root@localhost:26257/controllerd_upgrade'
+state=$(mktemp -d /tmp/controllerd-upgrade.XXXXXX)
+export MZDEV_BLOB="file://$state/persist/blob"
+old=/absolute/path/to/26.46-binaries
+new=/absolute/path/to/26.47-binaries
+
+bin/controllerd --controller-data-directory "$state" \
+  --controller-binaries-directory "$old" -- --deploy-generation=0 \
+  --controller-http-listen-addr=127.0.0.1:6882 \
+  --pubsubd-image="$old/pubsubd" >"$state/controller-0.log" 2>&1 &
+controller0=$!
+```
+
+Wait for `/api/adapters` on port 6882 to report the default adapter ready.
+Discover the shared relay, then start the candidate against the same state:
+
+```sh
+relay=$(curl -fsS http://127.0.0.1:6882/api/inventory |
+  jq -r '"http://" + .pubsub.endpoints.pubsub[0]')
+bin/controllerd --controller-data-directory "$state" \
+  --controller-binaries-directory "$new" --pubsub-url "$relay" -- \
+  --deploy-generation=1 --controller-http-listen-addr=127.0.0.1:6883 \
+  >"$state/controller-1.log" 2>&1 &
+controller1=$!
+```
+
+Wait for the candidate adapter's readiness, then discover both SQL endpoints.
+Keep any interactive incumbent SQL sessions open across promotion.
+
+```sh
+sql0=$(curl -fsS http://127.0.0.1:6882/api/adapters |
+  jq -r '.[] | select(.id == "a1") | .endpoints["sql-external"][0]')
+sql1=$(curl -fsS http://127.0.0.1:6883/api/adapters |
+  jq -r '.[] | select(.id == "a1") | .endpoints["sql-external"][0]')
+
+probe_writers() {
+  phase=$1
+  psql "postgres://materialize@$sql0/materialize" -v ON_ERROR_STOP=1 \
+    -c "CREATE TABLE ${phase}_old (n INT)" \
+    -c "INSERT INTO ${phase}_old VALUES (1)" \
+    -c "CREATE INDEX ${phase}_old_idx ON ${phase}_old (n)"
+  psql "postgres://materialize@$sql1/materialize" -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO ${phase}_old VALUES (2)" \
+    -c "CREATE TABLE ${phase}_new (n INT)" \
+    -c "INSERT INTO ${phase}_new VALUES (10)" \
+    -c "CREATE INDEX ${phase}_new_idx ON ${phase}_new (n)"
+  psql "postgres://materialize@$sql0/materialize" -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO ${phase}_new VALUES (20)"
+  for endpoint in "$sql0" "$sql1"; do
+    psql "postgres://materialize@$endpoint/materialize" -v ON_ERROR_STOP=1 \
+      -c 'SELECT mz_version()' \
+      -c "SELECT sum(n) FROM ${phase}_old" \
+      -c "SELECT sum(n) FROM ${phase}_new"
+  done
+}
+probe_writers before
+```
+
+Both endpoints should return sums 3 and 30, with distinct SQL versions.
+
+### Promote without retiring the predecessor
+
 Promotion uses the candidate adapter's internal HTTP port, not controllerd's port.
 For the default adapter `a1`:
 
@@ -214,7 +288,9 @@ The POST acknowledges the request, not completed promotion. Wait until inventory
 reports the candidate as active and its adapter is SQL-ready again. Promotion
 restarts the candidate adapter, so reconnect its SQL sessions. It must preserve
 warmed replicas and leave the older admitted deployment writable. Retirement is
-a separate operation.
+a separate operation. With the two-version setup above, refresh `sql1` from the
+candidate inventory and run `probe_writers after`. Both deployments must still
+accept DDL and writes and return the same sums.
 
 ## Retire one deployment
 
@@ -246,6 +322,39 @@ Transfer relay provisioning to a surviving controller before retiring its curren
 provisioner, following the shared-relay rules above. Retained pubsub keeps running,
 but an external-mode controller does not automatically become its provisioner.
 Do not use `--stop` for a single deployment: it stops the whole environment.
+
+For the two-version setup above, stop only the two controller launchers, then
+restart the survivor as the relay provisioner with the original relay binary:
+
+```sh
+kill "$controller0" "$controller1"
+wait "$controller0" "$controller1" || true
+bin/controllerd --controller-data-directory "$state" \
+  --controller-binaries-directory "$new" -- --deploy-generation=1 \
+  --controller-http-listen-addr=127.0.0.1:6883 \
+  --pubsubd-image="$old/pubsubd" >"$state/controller-1-retained.log" 2>&1 &
+controller1=$!
+```
+
+Wait for readiness. Confirm the relay endpoint and replica processes in inventory
+are unchanged. Existing SQL sessions should remain usable during controller
+replacement. Retire the predecessor explicitly, then verify survivor progress:
+
+```sh
+bin/controllerd --controller-data-directory "$state" \
+  --retire-generation 0 --controller-url http://127.0.0.1:6883
+psql "postgres://materialize@$sql1/materialize" -v ON_ERROR_STOP=1 \
+  -c 'INSERT INTO after_old VALUES (3)' \
+  -c 'SELECT sum(n) FROM after_old'
+```
+
+The sum should be 6. Retired-generation sessions must not accept another write
+once the survivor has supplied post-retirement WAL progress. Retirement receipt
+alone is not that WAL barrier. Finish with the data-preserving environment stop:
+
+```sh
+bin/controllerd --controller-data-directory "$state" --stop
+```
 
 ## Inspect Persist collections
 
