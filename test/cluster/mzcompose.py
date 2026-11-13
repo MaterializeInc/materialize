@@ -8602,6 +8602,135 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
     assert not upper_empty, "the target MV's shard was sealed, its data is lost"
 
 
+def workflow_test_mv_apply_replacement_stalled_downstream_mv(c: Composition) -> None:
+    """
+    Restarting environmentd after applying a replacement must not advance the
+    target's since past the upper of a stalled downstream MV.
+    """
+
+    def global_id(name: str) -> str:
+        [(gid,)] = c.sql_query(f"""
+            SELECT g.global_id
+            FROM mz_internal.mz_object_global_ids g
+            JOIN mz_objects o ON o.id = g.id
+            WHERE o.name = '{name}'
+            """)
+        return gid
+
+    def frontier(column: str, gid: str) -> int | None:
+        rows = c.sql_query(f"""
+            SELECT {column} FROM mz_internal.mz_frontiers WHERE object_id = '{gid}'
+            """)
+        if not rows or rows[0][0] is None:
+            return None
+        return int(rows[0][0])
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER down_cluster SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+        CREATE MATERIALIZED VIEW mv AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 IN CLUSTER down_cluster AS SELECT a FROM mv;
+        """)
+    assert c.sql_query("SELECT * FROM mv2") == [(1,)]
+    c.sql("ALTER CLUSTER down_cluster SET (REPLICATION FACTOR 0)")
+
+    t_gid = global_id("t")
+    mv2_gid = global_id("mv2")
+    # The collection of `mv` that `mv2` reads. Applying the replacement adds a
+    # second global ID for `mv`, which `mv2` does not depend on.
+    mv_gid = global_id("mv")
+
+    # Wait for the since of `t` to pass the upper of `mv2`, so that the as-of
+    # of the replacement lands beyond that upper.
+    for _ in range(30):
+        time.sleep(1)
+        t_since = frontier("read_frontier", t_gid)
+        mv2_upper = frontier("write_frontier", mv2_gid)
+        if t_since is not None and mv2_upper is not None and t_since > mv2_upper:
+            break
+    else:
+        raise RuntimeError("t's since didn't advance beyond mv2's upper")
+
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        """)
+
+    # With soft assertions enabled, a violated as-of constraint for `mv2`
+    # panics environmentd during bootstrap.
+    c.kill("materialized")
+    c.up("materialized")
+
+    mv_since = frontier("read_frontier", mv_gid)
+    mv2_upper = frontier("write_frontier", mv2_gid)
+    assert mv_since is not None and mv2_upper is not None
+    assert (
+        mv_since <= mv2_upper
+    ), f"mv's since {mv_since} advanced past mv2's upper {mv2_upper}"
+
+
+def workflow_test_refresh_mv_apply_replacement_restart(c: Composition) -> None:
+    """
+    Restart environmentd after applying replacements with a different refresh
+    schedule, before the first refresh of the new schedule.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # The first refresh of `mv` is an hour out. The replacement's refresh grid
+    # is shifted off it, so its first refresh after that is a different time.
+    c.sql("""
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+        CREATE MATERIALIZED VIEW mv
+          WITH (REFRESH AT mz_now()::text::int8 + 3600001)
+          AS SELECT a FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv
+          WITH (REFRESH EVERY '7 seconds' ALIGNED TO mz_now()::text::int8 + 3000)
+          AS SELECT a + 1 AS a FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        """)
+
+    # `mv_plain` refreshes on commit, so its upper moves past its as-of. The
+    # replacement's only refresh is an hour out, so at the restart the upper
+    # lies between the as-of and the first refresh.
+    c.sql("CREATE MATERIALIZED VIEW mv_plain AS SELECT a FROM t")
+    time.sleep(3)
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp_plain FOR mv_plain
+          WITH (REFRESH AT mz_now()::text::int8 + 3600000)
+          AS SELECT a + 1 AS a FROM t;
+        ALTER MATERIALIZED VIEW mv_plain APPLY REPLACEMENT rp_plain;
+        """)
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    for name in ["mv", "mv_plain"]:
+        for _ in range(30):
+            rows = c.sql_query(f"""
+                SELECT r.last_completed_refresh, r.next_refresh, f.write_frontier
+                FROM mz_internal.mz_materialized_view_refreshes r
+                JOIN mz_materialized_views m ON m.id = r.materialized_view_id
+                JOIN mz_internal.mz_frontiers f ON f.object_id = r.materialized_view_id
+                WHERE m.name = '{name}'
+                """)
+            if rows:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError(f"no refresh introspection for {name}")
+        print(f"refresh introspection for {name}: {rows}")
+        [(last_completed_refresh, next_refresh, _)] = rows
+        assert last_completed_refresh is None, rows
+        assert next_refresh is not None, rows
+
+
 def workflow_test_github_10102(c: Composition) -> None:
     """
     Regression test for database-issues#10102:

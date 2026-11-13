@@ -3036,24 +3036,23 @@ impl RefreshIntrospectionState {
                 };
             self.next_refresh = Datum::Null;
         } else {
-            if PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
+            let write_frontier = write_frontier.as_option().expect("checked above");
+            let initial_as_of = self.initial_as_of.as_option().expect(
+                "initial_as_of can't be [], because then there would be no refreshes at all",
+            );
+            // Sequencing sets `initial_as_of` to the first refresh. An applied replacement
+            // keeps the target's `initial_as_of`, which need not lie on the replacement's
+            // schedule. The shard's upper can then pass `initial_as_of` before the schedule's
+            // first refresh, with no refresh below the upper.
+            let first_refresh = self.refresh_schedule.round_up_timestamp(*initial_as_of);
+            if *write_frontier <= *initial_as_of
+                || first_refresh.is_some_and(|first_refresh| *write_frontier <= first_refresh)
+            {
                 // We are before the first refresh.
                 self.last_completed_refresh = Datum::Null;
-                let initial_as_of = self.initial_as_of.as_option().expect(
-                    "initial_as_of can't be [], because then there would be no refreshes at all",
-                );
-                let first_refresh = self
-                    .refresh_schedule
-                    .round_up_timestamp(*initial_as_of)
-                    .expect("sequencing makes sure that REFRESH MVs always have a first refresh");
-                soft_assert_or_log!(
-                    first_refresh == *initial_as_of,
-                    "initial_as_of should be set to the first refresh"
-                );
-                self.next_refresh = first_refresh.into();
+                self.next_refresh = first_refresh.map_or(Datum::Null, Datum::from);
             } else {
                 // The first refresh has already happened.
-                let write_frontier = write_frontier.as_option().expect("checked above");
                 self.last_completed_refresh = self
                     .refresh_schedule
                     .round_down_timestamp_m1(*write_frontier)
