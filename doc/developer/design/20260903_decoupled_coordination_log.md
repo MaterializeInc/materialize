@@ -90,6 +90,9 @@ distinct-version walkthrough and sink/CDC run.
   replica limit, including with current debug binaries. The current first run
   and exact retry record clusterd exit 137 and OOMKilled, with about 60 GB host
   RAM available. `native-bounded-launch-audit.md` records the source comparison.
+  `native-bounded-offline-findings.md` confirms active upsert backpressure and
+  predominantly anonymous memory growth during ingestion/index startup. It does
+  not identify the retaining operator or the actual compaction frontier.
   Cause remains unproven. This does not establish a regression against optimized
   upstream. Full upsert stress also exceeded an earlier local cap. Do not shrink
   workloads or raise limits to hide either failure.
