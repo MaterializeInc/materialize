@@ -1451,10 +1451,10 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
             ) WITH (VALIDATE = false);
             """))
 
-    # `SET failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
+    # `SET unsafe_failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
     # which writes to the process-global registry -- the pause applies to any
     # session that later hits the named failpoint.
-    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=pause'")
+    c.sql(f"SET unsafe_failpoints = '{ROTATE_KEYS_FAILPOINT}=pause'")
 
     rotate_err: Exception | None = None
 
@@ -1484,7 +1484,7 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
     # Release ROTATE. It will resume into `catalog_transact`, where
     # `PlanValidity::check` should detect that ssh_conn's `create_sql` hash
     # changed and return ConcurrentDependencyMutation.
-    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=off'")
+    c.sql(f"SET unsafe_failpoints = '{ROTATE_KEYS_FAILPOINT}=off'")
 
     t_rotate.join()
 

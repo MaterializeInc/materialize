@@ -67,7 +67,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     # that we can prevent a racy startup from cleaning up the secret before we
     # observed it.
     mz.set_environmentd_failpoints("orphan_secrets=panic")
-    mz.environmentd.sql("SET failpoints = 'drop_secrets=panic'")
+    mz.environmentd.sql("SET unsafe_failpoints = 'drop_secrets=panic'")
     mz.environmentd.sql("CREATE SECRET orphan AS '123'")
 
     id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'orphan'")[

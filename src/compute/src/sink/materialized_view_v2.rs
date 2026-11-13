@@ -1002,8 +1002,8 @@ mod write {
                 // the same side of the `spawn_blocking` boundary as the work it stands for.
                 //
                 // NOTE: activate it with the `FAILPOINTS` env var on the clusterd process, e.g.
-                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `failpoints` session variable
-                // only reaches environmentd, never a cluster.
+                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `unsafe_failpoints` session
+                // variable only reaches environmentd, never a cluster.
                 fail::fail_point!("mv_sink_correction");
 
                 // Apply the same logical sequence of operations that the per-chunk commands

@@ -121,7 +121,7 @@ SERVICES = [
 # `DateStyle` does not matter.
 SESSION_VARIABLES = {
     # SessionVars::new pure-session variables.
-    "failpoints",
+    "unsafe_failpoints",
     "server_version",
     "server_version_num",
     "sql_safe_updates",

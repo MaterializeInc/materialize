@@ -270,7 +270,7 @@ DROP CLUSTER no_replicas
 
 # EXPLAIN BROKEN explains the stages before an optimizer panic in the LIR stage.
 statement ok
-SET failpoints = 'finalize_dataflow=panic(forced optimizer panic)'
+SET unsafe_failpoints = 'finalize_dataflow=panic(forced optimizer panic)'
 
 statement error unexpected panic during query optimization
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
@@ -285,4 +285,4 @@ Target cluster: quickstart
 EOF
 
 statement ok
-SET failpoints = 'finalize_dataflow=off'
+SET unsafe_failpoints = 'finalize_dataflow=off'

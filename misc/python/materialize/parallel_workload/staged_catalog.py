@@ -65,7 +65,7 @@ def paused_preparation(
         )
         initial_stdout_lines = len(initial_logs.stdout.splitlines())
         initial_stderr_lines = len(initial_logs.stderr.splitlines())
-        execute(control, f"SET failpoints = '{failpoint}={action}'")
+        execute(control, f"SET unsafe_failpoints = '{failpoint}={action}'")
         started = False
         try:
             worker.start()
@@ -105,7 +105,7 @@ def paused_preparation(
             yield result
         finally:
             try:
-                execute(control, f"SET failpoints = '{failpoint}=off'")
+                execute(control, f"SET unsafe_failpoints = '{failpoint}=off'")
             finally:
                 if started:
                     worker.join(timeout=90)
@@ -282,7 +282,7 @@ def resume_commit_to_queue(
     )
     initial_stdout_lines = len(initial_logs.stdout.splitlines())
     initial_stderr_lines = len(initial_logs.stderr.splitlines())
-    execute(control, "SET failpoints = 'catalog_purification_ready=off'")
+    execute(control, "SET unsafe_failpoints = 'catalog_purification_ready=off'")
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         logs = c.invoke(

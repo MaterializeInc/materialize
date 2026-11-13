@@ -69,7 +69,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 > SELECT COUNT(*) > 0 FROM failpoint_tbl;
 true
 
-> SET failpoints = '${arg.failpoint}=${arg.action}';
+> SET unsafe_failpoints = '${arg.failpoint}=${arg.action}';
 
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "e${kafka-ingest.iteration}"} {"f2": "e${kafka-ingest.iteration}"}
