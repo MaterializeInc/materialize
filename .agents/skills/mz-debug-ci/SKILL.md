@@ -5,7 +5,8 @@ description: >
   Buildkite failures, CI issues — "why is CI red", "build broken",
   "checks failing", "what went wrong in CI", "nightly broke",
   "tests failing on this PR", or pasted Buildkite URL. Also PR number +
-  why failing.
+  why failing, and reviewing failures of main and releases in the CI ledger
+  ("mark the nightly failures fixed").
 argument-hint: <PR number, GitHub PR URL, or Buildkite build URL>
 ---
 
@@ -76,6 +77,27 @@ the positional pattern and matches across build, test, issue, content, and
 branch at once. Narrow results with `--branch main`, `--version`, `--issue`,
 `--test` (the Buildkite job name), `--build`, `--start-date`, or
 `--end-date`; `--size` raises the row cap (default 31, max 100).
+
+## Reviews in the CI ledger
+
+Failed jobs of `main` and of release builds (release candidates included) are
+also in the CI ledger, grouped into patterns that are reviewed once: a status
+(`unreviewed`, `reviewed`, `fixed`), a type (`deterministic`, `flaky`,
+`infrastructure`), a cause, a related bug, and the fixing PR. A review is
+shared by main and every release the pattern fails in. Before investigating
+such a failure, check whether someone reviewed it already. A Buildkite job URL
+names the entries that job failed with, and `show` needs an entry id when there
+are several:
+
+```bash
+bin/ci-ledger show 'https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>#<JOB_ID>' \
+  | jq '{effective_status, failure_type, cause, bug: .bug.value, fix: .fix.value}'
+# What nobody has looked at yet
+bin/ci-ledger list --scope main --status unreviewed
+```
+
+PR builds are not in the ledger. `bin/ci-ledger --help` lists the commands,
+and https://ci.dev.materialize.com/docs describes every field.
 
 ## Step 1: Find the build
 

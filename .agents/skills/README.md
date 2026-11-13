@@ -18,7 +18,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-test** | Running or writing tests, choosing a test framework | General testing guide: unit tests, sqllogictest, testdrive, pgtest, mzcompose, reproducing bugs. Points to dedicated skills for specific frameworks |
 | **mz-commit** | Committing, creating PRs, pushing | Pre-commit checklist, PR title conventions, Cargo.lock discipline, git workflows |
 | **mz-pr-review** | Reviewing code changes | Local code review against Materialize standards for tests, style, error messages, architecture, and polish |
-| **mz-debug-ci** | CI failures, red builds, Buildkite issues | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes |
+| **mz-debug-ci** | CI failures, red builds, Buildkite issues | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes, and reviews main and release failures in the CI ledger (`bin/ci-ledger`) |
 | **mz-dbt-release** | Cutting a new `dbt-materialize` PyPI release | Bumps the version in `__version__.py` + `setup.py`, dates the `Unreleased` CHANGELOG entry, opens the release PR |
 | **mz-release-signoff** | Verifying a release candidate on the Grafana dashboards | Compares metrics across the release boundary per area and region. Metric references with measured baselines for compute, adapter, sources and sinks, persist, and the release-health and networking dashboards |
 | **mz-dependencies** | Adding, updating, or removing Rust dependencies | Workspace dependency rules, Cargo.lock discipline, license policy sync between `deny.toml` and `about.toml` |
