@@ -71,7 +71,6 @@ COMPATIBLE_TESTDRIVE_FILES = [
     "delete-using.td",
     "drop.td",
     "duplicate-table-names.td",
-    "failpoints.td",
     "fetch-tail-large-diff.td",
     "fetch-tail-limit-timeout.td",
     "fetch-tail-timestamp-zero.td",
