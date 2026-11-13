@@ -22,14 +22,34 @@ collections and command processing, with existing hydration/drop assertions
 preserved. The regenerated metric catalog also removes stale entries from prior
 native-only removals. No memory improvement has been measured.
 
-Scratch task `aj-native-history-check.service` is running the affected library
-suites after successful all-target checks. Evidence under
-`native-driver-scratch/`: `native-history-check.log`, `native-history-check.sh`,
-`native-history-source-sha256.json` and `native-history-metrics.yml`.
-A later local edit only removes an empty comment heading from compute metrics.
+All-target checks and compute library tests pass. The compute-client suite fails
+its existing exact-size assertion: `ComputeCommand` is 48 bytes rather than 40.
+The exact full command reproduced this. The accepted subscription-incarnation
+field in `8c9e18f0d7` explains the growth. Asked whether to accept the eight bytes
+and update the expectation. The assertion is unchanged pending that decision.
+Do not claim the full suite passes.
+
+The remaining library cases passed under `aj-native-history-remainder.service`,
+using the same package/feature union and explicitly skipping only that recorded
+failure. An initial storage-only invocation was stopped because changing the
+package union triggered unnecessary dependency recompilation. Evidence:
+`native-history-check.log`, `native-history-reproduce.log`,
+`native-history-storage-tests.log` and `native-history-remainder.log`.
+Source: `native-history-source-sha256.json`. A later local Rust edit only removes
+an empty comment heading from compute metrics.
+
 Rust removal and upsert fixture changes are not committed yet. The fixture now
 has two separate scenarios with unchanged settings, workloads and assertions.
-Its launcher unit check passes. Both repaired runtime scenarios still need to run.
+The existing launcher test now traverses all five configurations. Its negative
+control reproduces the malformed tuple in memory without editing the worktree.
+Both repaired runtime scenarios still need to run.
+
+The rebuild inputs were applied after tests stopped and their full source
+manifest matched. `aj-native-history-build.service` is building sequentially. Inputs: `native-history-final-source.tar.gz`,
+`native-history-runtime-source.tar.gz`, `native-history-build-source-sha256.json`,
+`native-history-build.sh` and `native_history_runtime_verify.py`. The runner supports metrics, HTTP proxy, full upsert load-test and prior smoke/
+subscription workflows. It uses `native-history-candidate/`, preserving the
+previous verified candidate. The runtime runs have not executed yet.
 
 ## Approved scope and verified outcomes
 
