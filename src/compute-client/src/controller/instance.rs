@@ -1368,8 +1368,8 @@ impl Instance {
             ));
             to_drop.push(uuid);
         }
-        for response in peek_responses {
-            self.deliver_peek_notification(response.0, response.1, response.2);
+        for (uuid, notification, otel_ctx) in peek_responses {
+            self.deliver_peek_notification(uuid, notification, otel_ctx);
         }
         for uuid in to_drop {
             let response =

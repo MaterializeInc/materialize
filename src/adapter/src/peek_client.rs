@@ -579,6 +579,7 @@ impl PeekClient {
                 target_read_hold,
                 target_replica,
                 rows_tx,
+                None,
             )
             .await;
 
