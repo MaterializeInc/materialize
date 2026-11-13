@@ -124,3 +124,19 @@ steps:
           limit: 2
     concurrency: 1
     concurrency_group: deploy/helm-charts
+
+  # The macOS build compiles from source on a single shared agent. Kept off this
+  # pipeline's synchronous path because release builds hold Nightly until
+  # `deploy` finishes.
+  - id: deploy-mz-deploy
+    label: ":rocket: mz-deploy"
+    trigger: deploy-mz-deploy
+    async: true
+    # This pipeline also runs on every push to main, where there is no tag to
+    # derive a version from.
+    if: build.tag != ""
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
