@@ -4405,17 +4405,45 @@ async fn test_cancel_linearize_commit_discards_set_local() {
 /// A COMMIT whose write is queued for group commit and then cancelled must not leave its
 /// `SET LOCAL` values on the session.
 ///
-/// Group commits run one at a time, so a group commit parked at the
+/// Group commits that take the group commit permit run one at a time, so one parked at the
 /// `group_commit_before_apply_write` failpoint holds the COMMIT in `pending_writes`, where the
-/// cancel finds it. The failpoint is process-global, so the test relies on running in its own
-/// process, as nextest runs it.
+/// cancel finds it. `BuiltinTableAppend::execute` stages a group commit without the permit. Such a
+/// commit either moves the COMMIT into the group committer, out of the cancel's reach, or, when it
+/// is the one parked, leaves the permit free for the COMMIT. The test therefore runs no DDL while
+/// the failpoint is armed, and first waits out the startup prune of
+/// `mz_object_arrangement_size_history`, which calls `execute` even with nothing to retract.
+///
+/// The failpoint is process-global, so the test relies on running in its own process, as nextest
+/// runs it.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
 fn test_cancel_group_commit_discards_set_local() {
     let server = test_util::TestHarness::default().start_blocking();
+    let prune_handled = || {
+        server
+            .metrics_registry()
+            .gather()
+            .iter()
+            .filter(|m| m.name() == "mz_slow_message_handling")
+            .flat_map(|m| m.get_metric())
+            .filter(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| l.name() == "message_kind" && l.value() == "arrangement_sizes_prune")
+            })
+            .map(|m| m.get_histogram().get_sample_count())
+            .sum::<u64>()
+            > 0
+    };
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| if prune_handled() { Ok(()) } else { Err(()) })
+        .expect("startup prune of mz_object_arrangement_size_history was handled");
     let mut client = server.connect(postgres::NoTls).unwrap();
     let client_cancel = client.cancel_token();
+    // The prune's handler has staged its group commit. The group committer applies it no later
+    // than this DDL's builtin table write, which the DDL waits for.
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
     client
         .batch_execute("SET transaction_isolation = 'serializable'")
@@ -4463,14 +4491,17 @@ fn test_cancel_group_commit_discards_set_local() {
         .retry(|_| {
             client_cancel.cancel_query(postgres::NoTls).unwrap();
             commit_rx.try_recv()
-        })
-        .expect("COMMIT returned");
+        });
+    // Resume before asserting. A panic while the group commit is parked hangs the test, because
+    // the runtime's shutdown waits for the parked worker.
     fail::remove("group_commit_before_apply_write");
     resume.wait();
     writer_thread.join().unwrap().unwrap();
     let mut client = commit_thread.join().unwrap();
 
-    let err = commit_res.expect_err("COMMIT was cancelled");
+    let err = commit_res
+        .expect("COMMIT returned while group commit was parked")
+        .expect_err("COMMIT was cancelled");
     assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
     // NOTE: This must use the simple query protocol, see
     // `test_cancel_linearize_commit_discards_set_local`.
