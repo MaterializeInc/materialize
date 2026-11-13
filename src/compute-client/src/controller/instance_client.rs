@@ -221,70 +221,16 @@ impl InstanceClient {
         .await?
     }
 
-    /// Issue a peek by calling into the instance task.
+    /// Issues a peek on the instance task, ordered against cancellation when a lifecycle is supplied.
     ///
-    /// If this returns an error, then it didn't modify any `Instance` state.
+    /// Without a lifecycle, terminal notifications go to the coordinator. With one,
+    /// the caller must retain ownership until retirement, including on issue errors,
+    /// instance shutdown, or abandonment of this future. Dropping the lifecycle does
+    /// not retire it. On an issue error, the caller must complete or cancel it.
+    ///
+    /// Cancellation before issue sends its response through `peek_response_tx`
+    /// without issuing compute work and returns `Ok(())`.
     pub async fn peek(
-        &self,
-        peek_target: PeekTarget,
-        literal_constraints: Option<Vec<Row>>,
-        uuid: Uuid,
-        timestamp: Timestamp,
-        result_desc: RelationDesc,
-        finishing: RowSetFinishing,
-        map_filter_project: mz_expr::SafeMfpPlan,
-        target_read_hold: ReadHold,
-        target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
-    ) -> Result<(), PeekError> {
-        self.peek_inner(
-            peek_target,
-            literal_constraints,
-            uuid,
-            timestamp,
-            result_desc,
-            finishing,
-            map_filter_project,
-            target_read_hold,
-            target_replica,
-            peek_response_tx,
-            None,
-        )
-        .await
-    }
-
-    /// Issues a frontend-owned peek, ordered against lifecycle cancellation.
-    pub async fn peek_with_lifecycle(
-        &self,
-        peek_target: PeekTarget,
-        literal_constraints: Option<Vec<Row>>,
-        uuid: Uuid,
-        timestamp: Timestamp,
-        result_desc: RelationDesc,
-        finishing: RowSetFinishing,
-        map_filter_project: mz_expr::SafeMfpPlan,
-        target_read_hold: ReadHold,
-        target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
-        lifecycle: Arc<PeekLifecycle>,
-    ) -> Result<(), PeekError> {
-        self.peek_inner(
-            peek_target,
-            literal_constraints,
-            uuid,
-            timestamp,
-            result_desc,
-            finishing,
-            map_filter_project,
-            target_read_hold,
-            target_replica,
-            peek_response_tx,
-            Some(lifecycle),
-        )
-        .await
-    }
-
-    async fn peek_inner(
         &self,
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
@@ -298,10 +244,12 @@ impl InstanceClient {
         peek_response_tx: oneshot::Sender<PeekResponse>,
         lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
-        let cancellation_client = self.clone();
+        let cancellation = lifecycle.map(|lifecycle| (lifecycle, self.clone()));
         self.call_sync(move |i| {
             let mut response_tx = Some(peek_response_tx);
-            let issued_lifecycle = lifecycle.clone();
+            let issued_lifecycle = cancellation
+                .as_ref()
+                .map(|(lifecycle, _)| Arc::clone(lifecycle));
             let issue = || {
                 i.peek(
                     peek_target,
@@ -317,7 +265,7 @@ impl InstanceClient {
                     issued_lifecycle,
                 )
             };
-            if let Some(lifecycle) = lifecycle {
+            if let Some((lifecycle, cancellation_client)) = cancellation {
                 // Run the ordering critical section on the instance task, not
                 // around call_sync's await, which would block cancellation.
                 let canceled = lifecycle.issue(issue, move |reason| {

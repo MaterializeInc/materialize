@@ -25,10 +25,9 @@ enum State {
 
 /// A single retirement obligation shared with cancellation and compute.
 ///
-/// Issue must run synchronously on the compute instance task. Its critical
-/// section ensures cancellation either prevents issue or observes an issued
-/// peek and sends cancellation after it. Neither issue nor the callbacks may
-/// await. The issue closure must not reenter this handle.
+/// The owner must arrange completion or cancellation on every terminal path.
+/// Dropping this handle does not invoke retirement. Callbacks run synchronously
+/// and must not block waiting for the compute instance task.
 #[derive(derivative::Derivative)]
 #[derivative(Debug)]
 pub struct PeekLifecycle {
@@ -46,7 +45,10 @@ impl PeekLifecycle {
 
     /// Returns a terminal outcome without calling `issue` if already retired.
     /// A failed issue leaves retirement with the caller.
-    pub fn issue<E>(
+    ///
+    /// Must run synchronously on the compute instance task. The issue closure
+    /// runs under the lifecycle lock and must not reenter this handle.
+    pub(super) fn issue<E>(
         &self,
         issue: impl FnOnce() -> Result<(), E>,
         cancel: impl FnOnce(PeekResponse) + Send + 'static,
