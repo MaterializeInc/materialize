@@ -113,6 +113,26 @@
       "allowedVersions": "<0.30"
     },
     {
+      // 0.10.3 only moves to parking_lot 0.13, while tokio and the rest of the
+      // tree stay on 0.12, and deny.toml bans the duplicate.
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["hyper-openssl"],
+      "allowedVersions": "<0.10.3"
+    },
+    {
+      // Our iceberg fork ([patch.crates-io]) builds on arrow and parquet 58, and
+      // duckdb 1.20000 needs arrow 60, so either upgrade alone duplicates
+      // arrow or parquet, which deny.toml bans. Lift both once the fork moves.
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["arrow", "arrow-*", "parquet"],
+      "allowedVersions": "<60"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["duckdb", "libduckdb-sys"],
+      "allowedVersions": "<1.20000"
+    },
+    {
       "matchManagers": ["cargo"],
       "matchJsonata": ["packageName != depName"],
       "matchIsBreaking": true,
