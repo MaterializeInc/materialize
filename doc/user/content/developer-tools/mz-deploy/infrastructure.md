@@ -78,7 +78,7 @@ CREATE SECRET pg_password AS aws_secret('prod/pg-password');
 `aws_secret()` requires an `aws_profile` in your `project.toml`:
 
 ```toml
-[profiles.default.security]
+[default.security]
 aws_profile = "my-aws-profile"
 ```
 
