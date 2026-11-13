@@ -19,6 +19,9 @@ use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::stack::Stack;
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use rustls::RootCertStore;
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
 use tokio_postgres::config::SslMode;
 
 macro_rules! bail_generic {
@@ -183,24 +186,24 @@ pub const SSL_CERT_FILE: &str = "SSL_CERT_FILE";
 ///
 /// Sets [`SSL_CERT_FILE`] in the process environment, so it must be called
 /// before the process spawns any threads.
-pub unsafe fn install_additional_trust_bundle(path: &Path) -> Result<PathBuf, TlsError> {
+pub unsafe fn install_additional_trust_bundle(path: &Path) -> Result<PathBuf, anyhow::Error> {
     let additional = std::fs::read(path)
         .with_context(|| format!("reading additional trust bundle {}", path.display()))?;
-    // The probe returns `SSL_CERT_FILE` itself when it is already set. Only
-    // the bundle file is merged, not certificates in the system's CA
-    // directory, since clients like `rustls-native-certs` stop reading that
-    // directory once `SSL_CERT_FILE` is set. Our images ship their system
-    // CAs as a bundle file.
-    //
-    // Without a system bundle, the merged file would hold only the additional
-    // certificates and so replace the system's CAs. `openssl-probe` knows no
-    // bundle path on macOS, for example.
-    let Some(system_file) = openssl_probe::probe().cert_file else {
-        bail_generic!("no system CA bundle found; set {SSL_CERT_FILE} to one");
-    };
-    let system = std::fs::read(&system_file)
-        .with_context(|| format!("reading system CA bundle {}", system_file.display()))?;
-    let merged = merge_trust_bundles(&system, &additional)
+    // Reads `SSL_CERT_FILE` and `SSL_CERT_DIR` when either is set, and the
+    // platform's store otherwise. Once `SSL_CERT_FILE` points at the merged
+    // bundle, clients stop reading the platform's store, so a certificate
+    // that fails to load here would silently stop being trusted.
+    let system = rustls_native_certs::load_native_certs();
+    if let Some(err) = system.errors.first() {
+        anyhow::bail!(
+            "loading system CA certificates: {err} ({} errors)",
+            system.errors.len()
+        );
+    }
+    if system.certs.is_empty() {
+        anyhow::bail!("no system CA certificates found");
+    }
+    let merged = merge_trust_bundles(system.certs, &additional)
         .with_context(|| format!("parsing additional trust bundle {}", path.display()))?;
     // The process ID keeps processes that share a temporary directory, as
     // under the process orchestrator, from overwriting each other's bundles.
@@ -213,20 +216,29 @@ pub unsafe fn install_additional_trust_bundle(path: &Path) -> Result<PathBuf, Tl
     Ok(merged_path)
 }
 
-/// Appends the certificates in `additional` to the `system` bundle.
-fn merge_trust_bundles(system: &[u8], additional: &[u8]) -> Result<Vec<u8>, TlsError> {
-    let certs = X509::stack_from_pem(additional)?;
-    if certs.is_empty() {
-        bail_generic!("no PEM-encoded certificates found");
+/// Encodes the `system` certificates followed by the PEM certificates in
+/// `additional` as one PEM bundle.
+fn merge_trust_bundles(
+    system: Vec<CertificateDer<'static>>,
+    additional: &[u8],
+) -> Result<String, anyhow::Error> {
+    let additional = CertificateDer::pem_slice_iter(additional)
+        .collect::<Result<Vec<_>, _>>()
+        .context("decoding PEM")?;
+    if additional.is_empty() {
+        anyhow::bail!("no PEM-encoded certificates found");
     }
-    let mut merged = system.to_vec();
-    if !merged.is_empty() && !merged.ends_with(b"\n") {
-        merged.push(b'\n');
+    // Parse each certificate as a trust anchor, as rustls does when it builds
+    // a verifier.
+    for cert in &additional {
+        RootCertStore::empty().add(cert.clone())?;
     }
-    for cert in certs {
-        merged.extend(cert.to_pem()?);
-    }
-    Ok(merged)
+    let pems: Vec<_> = system
+        .iter()
+        .chain(&additional)
+        .map(|cert| pem::Pem::new("CERTIFICATE", cert.as_ref()))
+        .collect();
+    Ok(pem::encode_many(&pems))
 }
 
 #[cfg(test)]
@@ -426,24 +438,31 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // uses openssl FFI
     fn merge_trust_bundles_appends_to_system_bundle() {
-        let system = TestCa::new().cert.to_pem().unwrap();
+        let system = CertificateDer::from_pem_slice(&TestCa::new().cert.to_pem().unwrap()).unwrap();
         let additional = TestCa::new().cert.to_pem().unwrap();
 
-        let merged = merge_trust_bundles(&system, &additional).unwrap();
-        let certs: Vec<_> = X509::stack_from_pem(&merged)
-            .unwrap()
-            .iter()
-            .map(|cert| cert.to_pem().unwrap())
-            .collect();
-        assert_eq!(certs, vec![system, additional]);
+        let merged = merge_trust_bundles(vec![system.clone()], &additional).unwrap();
+        let certs = CertificateDer::pem_slice_iter(merged.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            certs,
+            vec![system, CertificateDer::from_pem_slice(&additional).unwrap()]
+        );
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // uses openssl FFI
     fn merge_trust_bundles_rejects_bundle_without_certificates() {
-        let system = TestCa::new().cert.to_pem().unwrap();
-        assert!(merge_trust_bundles(&system, b"").is_err());
-        assert!(merge_trust_bundles(&system, b"not a certificate").is_err());
+        let system = CertificateDer::from_pem_slice(&TestCa::new().cert.to_pem().unwrap()).unwrap();
+        let not_x509 = b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        for additional in [&b""[..], b"not a certificate", not_x509] {
+            assert!(
+                merge_trust_bundles(vec![system.clone()], additional).is_err(),
+                "accepted {:?}",
+                String::from_utf8_lossy(additional)
+            );
+        }
     }
 
     #[mz_ore::test(tokio::test)]

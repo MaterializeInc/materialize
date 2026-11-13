@@ -13,8 +13,10 @@ workspace = true
 anyhow.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 openssl.workspace = true
-openssl-probe.workspace = true
+pem.workspace = true
 postgres-openssl.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 thiserror.workspace = true
 tokio-postgres.workspace = true
 
