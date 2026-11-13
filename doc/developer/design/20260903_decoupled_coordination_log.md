@@ -38,8 +38,8 @@ isolated shutdown negative control pass. This is not a full parallel stress run.
 Replay-history cloning, compaction, implementation tests and both history gauges
 are removed (`8c09eb6c`). Independent review found no execution/recovery consumer.
 All-target checks, compute tests and real current-binary replica-metrics/HTTP-proxy
-workflows pass. Other affected library tests pass except the exact-size failure
-below. The regenerated metrics catalog also removes previously retired entries.
+workflows pass. Other affected library tests passed except the exact-size failure
+below, whose expectation is now updated. The regenerated metrics catalog also removes previously retired entries.
 No memory improvement has been measured.
 
 The repaired upsert load-test runs all original scenarios, including the two
@@ -87,11 +87,12 @@ distinct-version walkthrough and sink/CDC run.
   also deferred. Commit `1380f0ba` exposes unsupported coverage while preserving
   historical-only and unrelated workflows. Optional final preflight skips unknown
   or unsupported provenance before stopping processes.
-- `ComputeCommand` is 48 bytes, but its existing size test expects 40. The exact
-  full test command reproduces this. The approved subscription-incarnation field
-  in `8c9e18f0d7` explains the growth. Asked whether to accept the eight bytes and
-  update the expectation. It remains unchanged pending that decision. The remainder
-  run explicitly skipped only that recorded failure. Do not claim a full pass.
+- The user accepted the 48-byte `ComputeCommand` size from the subscription
+  incarnation field in `8c9e18f0d7`. The exact-size assertion now expects 48,
+  matching the actual value in the prior reproduced failure. Rustfmt and diff
+  checks pass. The Rust test has not been rebuilt/rerun after this assertion-only
+  edit. The earlier remainder run explicitly skipped this test, so it is not
+  evidence of a fully green library suite.
 - Bounded-memory upsert-index hydration reproducibly OOMs at its original 3.5-GiB
   replica limit, including with current debug binaries. The current first run
   and exact retry record clusterd exit 137 and OOMKilled, with about 60 GB host

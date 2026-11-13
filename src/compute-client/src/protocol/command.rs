@@ -555,6 +555,6 @@ mod tests {
     /// Test to ensure the size of the `ComputeCommand` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_command_size() {
-        assert_eq!(std::mem::size_of::<ComputeCommand>(), 40);
+        assert_eq!(std::mem::size_of::<ComputeCommand>(), 48);
     }
 }
