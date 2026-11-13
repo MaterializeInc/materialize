@@ -126,9 +126,6 @@ pub enum DeploymentSnapshotError {
     #[error("failed to build snapshot from project graph: {0}")]
     PlannedAccess(String),
 
-    #[error("invalid object FQN: {0}")]
-    InvalidFqn(String),
-
     #[error("deployment '{environment}' already exists")]
     DeploymentAlreadyExists { environment: String },
 
