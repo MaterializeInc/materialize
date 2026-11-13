@@ -10,10 +10,11 @@ without changing Persist or the 60s publication default.
 The current two-version local `bin/controllerd` walkthrough and complementary
 `0dt ddl` workload passed, including sink authority and singleton CDC handover.
 The current debug bounded-memory upsert-index test still OOMs at its original
-limit in both current runs. The independent launch audit found no demonstrated
-conversion omission. Effective runtime settings, heap attribution and a matched
-build comparison remain the diagnostic options. Do not raise limits or shrink
-the workload.
+limit in both current runs. The user approved investigating this failure under
+the active goal. Capture raw heap profiles and metrics at the unchanged limit,
+then compare a matched upstream build/workload. The independent launch audit
+found no demonstrated conversion omission. Do not raise limits or shrink the
+workload.
 
 Then reconcile remaining native-only acceptance gaps. The owned runtime is
 cleaned up. Proposed residual-load work is ranked in the follow-up inventory,
@@ -116,6 +117,15 @@ Owned worker: `i-064fa517ec1d8bbdb`, now terminated after copying evidence
 and candidates locally. `worker-termination.json` records the request and
 `worker-final-state.json` confirms termination. No access rules
 changed. `remote.py` points to that released worker, not a reusable live host.
+
+The OOM investigation uses new owned worker `i-0b3699392b71bd7d2`, expiring
+`2026-11-13T20:31:57.921677+00:00`. Its evidence and instance-specific `remote.py`
+are in `../upsert-oom-investigation/`. Source setup completed. The retained
+candidate transfer and capped MySQL dependency build are running, recorded in
+`candidate-upload.log` and `fixture-build.log`. Other exact dependency images
+were recovered. Do not overlap a runtime with the dependency build.
+`profile_bounded_memory.py` adds raw jemalloc/metrics capture to the existing
+driver, without workload or memory-limit changes. It has not run yet.
 
 Keep heavy work on scratch, sequentially. Container/build aggregate budget:
 40 GiB, no swap, eight CPUs. Builds use one Cargo job, 32 GiB and four CPUs.
