@@ -1,6 +1,6 @@
 ---
 title: "Bin packing"
-description: "Pack Materialize clusters onto fewer nodes in a Self-Managed Materialize deployment."
+description: "Optimize resource utilization by packing Materialize clusters onto fewer nodes in a Self-Managed Materialize deployment."
 menu:
   main:
     parent: "deployment-guidelines"
@@ -8,8 +8,11 @@ menu:
 ---
 
 Each replica of a Materialize cluster runs as a `clusterd` pod. How these pods
-are placed on nodes determines how many nodes your deployment needs. This page
-covers three ways to keep that number down:
+are placed on nodes determines how many nodes your deployment needs. Waste
+builds up most after events that briefly double capacity, such as Materialize
+rollouts or blue-green deployments that run new clusters alongside the old ones.
+Afterwards, the remaining pods can be left holding nodes far larger than they
+need. This page covers three ways to reduce the number of nodes required:
 
 - [Match cluster sizes to node sizes](#match-cluster-sizes-to-node-sizes), so a
   small cluster doesn't hold a large node.
@@ -18,7 +21,7 @@ covers three ways to keep that number down:
 - [Move a replica off a node](#move-a-replica-off-a-node), when a single pod is
   keeping an otherwise idle node running.
 
-## Materialize pods aren't consolidated
+## Why pod placement matters
 
 Node autoscalers can save cost by evicting pods from underused nodes and
 removing the nodes. Materialize opts its pods out of this: every `environmentd`
@@ -155,6 +158,12 @@ Two or three tiers are usually enough. Too many narrow pools cause problems:
   as many nodes as the largest replication factor of the clusters using that
   size.
 
+Start coarse and split tiers only when you see a need. If pods stay `Pending`
+because a pool can't add nodes, back out to coarser tiers: change the
+`selectors` of the affected sizes to point at a pool that has capacity, upgrade
+the operator release, and [roll out each Materialize
+instance](/self-managed-deployments/upgrading/#rollout-configuration).
+
 ## Use `MostAllocated` scheduling
 
 When a pod can be placed on several nodes, the Kubernetes scheduler scores the
@@ -170,6 +179,13 @@ completely, so they can be removed.
 
 Both strategies score nodes by the resources pods _request_, not by what they
 actually use.
+
+Packing drifts over time as replicas are created, dropped, and resized. A
+Materialize rollout reschedules every `environmentd` and `clusterd` pod, so with
+`MostAllocated` enabled, each rollout also repacks the deployment, and nodes
+left with only old pods empty out and can be removed. Regular upgrades act as a
+periodic rebalance. To rebalance between upgrades, [force a
+rollout](/self-managed-deployments/upgrading/#rollout-configuration).
 
 How you enable `MostAllocated` depends on your platform:
 
@@ -222,9 +238,8 @@ gcloud container clusters update <cluster-name> \
 
 The autoscaling profile applies to the whole GKE cluster, not just to
 Materialize, and it also makes the cluster autoscaler remove underused nodes
-sooner. Materialize pods are protected from this, as described in [Why
-Materialize pods aren't
-consolidated](#materialize-pods-arent-consolidated). Other workloads in the
+sooner. Materialize pods are protected from this, as described in [Why pod
+placement matters](#why-pod-placement-matters). Other workloads in the
 cluster are not: their pods are evicted and restarted on other nodes more often.
 
 Before you enable the profile, check that everything else running in the
