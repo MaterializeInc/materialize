@@ -28,6 +28,12 @@ enum State {
 /// The owner must arrange completion or cancellation on every terminal path.
 /// Dropping this handle does not invoke retirement. Callbacks run synchronously
 /// and must not block waiting for the compute instance task.
+///
+/// # Panics
+///
+/// State-changing methods panic if the lifecycle lock is poisoned. Callback
+/// panics propagate to the caller. Callbacks must not panic if retirement is
+/// to be guaranteed: a panic after marking the lifecycle retired is not retried.
 #[derive(derivative::Derivative)]
 #[derivative(Debug)]
 pub struct PeekLifecycle {
@@ -36,18 +42,36 @@ pub struct PeekLifecycle {
 }
 
 impl PeekLifecycle {
-    /// Creates an unissued peek with one retirement obligation.
+    /// Creates an unissued peek whose terminal metadata is delivered to `retire`.
+    ///
+    /// The first completion or cancellation takes ownership of `retire` and
+    /// invokes it outside the lifecycle lock, on the thread performing that
+    /// operation. The callback receives execution metadata, not the query rows.
     pub fn new(retire: impl FnOnce(PeekNotification) + Send + 'static) -> Self {
         Self {
             state: Mutex::new(State::Registered(Box::new(retire))),
         }
     }
 
-    /// Returns a terminal outcome without calling `issue` if already retired.
-    /// A failed issue leaves retirement with the caller.
+    /// Issues compute work unless retirement has already won.
     ///
-    /// Must run synchronously on the compute instance task. The issue closure
-    /// runs under the lifecycle lock and must not reenter this handle.
+    /// Call on the compute instance task. `issue` runs synchronously under the
+    /// lifecycle lock and must not reenter this handle. It must return `Err`
+    /// only if no compute peek was issued. On success, `cancel` is retained to
+    /// enqueue cancellation on that task with the response supplied to
+    /// [`Self::cancel`] if cancellation wins retirement.
+    ///
+    /// Returns `Ok(None)` after successful issue. If already retired, invokes
+    /// neither callback and returns `Ok(Some(response))` for the caller to send
+    /// through the peek's result channel. This is the saved cancellation response,
+    /// or `PeekResponse::Canceled` if retirement came from [`Self::complete`].
+    /// An issue error is returned unchanged and leaves the peek unissued, with
+    /// retirement still owed by the caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if already issued but not retired. A panic in `issue` poisons the
+    /// lifecycle lock.
     pub(super) fn issue<E>(
         &self,
         issue: impl FnOnce() -> Result<(), E>,
@@ -72,12 +96,37 @@ impl PeekLifecycle {
         Ok(None)
     }
 
-    /// Retires a controller completion once, without canceling compute again.
+    /// Delivers terminal metadata to the retirement callback without canceling compute.
+    ///
+    /// `outcome` describes the controller's result, or an error that prevented
+    /// issue. This method does not deliver a query result or clean up compute
+    /// resources. The caller remains responsible for those.
+    ///
+    /// Returns `true` if this call performed retirement, or `false` if another
+    /// completion or cancellation already retired the peek.
     pub fn complete(&self, outcome: PeekNotification) -> bool {
         self.retire(outcome, None)
     }
 
-    /// Retires cancellation once and cancels compute only if issue succeeded.
+    /// Retires the peek as canceled and prevents or cancels compute issue.
+    ///
+    /// `response` is the requested cancellation result for the query, either
+    /// `PeekResponse::Canceled` or `PeekResponse::Error`. In both cases the
+    /// retirement callback receives `PeekNotification::Canceled`, so a
+    /// dependency-drop error can be returned to the query but logged as cancellation.
+    ///
+    /// Before issue, saves `response` for the issue caller to deliver. After
+    /// successful issue, passes it to the compute-cancellation callback before
+    /// invoking retirement. Both callbacks run outside the lifecycle lock.
+    /// This does not wait for compute cancellation: an issued peek can deliver
+    /// its result before the queued cancellation is processed.
+    ///
+    /// Returns `true` if this call performed retirement. Returns `false` without
+    /// invoking callbacks if the peek was already retired.
+    ///
+    /// # Panics
+    ///
+    /// Panics for any other response variant, even if already retired.
     pub fn cancel(&self, response: PeekResponse) -> bool {
         assert!(matches!(
             &response,
@@ -86,6 +135,8 @@ impl PeekLifecycle {
         self.retire(PeekNotification::Canceled, Some(response))
     }
 
+    /// Claims retirement and delivers `outcome`, forwarding `cancellation` to
+    /// compute only for an issued peek. Returns whether this call claimed retirement.
     fn retire(&self, outcome: PeekNotification, cancellation: Option<PeekResponse>) -> bool {
         let previous = {
             let mut state = self.state.lock().expect("peek lifecycle lock poisoned");
