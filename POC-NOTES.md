@@ -306,3 +306,25 @@ Remaining gap to a warm in-memory index, about 20 ms per query:
   filter runs. Decoding only the key column first, or binary searching the
   sorted part, would cut this.
 Not done. These are the next places to look.
+
+## Three-way comparison (same data, fresh MVs at default settings)
+
+Three MV copies of each base table (`t` 2.4M rows, `d` 2M, `t2` 2M) on
+`producer`: plain, with a materialized index, and with an in-memory index on
+`serving`. Queries run on `serving` (1 worker), median of 5 after a warm-up,
+local-file blob. Results identical across configurations in every row.
+
+| Query | Plain MV | MV + materialized index | MV + in-memory index |
+|---|---|---|---|
+| Point lookup, 1 key | 256.2 ms | 19.1 ms | 4.5 ms |
+| 2-way join, 5 keys | 793.7 ms | 29.0 ms | 8.2 ms |
+| 3-way join, 5 keys | 1361.5 ms | 54.3 ms | 11.2 ms |
+| 2-column key join, 4 keys | 711.6 ms | 31.7 ms | 8.5 ms |
+| Aggregated probe join | 810.2 ms | 29.7 ms | 8.9 ms |
+| Same relation joined twice | 797.0 ms | 30.0 ms | 7.2 ms |
+| 2000 contiguous keys | 791.7 ms | 27.8 ms | 9.0 ms |
+| 2000 keys spread over range | 800.7 ms | 308.4 ms | 11.5 ms |
+| 1M keys | 1321.3 ms | 1640.6 ms | 558.8 ms |
+
+Serving cluster cost: in-memory indexes took 4.0 s to hydrate and hold
+293 MB of arrangements; materialized indexes need neither.
