@@ -2965,6 +2965,8 @@ fn generate_view_sql(
     let create_index = AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
         name: None,
         in_cluster: None,
+        materialized: false,
+        as_of: None,
         on_name: RawItemName::Name(name.clone()),
         key_parts: if columns.len() == 0 {
             None
@@ -3178,6 +3180,8 @@ fn mutate(sql: &str) -> Vec<String> {
                 AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
                     name: None,
                     in_cluster: None,
+                    materialized: false,
+                    as_of: None,
                     on_name: RawItemName::Name(stmt.name.clone()),
                     key_parts: Some(
                         stmt.columns

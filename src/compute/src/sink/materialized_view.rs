@@ -202,9 +202,14 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
 
         let read_only_rx = collection_state.read_only_rx.clone();
 
+        // NOTE(poc): sorted shards bound each batch to a handful of sorted
+        // runs. Persist rejects values below 2 (that disables write-time
+        // compaction), and 4 kept a 2M-row snapshot at 6 runs.
+        let max_runs = self.partition_by.map(|_| 4);
         let token = persist_sink(
             sink_id,
             &self.storage_metadata,
+            max_runs,
             ok_collection,
             err_collection,
             as_of,
@@ -241,6 +246,7 @@ pub(super) type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
+    max_runs: Option<usize>,
     ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
     err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
@@ -254,6 +260,7 @@ where
         return materialized_view_v2::persist_sink(
             sink_id,
             target,
+            max_runs,
             ok_collection,
             err_collection,
             as_of,
@@ -276,6 +283,7 @@ where
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
+        max_runs,
     };
 
     let (desired, descs, sink_frontier, mint_token) = mint::render(
@@ -361,6 +369,8 @@ pub(super) struct PersistApi {
     pub(super) collection: CollectionMetadata,
     pub(super) shard_name: String,
     pub(super) purpose: String,
+    /// See [`crate::sink::shared_batch::SharedBatchWriter`].
+    pub(super) max_runs: Option<usize>,
 }
 
 impl PersistApi {

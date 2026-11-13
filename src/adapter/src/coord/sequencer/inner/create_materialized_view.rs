@@ -437,6 +437,7 @@ impl Coordinator {
                     column_names,
                     cluster_id,
                     non_null_assertions,
+                    partition_by,
                     refresh_schedule,
                     ..
                 },
@@ -469,6 +470,7 @@ impl Coordinator {
             view_id,
             column_names.clone(),
             non_null_assertions.clone(),
+            *partition_by,
             refresh_schedule.clone(),
             debug_name,
             optimizer_config,
@@ -589,6 +591,8 @@ impl Coordinator {
                             cluster_id,
                             target_replica,
                             non_null_assertions,
+                            partition_by,
+                            materialized_index,
                             compaction_window,
                             refresh_schedule,
                             ..
@@ -672,11 +676,18 @@ impl Coordinator {
                 })?
                 .into_element()
                 .ast;
-            let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
-                panic!("unexpected statement type");
+            create_sql = match stmt {
+                ast::Statement::CreateMaterializedView(mut stmt) => {
+                    stmt.as_of = Some(storage_as_of_ts.into());
+                    stmt.to_ast_string_stable()
+                }
+                // A `CREATE MATERIALIZED INDEX` is planned as a materialized view.
+                ast::Statement::CreateIndex(mut stmt) if stmt.materialized => {
+                    stmt.as_of = Some(storage_as_of_ts.into());
+                    stmt.to_ast_string_stable()
+                }
+                _ => panic!("unexpected statement type"),
             };
-            stmt.as_of = Some(storage_as_of_ts.into());
-            create_sql = stmt.to_ast_string_stable();
         }
 
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
@@ -706,6 +717,8 @@ impl Coordinator {
                     cluster_id,
                     target_replica,
                     non_null_assertions,
+                    partition_by,
+                    materialized_index,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),

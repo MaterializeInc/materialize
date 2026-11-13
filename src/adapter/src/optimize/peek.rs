@@ -336,12 +336,24 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
         // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
         // ahead of us.)
+        let catalog = Arc::clone(&self.catalog);
+        let sorted_prefix = move |id: GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(&id)
+                .and_then(|entry| entry.materialized_view())
+                .and_then(|mv| mv.partition_by)
+        };
+        let mi_catalog = Arc::clone(&self.catalog);
+        let materialized_indexes =
+            move |id: GlobalId| crate::coord::peek::materialized_indexes_on(mi_catalog.state(), id);
         let use_fast_path_optimizer = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            &sorted_prefix,
+            &materialized_indexes,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
             Err(OptimizerError::InternalUnsafeMfpPlan(_)) => {
@@ -377,6 +389,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            &sorted_prefix,
+            &materialized_indexes,
         )? {
             Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {

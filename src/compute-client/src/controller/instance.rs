@@ -1568,6 +1568,7 @@ impl Instance {
                     let conn = MaterializedViewSinkConnection {
                         value_desc: conn.value_desc,
                         storage_metadata: metadata,
+                        partition_by: conn.partition_by,
                     };
                     ComputeSinkConnection::MaterializedView(conn)
                 }

@@ -1982,9 +1982,35 @@ pub struct MaterializedView {
     /// If set, only install this materialized view's dataflow on the specified replica.
     pub target_replica: Option<ReplicaId>,
     pub non_null_assertions: Vec<usize>,
+    /// Number of leading columns the persist shard is sorted by. Set only for
+    /// `CREATE MATERIALIZED INDEX`.
+    pub partition_by: Option<usize>,
+    /// Set when this materialized view implements `CREATE MATERIALIZED INDEX`.
+    pub materialized_index: Option<MaterializedIndexDesc>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+}
+
+/// What a `CREATE MATERIALIZED INDEX` indexes.
+///
+/// NOTE(poc): the index is stored as a materialized view whose columns are
+/// `on`'s `key` columns followed by its remaining columns in order.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct MaterializedIndexDesc {
+    /// The indexed relation.
+    pub on: GlobalId,
+    /// Column indexes of `on` that form the key, in key order.
+    pub key: Vec<usize>,
+}
+
+impl MaterializedIndexDesc {
+    /// For each column of the materialized view, the column of `on` it holds.
+    pub fn stored_columns(&self, on_arity: usize) -> Vec<usize> {
+        let mut columns = self.key.clone();
+        columns.extend((0..on_arity).filter(|c| !self.key.contains(c)));
+        columns
+    }
 }
 
 #[derive(Clone, Debug)]

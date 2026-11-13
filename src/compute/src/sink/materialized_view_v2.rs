@@ -89,6 +89,7 @@ use crate::sink::shared_batch::SharedBatchWriter;
 pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &mz_storage_types::controller::CollectionMetadata,
+    max_runs: Option<usize>,
     ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
     err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
@@ -109,6 +110,7 @@ pub(super) fn persist_sink<'s>(
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
+        max_runs,
     };
 
     let (desired, descs, sink_frontier) = mint::render(

@@ -1812,10 +1812,12 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
         Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
         Some("SINK") => CatalogItemType::Sink,
         Some("VIEW") => CatalogItemType::View,
-        Some("MATERIALIZED") => {
-            assert_eq!(tokens.next(), Some("VIEW"));
-            CatalogItemType::MaterializedView
-        }
+        Some("MATERIALIZED") => match tokens.next() {
+            Some("VIEW") => CatalogItemType::MaterializedView,
+            // NOTE(poc): `CREATE MATERIALIZED INDEX` is stored as a materialized view.
+            Some("INDEX") => CatalogItemType::MaterializedView,
+            token => panic!("unexpected create sql token after MATERIALIZED: {token:?}"),
+        },
         Some("METRIC") => {
             assert_eq!(tokens.next(), Some("SINK"));
             CatalogItemType::MetricSink

@@ -3214,6 +3214,8 @@ pub fn plan_create_materialized_view(
             cluster_id,
             target_replica,
             non_null_assertions,
+            partition_by: None,
+            materialized_index: None,
             compaction_window,
             refresh_schedule,
             as_of,
@@ -4455,7 +4457,12 @@ pub fn plan_create_index(
         key_parts,
         with_options,
         if_not_exists,
+        materialized,
+        as_of,
     } = &mut stmt;
+    let materialized = *materialized;
+    let mi_as_of = *as_of;
+    let on_name_for_mi = on_name.clone();
     let on = scx.get_item_by_resolved_name(on_name)?;
 
     {
@@ -4589,6 +4596,20 @@ pub fn plan_create_index(
     let if_not_exists = *if_not_exists;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    if materialized {
+        return plan_materialized_index(
+            scx,
+            create_sql,
+            on_name_for_mi,
+            on.global_id(),
+            &on_desc,
+            &keys,
+            index_name,
+            cluster_id,
+            if_not_exists,
+            mi_as_of,
+        );
+    }
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::IndexOption::RetainHistory(lcw) = o {
@@ -4609,6 +4630,93 @@ pub fn plan_create_index(
         },
         if_not_exists,
     }))
+}
+
+/// Plans `CREATE MATERIALIZED INDEX` as a materialized view over `on` that
+/// stores the key columns first and whose sink sorts the shard by them.
+///
+/// NOTE(poc): the item is a materialized view in the catalog. Its `create_sql`
+/// is the `CREATE MATERIALIZED INDEX` statement, so restarts re-plan it here.
+fn plan_materialized_index(
+    scx: &StatementContext,
+    create_sql: String,
+    mut on_name: ResolvedItemName,
+    on_id: mz_repr::GlobalId,
+    on_desc: &RelationDesc,
+    keys: &[mz_expr::MirScalarExpr],
+    name: QualifiedItemName,
+    cluster_id: ClusterId,
+    if_not_exists: bool,
+    as_of: Option<u64>,
+) -> Result<Plan, PlanError> {
+    let mut key = Vec::with_capacity(keys.len());
+    for k in keys {
+        match k {
+            mz_expr::MirScalarExpr::Column(i, _)
+                if preserves_order(&on_desc.typ().column_types[*i].scalar_type)
+                    && !key.contains(i) =>
+            {
+                key.push(*i)
+            }
+            _ => sql_bail!(
+                "materialized index keys must be distinct columns whose type preserves order, got {k}"
+            ),
+        }
+    }
+    if key.is_empty() {
+        sql_bail!("materialized index requires at least one key column");
+    }
+    let desc = crate::plan::MaterializedIndexDesc { on: on_id, key };
+
+    if let ResolvedItemName::Item { print_id, .. } = &mut on_name {
+        *print_id = true;
+    }
+    let columns = desc
+        .stored_columns(on_desc.arity())
+        .into_iter()
+        .map(|c| Ident::new_unchecked(on_desc.get_name(c).as_str()).to_ast_string_stable())
+        .join(", ");
+    let sql = format!(
+        "CREATE MATERIALIZED VIEW mi AS SELECT {columns} FROM {}",
+        on_name.to_ast_string_stable()
+    );
+    let parsed = mz_sql_parser::parser::parse_statements(&sql)?
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    let (Statement::CreateMaterializedView(mut mv_stmt), _) =
+        crate::names::resolve(scx.catalog, parsed)?
+    else {
+        unreachable!("parsed a CREATE MATERIALIZED VIEW");
+    };
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let mut name_parts = Vec::with_capacity(3);
+    if let crate::names::RawDatabaseSpecifier::Name(database) = &full_name.database {
+        name_parts.push(Ident::new_unchecked(database.clone()));
+    }
+    name_parts.push(Ident::new_unchecked(full_name.schema.clone()));
+    name_parts.push(Ident::new_unchecked(full_name.item.clone()));
+    mv_stmt.name = UnresolvedItemName::qualified(&name_parts);
+    mv_stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+    mv_stmt.as_of = as_of;
+    mv_stmt.if_exists = if if_not_exists {
+        IfExistsBehavior::Skip
+    } else {
+        IfExistsBehavior::Error
+    };
+
+    let Plan::CreateMaterializedView(mut plan) = plan_create_materialized_view(scx, mv_stmt)?
+    else {
+        unreachable!("planned a CREATE MATERIALIZED VIEW");
+    };
+    plan.materialized_view.create_sql = create_sql;
+    plan.materialized_view.partition_by = Some(desc.key.len());
+    plan.materialized_view.materialized_index = Some(desc);
+    Ok(Plan::CreateMaterializedView(plan))
 }
 
 pub fn describe_create_type(

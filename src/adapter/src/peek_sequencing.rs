@@ -819,7 +819,18 @@ impl PeekClient {
 
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
-        let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
+        let mut input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
+        // NOTE(poc): a materialized index on a storage collection the query reads may
+        // serve it (see `create_fast_path_plan`), so it needs a read hold and must be
+        // readable at the chosen timestamp. This makes every such read wait for the
+        // materialized index to catch up, even when the query doesn't use it.
+        let materialized_index_ids: Vec<_> = input_id_bundle
+            .storage_ids
+            .iter()
+            .flat_map(|id| crate::coord::peek::materialized_indexes_on(catalog.state(), *id))
+            .map(|(id, _)| id)
+            .collect();
+        input_id_bundle.storage_ids.extend(materialized_index_ids);
 
         // Warning: This will be false for AS OF queries, even if we are otherwise inside a
         // multi-statement transaction. (It's also false for FreshestTableWrite, which is currently

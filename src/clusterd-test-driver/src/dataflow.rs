@@ -346,6 +346,7 @@ impl DataflowBuilder {
             connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
                 value_desc,
                 storage_metadata: (),
+                partition_by: None,
             }),
             with_snapshot: true,
             up_to: Antichain::new(),
@@ -681,6 +682,7 @@ fn augment(
                 ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
                     value_desc: conn.value_desc,
                     storage_metadata: metadata.clone(),
+                    partition_by: conn.partition_by,
                 })
             }
             ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),

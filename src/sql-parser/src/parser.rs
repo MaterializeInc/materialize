@@ -2113,7 +2113,10 @@ impl<'a> Parser<'a> {
                 self.parse_create_cluster()
                     .map_parser_err(StatementKind::CreateCluster)
             }
-        } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
+        } else if self.peek_keyword(INDEX)
+            || self.peek_keywords(&[DEFAULT, INDEX])
+            || self.peek_keywords(&[MATERIALIZED, INDEX])
+        {
             self.parse_create_index()
                 .map_parser_err(StatementKind::CreateIndex)
         } else if self.peek_keyword(SOURCE) {
@@ -4374,7 +4377,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let default_index = self.parse_keyword(DEFAULT);
+        let materialized = self.parse_keyword(MATERIALIZED);
+        let default_index = !materialized && self.parse_keyword(DEFAULT);
         self.expect_keyword(INDEX)?;
 
         let if_not_exists = self.parse_if_not_exists()?;
@@ -4424,6 +4428,11 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
+        let as_of = if materialized {
+            self.parse_optional_internal_as_of()?
+        } else {
+            None
+        };
 
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
@@ -4432,6 +4441,8 @@ impl<'a> Parser<'a> {
             key_parts,
             with_options,
             if_not_exists,
+            materialized,
+            as_of,
         }))
     }
 

@@ -457,6 +457,8 @@ pub fn create_statement(
             key_parts,
             with_options: _,
             if_not_exists,
+            materialized: _,
+            as_of: _,
         }) => {
             let mut normalizer = QueryNormalizer::new();
             if let Some(key_parts) = key_parts {

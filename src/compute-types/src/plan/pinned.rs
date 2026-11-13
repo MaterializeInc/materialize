@@ -441,6 +441,8 @@ pub struct MaterializedViewInfo {
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
+    /// Number of leading columns the shard is sorted by (`PARTITION BY`).
+    pub partition_by: Option<usize>,
     /// The view's refresh schedule.
     pub refresh_schedule: Option<RefreshSchedule>,
 }
@@ -762,6 +764,7 @@ impl PinnedDataflow {
                             MaterializedViewSinkConnection {
                                 value_desc: rel_desc,
                                 storage_metadata: (),
+                                partition_by: info.partition_by,
                             },
                         ),
                         with_snapshot: true,

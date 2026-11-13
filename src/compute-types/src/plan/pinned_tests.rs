@@ -143,6 +143,7 @@ fn mv_info() -> MaterializedViewInfo {
     MaterializedViewInfo {
         desc: asserted_mv_desc(),
         non_null_assertions: vec![0],
+        partition_by: None,
         refresh_schedule: Some(schedule()),
     }
 }
@@ -156,6 +157,7 @@ fn mv_sink(from: GlobalId) -> ComputeSinkDesc {
         connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
             value_desc: asserted,
             storage_metadata: (),
+            partition_by: None,
         }),
         with_snapshot: true,
         up_to: Antichain::new(),

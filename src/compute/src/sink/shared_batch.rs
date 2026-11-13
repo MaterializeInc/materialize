@@ -42,6 +42,9 @@ pub(super) struct SharedBatchWriter {
     schemas: Schemas<SourceData, ()>,
     shared_batches: SharedBatches,
     max_bytes: ConfigValHandle<usize>,
+    /// Passed to persist's batch builders. Sorted (`PARTITION BY`) shards
+    /// set it so each batch lands as a few sorted runs.
+    max_runs: Option<usize>,
 }
 
 impl SharedBatchWriter {
@@ -64,6 +67,7 @@ impl SharedBatchWriter {
             },
             shared_batches: persist_api.persist_batches.clone(),
             max_bytes,
+            max_runs: persist_api.max_runs,
         }
     }
 
@@ -83,6 +87,7 @@ impl SharedBatchWriter {
                 self.schemas.clone(),
                 desc.lower.clone(),
                 desc.upper.clone(),
+                self.max_runs,
             )
         });
         SharedBatchWrite {
@@ -104,7 +109,7 @@ impl SharedBatchWriter {
             &self.shard_name,
             self.schemas.clone(),
             desc.lower.clone(),
-            None,
+            self.max_runs,
         )
     }
 }
@@ -209,6 +214,7 @@ mod tests {
             },
             shared_batches: shared_batches.clone(),
             max_bytes: ConfigValHandle::disconnected(max_bytes),
+            max_runs: None,
         }
     }
 
