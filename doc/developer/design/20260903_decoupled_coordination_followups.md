@@ -202,6 +202,16 @@ opportunity. Validate against each transaction's item versions and optimizer
 settings, retaining the existing incremental reader rather than adding shard
 scans. No incremental-replay cache change or measured saving is claimed here.
 
+## Metadata-only identities after execution retirement
+
+Durable execution retirement can remove the last client grant without the
+adapter transaction that normally removes an already-dropped collection's
+metadata. Bootstrap must recover those identities until the catalog deletes
+their metadata, preserving the committed shared-shard bounds. The classification
+repair does not add reclamation. Track eventual cleanup of these abandoned
+identities separately, using catalog authorization and incremental changes rather
+than a full-inventory sweep or a new ownership protocol.
+
 ## Temporary-item cleanup after native retirement
 
 The legacy temporary-item upgrade tests require durable reclamation after their

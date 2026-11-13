@@ -248,8 +248,9 @@ pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collection_metadata: imbl::OrdMap<GlobalId, ShardId>,
     pub unfinalized_shards: imbl::OrdSet<ShardId>,
-    /// IDs with no SQL object but a live client requirement. Derived from catalog
-    /// membership and client requirements, not separately persisted.
+    /// Metadata-only IDs with no SQL object, including identities awaiting cleanup
+    /// after their last client retires. Only catalog metadata removal ends this
+    /// lifetime. Derived from catalog membership, not separately persisted.
     pub retained_collections: imbl::OrdSet<GlobalId>,
     /// Committed permission to compact each collection through this frontier.
     /// In protected environments, writable registration requires a bound for every

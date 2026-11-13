@@ -146,9 +146,6 @@ impl CatalogState {
                     StateUpdateKind::ClientIncarnation(incarnation) => {
                         temporary_owners.insert(incarnation.id);
                     }
-                    StateUpdateKind::ClientReadRequirement(requirement) => {
-                        retention_candidates.insert(requirement.id);
-                    }
                     StateUpdateKind::StorageCollectionMetadata(metadata) => {
                         retention_candidates.insert(metadata.id);
                     }
@@ -238,7 +235,7 @@ impl CatalogState {
                 }
             }
 
-            // SQL lifetime and protected storage lifetime need not end together.
+            // SQL lifetime and storage metadata lifetime need not end together.
             // Derive this projection only after the whole timestamp is applied.
             for owner in temporary_owners {
                 if self.ephemeral_items_by_incarnation.contains_key(&owner)
@@ -251,7 +248,6 @@ impl CatalogState {
             }
             for id in retention_candidates {
                 let retained = self.storage_metadata.collection_metadata.contains_key(&id)
-                    && self.client_read_frontier(id).is_some()
                     && !self.contains_live_collection(&id);
                 if retained != self.storage_metadata.retained_collections.contains(&id) {
                     let metadata = Arc::make_mut(&mut self.storage_metadata);

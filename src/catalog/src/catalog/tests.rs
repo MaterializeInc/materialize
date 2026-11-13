@@ -602,6 +602,108 @@ async fn owned_catalog_reconstruction_preserves_pending_replica() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn metadata_only_collection_survives_client_retirement() {
+    use crate::durable::{ClientRealization, DEFAULT_ADAPTER_ID, TestCatalogStateBuilder};
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_storage_client::controller::StorageTxn;
+
+    let persist = PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let bootstrap = test_bootstrap_args();
+    let storage = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    let catalog = Catalog::open_debug_catalog_inner(
+        persist.clone(),
+        storage,
+        SYSTEM_TIME.clone(),
+        Some(format!("local-az1-{organization}-0").parse().unwrap()),
+        &mz_build_info::DUMMY_BUILD_INFO,
+        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+        &bootstrap,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut storage = catalog.storage().await;
+    let id = GlobalId::User(100_000);
+    let shard = mz_persist_client::ShardId::new();
+    let frontier = Timestamp::MIN;
+    // This is the durable state after SQL DROP while a client still holds the
+    // collection. Execution retirement can remove that grant independently of
+    // the adapter's ordinary last-grant metadata cleanup transaction.
+    storage.sync_to_current_updates().await.unwrap();
+    let mut tx = storage.transaction().await.unwrap();
+    let incarnation = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
+    tx.insert_collection_metadata(BTreeMap::from([(id, shard)]))
+        .unwrap();
+    tx.set_collection_compaction_bound(id, Some(frontier))
+        .unwrap();
+    tx.grant_client_read_requirements(incarnation, BTreeMap::from([(id, frontier)]))
+        .unwrap();
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    tx.commit(ts).await.unwrap();
+
+    let mut follower =
+        Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
+            .await
+            .unwrap();
+    assert!(
+        follower
+            .state()
+            .storage_metadata()
+            .retained_collections
+            .contains(&id)
+    );
+
+    storage.sync_to_current_updates().await.unwrap();
+    let mut tx = storage.transaction().await.unwrap();
+    assert!(tx.remove_adapter_declaration(DEFAULT_ADAPTER_ID).is_some());
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    tx.commit(ts).await.unwrap();
+    follower.sync_to_current_updates().await.unwrap();
+    let restarted = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
+        .await
+        .unwrap();
+    for catalog in [&follower, &restarted] {
+        assert!(catalog.state().client_read_frontier(id).is_none());
+        let metadata = catalog.state().storage_metadata();
+        assert_eq!(metadata.collection_metadata[&id], shard);
+        assert_eq!(
+            metadata.compaction_bounds[&id],
+            timely::progress::Antichain::from_elem(frontier)
+        );
+        assert!(metadata.retained_collections.contains(&id));
+    }
+
+    storage.sync_to_current_updates().await.unwrap();
+    let mut tx = storage.transaction().await.unwrap();
+    assert_eq!(
+        tx.delete_collection_metadata(BTreeSet::from([id])),
+        vec![(id, shard)]
+    );
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    tx.commit(ts).await.unwrap();
+    follower.sync_to_current_updates().await.unwrap();
+    let metadata = follower.state().storage_metadata();
+    assert!(!metadata.collection_metadata.contains_key(&id));
+    assert!(!metadata.compaction_bounds.contains_key(&id));
+    assert!(!metadata.retained_collections.contains(&id));
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn durable_temporary_membership_preserves_storage_lifetime() {
     use crate::SYSTEM_CONN_ID;
     use crate::durable::TestCatalogStateBuilder;

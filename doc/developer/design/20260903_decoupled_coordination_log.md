@@ -12,8 +12,19 @@ for written-plan reads, uses the existing paired-writer build identity and leave
 independent consistency reconstruction uncached. Independent review, targeted
 cache/catalog/follower tests and the debug build pass. The complete frontier
 test passes twice at its original retry budget. New replica startup falls from
-31–33s to roughly 5s in this fixture. Next run the unchanged parallel promotion
-workload on the cache-enabled binaries, then reconcile remaining acceptance gaps.
+31–33s to roughly 5s in this fixture. The parallel repeat now exposes a concrete
+bootstrap crash: dropped replacement MV u1662 fails storage registration with
+`IdentifierMissing`. Prioritize that before the prepared index workflow.
+
+The metadata repair keeps metadata-only identities classified as retained
+until catalog metadata removal. Execution retirement can remove the last client
+grant without running the adapter's metadata cleanup transaction. Independent
+review found no blocking issue. The real-catalog regression fails twice before
+the repair and passes afterward, alongside temporary lifetime and retained-storage
+safety checks. Matching debug builds pass. Repaired stress failed earlier on
+three retirement HTTP 409 conflicts, before validating restart. Collect the exact
+repeat from `parallel-retained-repeat-launch.json`. Do not increase retries or
+timeouts to claim acceptance.
 
 The committed frontier decoder guard passes its compiled unindexed regression
 and full catalog plan snapshot. An unchanged parallel promotion repeat passes
@@ -57,6 +68,13 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
   preceding run fails on `SHOW CLUSTER REPLICAS` with a catalog-server receive
   timeout. No resource guard fires. The repeat's resource observations show CPU
   throttling, which does not establish the cause of the earlier timeout.
+  Cache-enabled stress promoted twice but exited with the second retirement still
+  running. It skipped final checks. The adapter exits at promotion are expected,
+  not evidence of crashes. The exact repeat completed retirement but crash-looped
+  afterward in storage bootstrap. Controllerd also aborts when reporting the child
+  panic. The first run's retirement delay remains unattributed.
+  The repaired candidate's first run instead exhausted retirement's existing
+  retries with `catalog changed; retry the request`. Native stress is not green.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
@@ -79,12 +97,15 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
 Owned worker `i-0b3699392b71bd7d2` expires at
-`2026-11-13T22:31:57.921677+00:00`. Its helper and receipts are in
+`2026-11-14T00:31:57.921677+00:00`. Its helper and receipts are in
 `upsert-oom-investigation/`. Build receipts and binaries are in
 `frontier-build-receipts.tar.gz` and worker directory `native-frontier-candidate`.
 Cache binaries are in `native-cache-candidate`, verified by
-`cache-build-source-sha256.json` and `native-cache-binaries.json`. No build is
-running. No parser or Persist source changed. Supervision has an
+`cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
+build is complete. Repaired binaries are in `native-retained-candidate`, with
+`retained-build-source-sha256.json` and `native-retained-binaries.json`. The
+`native_parallel_retained.py` stress run is active, without a concurrent build.
+No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
 in memory, now expiring at 08:19 UTC November 14. No access rules changed. The prior worker
@@ -99,6 +120,13 @@ Essential pointers, relative to the evidence root:
 - Cache implementation checks and complete frontier passes:
   `upsert-oom-investigation/cache-build-evidence.tar.gz`,
   `frontier-cached-evidence.tar.gz`, and `frontier-cached-repeat-evidence.tar.gz`.
+- Cache-enabled incomplete stress: `upsert-oom-investigation/parallel-cached-evidence.tar.gz`.
+  Crashing repeat: `parallel-cached-repeat-evidence.tar.gz` in that directory.
+  Its `aj-native-parallel-d593aae2/5fa43c4b68d3.log` contains the bootstrap panics.
+- Confirmed retained-metadata regression and initial build receipts:
+  `upsert-oom-investigation/retained-red-evidence.tar.gz`.
+  Passing repair checks and runtime provenance: `retained-green-evidence.tar.gz`.
+  Repaired retirement conflict: `parallel-retained-evidence.tar.gz`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
 - Fixed-binary stress failure:
