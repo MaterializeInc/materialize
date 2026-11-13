@@ -292,7 +292,7 @@ arrow = { version = "58.4.1", default-features = false }
 arrow-ipc = "58.4.1"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
-async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
+async-compression = { version = "0.4.27", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-config = { version = "1.12.0", default-features = false, features = ["sso"] }
@@ -325,6 +325,10 @@ bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stabl
 byteorder = "1.5"
 bytes = "1.12.1"
 bytesize = "2.7.0"
+# async-compression turns on bzip2's default libbz2-rs-sys backend. Crates that
+# decode bzip2 depend on this to also turn on `bzip2-sys`, which bzip2 then uses
+# in place of libbz2-rs-sys.
+bzip2 = { version = "0.6.1", features = ["bzip2-sys"] }
 cc = "1.5.1"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
@@ -698,11 +702,6 @@ mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev =
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
 tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
-
-# Allows us to use bzip2-sys rather than the rust reimpl.
-# All changes should go to the `mz_changes` branch.
-# Once https://github.com/Nullus157/async-compression/pull/364 lands we can remove this.
-async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_v0.10.x` branch.

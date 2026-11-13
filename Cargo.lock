@@ -550,7 +550,8 @@ dependencies = [
 [[package]]
 name = "async-compression"
 version = "0.4.27"
-source = "git+https://github.com/MaterializeInc/async-compression.git?rev=fe7411eb6104a02a89e2c3a76ab326dd6594214d#fe7411eb6104a02a89e2c3a76ab326dd6594214d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddb939d66e4ae03cee6091612804ba446b12878410cfa17f785f4dd67d4014e8"
 dependencies = [
  "brotli",
  "bzip2",
@@ -8997,6 +8998,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "bzip2",
  "columnar",
  "columnation",
  "csv-async",
@@ -9152,6 +9154,7 @@ dependencies = [
  "aws-types",
  "byteorder",
  "bytes",
+ "bzip2",
  "chrono",
  "clap",
  "duckdb",
