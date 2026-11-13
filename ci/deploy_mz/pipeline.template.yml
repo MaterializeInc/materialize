@@ -44,7 +44,7 @@ steps:
 
   - command: bin/pyactivate -m ci.deploy_mz.macos
     agents:
-      queue: mac-aarch64
+      queue: mac-aarch64-release
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz/macos/aarch64
