@@ -11,6 +11,7 @@
             )
         )]
         [, EXPERIMENTAL ARRANGEMENT COMPRESSION = <bool>]
+        [, QUERY POLICY = <policy_name>]
     );
   syntax_elements:
     - name: "**IF NOT EXISTS**"
@@ -79,3 +80,9 @@
         workload. Only available on managed clusters.
 
         Default: `FALSE`
+    - name: "`QUERY POLICY`"
+      description: |
+        {{< private-preview-inline />}}
+
+        Optional. The [query policy](/clusters/query-policies/) that checks
+        queries on this cluster. Requires `USAGE` privileges on the policy.

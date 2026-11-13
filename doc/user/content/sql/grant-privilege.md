@@ -139,6 +139,27 @@ TO <role_name> [, ... ];
 {{</ tab >}}
 
 
+{{< tab "Query policy">}}
+
+For specific query policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON QUERY POLICY <name> [, ...]
+TO <role_name> [, ... ];
+```
+
+For all query policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON ALL QUERY POLICIES
+TO <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+
 {{< tab "Schema">}}
 
 For specific schema(s):
@@ -183,7 +204,7 @@ TO <role_name> [, ... ];
 {{< tab "System">}}
 
 ```mzsql
-GRANT <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | ALL [PRIVILEGES]> [, ... ]
+GRANT <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | CREATEQUERYPOLICY | ALL [PRIVILEGES]> [, ... ]
 ON SYSTEM
 TO <role_name> [, ... ];
 ```
