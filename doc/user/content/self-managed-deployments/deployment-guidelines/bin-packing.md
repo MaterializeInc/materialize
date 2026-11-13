@@ -18,11 +18,11 @@ covers three ways to keep that number down:
 - [Move a replica off a node](#move-a-replica-off-a-node), when a single pod is
   keeping an otherwise idle node running.
 
-## Why Materialize pods aren't consolidated
+## Materialize pods aren't consolidated
 
-Node autoscalers save cost by evicting pods from underused nodes and removing
-the nodes. Materialize opts its pods out of this: every `environmentd` and
-`clusterd` pod carries these annotations:
+Node autoscalers can save cost by evicting pods from underused nodes and
+removing the nodes. Materialize opts its pods out of this: every `environmentd`
+and `clusterd` pod carries these annotations:
 
 ```yaml
 cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
@@ -30,17 +30,9 @@ karpenter.sh/do-not-disrupt: "true"
 ```
 
 A replica restarted by an eviction has to rehydrate, and it can't serve
-queries until it has. To avoid that, the cluster autoscaler (including GKE's)
-and Karpenter (including AKS Node Auto Provisioning) won't scale down or
-consolidate a node while a Materialize pod is running on it.
-
-These annotations only block voluntary disruption. A node can still be removed
-in other ways, for example by a spot interruption, a GKE node upgrade, or
-Karpenter node expiry when the `NodePool` sets a `terminationGracePeriod`. See
-[Karpenter node
-expiry](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/#karpenter-node-expiry)
-and [GKE node pool
-upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/).
+queries until it has. To avoid these disruptions, the cluster autoscaler
+(including GKE's) and Karpenter (including AKS Node Auto Provisioning) won't
+scale down or consolidate a node while a Materialize pod is running on it.
 
 As a result, a Materialize pod stays on the node it was first scheduled to
 until it's replaced: by a Materialize rollout, by dropping or resizing its
@@ -48,14 +40,27 @@ replica, or by [moving it by hand](#move-a-replica-off-a-node). Where pods land
 when they're scheduled decides how well they're packed, and the node
 autoscaler can't fix it afterwards.
 
+{{< note >}}
+
+The `safe-to-evict` and `do-not-disrupt` annotations only block voluntary
+disruption. A node can still be removed in other ways, for example by a spot
+interruption, a GKE node upgrade, or Karpenter node expiry when the `NodePool`
+sets a `terminationGracePeriod`. See [Karpenter node
+expiry](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/#karpenter-node-expiry)
+and [GKE node pool
+upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/).
+
+{{< /note >}}
+
 ## Match cluster sizes to node sizes
 
 A pod keeps its node running no matter how little of the node it uses. If a
 `25cc` replica is scheduled onto an otherwise empty node sized for `1600cc`
 replicas, that node can't be removed until the replica moves.
 
-To prevent this, run separate node pools for small and large cluster sizes, and
-use per-size node selectors so each size only schedules onto its pool.
+To keep small replicas from holding large nodes indefinitely, run separate
+node pools for small and large cluster sizes, and use per-size node selectors so
+each size only schedules onto its pool.
 
 ### 1. Create a node pool per size tier
 
@@ -92,8 +97,12 @@ clusterd:
       effect: NoSchedule
 ```
 
+{{< note >}}
+
 Helm replaces lists rather than merging them, so include any tolerations you
 already set for `clusterd`.
+
+{{< /note >}}
 
 ### 3. Add node selectors to the cluster sizes
 
@@ -129,12 +138,12 @@ together with `clusterd.nodeSelector`. Built-in clusters, such as
 
 Upgrade the operator release with the new values, then [roll out each
 Materialize instance](/self-managed-deployments/upgrading/#rollout-configuration)
-so existing pods are rescheduled with the new selectors and tolerations. New replicas pick
-them up when they're created.
+so existing pods are rescheduled with the new selectors and tolerations. New
+replicas pick them up when they're created.
 
 ### Avoid overly granular tiers
 
-Two or three tiers are usually enough. Don't create a pool for every size:
+Two or three tiers are usually enough. Too many narrow pools cause problems:
 
 - **Capacity:** a node selector is a hard requirement. If a pool can't add a
   node, because its VM type is out of stock in the zone, or you've reached your
@@ -215,7 +224,7 @@ The autoscaling profile applies to the whole GKE cluster, not just to
 Materialize, and it also makes the cluster autoscaler remove underused nodes
 sooner. Materialize pods are protected from this, as described in [Why
 Materialize pods aren't
-consolidated](#why-materialize-pods-arent-consolidated). Other workloads in the
+consolidated](#materialize-pods-arent-consolidated). Other workloads in the
 cluster are not: their pods are evicted and restarted on other nodes more often.
 
 Before you enable the profile, check that everything else running in the
@@ -262,7 +271,7 @@ kubectl get pods -A -o wide --field-selector spec.nodeName=<node-name>
 
 `clusterd` pod names include the cluster ID and the replica ID. For example,
 `mz9j7stg3ws3-cluster-u5-replica-u12-gen-2-0` runs replica `u12` of cluster
-`u5`. Look up their names:
+`u5`. Look up the cluster and replica names:
 
 ```mzsql
 SELECT c.name AS cluster, r.name AS replica, c.replication_factor
@@ -335,10 +344,15 @@ kubectl wait -n <materialize-instance-namespace> --for=condition=Ready pod/<pod-
 ```
 
 Then wait for the original replica to hydrate again, using the query from the
-previous step. Don't rely on a check made right after deleting the pod: until
-Materialize notices the restart, the original replica can still show as
-hydrated. Its `hydrated` count should drop, then climb back to match
+previous step. Its `hydrated` count should drop, then climb back to match
 `objects`.
+
+{{< warning >}}
+
+Don't rely on a check made right after deleting the pod: until Materialize
+notices the restart, the original replica can still show as hydrated.
+
+{{< /warning >}}
 
 ### 6. Remove the temporary replica
 
