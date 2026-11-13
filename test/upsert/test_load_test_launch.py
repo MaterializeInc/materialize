@@ -23,10 +23,6 @@ workflow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
 
 
-class RehydrationStarted(Exception):
-    pass
-
-
 class LoadTestLaunchTest(unittest.TestCase):
     def test_inventory_precedes_launch_and_context_survives_restart(self):
         c = Mock()
@@ -56,6 +52,8 @@ class LoadTestLaunchTest(unittest.TestCase):
 
         def lookup(sql):
             self.assertTrue(inventory)
+            if "rehydration_latency" in sql:
+                return [(len(launches),)]
             return [("u7", "u9")]
 
         def up(*services):
@@ -67,10 +65,9 @@ class LoadTestLaunchTest(unittest.TestCase):
             self.assertIn("--catalog-replica-id=u9", command)
             self.assertIn("--catalog-deploy-generation=3", command)
             launches.append(list(command))
-            if len(launches) == 2:
+            if len(launches) > 1:
                 self.assertTrue(source)
                 self.assertIn("materialized", services)
-                raise RehydrationStarted
 
         c.override.side_effect = override
         c.exec.side_effect = execute
@@ -81,9 +78,18 @@ class LoadTestLaunchTest(unittest.TestCase):
             "native_catalog_options",
             return_value=["--catalog-deploy-generation=3"],
         ):
-            with self.assertRaises(RehydrationStarted):
-                workflow.workflow_load_test(c, Mock())
-        self.assertEqual(launches[0], launches[1])
+            workflow.workflow_load_test(c, Mock())
+        # Initial hydration plus each of the five independent configurations.
+        # In particular, stall-enabled and upsert-v2 must both reach rehydration.
+        self.assertEqual(len(launches), 6)
+        self.assertTrue(all(command == launches[0] for command in launches))
+        self.assertEqual(
+            sum(
+                "rehydration_latency IS NOT NULL" in call.args[0]
+                for call in c.testdrive.call_args_list
+            ),
+            5,
+        )
         self.assertFalse(active)
 
 

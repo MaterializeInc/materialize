@@ -643,6 +643,8 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
                     "upsert_rocksdb_write_buffer_manager_allow_stall": "true",
                 },
+            ),
+            (
                 "with upsert v2 enabled",
                 {
                     # Force backpressure to be enabled.
