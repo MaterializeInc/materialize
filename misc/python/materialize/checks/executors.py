@@ -92,14 +92,18 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         super().__init__(composition)
         self.exception: BaseException | None = None
 
+    def _start(self, target: Callable, *args: Any) -> threading.Thread:
+        # Daemon, because interpreter exit joins every non-daemon thread, so a
+        # check still hanging after the scenario failed, for example on a
+        # crashed replica, would keep mzcompose alive until the CI step timeout.
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+        return thread
+
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> Any:
-        thread = threading.Thread(
-            target=self._testdrive, args=[input, caller, mz_service]
-        )
-        thread.start()
-        return thread
+        return self._start(self._testdrive, input, caller, mz_service)
 
     def _testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
@@ -127,9 +131,7 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         method: Callable,
         mz_service: str | None = None,
     ) -> Any:
-        thread = threading.Thread(target=self._run_pyaction, args=[method, mz_service])
-        thread.start()
-        return thread
+        return self._start(self._run_pyaction, method, mz_service)
 
     def _run_pyaction(
         self,
@@ -145,7 +147,10 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
 
     def join(self, handle: Any) -> None:
         assert type(handle) is threading.Thread
-        handle.join()
+        # A failure in any thread fails the scenario, so stop waiting then:
+        # `handle` itself may never finish.
+        while handle.is_alive() and self.exception is None:
+            handle.join(timeout=1)
         if self.exception:
             raise self.exception
 

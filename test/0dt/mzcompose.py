@@ -1727,6 +1727,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         Service("testdrive", idle=True),
     )
 
+    # The fail_state_multi_put failpoint exists only in the v1 upsert
+    # operator. Under v2 it is never hit and the source stays running.
+    upsert_v1 = {"enable_upsert_v2": "false"}
+
     # Start the original Materialized instance with the failpoint enabled.
     with c.override(
         Materialized(
@@ -1734,6 +1738,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=0,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             external_metadata_store=True,
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
             default_replication_factor=2,
@@ -1770,6 +1775,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
