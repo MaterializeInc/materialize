@@ -1,194 +1,102 @@
 # Decoupled coordination: current handoff
 
-## Current objective and next action
+## Objective and next action
 
 Finish native-only ownership, execution and harness cleanup. Preserve adapter
-policy, validated catalog transactions, durable protection, compatible full
-writers and explicit retirement. Assess remaining architectural load separately,
-without changing Persist or the 60s publication default.
+policy, validated transactions, durable read protection, compatible full writers
+and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-The current two-version local `bin/controllerd` walkthrough and complementary
-`0dt ddl` workload passed, including sink authority and singleton CDC handover.
-The current debug bounded-memory upsert-index test still OOMs at its original
-limit. The user approved investigating this failure under the active goal.
-The profiled reproduction identifies decoded upsert row clones as the dominant
-allocation path. The matched upstream-base debug build is running. Next run its
-original workload and compare startup state, memory and buffering before proposing
-a repair. Do not raise limits or shrink the workload.
+Next run bounded current-binary parallel-workload promotion acceptance with the
+strict native error policy. Then reconcile the remaining index-publication and
+source-status cases before claiming broader acceptance. The error-filter unit
+checks and shutdown negative control pass, but are not a full stress run.
 
-Then reconcile remaining native-only acceptance gaps. The owned runtime is
-cleaned up. Proposed residual-load work is ranked in the follow-up inventory,
-separately from implementation. Do not turn passing targeted checks into a claim
-of full CI or arbitrary-release compatibility.
+The upsert investigation reproduced the original-limit debug OOM on pinned
+upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
+by decoded upsert rows and processing buffers. Native ownership is not required
+to reproduce the failure. Startup timing and progress differ, so this does not
+exclude a native contribution to severity. No native-specific repair is evidenced.
+A general upsert input-memory bound is separate work, not part of this cleanup.
+See `upsert-oom-investigation/findings.md` under the evidence root below.
 
-## Verified outcomes
+## Verified outcome
 
 Controllerd owns processes, replica followers own maintained execution, and
-adapters retain policy, transactions, protection and transient queries. Mandatory
-native startup, transport ownership removal, storage restart fencing and native
-profiling inventory are committed and pass targeted checks. Temporary objects
-have execution ownership while retaining session visibility. Subscription IDs
-are execution-qualified through observations, logging and dependencies.
+adapters retain policy, transactions, protection and transient queries. Native
+startup is mandatory. Temporary objects carry execution ownership while retaining
+session visibility. Subscription identities remain execution-qualified through
+observations, logging and dependencies. Bounded independent audits found no
+reachable legacy alternative in the inspected startup and command-ingress paths.
 
-The final bounded runtime-ownership audit found no reachable legacy alternative
-in the inspected startup and command-ingress paths. Parallel-workload no longer
-ignores read-only/frozen-catalog failures during native deployment or bypasses
-its wedged-worker verdict just for promotion. Filter regression tests and the
-isolated shutdown negative control pass. This is not a full parallel stress run.
+Replay-history cloning, compaction and both obsolete gauges are removed. Affected
+all-target/library checks, current-binary metrics and HTTP-proxy workflows pass.
+The accepted command-size expectation passes the complete compute-client library suite.
+The repaired upsert load-test runs its unchanged original scenarios successfully.
+No performance or memory saving from cleanup has been measured.
 
-Replay-history cloning, compaction, implementation tests and both history gauges
-are removed (`8c09eb6c`). Independent review found no execution/recovery consumer.
-All-target checks, compute tests and real current-binary replica-metrics/HTTP-proxy
-workflows pass. The accepted 48-byte `ComputeCommand` expectation is now rebuilt
-and verified. The complete compute-client library suite passes without skips.
-Other affected library tests passed in the earlier remainder run. The regenerated
-metrics catalog also removes previously retired entries.
-No memory improvement has been measured.
+The current local `bin/controllerd` walkthrough and full `0dt ddl` workflow pass
+with 26.46/26.47 package versions sharing implementation and plan encoding. They
+cover concurrent SQL/DDL/table writers around promotion, warmed execution,
+protection, explicit retirement, rejected retired writers, sink authority and
+singleton CDC handover. Earlier checks cover both Timely topologies and surviving
+subscriptions. This is compatible-prototype coverage using mounted binaries,
+not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
-The repaired upsert load-test runs all original scenarios, including the two
-formerly combined configurations, with unchanged workloads/assertions and fixture
-caps (`4a6f23e5`). The launcher regression traverses all configurations and fails
-on the original malformed tuple. The first runtime attempt hit a harness guard
-that mistook `cargo metadata` for compilation. Its exact retry passed unchanged.
+## Live gaps and approved deferrals
 
-Default-development 26.46 and 26.47 package builds share implementation and plan
-encoding. The version-only build changes only environmentd/clusterd package
-versions and their two lock entries, then restores original sources. The local
-walkthrough verifies both versions serving SQL/DDL/table writes before and after
-promotion, warmed execution and relay preservation, explicit retirement,
-rejected old writes/reopen, survivor writes and a held snapshot, and clean stop.
-It retains the configured ten-minute replica-stability requirement.
-
-Successful receipt: `native-history-lifecycle/run-1794572603/result.json`.
-The log is `native-history-lifecycle-process-snapshot-reproduce.log`. Evidence
-was copied locally in `native-history-lifecycle-complete-evidence.tar.gz`.
-The user-facing walkthrough is in `doc/developer/controllerd.md` (`8a996a03`).
-This is an actual local launcher run, not merely container acceptance or green CI.
-
-Launcher shutdown now handles exited non-child zombies without weakening live
-process checks (`8ca234c0`). The regression's negative control, launcher tests,
-independent review and actual walkthrough pass. Failed harness runs remain in the
-evidence logs. Use `native_history_lifecycle_snapshot_safe.py` for any future
-walkthrough to avoid the separately reproduced psutil cache race.
-
-The unchanged full `0dt ddl` workflow passed with these two versions before and
-after promotion, then the survivor after retirement. It exercises source/sink
-workloads and singleton handover. Receipt: `aj-native-current-317b08de/result.json`,
-with `sql-versions.json` recording actual versions. Cleanup completed and no new
-OOM events occurred. This is compatible-prototype coverage, not arbitrary-release
-or builtin-schema-migration coverage.
-
-Earlier current-binary full multi-process smoke passed in both Timely topologies,
-profiling HTTP passed, and same-build two-writer subscription promotion passed.
-Those receipts remain useful regression evidence, not substitutes for the current
-distinct-version walkthrough and sink/CDC run.
-
-## Approved deferrals and live gaps
-
-- Positive native builtin-schema migration is deferred beyond M3. Keep the
-  rejection guard. Current-native Kubernetes/operator/Terraform integration is
-  also deferred. Commit `1380f0ba` exposes unsupported coverage while preserving
-  historical-only and unrelated workflows. Optional final preflight skips unknown
-  or unsupported provenance before stopping processes.
-- Bounded-memory upsert-index hydration reproducibly OOMs at its original 3.5-GiB
-  replica limit, including with current debug binaries. The current first run
-  and exact retry record clusterd exit 137 and OOMKilled, with about 60 GB host
-  RAM available. `native-bounded-launch-audit.md` records the source comparison.
-  `native-bounded-offline-findings.md` confirms active upsert backpressure and
-  predominantly anonymous memory growth during ingestion/index startup. It does
-  not identify the retaining operator or the actual compaction frontier.
-  New profiling evidence is in `../upsert-oom-investigation/findings.md`:
-  roughly 69% of the sampled heap originated in upsert command row clones.
-  The 256-MiB backpressure controls Persist feedback, not incoming Kafka rows.
-  Some provisional writes completed despite zero indexed-byte counters.
-  The retaining queue and reason this exceeds the cap still need comparison.
-  No upstream regression is established. Full upsert stress also exceeded an
-  earlier local cap. Do not shrink workloads or raise limits to hide either failure.
+- Original-limit bounded-memory upsert-index hydration still fails. Native and
+  both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
+  RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
+  do not identify the retaining queue. Periodic jemalloc gauges are not exact
+  simultaneous accounting. Do not raise limits or shrink workloads to hide this.
 - Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
   acceptance remain incomplete. Earlier index-publication and slow source-status
   cases remain unexplained. Adapter-loss acceptance needs a Persist CLI/jobs artifact.
-- Broad CI is not green. Last reviewed broad evidence is
+- Positive native builtin-schema migrations, pre-native conversion and current-native
+  Kubernetes/operator/Terraform integration are unsupported within M3. Keep guards
+  and visible unsupported outcomes without disabling historical/unrelated tests.
+- Broad CI is not green. Last reviewed evidence is
   [Build141419](https://buildkite.com/materialize/test/builds/141419). Registry/image
   gates, merge skew, Persist JSON-order checking and stale hydration expectations
   remain unresolved. Full bin/fmt reports unchanged long catalog-file lines.
   Changed-file checks pass. The PR stays draft.
 
-## Worker, resources and evidence
+## Worker and essential evidence
 
-Evidence root: `~/.local/share/aj/m3-evidence/native-only/`. Filenames above are
-relative to `native-driver-scratch/` unless noted otherwise.
-Owned worker: `i-064fa517ec1d8bbdb`, now terminated after copying evidence
-and candidates locally. `worker-termination.json` records the request and
-`worker-final-state.json` confirms termination. No access rules
-changed. `remote.py` points to that released worker, not a reusable live host.
+Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
-The OOM investigation uses new owned worker `i-0b3699392b71bd7d2`, expiring
-`2026-11-13T20:31:57.921677+00:00`. Its evidence and instance-specific `remote.py`
-are in `../upsert-oom-investigation/`. Candidate/dependency setup completed.
-`profile_bounded_memory.py` reproduced the OOM without workload or limit changes.
-`native-profile-evidence.tar.gz` preserves the run and heap captures locally.
-`native-heap-functions.log` is the successful function-level allocation report.
-No runtime remains. The guarded upstream build is `aj-upsert-baseline-build`,
-recorded in `baseline-build.log`. It uses one Cargo job, 32 GiB and four CPUs.
-Its pinned worktree is `/home/ubuntu/materialize-upsert-baseline` at `d9a2c5dc`.
-After it succeeds, use `profile_baseline.py` with that worktree's MZ_ROOT and
-PYTHONPATH. Do not overlap the comparison runtime with the build.
+Owned worker `i-0b3699392b71bd7d2` expires at
+`2026-11-13T20:31:57.921677+00:00`. Its helper and receipts are in
+`upsert-oom-investigation/`. No test runtime or build remains. The baseline build
+succeeded with one Cargo job and unchanged lockfile. SSO refresh expired, but
+`remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
+in memory, expiring at 20:23 UTC. No access rules changed. The prior worker
+`i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
 
-Keep heavy work on scratch, sequentially. Container/build aggregate budget:
-40 GiB, no swap, eight CPUs. Builds use one Cargo job, 32 GiB and four CPUs.
-Preserve 30 GiB disk and 2 GiB available RAM. The local-process walkthrough used
-disjoint hard caps totalling 36 GiB/eight CPUs, verified actual membership, then
-stopped and removed its user slice and restored the standard system-slice budget.
-No native processes or containers remained after the final memory-test retry
-either. See `native-history-post-bounded-resources.txt`.
+Keep heavy work sequential and off the local VM. Worker aggregate limits are
+40 GiB, eight CPUs and no swap. Builds use one job, 32 GiB and four CPUs.
+Preserve 30 GiB disk and 2 GiB available RAM. All investigation containers were
+removed and raw evidence copied locally. Do not overlap builds with test runtimes.
 
-Both versioned candidates are copied locally and hashes verified. The old version
-is in `native-history-candidate/`, the new in
-`native-history-compatible/artifacts/26.47.0-dev.0/`. Source/build/version manifests
-are in `native-history-compatible/`. Superseded binaries and redundant archives
-were removed. Local disk headroom is 33 GiB after the focused Rust rebuild.
-Its transient units are inactive. The local check used one Cargo job, a 6-GiB
-memory cap, two CPUs and disk/time guards.
+Essential pointers, relative to the evidence root:
+- Upsert diagnosis, controls and independent review:
+  `upsert-oom-investigation/findings.md` and `comparison-review.md` there.
+  Its native/baseline profile archives, repeated-baseline archive, function-level
+  reports and build/binary manifests preserve the detailed measurements.
+- Local lifecycle: `native-driver-scratch/native-history-lifecycle-complete-evidence.tar.gz`.
+- Distinct-version DDL/sink/CDC:
+  `native-driver-scratch/native-history-compatible-ddl-evidence.tar.gz`.
+- Metrics/proxy and repaired upsert load-test: `native-driver-scratch/` archives
+  `native-history-metrics-evidence.tar.gz` and `native-history-upsert-evidence.tar.gz`.
+- Runtime/error-policy reviews and detailed earlier outcomes:
+  `native-driver-scratch/native-handoff-before-upsert-baseline.md`.
+  Both versioned native candidates and their manifests remain under that directory.
 
-The completed DDL fixture uses pinned mounted binaries and the existing dependency
-images. SQL Server uses the same upstream CU21 base as the repository image,
-without its preinitialized startup cache. The workload/assertions are unchanged.
-This is not rebuilt-image CI. Its guard records the reviewed launcher-only source
-override separately from the unchanged Rust build inputs.
-
-Essential receipts:
-- Replay checks: `native-history-check.log`, `native-history-reproduce.log`,
-  `native-history-remainder.log`, `native-history-final-format-delta.txt`.
-- Accepted command size and complete compute-client suite:
-  `native-command-size-local.log`, `native-compute-client-final.log` and their
-  corresponding `-result.json` resource-guard receipts.
-- Metrics/proxy: `native-history-metrics-evidence.tar.gz`.
-- Upsert: `native-history-upsert-evidence.tar.gz` and
-  `native-history-upsert-reproduce.log`.
-- Launcher: `native-stop-zombie-tests.log` and the lifecycle evidence above.
-- Distinct-version DDL: `native-history-compatible-ddl-evidence.tar.gz` and
-  `native-history-compatible-ddl.log`.
-- Current bounded-memory failure: `native-history-bounded-first-evidence.tar.gz`
-  (`aj-native-cluster-cc9269fe`) and `native-history-bounded-metadata-fixed.log`.
-  Exact retry: `native-history-bounded-oom-reproduce.log` and
-  `native-history-bounded-repeat-evidence.tar.gz` (`aj-native-cluster-f7277a96`).
-- Deferred boundaries: `native-bounded-harness-tests.log` and
-  `native-boundary-review-{negative,fixed}.log`.
-- Final source audit and launcher boundaries: `native-runtime-final-audit.md`
-  and `native-final-launch-boundaries.log`.
-- Native stress error policy: `native-parallel-errors-{negative,fixed}.log`,
-  `native-parallel-shutdown-control.log` and `native-parallel-filter-review.md`.
-- Earlier outcomes and pointers: `native-handoff-before-current-version-acceptance.md`,
-  `native-handoff-before-approved-deferrals.md` and the
-  [archive](20260903_decoupled_coordination_log_archive.md).
-
-Remaining architectural opportunities and unresolved cases are in the
-[follow-up inventory](20260903_decoupled_coordination_followups.md).
-`native-introspection-current-audit.md` distinguishes native relays from removed
-legacy ownership. Do not remove their SQL inputs without replacement.
-The [publication comparison](20260903_decoupled_coordination_publication_interval.md)
-and `../logical-component-load/` remain the performance baseline, not measured
-benefits from this cleanup.
+The [follow-up inventory](20260903_decoupled_coordination_followups.md) separates
+remaining architectural opportunities from this cleanup. The
+[publication comparison](20260903_decoupled_coordination_publication_interval.md)
+and `logical-component-load/` remain the performance baseline, not measured
+benefits of the removals. Preserve native observation SQL inputs until replaced.
 
 Preserve the unrelated
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.

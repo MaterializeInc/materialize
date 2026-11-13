@@ -164,8 +164,13 @@ For memory, investigate narrower catalog retention in non-SQL processes before
 adding shared caches or services. For remaining statistics/hydration relays,
 consider direct observation ownership only with their SQL contracts and cleanup
 semantics preserved. These are separate proposals, not more legacy paths to
-delete. The original-limit debug upsert OOM still needs attribution and is not
-evidence that any one of these changes would fix it.
+delete. The original-limit debug upsert OOM also reproduces on the pinned upstream
+base. Both sampled heaps are dominated by decoded upsert rows and processing
+buffers. This does not establish identical retention or exclude native timing
+effects. The existing feedback budget does not bound incoming decoded rows.
+A general upsert input-memory bound is separate work, not evidence for any of
+these catalog changes. See `upsert-oom-investigation/findings.md` in the handoff's
+evidence root for the matched runs and interpretation limits.
 
 ### Catalog/cache ownership in non-execution processes
 
