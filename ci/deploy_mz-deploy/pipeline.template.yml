@@ -34,6 +34,8 @@ steps:
     command: bin/pyactivate -m ci.deploy_mz-deploy.macos
     agents:
       queue: mac-aarch64
+    env:
+      MZ_BINARIES_UPLOAD_ROLE_ARN: arn:aws:iam::834237029485:role/buildkite-macos-deploy
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz-deploy/macos/aarch64
