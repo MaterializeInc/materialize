@@ -25,10 +25,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-11-13* <br>
 
 ### Improvements {#v26.50-improvements}
-- **MCP endpoints serve the 2026-07-28 protocol**: Materialize's built-in MCP endpoints now serve the 2026-07-28 protocol revision alongside 2025-11-25 by default, so a client that asks for 2026-07-28 is served it instead of falling back to the older revision.
-- **The standalone MCP server packages are retired**: The `mcp-materialize` and `mcp-materialize-agents` PyPI packages are deprecated, archived on PyPI, and removed from the repository in favor of the built-in MCP server at `/api/mcp/agent`; they use APIs that `mcp` 2.x removed and fail to start on a fresh install, so move to the built-in server.
-- **Readiness-based balancer rotation on Self-Managed**: With connection watermarks configured, a balancer approaching its connection limit now reports itself unready on `/api/readyz` so a load balancer takes it out of rotation, and the operator's new `balancerd.readinessProbePath` value lets deployments behind a network load balancer point the readiness probe at `/api/livez` instead.
-- **Run Materialize pods in Kubernetes user namespaces**: The operator can now run the `environmentd`, `clusterd`, balancer, and Console pods with `hostUsers: false` through the new `operator.args.enableUserNamespaces` Helm value, so a container escape lands as an unprivileged user on the node rather than as root; it is off by default and requires nodes that permit user namespaces, which Bottlerocket does not.
+- **Run Materialize pods in Kubernetes user namespaces**: The operator can now run the `environmentd`, `clusterd`, balancer, and Console pods with `hostUsers: false` through the new `operator.args.enableUserNamespaces` Helm value, so a container escape lands as an unprivileged user on the node rather than as root; it is off by default and requires nodes that permit user namespaces.
 - **`dbt-materialize` 1.9.12**: Version 1.9.12 of the dbt adapter is released with fixes for blue/green deployments and error messages, support for dbt-postgres 1.11, and a strict-mode warning, which previously never fired, when a view, materialized view, or table is built in a schema reserved for sources, source tables, and sinks.
 
 ### Bug Fixes {#v26.50-bug-fixes}
