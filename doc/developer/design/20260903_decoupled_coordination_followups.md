@@ -101,7 +101,10 @@ Verify continued ingestion and eventual cessation of contention, not uninterrupt
 connections. The ownership repair is implemented. Selected native PostgreSQL,
 MySQL and SQL Server handover runs passed, as recorded in
 `~/.local/share/aj/m3-evidence/native-only/native-cdc-runtime-verification.md`.
-Broader workloads and distinct-version CDC acceptance remain separate checks.
+The unchanged full DDL workload also passed with the current compatible-prototype
+26.46/26.47 binaries. See `native-driver-scratch/native-history-compatible-ddl-evidence.tar.gz`
+under the same evidence root. This is not arbitrary-release compatibility or
+rebuilt-image CI. Broader workloads remain separate checks.
 
 Evidence: `~/.local/share/aj/m3-evidence/native-only/native-cdc-reader-ownership.md`
 and the matched actor logs in `aj-native-ddl-6f303bf0/`.
@@ -140,10 +143,29 @@ selection/revision while retaining version checks and pending misses. Filtering
 irrelevant protection kinds before the shared SQL arrangement is a separate
 candidate. It cannot by itself remove empty completeness writes or journal bytes.
 
-The 60s comparison also finds legacy frontier progress retained by dynamic SQL
-branches. Remove inactive input dependencies before stopping their writers,
-otherwise protected-mode results can stall. This is a view/progress design
-change, not an unconditional writer-disable patch.
+The 60s comparison also found legacy frontier progress retained by dynamic SQL
+branches. Native-only cleanup removed those alternatives together with their SQL
+dependencies. No matched post-cleanup load reduction has been measured. Remaining
+native observation relays are not alternate execution owners and cannot simply
+be stopped while their SQL inputs remain.
+
+### Priorities after native-only cleanup
+
+First repeat the matched-build, per-process comparison before assigning savings
+to the removal. Current correctness runs do not measure a performance benefit.
+Keep the 60s publication setting and Persist unchanged.
+
+Then evaluate idle completeness coalescing within existing progress-lag bounds,
+and revision-keyed caching of immutable plan-derived schemas. Prior evidence
+connects these to extra conditional writes and CPU respectively. Neither requires
+a new owner or consensus protocol. Preserve pending updates and read obligations.
+
+For memory, investigate narrower catalog retention in non-SQL processes before
+adding shared caches or services. For remaining statistics/hydration relays,
+consider direct observation ownership only with their SQL contracts and cleanup
+semantics preserved. These are separate proposals, not more legacy paths to
+delete. The original-limit debug upsert OOM still needs attribution and is not
+evidence that any one of these changes would fix it.
 
 ### Catalog/cache ownership in non-execution processes
 

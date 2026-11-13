@@ -7,16 +7,18 @@ policy, validated catalog transactions, durable protection, compatible full
 writers and explicit retirement. Assess remaining architectural load separately,
 without changing Persist or the 60s publication default.
 
-The current two-version local `bin/controllerd` walkthrough passed. Finish the
-running complementary `0dt ddl` workload against the same binaries, including
-sink authority and singleton CDC handover. The owned scratch task is
-`aj-native-history-compatible-ddl.service`, launched by
-`native_history_compatible_runtime.py`. Its local log is
-`native-history-compatible-ddl.log`. No other runtime or build should overlap it.
+The current two-version local `bin/controllerd` walkthrough and complementary
+`0dt ddl` workload passed, including sink authority and singleton CDC handover.
+The current debug bounded-memory upsert-index test still OOMs at its original
+limit in both current runs. The independent launch audit found no demonstrated
+conversion omission. Effective runtime settings, heap attribution and a matched
+build comparison remain the diagnostic options. Do not raise limits or shrink
+the workload.
 
-Then reconcile remaining native-only acceptance gaps, clean owned resources and
-assess residual architectural load. Do not turn passing targeted checks into a
-claim of full CI or arbitrary-release compatibility.
+Then reconcile remaining native-only acceptance gaps. The owned runtime is
+cleaned up. Proposed residual-load work is ranked in the follow-up inventory,
+separately from implementation. Do not turn passing targeted checks into a claim
+of full CI or arbitrary-release compatibility.
 
 ## Verified outcomes
 
@@ -54,24 +56,23 @@ was copied locally in `native-history-lifecycle-complete-evidence.tar.gz`.
 The user-facing walkthrough is in `doc/developer/controllerd.md` (`8a996a03`).
 This is an actual local launcher run, not merely container acceptance or green CI.
 
-The walkthrough exposed a real shutdown bug: an exited non-child zombie was
-reported as still running while its parent had not reaped it. `8ca234c0` fixes
-that while retaining identity checks, escalation and failure for live processes.
-A real-process negative control reproduced it. The complete launcher suite and
-independent review pass. The successful walkthrough uses the repair.
+Launcher shutdown now handles exited non-child zombies without weakening live
+process checks (`8ca234c0`). The regression's negative control, launcher tests,
+independent review and actual walkthrough pass. Failed harness runs remain in the
+evidence logs. Use `native_history_lifecycle_snapshot_safe.py` for any future
+walkthrough to avoid the separately reproduced psutil cache race.
 
-Earlier failed walkthroughs remain recorded. Asynchronous compute logging needed
-a bounded complete-export baseline before identity comparisons. A process guard
-also raced exited processes, and concurrent psutil `process_iter` calls could
-replace cached `.info` fields. The latter was reproduced deterministically and a
-snapshot-local dictionary fix is prepared in `native_history_lifecycle_snapshot_safe.py`.
-The successful exact retry did not hit that harness race. It is not a claim that
-the old runner is race-free. No failed run is counted as clean acceptance.
+The unchanged full `0dt ddl` workflow passed with these two versions before and
+after promotion, then the survivor after retirement. It exercises source/sink
+workloads and singleton handover. Receipt: `aj-native-current-317b08de/result.json`,
+with `sql-versions.json` recording actual versions. Cleanup completed and no new
+OOM events occurred. This is compatible-prototype coverage, not arbitrary-release
+or builtin-schema-migration coverage.
 
 Earlier current-binary full multi-process smoke passed in both Timely topologies,
 profiling HTTP passed, and same-build two-writer subscription promotion passed.
 Those receipts remain useful regression evidence, not substitutes for the current
-distinct-version walkthrough or unfinished sink/CDC run.
+distinct-version walkthrough and sink/CDC run.
 
 ## Approved deferrals and live gaps
 
@@ -86,8 +87,12 @@ distinct-version walkthrough or unfinished sink/CDC run.
   update the expectation. It remains unchanged pending that decision. The remainder
   run explicitly skipped only that recorded failure. Do not claim a full pass.
 - Bounded-memory upsert-index hydration reproducibly OOMs at its original 3.5-GiB
-  limit. Cause remains unproven. Full upsert stress also exceeded an earlier local
-  cap. Do not shrink workloads or raise limits to hide either failure.
+  replica limit, including with current debug binaries. The current first run
+  and exact retry record clusterd exit 137 and OOMKilled, with about 60 GB host
+  RAM available. `native-bounded-launch-audit.md` records the source comparison.
+  Cause remains unproven. This does not establish a regression against optimized
+  upstream. Full upsert stress also exceeded an earlier local cap. Do not shrink
+  workloads or raise limits to hide either failure.
 - Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
   acceptance remain incomplete. Earlier index-publication and slow source-status
   cases remain unexplained. Adapter-loss acceptance needs a Persist CLI/jobs artifact.
@@ -101,17 +106,18 @@ distinct-version walkthrough or unfinished sink/CDC run.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`. Filenames above are
 relative to `native-driver-scratch/` unless noted otherwise.
-Owned worker: `i-064fa517ec1d8bbdb`, extended only to
-`2026-11-13T14:08:21.941528+00:00` to finish acceptance without another build/worker.
-`worker.json` and `worker-expiry-extension.json` record ownership and expiry.
-Connect through the instance-specific `remote.py`. No access rules changed.
+Owned worker: `i-064fa517ec1d8bbdb`, now terminated after copying evidence
+and candidates locally. `worker-termination.json` records the request and
+`worker-final-state.json` confirms termination. No access rules
+changed. `remote.py` points to that released worker, not a reusable live host.
 
 Keep heavy work on scratch, sequentially. Container/build aggregate budget:
 40 GiB, no swap, eight CPUs. Builds use one Cargo job, 32 GiB and four CPUs.
 Preserve 30 GiB disk and 2 GiB available RAM. The local-process walkthrough used
 disjoint hard caps totalling 36 GiB/eight CPUs, verified actual membership, then
 stopped and removed its user slice and restored the standard system-slice budget.
-No native processes or containers remained after that walkthrough.
+No native processes or containers remained after the final memory-test retry
+either. See `native-history-post-bounded-resources.txt`.
 
 Both versioned candidates are copied locally and hashes verified. The old version
 is in `native-history-candidate/`, the new in
@@ -119,7 +125,7 @@ is in `native-history-candidate/`, the new in
 are in `native-history-compatible/`. Superseded binaries and redundant archives
 were removed. Local disk headroom was 37 GiB at last check.
 
-The running DDL fixture uses pinned mounted binaries and the existing dependency
+The completed DDL fixture uses pinned mounted binaries and the existing dependency
 images. SQL Server uses the same upstream CU21 base as the repository image,
 without its preinitialized startup cache. The workload/assertions are unchanged.
 This is not rebuilt-image CI. Its guard records the reviewed launcher-only source
@@ -132,6 +138,12 @@ Essential receipts:
 - Upsert: `native-history-upsert-evidence.tar.gz` and
   `native-history-upsert-reproduce.log`.
 - Launcher: `native-stop-zombie-tests.log` and the lifecycle evidence above.
+- Distinct-version DDL: `native-history-compatible-ddl-evidence.tar.gz` and
+  `native-history-compatible-ddl.log`.
+- Current bounded-memory failure: `native-history-bounded-first-evidence.tar.gz`
+  (`aj-native-cluster-cc9269fe`) and `native-history-bounded-metadata-fixed.log`.
+  Exact retry: `native-history-bounded-oom-reproduce.log` and
+  `native-history-bounded-repeat-evidence.tar.gz` (`aj-native-cluster-f7277a96`).
 - Deferred boundaries: `native-bounded-harness-tests.log` and
   `native-boundary-review-{negative,fixed}.log`.
 - Earlier outcomes and pointers: `native-handoff-before-current-version-acceptance.md`,
