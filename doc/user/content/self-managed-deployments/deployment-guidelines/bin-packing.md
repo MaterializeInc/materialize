@@ -209,10 +209,21 @@ gcloud container clusters update <cluster-name> \
   --autoscaling-profile optimize-utilization
 ```
 
-The profile applies to the whole cluster, and it also makes the cluster
-autoscaler remove underused nodes sooner. That doesn't affect nodes running
-Materialize pods, which [aren't removed](#why-materialize-pods-arent-consolidated),
-but other pods, for example on the system node pool, may be moved more often.
+{{< warning >}}
+
+The autoscaling profile applies to the whole GKE cluster, not just to
+Materialize, and it also makes the cluster autoscaler remove underused nodes
+sooner. Materialize pods are protected from this, as described in [Why
+Materialize pods aren't
+consolidated](#why-materialize-pods-arent-consolidated). Other workloads in the
+cluster are not: their pods are evicted and restarted on other nodes more often.
+
+Before you enable the profile, check that everything else running in the
+cluster tolerates being restarted. To protect a workload that doesn't, give it
+a [PodDisruptionBudget](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)
+or the `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` annotation.
+
+{{< /warning >}}
 
 {{< /tab >}}
 {{< tab "Other platforms" >}}
