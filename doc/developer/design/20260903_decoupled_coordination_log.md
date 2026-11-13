@@ -6,35 +6,9 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Native startup reuses local expression-cache entries during native
-replica reconstruction without cache reconciliation. It retains the same store
-for written-plan reads, uses the existing paired-writer build identity and leaves
-independent consistency reconstruction uncached. Independent review, targeted
-cache/catalog/follower tests and the debug build pass. The complete frontier
-test passes twice at its original retry budget. New replica startup falls from
-31–33s to roughly 5s in this fixture. Metadata-only identity recovery and the
-generation-specific retirement error policy are also verified. The native stress
-run passes one promotion/retirement cycle and normal final checks, without a
-captured bootstrap panic. Next recheck index permission publication with
-`native_index_retained.py`, retaining its original workload and 1s reproducer.
-
-The metadata repair keeps metadata-only identities classified as retained
-until catalog metadata removal. Execution retirement can remove the last client
-grant without running the adapter's metadata cleanup transaction. Independent
-review found no blocking issue. The real-catalog regression fails twice before
-the repair and passes afterward, alongside temporary lifetime and retained-storage
-safety checks. Matching debug builds pass. Repaired stress failed earlier on
-three retirement HTTP 409 conflicts, before validating restart. Its exact repeat
-reached retirement, then misclassified a retired generation's SQL rejection.
-The harness repair permits that rejection only for explicitly requested
-retirement targets in the deploy scenario, then reconnects. Review and policy/
-compose tests and the native stress run pass. Earlier contention remains unexplained.
-Do not increase retries or timeouts to claim acceptance.
-
-The committed frontier decoder guard passes its compiled unindexed regression
-and full catalog plan snapshot. An unchanged parallel promotion repeat passes
-final and lifecycle checks. The preceding run failed on a catalog-server query
-connection timeout, which remains an unexplained flake, not a decoder regression.
+Collect `index-four-retained-launch.json` next. Then continue bounded
+current-native acceptance of the unrun harnesses below. Keep original workloads and
+bounds. Do not increase retries or timeouts to claim acceptance.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -45,6 +19,21 @@ A general upsert input-memory bound is separate work, not part of this cleanup.
 See `upsert-oom-investigation/findings.md` under the evidence root below.
 
 ## Verified outcome
+
+Native startup reuses validated Local expressions without cache maintenance or a
+second plan-store open. In the debug frontier fixture, new-replica startup falls
+from 31–33s to roughly 5s and the complete test passes twice. Metadata-only
+identity recovery has red/green catalog coverage and retained-storage safety
+coverage. The current native stress run completes one promotion/retirement cycle
+and final checks without a captured bootstrap panic. The full one-index protection
+workflow also passes, including concurrent DROP, paused caps and release. Its
+slowest committed-permission observation took 23s. These passes do not explain
+the earlier intermittent failures or establish a steady-state resource saving.
+The complete source-failpoint lifecycle also passes. Its final status query
+returns `running` in 1.84s after promotion and retirement, rather than the earlier
+673s. The index and source workflows used PostgreSQL metadata and shared-file
+blobs. Their original private runner receipts incorrectly label blobs as Minio,
+corrected in `retained-workflow-backend-correction.json` alongside the evidence.
 
 Controllerd owns processes, replica followers own maintained execution, and
 adapters retain policy, transactions, protection and transient queries. Native
@@ -86,9 +75,10 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
   RAM. The 256-MiB control bounds Persist feedback, not decoded input. Heap stacks
   do not identify the retaining queue. Periodic jemalloc gauges are not exact
   simultaneous accounting. Do not raise limits or shrink workloads to hide this.
-- Data-ingest/parallel stress, randomized zippy/restore and bumped-version platform
-  acceptance remain incomplete. Earlier index-publication and slow source-status
-  cases remain unexplained. Adapter-loss acceptance needs a Persist CLI/jobs artifact.
+- Data-ingest, randomized zippy/restore and bumped-version platform acceptance
+  remain incomplete. Parallel stress and one-index publication now have current
+  passes, but their earlier intermittent failures remain unexplained. The source
+  status latency repeat passes. Adapter-loss needs a Persist CLI/jobs artifact.
 - Positive native builtin-schema migrations, pre-native conversion and current-native
   Kubernetes/operator/Terraform integration are unsupported within M3. Keep guards
   and visible unsupported outcomes without disabling historical/unrelated tests.
@@ -110,9 +100,9 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`. The
-`native_parallel_retirement_policy.py` stress run completed and cleaned up. No
-build or runtime is active. Its Python-only changes have a separate source-exception manifest and are
-copied into runtime evidence. Compiled Rust remains unchanged.
+stress, one-index and source-status runs completed and cleaned up. The four-index workflow is
+active, without a concurrent build. Python-only harness changes have a separate
+source-exception manifest. Compiled Rust remains unchanged.
 No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
@@ -139,6 +129,8 @@ Essential pointers, relative to the evidence root:
   Policy red/green logs and patch: `retirement-policy-*.log` and
   `retirement-error-policy.patch` in the same directory.
   Passing current stress: `parallel-retirement-policy-evidence.tar.gz`.
+  Current index protection/publication: `index-retained-evidence.tar.gz`.
+  Current source lifecycle/status latency: `source-status-retained-evidence.tar.gz`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
 - Fixed-binary stress failure:
