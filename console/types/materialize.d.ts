@@ -2742,7 +2742,7 @@ export interface MzPreparedStatementHistory {
   session_id: string;
   sql_hash: Buffer;
   statement_type: string | null;
-  throttled_count: string;
+  throttled_count: string | null;
 }
 
 export interface MzPseudoTypes {
@@ -4303,6 +4303,7 @@ export interface MzStatementExecutionHistory {
   rows_returned: Int8 | null;
   sample_rate: number;
   search_path: string;
+  throttled_count: string | null;
   transaction_id: string;
   transaction_isolation: string;
   transient_index_id: string | null;
@@ -4325,6 +4326,7 @@ export interface MzStatementExecutionHistoryRedacted {
   rows_returned: Int8 | null;
   sample_rate: number;
   search_path: string;
+  throttled_count: string | null;
   transaction_id: string;
   transaction_isolation: string;
   transient_index_id: string | null;
