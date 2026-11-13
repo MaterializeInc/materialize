@@ -290,3 +290,79 @@ impl InstanceClient {
         let _ = self.call(move |i| i.cancel_peek(uuid, reason));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::task::Poll;
+
+    use mz_expr::{MapFilterProject, RowSetFinishing, SafeMfpPlan};
+    use mz_repr::{GlobalId, RelationDesc, Timestamp};
+    use mz_storage_types::read_holds::ReadHold;
+    use timely::progress::Antichain;
+    use tokio::sync::{mpsc, oneshot};
+    use uuid::Uuid;
+
+    use crate::controller::PeekNotification;
+    use crate::controller::instance::tests::peek_test_instance;
+    use crate::controller::peek_lifecycle::PeekLifecycle;
+    use crate::protocol::command::PeekTarget;
+    use crate::protocol::response::{PeekError, PeekResponse};
+
+    use super::InstanceClient;
+
+    #[mz_ore::test(tokio::test)]
+    async fn cancellation_before_instance_processes_issue_delivers_result() {
+        for response in [
+            PeekResponse::Canceled,
+            PeekResponse::Error(PeekError::unstructured("dependency dropped")),
+        ] {
+            let (mut instance, mut coordinator) = peek_test_instance();
+            let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+            let client = InstanceClient {
+                command_tx,
+                read_hold_tx: Arc::new(|_, _| Ok(())),
+            };
+            let (retired_tx, mut retired_rx) = oneshot::channel();
+            let lifecycle = Arc::new(PeekLifecycle::new(move |outcome| {
+                retired_tx.send(outcome).unwrap();
+            }));
+            let (result_tx, result_rx) = oneshot::channel();
+            // A mismatched hold would fail validation if Instance::peek ran.
+            let hold = ReadHold::new(
+                GlobalId::User(2),
+                Antichain::from_elem(Timestamp::MIN),
+                Arc::new(|_, _| Ok(())),
+            );
+            let peek = client.peek(
+                PeekTarget::Index {
+                    id: GlobalId::User(1),
+                },
+                None,
+                Uuid::new_v4(),
+                Timestamp::MIN,
+                RelationDesc::empty(),
+                RowSetFinishing::trivial(0),
+                SafeMfpPlan::from_mfp(MapFilterProject::new(0)),
+                hold,
+                None,
+                result_tx,
+                Some(Arc::clone(&lifecycle)),
+            );
+            futures::pin_mut!(peek);
+            assert!(matches!(futures::poll!(&mut peek), Poll::Pending));
+            let issue = command_rx.try_recv().expect("issue queued");
+            assert!(lifecycle.cancel(response.clone()));
+            assert_eq!(retired_rx.try_recv().unwrap(), PeekNotification::Canceled);
+            issue(&mut instance);
+            peek.await
+                .expect("canceled issue succeeds without validation");
+            assert_eq!(result_rx.await.unwrap(), response);
+            assert!(
+                command_rx.try_recv().is_err(),
+                "unissued peek needs no cancel command"
+            );
+            assert!(coordinator.try_recv().is_err());
+        }
+    }
+}
