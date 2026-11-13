@@ -10,11 +10,10 @@ Persist or the 60s publication default.
 
 ## Next concrete action
 
-Finish the running repaired upsert load-test, including both formerly combined
-scenarios with unchanged workloads. Replay removal is committed and its current-
-binary metrics/proxy acceptance passed. Return
-to distinct-version compatible-upgrade acceptance after this bounded cleanup.
-Do not present same-build promotion as distinct-version or migration coverage.
+Finish the running distinct-version local `bin/controllerd` walkthrough. The
+approved replay removal, metrics/proxy acceptance and full repaired upsert load-test
+are complete. Keep the command-size failure below explicit. After the walkthrough,
+verify remaining current-version sink/CDC coverage and document executed commands.
 
 Commit `8c09eb6c` removes the replay buffer, cloning/compaction, implementation
 tests and two exported history gauges. Execution uses no history reader.
@@ -39,11 +38,11 @@ package union triggered unnecessary dependency recompilation. Evidence:
 Source: `native-history-source-sha256.json`. A later local Rust edit only removes
 an empty comment heading from compute metrics.
 
-Upsert fixture changes are not committed yet. The fixture now
+Commit `4a6f23e5` repairs the upsert fixture. It now
 has two separate scenarios with unchanged settings, workloads and assertions.
 The existing launcher test now traverses all five configurations. Its negative
 control reproduces the malformed tuple in memory without editing the worktree.
-Both repaired runtime scenarios still need to run.
+The full original runtime workload passed, including both repaired scenarios.
 
 The current default-dev build passed with a matching source manifest and unchanged
 Cargo.lock. Peak build memory was 28.2 GiB. Inputs: `native-history-final-source.tar.gz`,
@@ -56,18 +55,40 @@ aggregate OOM increase. Receipts: `native-history-metrics-runtime.log`,
 `aj-native-current-785104f2`. Evidence is being copied locally in
 `native-history-metrics-evidence.tar.gz`. The sole post-build source difference
 is removal of one blank line, recorded in `native-history-final-format-delta.txt`.
-The full upsert run is active as `aj-native-history-upsert.service`, with the
-previous fixture caps and original workload. Log: `native-history-upsert-runtime.log`.
-Current artifacts are being copied and hash-verified locally by task 127.
+The first upsert run was interrupted by a guard mistaking `cargo metadata` for
+compilation. Its exact retry passed all original scenarios without a code or
+resource change. Logs: `native-history-upsert-runtime.log` and
+`native-history-upsert-reproduce.log`. Both runs' receipts are copied locally in
+`native-history-upsert-evidence.tar.gz`. A precise read-only metadata exception
+has been prepared and checked separately for future runners.
+The current candidate is copied locally with all four hashes verified. Superseded
+candidate binaries and redundant archives were removed, retaining provenance.
+Local disk headroom is 40 GiB.
 
-For the subsequent distinct-version local walkthrough, reuse
-`../lifecycle/witness.py` and the existing version-only build mechanism in
-`native-compatible-current/build-pair.py`, but refresh their stale provenance,
-paths, current catalog assertions and resource guards before execution. The
-witness uses real `bin/controllerd` launches, checks both writers around promotion,
-warmed execution, separate retirement and survivor protection. It lacks sink/CDC
-workloads, so complementary current-version coverage is still required. Do not
-run either old script unchanged or count same-build subscription coverage instead.
+The version-only 26.47 build passed. Only the environmentd/clusterd package versions
+and their two Cargo.lock entries changed. Original sources were restored and the
+26.46 artifacts stayed unchanged. Evidence: `native-history-next-build-fixed.log`
+and `native-history-compatible/`. An earlier harness assumption incorrectly
+required a Git-clean scratch overlay, reproduced before replacing it with exact
+verified-manifest validation. Both artifacts are being preserved locally.
+
+`native_history_lifecycle.py` adapts the retained local walkthrough to this pair.
+Current catalog schemas and synchronous retirement retractions were reviewed.
+It retains both-writer DDL/table probes, warmed execution, promotion, separate
+retirement, rejected old writes and surviving held snapshots. Resource and cleanup
+review findings were fixed before launch. Its current run is
+`native-history-lifecycle/run-1794569533`, under
+`aj-native-history-lifecycle.service`. Log: `native-history-lifecycle-runtime.log`.
+The first controller is initializing. Runtime acceptance is not established yet.
+
+This local-process fixture has disjoint hard caps: system slice 8 GiB/2 CPU for
+supervisor and metadata, user `ajnativeruntime.slice` 28 GiB/6 CPU for native child
+scopes. It checks actual process/container ancestry and limits, records OOM deltas,
+and uses a private metadata container/state directory. The shell wrapper restores
+the usual system slice 40-GiB/8-CPU limits on exit and stops/removes its user slice.
+No builds overlap. Do not run another fixture or build until it finishes.
+The walkthrough lacks external sink/CDC workloads, so complementary current-version
+coverage remains required. Do not count same-build subscription coverage instead.
 
 ## Approved scope and verified outcomes
 
