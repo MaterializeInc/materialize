@@ -21,7 +21,7 @@ need. This page covers three ways to reduce the number of nodes required:
 - [Move a replica off a node](#move-a-replica-off-a-node), when a single pod is
   keeping an otherwise idle node running.
 
-## Why pod placement matters
+## Materialize pods aren't consolidated
 
 Node autoscalers can save cost by evicting pods from underused nodes and
 removing the nodes. Materialize opts its pods out of this: every `environmentd`
@@ -238,8 +238,9 @@ gcloud container clusters update <cluster-name> \
 
 The autoscaling profile applies to the whole GKE cluster, not just to
 Materialize, and it also makes the cluster autoscaler remove underused nodes
-sooner. Materialize pods are protected from this, as described in [Why pod
-placement matters](#why-pod-placement-matters). Other workloads in the
+sooner. Materialize pods are protected from this, as described in [Materialize
+pods aren't consolidated](#materialize-pods-arent-consolidated). Other workloads
+in the
 cluster are not: their pods are evicted and restarted on other nodes more often.
 
 Before you enable the profile, check that everything else running in the
