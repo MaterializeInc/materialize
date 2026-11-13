@@ -83,6 +83,34 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
     }
 }
 
+/// Whether the buffer pool can move extents out of RAM on this replica,
+/// through swap or through a file store.
+///
+/// The first [`apply_pool_config`] fixes the backend, and a file store that
+/// fails to open falls back to swap. Once the pool exists, its backend
+/// decides. Before that, `file_requested` stands in for it: whether the
+/// install will ask for a file store.
+pub fn pool_can_spill(swap_available: bool, file_requested: bool) -> bool {
+    can_spill_in(&GLOBAL_POOL, swap_available, file_requested)
+}
+
+/// [`pool_can_spill`] over an explicit slot.
+fn can_spill_in(
+    slot: &std::sync::OnceLock<Option<mz_ore::pool::Pool>>,
+    swap_available: bool,
+    file_requested: bool,
+) -> bool {
+    if swap_available {
+        return true;
+    }
+    match slot.get() {
+        Some(Some(pool)) => pool.backend_kind() != mz_ore::pool::BackendKind::Swap,
+        // The reservation failed, so there is no pool to spill through.
+        Some(None) => false,
+        None => file_requested,
+    }
+}
+
 /// Builds the pool for `backend`, creating a file backend's directory. A
 /// file store that cannot be created or opened falls back to swap, which
 /// needs no scratch space. This is the only place that decides the fallback.
@@ -285,6 +313,52 @@ mod tests {
             mz_ore::pool::BackendKind::Swap,
             "the backend is fixed by the first application",
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn can_spill_follows_the_installed_backend() {
+        let slot = std::sync::OnceLock::new();
+        assert!(can_spill_in(&slot, true, false), "swap always spills");
+        assert!(
+            can_spill_in(&slot, false, true),
+            "before install, a requested file store"
+        );
+        assert!(!can_spill_in(&slot, false, false));
+
+        assert!(apply_to(&slot, CONFIG, ExtentBackend::Swap));
+        assert!(
+            !can_spill_in(&slot, false, true),
+            "a swap pool cannot spill without swap, whatever is requested now",
+        );
+        assert!(can_spill_in(&slot, true, false));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let slot = std::sync::OnceLock::new();
+        assert!(apply_to(
+            &slot,
+            CONFIG,
+            ExtentBackend::File {
+                dir: dir.path().join("pool"),
+                capacity_bytes: None,
+            },
+        ));
+        let file_backed = slot
+            .get()
+            .cloned()
+            .flatten()
+            .expect("installed")
+            .backend_kind()
+            != mz_ore::pool::BackendKind::Swap;
+        assert_eq!(
+            can_spill_in(&slot, false, false),
+            file_backed,
+            "an installed file store spills without swap",
+        );
+
+        let failed = std::sync::OnceLock::new();
+        assert!(failed.set(None).is_ok());
+        assert!(!can_spill_in(&failed, false, true), "no pool, no spill");
     }
 
     /// A file backend whose directory cannot be created installs a swap

@@ -346,13 +346,23 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    // The chunked v2 stash spills only to swap, through the
-                    // buffer pool. On a replica that cannot swap, v1 keeps its
-                    // state in RocksDB on the scratch disk where one exists,
-                    // and v2's footprint without swap has not been measured.
+                    // The chunked v2 stash spills through the buffer pool, to
+                    // swap or to the pool's file store. On a replica where the
+                    // pool can do neither, v1 keeps its state in RocksDB on the
+                    // scratch disk where one exists, and v2's footprint without
+                    // a spill target has not been measured.
+                    //
+                    // NOTE: compute's config application installs the pool and
+                    // decides on the file store, from a flag storage cannot
+                    // read. Until the pool is installed, a replica without swap
+                    // renders v1, so a dataflow rendered before the first
+                    // config application keeps v1 for its life.
                     let use_upsert_v2 = dyncfgs::ENABLE_UPSERT_V2
                         .get(storage_state.storage_configuration.config_set())
-                        && storage_state.instance_context.swap_available;
+                        && mz_timely_util::pool_config::pool_can_spill(
+                            storage_state.instance_context.swap_available,
+                            false,
+                        );
                     let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
                     {
                         // Resolved here, at operator construction, so the

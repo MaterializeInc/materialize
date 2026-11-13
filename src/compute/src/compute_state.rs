@@ -519,19 +519,22 @@ impl ComputeState {
         //
         // Storage's stash shares the singleton and gates only participation,
         // so its spill gate installs the pool too, on replicas where the
-        // upsert-v2 stash can render (see `swap_available`). The worker config
+        // upsert-v2 stash can render (see `pool_can_spill`). The worker config
         // set is the full dyncfg aggregate, which is what makes the storage
         // flags readable here.
         {
             use mz_storage_types::dyncfgs::{ENABLE_UPSERT_PAGED_SPILL, ENABLE_UPSERT_V2};
             use mz_timely_util::pool_config::{
-                ExtentBackend, PoolPagerConfig, apply_pool_config, spill_threads_for_workers,
+                ExtentBackend, PoolPagerConfig, apply_pool_config, pool_can_spill,
+                spill_threads_for_workers,
             };
 
+            let file_requested =
+                scratch.is_some() && ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config);
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = ENABLE_UPSERT_PAGED_SPILL.get(config)
                 && ENABLE_UPSERT_V2.get(config)
-                && self.context.swap_available;
+                && pool_can_spill(self.context.swap_available, file_requested);
             let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
             // Storage's config application sets the storage chunk gate.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
@@ -569,12 +572,10 @@ impl ComputeState {
                 // the volume. lgalloc and the pager's file backend use the
                 // same directory, but are not enabled alongside the store.
                 let backend = match &scratch {
-                    Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
-                        ExtentBackend::File {
-                            dir: scratch.join("pool"),
-                            capacity_bytes: None,
-                        }
-                    }
+                    Some(scratch) if file_requested => ExtentBackend::File {
+                        dir: scratch.join("pool"),
+                        capacity_bytes: None,
+                    },
                     _ => ExtentBackend::Swap,
                 };
                 let applied = apply_pool_config(
