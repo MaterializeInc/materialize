@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import cast
 
 import requests
+import toml
 from semver.version import VersionInfo
 
 from materialize import MZ_ROOT, cargo, spawn
@@ -78,10 +79,20 @@ def build_package(version: NpmPackageVersion, crate_path: Path) -> Path:
         # Remove any -wasm suffixes.
         package["name"] = package["name"].removesuffix("-wasm")
         package["version"] = version.node
-        package["license"] = "SEE LICENSE IN 'LICENSE'"
+        # The root LICENSE carries the BSL text, the Apache text, and the
+        # notices for third-party code, so every package ships it. An SPDX
+        # identifier would hide the BSL's Additional Use Grant, so only Apache
+        # crates get one.
+        with open(crate_path / "Cargo.toml") as cargo_toml:
+            crate_license = toml.load(cargo_toml)["package"].get("license")
+        if crate_license == "Apache-2.0":
+            package["license"] = "Apache-2.0"
+        else:
+            package["license"] = "SEE LICENSE IN 'LICENSE'"
         package["repository"] = "github:MaterializeInc/materialize"
         package_file.seek(0)
         json.dump(package, package_file, indent=2)
+        package_file.truncate()
     return package_path
 
 
