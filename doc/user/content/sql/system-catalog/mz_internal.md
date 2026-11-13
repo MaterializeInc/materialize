@@ -1082,9 +1082,61 @@ in the system.
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |
 
+## `mz_query_policies`
+
+{{< private-preview />}}
+
+The `mz_query_policies` table contains a row for each [query
+policy](/clusters/query-policies/) in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_query_policies -->
+| Field        | Type                 | Meaning                                                                                                     |
+| ------------ | -------------------- | --------                                                                                                    |
+| `id`         | [`text`]             | The ID of the query policy.                                                                                 |
+| `name`       | [`text`]             | The name of the query policy.                                                                               |
+| `mode`       | [`text`]             | Whether matching rules warn or enforce rejection: `warn` or `enforce`.                                      |
+| `owner_id`   | [`text`]             | The role ID of the policy owner. Corresponds to [`mz_catalog.mz_roles.id`](../mz_catalog#mz_roles).         |
+| `privileges` | [`mz_aclitem array`] | The privileges belonging to the query policy.                                                               |
+| `oid`        | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the query policy.                                                  |
+
+## `mz_query_policy_rules`
+
+{{< private-preview />}}
+
+The `mz_query_policy_rules` table contains a row for each query policy rule in
+the system.
+
+<!-- RELATION_SPEC mz_internal.mz_query_policy_rules -->
+| Field       | Type     | Meaning                                                                                                   |
+| ----------- | -------- | --------                                                                                                  |
+| `policy_id` | [`text`] | The policy containing this rule. Corresponds to [`mz_internal.mz_query_policies.id`](#mz_query_policies). |
+| `name`      | [`text`] | The name of the rule within its policy.                                                                   |
+| `action`    | [`text`] | The rule action: `reject`.                                                                                |
+| `metric`    | [`text`] | The inspected metric: `query_plan_includes`.                                                              |
+| `value`     | [`text`] | The prohibited plan feature: `temporary_dataflow` or `storage_read`.                                      |
+
+## `mz_query_policy_attachments`
+
+{{< private-preview />}}
+
+The `mz_query_policy_attachments` table contains a row for each cluster that
+has a query policy attached.
+
+<!-- RELATION_SPEC mz_internal.mz_query_policy_attachments -->
+| Field         | Type     | Meaning                                                                                                 |
+| ------------- | -------- | --------                                                                                                |
+| `policy_id`   | [`text`] | The attached policy. Corresponds to [`mz_internal.mz_query_policies.id`](#mz_query_policies).           |
+| `object_type` | [`text`] | The attachment target type: `cluster`.                                                                  |
+| `object_id`   | [`text`] | The attached cluster. Corresponds to [`mz_catalog.mz_clusters.id`](../mz_catalog#mz_clusters).          |
+
 ## `mz_show_network_policies`
 
 The `mz_show_show_network_policies` view contains a row for each network policy in the system.
+
+## `mz_show_query_policies`
+
+The `mz_show_query_policies` view contains a row for each query policy in the
+system.
 
 ## `mz_show_all_privileges`
 
@@ -1660,6 +1712,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_query_policies -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_roles -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_schemas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_secrets -->

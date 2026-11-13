@@ -59,6 +59,7 @@ rows:
       - `CLUSTER`
       - `CONNECTION`
       - `DATABASE`
+      - `QUERY POLICY`
       - `SCHEMA`
       - `SECRET`
       - `TYPE`
@@ -92,5 +93,11 @@ rows:
   - Privilege: "**CREATENETWORKPOLICY**"
     Description: Permission to create network policies to control access at the network layer.
     Abbreviation: "`P`"
+    Applies to: |
+      - `SYSTEM`
+
+  - Privilege: "**CREATEQUERYPOLICY**"
+    Description: Permission to create [query policies](/clusters/query-policies/).
+    Abbreviation: "`Q`"
     Applies to: |
       - `SYSTEM`

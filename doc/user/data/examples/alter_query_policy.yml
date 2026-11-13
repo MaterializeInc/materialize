@@ -1,0 +1,39 @@
+- name: "syntax"
+  code: |
+    ALTER QUERY POLICY <name> SET (
+      [MODE = '<mode>']
+      [, RULES (
+        <rule_name> (action = 'reject', metric = 'query_plan_includes', value = '<plan_feature>')
+        [, ...]
+      )]
+    )
+    ;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the query policy to modify.
+    - name: "`MODE`"
+      description: |
+        *Optional.* `'warn'` or `'enforce'`. See [`CREATE QUERY
+        POLICY`](/sql/create-query-policy/#syntax).
+    - name: "`RULES`"
+      description: |
+        *Optional.* The new set of rules. Replaces all existing rules in the
+        policy. Specify `RULES ()` to remove all rules.
+    - name: "`<rule_name>`"
+      description: |
+        The name for the rule. Must be unique within the query policy.
+    - name: "`<plan_feature>`"
+      description: |
+        `'temporary_dataflow'` or `'storage_read'`. See [`CREATE QUERY
+        POLICY`](/sql/create-query-policy/#syntax).
+- name: "syntax-owner"
+  code: |
+    ALTER QUERY POLICY <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the query policy.
+    - name: "`<new_owner_role>`"
+      description: |
+        The role to own the query policy.

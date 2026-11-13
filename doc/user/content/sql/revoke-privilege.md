@@ -140,6 +140,29 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
+{{< tab "Query policy">}}
+
+For specific query policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON QUERY POLICY <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all query policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON ALL QUERY POLICIES
+FROM <role_name> [, ... ];
+```
+
+Revoking `USAGE` does not detach the policy from clusters it is already
+attached to.
+
+{{</ tab >}}
+
 {{< tab "Schema">}}
 
 For specific schema(s):
@@ -183,7 +206,7 @@ FROM <role_name> [, ... ];
 {{< tab "System">}}
 
 ```mzsql
-REVOKE <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | ALL [PRIVILEGES]> [, ... ]
+REVOKE <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | CREATEQUERYPOLICY | ALL [PRIVILEGES]> [, ... ]
 ON SYSTEM
 FROM <role_name> [, ... ];
 ```

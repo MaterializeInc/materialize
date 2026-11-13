@@ -12,6 +12,7 @@
             )
         )]
         [, EXPERIMENTAL ARRANGEMENT COMPRESSION = <bool>]
+        [, QUERY POLICY = <policy_name>]
     )
     [WITH ( <with_option>[,...])]
     ;
@@ -90,6 +91,14 @@
 
         Default: `FALSE`
 
+    - name: "`QUERY POLICY`"
+      description: |
+        {{< private-preview-inline />}}
+
+        Optional. The [query policy](/clusters/query-policies/) that checks
+        queries on this cluster. Requires `USAGE` privileges on the policy.
+        Specify `NULL` to detach the current policy.
+
     - name: "`WITH (<with_option>[,...])`"
       description: |
 
@@ -104,7 +113,7 @@
     ALTER CLUSTER <cluster_name>
     RESET (
         REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY
-        | EXPERIMENTAL ARRANGEMENT COMPRESSION,
+        | EXPERIMENTAL ARRANGEMENT COMPRESSION | QUERY POLICY,
         ...
     )
     ;
@@ -140,6 +149,14 @@
         hydrated.
 
         Default: `FALSE`
+    - name: "`QUERY POLICY`"
+      description: |
+        {{< private-preview-inline />}}
+
+        Optional. Resetting detaches the [query
+        policy](/clusters/query-policies/) from the cluster.
+
+        Default: no query policy.
 
 - name: "syntax-rename"
   code: |

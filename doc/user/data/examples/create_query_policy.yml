@@ -1,0 +1,42 @@
+- name: "syntax"
+  code: |
+    CREATE QUERY POLICY <name> (
+      [MODE = '<mode>',]
+      RULES (
+        <rule_name> (action = 'reject', metric = 'query_plan_includes', value = '<plan_feature>')
+        [, ...]
+      )
+    )
+    ;
+
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the query policy.
+    - name: "`MODE`"
+      description: |
+        *Optional.* What happens when a query matches a rule.
+
+        | Mode | Behavior |
+        |------|----------|
+        | `'warn'` | The query runs, and Materialize emits a `NOTICE` naming the policy, rule, and cluster. Use this mode to assess a policy before you enforce it. |
+        | `'enforce'` | The query fails with SQLSTATE `53000` (`insufficient_resources`). |
+
+        Default: `'warn'`
+    - name: "`RULES`"
+      description: |
+        The rules in the policy. Specify `RULES ()` to create a policy with no
+        rules.
+    - name: "`<rule_name>`"
+      description: |
+        The name for the rule. Must be unique within the query policy.
+    - name: "`<plan_feature>`"
+      description: |
+        The execution plan feature the rule rejects.
+
+        | Value | Matches |
+        |-------|---------|
+        | `'temporary_dataflow'` | Queries that build a temporary dataflow, including one that reads only from indexes. |
+        | `'storage_read'` | Queries that read from object storage, either directly or through a temporary dataflow. |
+
+        See [Choosing a rule](/clusters/query-policies/#choosing-a-rule).
