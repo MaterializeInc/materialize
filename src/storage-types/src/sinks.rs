@@ -866,15 +866,6 @@ impl PostgresSinkConnection {
     /// Progress table shared by every sink writing into the target database,
     /// one row per sink.
     pub const PROGRESS_TABLE: &str = "sink_progress";
-
-    /// Name of the staging table that sits next to the target table in
-    /// `self.schema`.
-    ///
-    /// NOTE: PostgreSQL truncates identifiers to 63 bytes, so a very long
-    /// target table name can make two sinks' staging tables collide.
-    pub fn staging_table_name(&self, sink_id: GlobalId) -> String {
-        format!("{}_mz_staging_{}", self.table, sink_id)
-    }
 }
 
 impl<C: ConnectionAccess> PostgresSinkConnection<C> {
