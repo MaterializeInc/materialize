@@ -52,8 +52,8 @@ use mz_expr::func::variadic::{
 };
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Eval, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME,
-    RowSetFinishing, TableFunc, func as expr_func,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME, RowSetFinishing,
+    TableFunc, func as expr_func,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -1301,7 +1301,7 @@ pub fn plan_params<'a>(
             ));
         }
         let ex = ex.lower_uncorrelated(scx.catalog.system_vars())?;
-        let evaled = ex.eval(&[], temp_storage)?;
+        let evaled = ex.eval_constant(temp_storage)?;
         packer.push(evaled);
         actual_types.push(actual_ty);
     }
@@ -1448,7 +1448,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 // TODO: Don't use ? on eval, but instead wrap the error and add the information
                 // that the error happened in a LIMIT clause, so that we have better error msg for
                 // something like `SELECT 5 LIMIT 'aaa'`.
-                match limit.eval(&[], &arena)? {
+                match limit.eval_constant(&arena)? {
                     d @ Datum::Int64(v) if v >= 0 => {
                         HirScalarExpr::literal(d, SqlScalarType::Int64)
                     }

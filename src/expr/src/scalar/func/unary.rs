@@ -562,6 +562,13 @@ impl<E> UnaryFunc<E> {
             _ => None,
         }
     }
+
+    /// True iff evaluating the function is not bounded in time or stack depth,
+    /// so it can hang or abort the evaluating process. This holds for `jq`
+    /// (see the NOTE in `func/jq.rs`).
+    pub fn is_unbounded(&self) -> bool {
+        matches!(self, UnaryFunc::Jq(_))
+    }
 }
 
 #[cfg(test)]

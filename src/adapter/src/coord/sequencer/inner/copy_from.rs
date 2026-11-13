@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_expr::Eval;
 use mz_ore::cast::CastInto;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
@@ -105,7 +104,7 @@ impl Coordinator {
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
             // and AdapterError::Unstructured.
             let temp_storage = RowArena::new();
-            let eval_result = from.eval(&[], &temp_storage)?;
+            let eval_result = from.eval_constant(&temp_storage)?;
             let eval_string = match eval_result {
                 Datum::Null => coord_bail!("COPY FROM target value cannot be NULL"),
                 Datum::String(url_str) => url_str,

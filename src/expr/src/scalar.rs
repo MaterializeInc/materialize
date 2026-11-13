@@ -1113,19 +1113,40 @@ impl MirScalarExpr {
     }
 
     /// True iff the expression contains a call that constant folding must not
-    /// evaluate: an `UnmaterializableFunc`, or `jq`, whose programs can loop or
-    /// recurse without bound and would hang or abort the optimizing process.
+    /// evaluate: an `UnmaterializableFunc`, or a call to an
+    /// [unbounded](UnaryFunc::is_unbounded) function.
     pub fn contains_unfoldable(&self) -> bool {
+        self.contains_unmaterializable() || self.contains_unbounded()
+    }
+
+    /// True iff the expression contains a call to an
+    /// [unbounded](UnaryFunc::is_unbounded) function.
+    pub fn contains_unbounded(&self) -> bool {
         let mut contains = false;
-        self.visit_pre(|e| match e {
-            MirScalarExpr::CallUnmaterializable(_)
-            | MirScalarExpr::CallUnary {
-                func: UnaryFunc::Jq(_),
-                ..
-            } => contains = true,
-            _ => {}
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallUnary { func, .. } = e {
+                contains |= func.is_unbounded();
+            }
         });
         contains
+    }
+
+    /// Evaluates an expression that references no columns.
+    ///
+    /// Returns an error, without evaluating anything, if
+    /// [`contains_unbounded`](Self::contains_unbounded) holds for the
+    /// expression. Panics if the expression references a column.
+    ///
+    /// This is for evaluating a statement's constant expression outside of a
+    /// dataflow, in a process that must not hang or abort.
+    pub fn eval_constant<'a>(&'a self, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+        if self.contains_unbounded() {
+            return Err(EvalError::Unsupported {
+                feature: "jq in a constant expression".into(),
+                discussion_no: None,
+            });
+        }
+        self.eval(&[], temp_storage)
     }
 
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
