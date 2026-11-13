@@ -24,14 +24,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-11-19* <br>
 *Released to Materialize Self-Managed: 2026-11-20* <br>
 
-### Update Azure node pools on your own schedule {#v26.51-azure-node-auto-provisioning}
-
-<red>*Materialize Self-Managed only*</red>
-
-Starting with v18.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the Azure modules provision Materialize nodes with AKS [Node Auto Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning) (NAP), Azure's managed Karpenter, instead of VMSS node pools. To change VM sizes, you no longer create a second node pool and migrate to it: update the NodePool, cordon the old nodes, and roll out Materialize, and NAP provisions new nodes and removes the old ones once they are empty. NAP does not drain nodes running Materialize pods when their spec changes, so you move the pods on your own schedule.
-
-Moving to NAP is a breaking change. To migrate an existing deployment, follow the [v18.0.0 upgrade notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v18.0.0/README.md#v1800). For more information, see [Resize node pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
-
 ### Improvements {#v26.51-improvements}
 - **Higher query throughput under concurrency**: Read-only transactions now finish in the session that owns them instead of taking a round trip through the coordinator, which in a staging benchmark at 512 concurrent clients raised throughput by 89% with the default statement-logging sample rate and by 195% with statement logging off, cutting mean latency from 129 ms to 68 ms in the first case.
 - **The new upsert implementation and buffer pool are on by default**: Self-Managed deployments, which have no feature-flag service to turn them on, now get the upsert source implementation and buffer pool that Cloud production already runs, so upsert state on a swap-enabled cluster spills to swap instead of being held in memory; clusters without swap keep the previous implementation, and `ALTER SYSTEM SET enable_upsert_v2 = false` reverts it.
