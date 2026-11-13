@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::testing::{disk_tempdir, fault};
 use super::*;
 
 fn store(capacity: u64) -> (tempfile::TempDir, FileStore) {
@@ -748,7 +749,7 @@ fn release_warm_takes_the_oldest_free_slots() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 #[cfg(target_os = "linux")]
-fn release_warm_restores_capacity_lowered_by_enospc() {
+fn refresh_capacity_restores_capacity_lowered_by_enospc() {
     let (dir, s) = store(64 << 20);
     let class = s.class_for(10_000).unwrap();
     let _held = s.alloc(class).unwrap();
@@ -759,7 +760,7 @@ fn release_warm_restores_capacity_lowered_by_enospc() {
 
     // The test volume's free space bounds the re-derived capacity.
     let usable = usable_bytes(sys::available_bytes(dir.path()).unwrap());
-    s.release_warm(0);
+    s.refresh_capacity();
     assert_eq!(
         s.capacity_bytes(),
         (s.allocated_bytes() + usable).min(64 << 20),
