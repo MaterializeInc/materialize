@@ -159,8 +159,12 @@ honoring it would change existing MVs that set it. The POC leaves user
    with each other, so a lone big batch stayed that way through 80 later
    writes. Fast path lookups on it took up to 2.4 s. Worth raising with
    persist even outside this POC (re-sort a batch with many unordered runs).
-3. **MV `PARTITION BY` is accepted and silently ignored** (see above). Either
-   document it as a no-op or wire it to sort-on-write behind its own flag.
+3. **MV `PARTITION BY` is declaration-only, by design.** Not a bug: the user
+   docs (`transform-data/patterns/partition-by.md`) say it validates the
+   declared prefix ordering and does not change storage or performance. It
+   doesn't give the guarantees lookups need (sorted on write, small parts,
+   routing). Whether declaring it should opt an MV into sort-on-write is a
+   product question, since it would change write cost for MVs that set it.
 4. **`statement_timeout` does not fire while a peek waits on a stalled
    collection.** With `statement_timeout = '5s'` and the maintaining cluster
    at zero replicas, `SELECT count(*) FROM t_plain` (a plain MV, no POC code
