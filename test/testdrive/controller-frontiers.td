@@ -62,6 +62,23 @@ mv1 r2
     frontiers.write_frontier > 0
 mv1
 
+# The unindexed path can push the ID predicate into the heterogeneous catalog
+# input. It must return the same frontier without decoding other record kinds.
+> SET auto_route_catalog_queries = false
+
+> SELECT
+    mvs.name
+  FROM mz_internal.mz_frontiers frontiers
+  JOIN mz_materialized_views mvs
+    ON frontiers.object_id = mvs.id
+  WHERE
+    frontiers.object_id LIKE 'u%' AND
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
+mv1
+
+> RESET auto_route_catalog_queries
+
 
 # A targeted MV reports its actual replica, not every replica that shares the
 # persisted output. Replacement keeps the predecessor alias, but that alias

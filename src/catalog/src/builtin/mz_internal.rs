@@ -3207,6 +3207,8 @@ pub static MZ_CURRENT_STORAGE_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|
         .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
+    // ID predicates can be pushed into the catalog scan. Other record kinds
+    // use numeric IDs, so the decoder must carry its own kind guard.
     sql: "
 SELECT o.object_id, o.read_known, o.read_frontier, o.write_known, o.write_frontier
 FROM mz_internal.mz_storage_frontier_observations o
@@ -3214,7 +3216,9 @@ WHERE EXISTS (SELECT 1 FROM mz_internal.mz_object_global_ids g WHERE g.global_id
   AND EXISTS (
     SELECT 1 FROM mz_internal.mz_catalog_shared c
     WHERE c.data->>'kind' = 'StorageCollectionMetadata'
-      AND mz_internal.parse_catalog_id(c.data->'key'->'id') = o.object_id
+      AND CASE WHEN c.data->>'kind' = 'StorageCollectionMetadata'
+               THEN mz_internal.parse_catalog_id(c.data->'key'->'id')
+          END = o.object_id
       AND c.data->'value'->>'shard' = o.data_shard
   )",
     access: vec![PUBLIC_SELECT],

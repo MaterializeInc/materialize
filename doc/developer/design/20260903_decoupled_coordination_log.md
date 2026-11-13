@@ -6,15 +6,20 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-The unindexed frontier query pushes an ID predicate into heterogeneous catalog
-input and fails decoding numeric IDs from other record kinds. A scoped SQL CASE
-guard fixes the full query in a side-by-side live comparison. The added regression
-query fails before the guard and returns the expected MV observations with it.
-Both changes remain uncommitted pending compiled verification.
+The frontier decoder guard passes its compiled unindexed-query regression and
+the complete catalog plan snapshot with standard SLT defaults. The earlier live
+negative control failed without the guard. Only the affected plan changed.
+Next finish the unchanged parallel promotion workload on these binaries.
 
-Next finish the guarded native/sqllogictest build, run the full frontier testdrive
-file, check the catalog plan golden through its harness, and rerun unchanged
-parallel promotion stress. Keep malformed matching-kind decoder errors intact.
+The guarded native/sqllogictest build passes. Full frontier testdrive repeatedly
+fails at its first replica-frontier assertion, before the new regression query.
+Post-failure probes find both replica observations and return the expected rows,
+including with the same user and cluster. Tracing excludes slow certification in
+that run. The test returns one replica row before exhausting its retry budget,
+and new replicas first complete reconciliation about 28s after launch. Startup
+and query progress latency remain unexplained. Do not increase the timeout to
+claim success. Return to that progress failure after parallel acceptance. The
+decoder still rejects malformed matching-kind IDs.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -51,8 +56,8 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 - Native parallel promotion stress fails before completing its lifecycle checks.
   Both unchanged seed-42 attempts fail on the same frontier query, without a
-  resource-guard failure. Cleanup completes. The SQL guard has live query-level
-  proof, but the rebuilt workload has not run. Additional three-second probes
+  resource-guard failure. Cleanup completes. The rebuilt workload is running.
+  The SQL guard has compiled query-level proof. Additional three-second probes
   timed out in one attempt, separately from the successful full-query comparison.
 - Original-limit bounded-memory upsert-index hydration still fails. Native and
   both baseline runs report clusterd OOMKilled/exit137 at 3.5 GiB with ample host
@@ -77,10 +82,10 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
 Owned worker `i-0b3699392b71bd7d2` expires at
 `2026-11-13T20:31:57.921677+00:00`. Its helper and receipts are in
-`upsert-oom-investigation/`. Build `aj-native-frontier-build` is running without a
-test runtime. Reused baseline outputs had stale generated keywords. The exact
-failure was reproduced, then only packages with changed generated inputs were
-invalidated. No parser or Persist source changed. Runtime supervision has an
+`upsert-oom-investigation/`. Build receipts and binaries are in
+`frontier-build-receipts.tar.gz` and worker directory `native-frontier-candidate`.
+The current stress run is recorded in `parallel-fixed-launch.json`.
+No build is running. No parser or Persist source changed. Supervision has an
 independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
 `remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
 in memory, expiring at 20:23 UTC. No access rules changed. The prior worker
@@ -92,10 +97,22 @@ Preserve 30 GiB disk and 2 GiB available RAM. Completed runs' containers are rem
 Do not overlap builds with test runtimes.
 
 Essential pointers, relative to the evidence root:
+- Compiled decoder and full plan verification:
+  `upsert-oom-investigation/compiled-decoder-regression-evidence.tar.gz` and
+  `frontier-slt-defaults-evidence.tar.gz`. Earlier SLT probes omitted standard
+  launcher defaults. Their broad generated rewrite was discarded, not committed.
+- Compiled frontier failure and post-failure SQL evidence:
+  `upsert-oom-investigation/frontier-testdrive-failure-evidence.tar.gz` and
+  `frontier-diagnostic2-probes.log`. These are failures, not acceptance passes.
+  `frontier-trace2-evidence.tar.gz` contains the traced startup/progress failure.
 - Parallel failure: `upsert-oom-investigation/parallel-first-evidence.tar.gz`,
   `parallel-runtime-repeat.log`, and `frontier-decoding-proof-evidence.tar.gz`.
-  Build: `frontier-build-cache-fixed.log`, `guard_frontier_build.py` and
-  `build_frontier_candidate.sh`. The output includes sqllogictest for golden checks.
+  Build: `frontier-build-worker.log`, `frontier-build-driver.log`,
+  `guard_frontier_build.py` and `build_frontier_candidate.sh`. Logs are now durable
+  on the worker after an SSH pipe interruption. The build includes sqllogictest.
+  Prepared verifiers: `native_frontier_testdrive.py`, `native_frontier_slt.py` and
+  `native_parallel_fixed.py`. SLT runs the actual native harness in a container
+  without systemd, so its replica children inherit the container budget.
   `parallel-provenance-review.md` documents exact source-guard exceptions.
   The missing mc fixture was built from its unchanged repository recipe.
 - Upsert diagnosis, controls and independent review:

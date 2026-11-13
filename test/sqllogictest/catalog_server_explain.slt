@@ -1649,11 +1649,11 @@ mz_internal.mz_current_storage_frontiers:
     →Distinct GroupAggregate
       Key:
         Project: #1, #2
-        Map: parse_catalog_id(((#0{data} -> "key") -> "id")), ((#0{data} -> "value") ->> "shard")
+        Map: case when ("StorageCollectionMetadata" = (#0{data} ->> "kind")) then parse_catalog_id(((#0{data} -> "key") -> "id")) else null end, ((#0{data} -> "value") ->> "shard")
       →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
         after %0:
           Project: #1
-          Filter: (((#1{data} -> "key") -> "id")) IS NOT NULL AND (((#1{data} -> "value") ->> "shard")) IS NOT NULL
+          Filter: (((#1{data} -> "value") ->> "shard")) IS NOT NULL AND (case when ("StorageCollectionMetadata" = (#1{data} ->> "kind")) then parse_catalog_id(((#1{data} -> "key") -> "id")) else null end) IS NOT NULL
         →Arranged mz_internal.mz_catalog_shared
         →Arrange (#0)
           →Constant (1 row)
