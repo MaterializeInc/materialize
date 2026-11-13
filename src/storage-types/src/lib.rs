@@ -17,6 +17,7 @@ pub mod connections;
 pub mod controller;
 pub mod dyncfgs;
 pub mod errors;
+pub mod freshness;
 pub mod instances;
 pub mod oneshot_sources;
 pub mod parameters;
