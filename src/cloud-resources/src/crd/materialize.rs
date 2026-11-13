@@ -115,6 +115,55 @@ impl Default for RolloutRequestTimeout {
     }
 }
 
+/// A key in a ConfigMap or Secret whose value holds one or more PEM-encoded
+/// CA certificates.
+///
+/// Set exactly one of `configMapKeyRef` or `secretKeyRef`. The ConfigMap or
+/// Secret must be in the same namespace as the Materialize resource. Only the
+/// referenced key is mounted into the pods.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalTrustBundle {
+    /// A key in a ConfigMap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_map_key_ref: Option<TrustBundleKeyRef>,
+    /// A key in a Secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_key_ref: Option<TrustBundleKeyRef>,
+}
+
+impl AdditionalTrustBundle {
+    /// The ConfigMap or Secret key holding the certificates. Errors unless
+    /// exactly one of `configMapKeyRef` and `secretKeyRef` is set.
+    pub fn source(&self) -> Result<TrustBundleSource<'_>, anyhow::Error> {
+        match (&self.config_map_key_ref, &self.secret_key_ref) {
+            (Some(key_ref), None) => Ok(TrustBundleSource::ConfigMap(key_ref)),
+            (None, Some(key_ref)) => Ok(TrustBundleSource::Secret(key_ref)),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("set only one of configMapKeyRef and secretKeyRef, not both")
+            }
+            (None, None) => anyhow::bail!("set one of configMapKeyRef or secretKeyRef"),
+        }
+    }
+}
+
+/// Where an [`AdditionalTrustBundle`] holds its certificates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrustBundleSource<'a> {
+    ConfigMap(&'a TrustBundleKeyRef),
+    Secret(&'a TrustBundleKeyRef),
+}
+
+/// A key in a ConfigMap or Secret.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustBundleKeyRef {
+    /// The name of the ConfigMap or Secret.
+    pub name: String,
+    /// The key whose value holds the PEM-encoded certificates.
+    pub key: String,
+}
+
 pub mod v1alpha1 {
     use super::*;
 
@@ -321,6 +370,16 @@ pub mod v1alpha1 {
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
+        /// PEM-encoded CA certificates that environmentd and clusterd trust for
+        /// outbound TLS connections, in addition to the CAs in their image.
+        /// Use this when an OIDC provider, a source, a sink, or object storage
+        /// presents a certificate signed by a private or self-signed CA.
+        ///
+        /// environmentd and clusterd read the certificates when they start, so
+        /// changes to the contents of the ConfigMap or Secret take effect the
+        /// next time their pods restart.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub additional_trust_bundle: Option<AdditionalTrustBundle>,
 
         /// The configuration for generating an x509 certificate using cert-manager for balancerd
         /// to present to incoming connections.
@@ -916,6 +975,7 @@ pub mod v1alpha1 {
                     enable_rbac: value.spec.enable_rbac,
                     environment_id: value.spec.environment_id,
                     system_parameter_configmap_name: value.spec.system_parameter_configmap_name,
+                    additional_trust_bundle: value.spec.additional_trust_bundle,
                     balancerd_external_certificate_spec: value
                         .spec
                         .balancerd_external_certificate_spec,
@@ -1153,6 +1213,12 @@ pub mod v1alpha1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub additional_trust_bundle: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub balancerd_external_certificate_spec: PartialField,
         #[serde(
             default,
@@ -1273,6 +1339,7 @@ pub mod v1alpha1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -1312,6 +1379,7 @@ pub mod v1alpha1 {
                 enable_rbac: present(enable_rbac),
                 environment_id: present(environment_id),
                 system_parameter_configmap_name: present_opt(system_parameter_configmap_name),
+                additional_trust_bundle: present_opt(additional_trust_bundle),
                 balancerd_external_certificate_spec: present_opt(
                     balancerd_external_certificate_spec,
                 ),
@@ -1400,6 +1468,7 @@ pub mod v1alpha1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -1442,6 +1511,7 @@ pub mod v1alpha1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -1684,6 +1754,16 @@ pub mod v1 {
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
+        /// PEM-encoded CA certificates that environmentd and clusterd trust for
+        /// outbound TLS connections, in addition to the CAs in their image.
+        /// Use this when an OIDC provider, a source, a sink, or object storage
+        /// presents a certificate signed by a private or self-signed CA.
+        ///
+        /// environmentd and clusterd read the certificates when they start, so
+        /// changes to the contents of the ConfigMap or Secret take effect the
+        /// next time their pods restart.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub additional_trust_bundle: Option<AdditionalTrustBundle>,
 
         /// The configuration for generating an x509 certificate using cert-manager for balancerd
         /// to present to incoming connections.
@@ -1749,6 +1829,7 @@ pub mod v1 {
                 enable_rbac: self.spec.enable_rbac,
                 environment_id: self.spec.environment_id,
                 system_parameter_configmap_name: self.spec.system_parameter_configmap_name.clone(),
+                additional_trust_bundle: self.spec.additional_trust_bundle.clone(),
                 balancerd_external_certificate_spec: None,
                 console_external_certificate_spec: None,
                 internal_certificate_spec: self.spec.internal_certificate_spec.clone(),
@@ -2236,6 +2317,7 @@ pub mod v1 {
                     enable_rbac: value.spec.enable_rbac,
                     environment_id: value.spec.environment_id,
                     system_parameter_configmap_name: value.spec.system_parameter_configmap_name,
+                    additional_trust_bundle: value.spec.additional_trust_bundle,
                     balancerd_external_certificate_spec: value
                         .spec
                         .balancerd_external_certificate_spec,
@@ -2478,6 +2560,12 @@ pub mod v1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub additional_trust_bundle: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub balancerd_external_certificate_spec: PartialField,
         #[serde(
             default,
@@ -2589,6 +2677,7 @@ pub mod v1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -2625,6 +2714,7 @@ pub mod v1 {
                 enable_rbac: present(enable_rbac),
                 environment_id: present(environment_id),
                 system_parameter_configmap_name: present_opt(system_parameter_configmap_name),
+                additional_trust_bundle: present_opt(additional_trust_bundle),
                 balancerd_external_certificate_spec: present_opt(
                     balancerd_external_certificate_spec,
                 ),
@@ -2714,6 +2804,7 @@ pub mod v1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -2759,6 +2850,7 @@ pub mod v1 {
                 enable_rbac,
                 environment_id,
                 system_parameter_configmap_name,
+                additional_trust_bundle,
                 balancerd_external_certificate_spec,
                 console_external_certificate_spec,
                 internal_certificate_spec,
@@ -2979,7 +3071,10 @@ mod tests {
     use semver::Version;
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
-    use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
+    use super::{
+        AdditionalTrustBundle, DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION,
+        RolloutRequestTimeout, TrustBundleKeyRef, TrustBundleSource,
+    };
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
@@ -3184,6 +3279,86 @@ mod tests {
         let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
         assert_eq!(v1["spec"], subset["spec"]);
         assert_eq!(super::convert_v1_to_v1alpha1(v1).unwrap(), subset);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn additional_trust_bundle_triggers_rollout_and_survives_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the unset field preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("additionalTrustBundle")
+                .is_none()
+        );
+
+        mz.spec.additional_trust_bundle = Some(AdditionalTrustBundle {
+            config_map_key_ref: Some(TrustBundleKeyRef {
+                name: "private-ca".to_owned(),
+                key: "ca.crt".to_owned(),
+            }),
+            secret_key_ref: None,
+        });
+        assert_ne!(mz.generate_rollout_hash(), hash);
+
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(
+            alpha.spec.additional_trust_bundle,
+            mz.spec.additional_trust_bundle
+        );
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .additional_trust_bundle,
+            mz.spec.additional_trust_bundle
+        );
+
+        let key_ref = TrustBundleKeyRef {
+            name: "private-ca".to_owned(),
+            key: "ca.crt".to_owned(),
+        };
+        let both = AdditionalTrustBundle {
+            config_map_key_ref: Some(key_ref.clone()),
+            secret_key_ref: Some(key_ref.clone()),
+        };
+        assert!(both.source().is_err(), "both refs set must be rejected");
+        let neither = AdditionalTrustBundle {
+            config_map_key_ref: None,
+            secret_key_ref: None,
+        };
+        assert!(neither.source().is_err(), "no ref set must be rejected");
+        let secret = AdditionalTrustBundle {
+            config_map_key_ref: None,
+            secret_key_ref: Some(key_ref.clone()),
+        };
+        assert_eq!(
+            secret.source().unwrap(),
+            TrustBundleSource::Secret(&key_ref)
+        );
+
+        for value in [
+            serde_json::json!({"secretKeyRef": {"name": "private-ca", "key": "ca.crt"}}),
+            serde_json::Value::Null,
+        ] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"additionalTrustBundle": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["additionalTrustBundle"], value);
+            assert_eq!(super::convert_v1_to_v1alpha1(v1).unwrap(), subset);
+        }
     }
 
     #[mz_ore::test]

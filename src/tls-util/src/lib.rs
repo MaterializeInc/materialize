@@ -9,6 +9,9 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
 use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
@@ -168,10 +171,69 @@ pub fn pkcs12der_from_pem(
     Ok(Pkcs12Archive { der, pass })
 }
 
+/// The environment variable that names the CA bundle trusted by OpenSSL's
+/// default verify paths, `openssl-probe` and `rustls-native-certs`.
+pub const SSL_CERT_FILE: &str = "SSL_CERT_FILE";
+
+/// Makes TLS clients in this process trust the PEM-encoded CA certificates in
+/// `path` in addition to the system's CAs, and returns the path of the merged
+/// bundle.
+///
+/// # Safety
+///
+/// Sets [`SSL_CERT_FILE`] in the process environment, so it must be called
+/// before the process spawns any threads.
+pub unsafe fn install_additional_trust_bundle(path: &Path) -> Result<PathBuf, TlsError> {
+    let additional = std::fs::read(path)
+        .with_context(|| format!("reading additional trust bundle {}", path.display()))?;
+    // The probe returns `SSL_CERT_FILE` itself when it is already set. Only
+    // the bundle file is merged, not certificates in the system's CA
+    // directory, since clients like `rustls-native-certs` stop reading that
+    // directory once `SSL_CERT_FILE` is set. Our images ship their system
+    // CAs as a bundle file.
+    //
+    // Without a system bundle, the merged file would hold only the additional
+    // certificates and so replace the system's CAs. `openssl-probe` knows no
+    // bundle path on macOS, for example.
+    let Some(system_file) = openssl_probe::probe().cert_file else {
+        bail_generic!("no system CA bundle found; set {SSL_CERT_FILE} to one");
+    };
+    let system = std::fs::read(&system_file)
+        .with_context(|| format!("reading system CA bundle {}", system_file.display()))?;
+    let merged = merge_trust_bundles(&system, &additional)
+        .with_context(|| format!("parsing additional trust bundle {}", path.display()))?;
+    // The process ID keeps processes that share a temporary directory, as
+    // under the process orchestrator, from overwriting each other's bundles.
+    let merged_path =
+        std::env::temp_dir().join(format!("mz-trust-bundle-{}.pem", std::process::id()));
+    std::fs::write(&merged_path, merged)
+        .with_context(|| format!("writing merged CA bundle {}", merged_path.display()))?;
+    // SAFETY: the caller guarantees that the process has not spawned threads.
+    unsafe { std::env::set_var(SSL_CERT_FILE, &merged_path) };
+    Ok(merged_path)
+}
+
+/// Appends the certificates in `additional` to the `system` bundle.
+fn merge_trust_bundles(system: &[u8], additional: &[u8]) -> Result<Vec<u8>, TlsError> {
+    let certs = X509::stack_from_pem(additional)?;
+    if certs.is_empty() {
+        bail_generic!("no PEM-encoded certificates found");
+    }
+    let mut merged = system.to_vec();
+    if !merged.is_empty() && !merged.ends_with(b"\n") {
+        merged.push(b'\n');
+    }
+    for cert in certs {
+        merged.extend(cert.to_pem()?);
+    }
+    Ok(merged)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
     use std::net::{SocketAddr, TcpListener};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use openssl::asn1::{Asn1Integer, Asn1Time};
     use openssl::bn::{BigNum, MsbOption};
@@ -201,9 +263,13 @@ mod tests {
 
     impl TestCa {
         fn new() -> TestCa {
+            // OpenSSL finds an issuer by subject name, so CAs that share a
+            // name shadow each other in one trust store.
+            static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
             let mut name = X509NameBuilder::new().unwrap();
-            name.append_entry_by_text("CN", "mz-tls-util test CA")
+            name.append_entry_by_text("CN", &format!("mz-tls-util test CA {id}"))
                 .unwrap();
             let name = name.build();
             let mut builder = X509::builder().unwrap();
@@ -355,6 +421,65 @@ mod tests {
         config.ssl_key(&client_key);
 
         assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // uses openssl FFI
+    fn merge_trust_bundles_appends_to_system_bundle() {
+        let system = TestCa::new().cert.to_pem().unwrap();
+        let additional = TestCa::new().cert.to_pem().unwrap();
+
+        let merged = merge_trust_bundles(&system, &additional).unwrap();
+        let certs: Vec<_> = X509::stack_from_pem(&merged)
+            .unwrap()
+            .iter()
+            .map(|cert| cert.to_pem().unwrap())
+            .collect();
+        assert_eq!(certs, vec![system, additional]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // uses openssl FFI
+    fn merge_trust_bundles_rejects_bundle_without_certificates() {
+        let system = TestCa::new().cert.to_pem().unwrap();
+        assert!(merge_trust_bundles(&system, b"").is_err());
+        assert!(merge_trust_bundles(&system, b"not a certificate").is_err());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn additional_trust_bundle_keeps_system_roots() {
+        let system_ca = TestCa::new();
+        let additional_ca = TestCa::new();
+
+        let mut system_file = tempfile::NamedTempFile::new().unwrap();
+        system_file
+            .write_all(&system_ca.cert.to_pem().unwrap())
+            .unwrap();
+        let mut additional_file = tempfile::NamedTempFile::new().unwrap();
+        additional_file
+            .write_all(&additional_ca.cert.to_pem().unwrap())
+            .unwrap();
+        // SAFETY: the environment is process global. nextest, which CI uses,
+        // runs each test in its own process. Under plain `cargo test` this can
+        // race with other tests reading the environment.
+        let merged_path = unsafe {
+            std::env::set_var(SSL_CERT_FILE, system_file.path());
+            install_additional_trust_bundle(additional_file.path()).unwrap()
+        };
+        assert_eq!(
+            std::env::var_os(SSL_CERT_FILE),
+            Some(merged_path.clone().into())
+        );
+
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        for ca in [&system_ca, &additional_ca] {
+            let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+            let addr = run_tls_server(&server_cert, &server_key, None);
+            assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+        }
+        std::fs::remove_file(merged_path).unwrap();
     }
 
     #[mz_ore::test]

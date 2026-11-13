@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
@@ -45,6 +46,7 @@ use crate::tls::issuer_ref_defined;
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_cloud_resources::crd::{ManagedResource, recommended_k8s_labels};
+use mz_orchestrator_kubernetes::{ADDITIONAL_TRUST_BUNDLE_PATH, additional_trust_bundle_volume};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -91,6 +93,18 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
 static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 50,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
+/// Version at which `environmentd` and `clusterd` learned
+/// `--additional-trust-bundle`, and `environmentd` learned
+/// `--orchestrator-kubernetes-additional-trust-bundle`. Older images reject the
+/// unknown arguments and fail to start.
+static V26_52_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 52,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -182,24 +196,24 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(config: &super::Config, mz: &Materialize, generation: u64) -> Self {
+    pub fn new(config: &super::Config, mz: &Materialize, generation: u64) -> Result<Self, Error> {
         let public_service = Box::new(create_public_service_object(config, mz, generation));
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, mz, generation,
-        ));
+        )?);
         let connection_info = Box::new(create_connection_info(config, mz, generation));
 
-        Self {
+        Ok(Self {
             generation,
             public_service,
             generation_service,
             persist_pubsub_service,
             environmentd_statefulset,
             connection_info,
-        }
+        })
     }
 
     #[instrument]
@@ -590,7 +604,7 @@ fn create_environmentd_statefulset_object(
     config: &super::Config,
     mz: &Materialize,
     generation: u64,
-) -> StatefulSet {
+) -> Result<StatefulSet, anyhow::Error> {
     // IMPORTANT: Only pass secrets via environment variables. All other
     // parameters should be passed as command line arguments, possibly gated
     // with a `meets_minimum_version` call. This ensures typos cause
@@ -962,6 +976,12 @@ fn create_environmentd_statefulset_object(
             args.push("--config-sync-file-path=/system-params/system-params.json".to_string());
             args.push("--config-sync-loop-interval=1s".to_string());
         }
+    }
+
+    if let Some((volume, volume_mount, bundle_args)) = additional_trust_bundle_args(mz)? {
+        volumes.push(volume);
+        volume_mounts.push(volume_mount);
+        args.extend(bundle_args);
     }
 
     // Add Sentry arguments.
@@ -1384,7 +1404,7 @@ fn create_environmentd_statefulset_object(
         ..Default::default()
     };
 
-    StatefulSet {
+    Ok(StatefulSet {
         metadata: ObjectMeta {
             annotations: Some(btreemap! {
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
@@ -1394,7 +1414,35 @@ fn create_environmentd_statefulset_object(
         },
         spec: Some(statefulset_spec),
         status: None,
+    })
+}
+
+/// The volume, mount and `environmentd` arguments that make `environmentd` and
+/// its `clusterd` pods trust `additionalTrustBundle`, if it is set.
+fn additional_trust_bundle_args(
+    mz: &Materialize,
+) -> Result<Option<(Volume, VolumeMount, Vec<String>)>, anyhow::Error> {
+    let Some(bundle) = &mz.spec.additional_trust_bundle else {
+        return Ok(None);
+    };
+    if !mz.meets_minimum_version(&V26_52_0) {
+        anyhow::bail!(
+            "additionalTrustBundle requires environmentd v{}.{}.{} or later",
+            V26_52_0.major,
+            V26_52_0.minor,
+            V26_52_0.patch,
+        );
     }
+    let (volume, volume_mount) =
+        additional_trust_bundle_volume(bundle).context("invalid additionalTrustBundle")?;
+    let args = vec![
+        format!("--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"),
+        format!(
+            "--orchestrator-kubernetes-additional-trust-bundle={}",
+            serde_json::to_string(bundle)?
+        ),
+    ];
+    Ok(Some((volume, volume_mount, args)))
 }
 
 /// Rejects a probe that sets more than one handler (`exec`, `grpc`, `httpGet`,
@@ -1713,7 +1761,12 @@ mod tests {
     use k8s_openapi::api::core::v1::{HTTPGetAction, Probe, TCPSocketAction};
     use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
-    use super::{environmentd_probe, validate_probe_handlers};
+    use kube::api::ObjectMeta;
+    use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeSpec};
+    use mz_cloud_resources::crd::materialize::{AdditionalTrustBundle, TrustBundleKeyRef};
+    use mz_orchestrator_kubernetes::ADDITIONAL_TRUST_BUNDLE_PATH;
+
+    use super::{additional_trust_bundle_args, environmentd_probe, validate_probe_handlers};
 
     fn base() -> Probe {
         Probe {
@@ -1772,6 +1825,50 @@ mod tests {
                 ..base()
             }
         );
+    }
+
+    #[mz_ore::test]
+    fn additional_trust_bundle_args_require_supported_version() {
+        let mut mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.51.0".to_owned(),
+                additional_trust_bundle: Some(AdditionalTrustBundle {
+                    config_map_key_ref: Some(TrustBundleKeyRef {
+                        name: "private-ca".to_owned(),
+                        key: "ca.crt".to_owned(),
+                    }),
+                    secret_key_ref: None,
+                }),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let err = additional_trust_bundle_args(&mz).unwrap_err();
+        assert!(
+            err.to_string().contains("v26.52.0"),
+            "unexpected error: {err}"
+        );
+
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v26.52.0-dev.0".to_owned();
+        let (volume, volume_mount, args) = additional_trust_bundle_args(&mz)
+            .unwrap()
+            .expect("bundle is set");
+        assert_eq!(volume_mount.name, volume.name);
+        assert_eq!(
+            volume.config_map.map(|config_map| config_map.name),
+            Some("private-ca".to_owned())
+        );
+        assert_eq!(
+            args,
+            vec![
+                format!("--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"),
+                r#"--orchestrator-kubernetes-additional-trust-bundle={"configMapKeyRef":{"name":"private-ca","key":"ca.crt"}}"#.to_owned(),
+            ]
+        );
+
+        mz.spec.additional_trust_bundle = None;
+        assert!(additional_trust_bundle_args(&mz).unwrap().is_none());
     }
 
     #[mz_ore::test]
