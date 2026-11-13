@@ -20,6 +20,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.50.0
+*Released to Materialize Cloud: 2026-11-12* <br>
+*Released to Materialize Self-Managed: 2026-11-13* <br>
+
+### Update Azure node pools on your own schedule {#v26.50-azure-node-auto-provisioning}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v18.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the Azure modules provision Materialize nodes with AKS [Node Auto Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning) (NAP), Azure's managed Karpenter, instead of VMSS node pools. To change VM sizes, you no longer create a second node pool and migrate to it: update the NodePool, cordon the old nodes, and roll out Materialize, and NAP provisions new nodes and removes the old ones once they are empty. NAP does not drain nodes running Materialize pods when their spec changes, so you move the pods on your own schedule.
+
+Moving to NAP is a breaking change. To migrate an existing deployment, follow the [v18.0.0 upgrade notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v18.0.0/README.md#v1800). For more information, see [Resize node pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
+
+### Improvements {#v26.50-improvements}
+- **Run Materialize pods in Kubernetes user namespaces**: The operator can now run the `environmentd`, `clusterd`, balancer, and Console pods with `hostUsers: false` through the new `operator.args.enableUserNamespaces` Helm value, so a container escape lands as an unprivileged user on the node rather than as root; it is off by default and requires nodes that permit user namespaces.
+- **`dbt-materialize` 1.9.12**: Version 1.9.12 of the dbt adapter is released with fixes for blue/green deployments and error messages, support for dbt-postgres 1.11, and a strict-mode warning, which previously never fired, when a view, materialized view, or table is built in a schema reserved for sources, source tables, and sinks.
+
+### Bug Fixes {#v26.50-bug-fixes}
+- Fixed a cast to `time`, `timestamp`, or `timestamptz` failing to parse when a clause's `WITH` follows it, as in `COPY t TO 's3://b/' || now()::timestamp WITH (FORMAT = 'csv')`.
+- Fixed a failed query sending a second, duplicate error when its transaction rolled back, which recent versions of client libraries such as `psycopg` reject.
+- Fixed `ALTER CLUSTER` not validating a newly referenced hydration size when the hydration strategy was changed together with a resize or an unmanaged-to-managed conversion, rather than on its own.
+- Fixed `mz_source_statistics` reporting `snapshot_committed` and a `rehydration_latency` for a table added to an existing source before that table's snapshot had started.
+- Fixed a spurious internal consistency error at startup when `environmentd` restarted while a table newly added to a source was still snapshotting.
+- Fixed the Console's Codex instructions telling you to run `codex mcp login materialize-agent` while writing the configuration under a different name, so the login command failed with "No MCP server named ... found".
+- Fixed a panic in background storage maintenance when two processes raced to clean up the same collection and one found the work already done.
+
 ## v26.49.1
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
