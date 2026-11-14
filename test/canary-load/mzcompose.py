@@ -56,6 +56,7 @@ CONNECTION_ERROR_STRINGS = [
     "consuming input failed: SSL SYSCALL error: EOF detected",
     "unexpected eof while reading",
     "consuming input failed: SSL connection has been closed unexpectedly",
+    "upstream server not available",
 ]
 
 
@@ -147,6 +148,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         failures: list[TestFailureDetails] = []
         connection_failures: list[tuple[str, str]] = []
+        boot: tuple[str, datetime.datetime] | None = None
 
         try:
             count_chunk = 0
@@ -156,6 +158,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.testdrive(dedent("""
                                 > DELETE FROM qa_canary_environment.public_table.table
                             """))
+
+                    # Connection errors are tolerated for upgrade cutovers. A
+                    # restart that kept the version was something else, e.g. a crash.
+                    prev, boot = boot, environmentd_boot(host, USERNAME, APP_PASSWORD)
+                    if prev and boot[1] != prev[1] and boot[0] == prev[0]:
+                        failures.append(
+                            TestFailureDetails(
+                                message=f"environmentd restarted at {boot[1]} without a version change",
+                                details=None,
+                            )
+                        )
 
                     conn1, cursor_on_table = create_connection_and_cursor(
                         host,
@@ -212,7 +225,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         # TODO(def-): Remove when database-issues#6825 is fixed
                         if "Non-positive multiplicity in DistinctBy" in error.message:
                             continue
-                        if is_connection_error(error.message):
+                        # testdrive puts the actual error in details.
+                        if is_connection_error(f"{error.message}\n{error.details}"):
                             now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                             connection_failures.append((now, error.message))
                             print(
@@ -296,6 +310,9 @@ def http_sql_query(
         print("Got 401, refreshing token and retrying")
         new_token = refresh_token()
         return http_sql_query(host, query, new_token, retries, refresh_token=None)
+    if r.status_code == 502:
+        # The main loop tolerates this. An AssertionError would abort the run.
+        raise ConnectionError(r.text)
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
@@ -316,6 +333,18 @@ def http_sql_query(
         )
 
     return results[0]["rows"]
+
+
+def environmentd_boot(
+    host: str, user_name: str, app_password: str
+) -> tuple[str, datetime.datetime]:
+    """Version and boot time of the environmentd serving `host`."""
+    with psycopg.connect(
+        host=host, user=user_name, password=app_password, port=6875, sslmode="require"
+    ) as conn:
+        row = conn.execute("SELECT mz_version(), now() - mz_uptime()").fetchone()
+    assert row is not None
+    return row[0], row[1]
 
 
 def create_connection_and_cursor(
