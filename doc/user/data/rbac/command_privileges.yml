@@ -27,6 +27,10 @@ rows:
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/alter-network-policy" %}}
 
+  - Command: "[`ALTER QUERY POLICY`](/sql/alter-query-policy)"
+    Privileges: |
+      {{% include-headless "/headless/sql-command-privileges/alter-query-policy" %}}
+
   - Command: "[`ALTER ROLE`](/sql/alter-role)"
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/alter-role" %}}
@@ -98,6 +102,10 @@ rows:
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/create-network-policy" %}}
 
+  - Command: "[`CREATE QUERY POLICY`](/sql/create-query-policy)"
+    Privileges: |
+      {{% include-headless "/headless/sql-command-privileges/create-query-policy" %}}
+
   - Command: "[`CREATE ROLE`](/sql/create-role)"
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/create-role" %}}
@@ -167,6 +175,10 @@ rows:
   - Command: "[`DROP OWNED`](/sql/drop-owned)"
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/drop-owned" %}}
+
+  - Command: "[`DROP QUERY POLICY`](/sql/drop-query-policy)"
+    Privileges: |
+      {{% include-headless "/headless/sql-command-privileges/drop-query-policy" %}}
 
   - Command: "[`DROP ROLE`](/sql/drop-role)"
     Privileges: |
