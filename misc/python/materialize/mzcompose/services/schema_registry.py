@@ -33,6 +33,7 @@ class SchemaRegistry(Service):
             # Under Docker, Kafka can be really slow, which means the default
             # Kafka connection timeout of 500ms is much too slow.
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
+            "SCHEMA_REGISTRY_IDLE_TIMEOUT_MS=300000",
             "SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR=1",
             f"SCHEMA_REGISTRY_HOST_NAME={name}",
             f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
