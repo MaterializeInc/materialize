@@ -445,6 +445,18 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: pg-sink
+        topics: [postgres]
+        label: Postgres sink
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-sink]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-sink
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
       - id: pg-cdc-standby
         topics: [postgres]
         label: Postgres CDC against a physical standby
