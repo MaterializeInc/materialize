@@ -26,8 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS, ENABLE_TIMELY_ZERO_COPY,
+    ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -728,6 +728,8 @@ impl Controller {
             ..Default::default()
         };
         let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
+        let file_extents =
+            ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get_with_overrides(&self.dyncfg, overrides);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -747,6 +749,19 @@ impl Controller {
                 MemoryLimit(request)
             });
         }
+
+        // The spill backend decides whether storage renders upsert v1 or v2,
+        // so every worker of the replica must see the same value. Deciding it
+        // here and passing it to every process guarantees that. The scratch
+        // disk test mirrors the orchestrators, which attach a disk unless the
+        // limit is zero.
+        let spill_backend = if file_extents && disk_limit != Some(DiskLimit::ZERO) {
+            "file"
+        } else if location.allocation.swap_enabled {
+            "swap"
+        } else {
+            "none"
+        };
 
         let service = self.orchestrator.ensure_service(
             &service_name,
@@ -819,6 +834,7 @@ impl Controller {
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
                     }
+                    args.push(format!("--spill-backend={spill_backend}"));
 
                     // If swap is enabled, make the replica limit its own heap usage based on the
                     // configured memory and disk limits.

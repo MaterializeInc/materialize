@@ -3183,8 +3183,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
-        # Read once per process, see `apply_pool_config`, so the processes of
-        # one replica can differ.
+        # Read when a replica is provisioned, so it reaches only replicas
+        # created after the flip.
         self.flags_with_values["enable_column_paged_batcher_file_extents"] = (
             BOOLEAN_FLAG_VALUES
         )

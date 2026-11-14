@@ -84,13 +84,6 @@ pub fn register(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_column_pool_extent_file_holes_punched_bytes_total", help: "Bytes of free file store slots returned to the filesystem."), |s| s.extent_file_holes_punched_bytes);
         read_latency_gauges(registry);
         backend_gauges(registry);
-        let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
-            metric!(
-                name: "mz_column_pool_backend_fallback",
-                help: "1 if the buffer pool was configured for the file store and installed on swap instead, else 0. Covers installation only: a store that later disables writes on an I/O error reports through mz_column_pool_extent_file_write_errors_total.",
-            ),
-            || u64::from(crate::pool_config::file_backend_fell_back()),
-        );
     });
 }
 
@@ -146,6 +139,7 @@ fn read_latency_gauges(registry: &MetricsRegistry) {
 fn backend_gauges(registry: &MetricsRegistry) {
     let kinds = [
         ("swap", BackendKind::Swap),
+        ("none", BackendKind::None),
         ("file_direct", BackendKind::FileDirect),
         ("file_buffered", BackendKind::FileBuffered),
     ];

@@ -51,15 +51,48 @@ static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync:
 /// the first config apply budgets the pool.
 static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Whether the pool was asked for a file backend and installed on swap.
-static FILE_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Where a replica spills compressed extents, as its controller decides
+/// when provisioning it. Every process of a replica receives the same value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpillBackend {
+    /// Page extents to the swap device.
+    Swap,
+    /// Demote extents to files in the scratch directory.
+    File,
+    /// Keep extents resident.
+    None,
+}
 
-/// Whether [`apply_pool_config`] was asked for a file backend and installed
-/// the pool on swap instead. Covers installation only: a store that later
-/// disables writes on an I/O error reports through
-/// `mz_column_pool_extent_file_write_errors_total`.
-pub fn file_backend_fell_back() -> bool {
-    FILE_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
+impl SpillBackend {
+    /// The name the replica's command-line argument uses.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SpillBackend::Swap => "swap",
+            SpillBackend::File => "file",
+            SpillBackend::None => "none",
+        }
+    }
+}
+
+impl std::fmt::Display for SpillBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SpillBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "swap" => Ok(SpillBackend::Swap),
+            "file" => Ok(SpillBackend::File),
+            "none" => Ok(SpillBackend::None),
+            _ => Err(format!(
+                "invalid spill backend {s:?}, expected one of swap, file, none"
+            )),
+        }
+    }
 }
 
 /// Returns the process-wide buffer pool only if something already
@@ -83,35 +116,26 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
     }
 }
 
-/// Builds the pool for `backend`, creating a file backend's directory. A
-/// file store that cannot be created or opened falls back to swap, which
-/// needs no scratch space. This is the only place that decides the fallback.
+/// Builds the pool for `backend`, creating a file backend's directory.
+/// Halts the process if a file backend fails, because the replica was told
+/// to spill to files and has no other store to use.
 fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
-    // Logged with the installed backend, so a swap pool tells "file never
-    // requested" apart from a fallback.
-    let requested_file = matches!(backend, ExtentBackend::File { .. });
     let built = match &backend {
-        ExtentBackend::Swap => mz_ore::pool::Pool::new(),
-        ExtentBackend::File { dir, .. } => std::fs::create_dir_all(dir)
+        ExtentBackend::Swap | ExtentBackend::None => {
+            mz_ore::pool::Pool::with_backend(backend.clone())
+        }
+        // The error can also come from the pool's own reservation. Halting
+        // on it too keeps the file backend's failure handling in one place.
+        ExtentBackend::File { dir, .. } => match std::fs::create_dir_all(dir)
             .and_then(|()| mz_ore::pool::Pool::with_backend(backend.clone()))
-            .or_else(|err| {
-                // The error can also come from the pool's own reservation,
-                // which the swap attempt then reports again.
-                tracing::warn!(%err, ?dir, "buffer pool with a file store failed, trying swap");
-                let pool = mz_ore::pool::Pool::new();
-                if pool.is_ok() {
-                    FILE_FALLBACK.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-                pool
-            }),
+        {
+            Ok(pool) => Ok(pool),
+            Err(err) => mz_ore::halt!("buffer pool with a file store in {dir:?} failed: {err}"),
+        },
     };
     match built {
         Ok(pool) => {
-            tracing::info!(
-                requested_file,
-                backend = ?pool.backend_kind(),
-                "buffer pool installed",
-            );
+            tracing::info!(backend = ?pool.backend_kind(), "buffer pool installed");
             Some(pool)
         }
         Err(err) => {
@@ -133,7 +157,8 @@ fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
 ///
 /// The first call installs the pool, and its `backend` fixes the extent store
 /// for the process. Later calls only retune the installed pool, so a changed
-/// backend, or a flag or scratch directory that feeds it, has no effect.
+/// backend has no effect. The first call halts the process if `backend` is a
+/// file store that cannot be opened.
 ///
 /// On success the pool becomes reachable through [`active_pool`] and its
 /// resident budget is retuned in place so live handles stay coherent.
@@ -287,24 +312,11 @@ mod tests {
         );
     }
 
-    /// A file backend whose directory cannot be created installs a swap
-    /// pool.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
-    fn unusable_file_backend_falls_back_to_swap() {
-        let file = tempfile::NamedTempFile::new().expect("tempfile");
-        let slot = std::sync::OnceLock::new();
-        let ok = apply_to(
-            &slot,
-            CONFIG,
-            ExtentBackend::File {
-                dir: file.path().join("pool"),
-                capacity_bytes: None,
-            },
-        );
-        assert!(ok, "the fallback installs a pool");
-        let pool = slot.get().cloned().flatten().expect("installed");
-        assert_eq!(pool.backend_kind(), mz_ore::pool::BackendKind::Swap);
-        assert!(file_backend_fell_back(), "the fallback is reported");
+    fn spill_backend_round_trips_through_its_name() {
+        for backend in [SpillBackend::Swap, SpillBackend::File, SpillBackend::None] {
+            assert_eq!(backend.as_str().parse::<SpillBackend>(), Ok(backend));
+        }
+        assert!("disk".parse::<SpillBackend>().is_err());
     }
 }

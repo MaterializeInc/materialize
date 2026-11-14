@@ -41,7 +41,9 @@
 //!   pushes the oldest extents to the swap device with `MADV_PAGEOUT`.
 //! * **The swap device** (overflow). Reads fault and decompress. A pool
 //!   built over [`ExtentBackend::File`] demotes extents to files in a
-//!   scratch directory instead, and reads them back with `pread`.
+//!   scratch directory instead, and reads them back with `pread`. A pool
+//!   built over [`ExtentBackend::None`] has no overflow tier: its extents
+//!   stay resident and the RSS target does not bound them.
 //!
 //! Residency is a state, not a type. It descends through eviction and
 //! ascends through exactly one transition: an admitting read
@@ -157,6 +159,9 @@ impl ExtentCodec for IdentityCodec {
 pub enum ExtentBackend {
     /// Compressed extents in the arena, paged to the swap device.
     Swap,
+    /// Compressed extents in the arena, never pushed out of RAM. The RSS
+    /// target does not bound them.
+    None,
     /// Compressed extents in the arena, demoted to files under `dir`.
     File {
         /// A directory on a disk-backed filesystem. The files have no name
@@ -173,6 +178,8 @@ pub enum ExtentBackend {
 pub enum BackendKind {
     /// The swap device.
     Swap,
+    /// No store: extents stay resident.
+    None,
     /// Files with `O_DIRECT` I/O.
     FileDirect,
     /// Files with page-cache I/O, written back and dropped after each write.
@@ -183,6 +190,7 @@ pub enum BackendKind {
 #[derive(Debug)]
 enum ExtentStore {
     Swap,
+    None,
     File(Arc<FileStore>),
 }
 
@@ -823,7 +831,7 @@ impl Pool {
     }
 
     /// As [`Pool::new`], over `backend`. A file backend that cannot open
-    /// returns the error, and the caller decides whether to fall back.
+    /// returns the error.
     pub fn with_backend(backend: ExtentBackend) -> std::io::Result<Pool> {
         Pool::with_backend_and_class_capacity(backend, CLASS_CAPACITY_BYTES)
     }
@@ -832,6 +840,7 @@ impl Pool {
     pub fn backend_kind(&self) -> BackendKind {
         match &self.0.store {
             ExtentStore::Swap => BackendKind::Swap,
+            ExtentStore::None => BackendKind::None,
             ExtentStore::File(store) => match store.io_mode() {
                 IoMode::Direct => BackendKind::FileDirect,
                 IoMode::Buffered => BackendKind::FileBuffered,
@@ -850,6 +859,7 @@ impl Pool {
         // index, so the store must use the arena's ladder.
         let store = match backend {
             ExtentBackend::Swap => ExtentStore::Swap,
+            ExtentBackend::None => ExtentStore::None,
             ExtentBackend::File {
                 dir,
                 capacity_bytes,
@@ -1121,7 +1131,7 @@ impl Pool {
     pub fn stats(&self) -> PoolStats {
         let c = &self.0.counters;
         let (file, file_capacity) = match &self.0.store {
-            ExtentStore::Swap => (file::FileStoreStats::default(), 0),
+            ExtentStore::Swap | ExtentStore::None => (file::FileStoreStats::default(), 0),
             ExtentStore::File(store) => (store.stats(), store.capacity_bytes()),
         };
         PoolStats {
@@ -2169,6 +2179,8 @@ impl PoolInner {
     fn compressed_tier_above(&self, over: u64) -> bool {
         match &self.store {
             ExtentStore::Swap => self.counters.extent_resident_bytes.load(Ordering::Relaxed) > over,
+            // Nothing can push an extent out, so the tier is never over.
+            ExtentStore::None => false,
             // Heap-fallback extents are never demoted, so they do not keep a
             // pass walking the queue.
             ExtentStore::File(_) => self.reclaimable_resident() > over,
@@ -2396,6 +2408,9 @@ impl PoolInner {
     /// threads, and the tier grows past the bound by whatever the store
     /// cannot take.
     fn enforce_or_defer_compressed_cap(&self) {
+        if matches!(self.store, ExtentStore::None) {
+            return;
+        }
         if self.spill.threads.load(Ordering::Relaxed) > 0 {
             // The inline backstop keys on the bytes enforcement can actually
             // reclaim. Unreclaimable extents (retry-capped, heap-backed)
@@ -2404,7 +2419,7 @@ impl PoolInner {
             // reason, a file store that cannot take a demotion right now
             // leaves the backstop to the spill threads.
             let stalled = match &self.store {
-                ExtentStore::Swap => false,
+                ExtentStore::Swap | ExtentStore::None => false,
                 ExtentStore::File(store) => {
                     store.writes_disabled() || self.full_hint.load(Ordering::Relaxed)
                 }
@@ -2454,7 +2469,12 @@ impl PoolInner {
     /// background file-mode pass stops per [`DEMOTION_PASS_BYTES`]. An inline
     /// file-mode pass with spill threads present also stops after
     /// [`DEMOTION_PASS_BYTES`].
+    ///
+    /// Without a store the pass does nothing and extents stay resident.
     fn enforce_compressed_cap(&self, pass: Pass) {
+        if matches!(self.store, ExtentStore::None) {
+            return;
+        }
         let cap = self.compressed_cap();
         let over = match (&self.store, pass) {
             // An inline pass leaves the tier at the backstop threshold, and
@@ -3273,6 +3293,34 @@ mod tests {
         // Dropping the handle uncounts the resident extent.
         drop(handle);
         assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    /// Without a store, shrinking the RSS target to zero leaves an evicted
+    /// chunk's extent resident, and the chunk still reads back.
+    #[mz_ore::test]
+    fn no_store_keeps_extents_resident() {
+        let capacity = if cfg!(miri) { 1 << 20 } else { 64 << 20 };
+        let pool = Pool::with_backend_and_class_capacity(ExtentBackend::None, capacity)
+            .expect("pool creation");
+        pool.set_budget(256 << 20);
+        assert_eq!(pool.backend_kind(), BackendKind::None);
+        pool.set_rss_target(1 << 30);
+        let orig = payload(SMALL, 23);
+        let handle = insert(&pool, &mut orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let resident = pool.stats().extent_resident_bytes;
+        assert!(resident > 0, "the evicted chunk has a resident extent");
+
+        pool.set_rss_target(0);
+        pool.enforce_compressed();
+        let stats = pool.stats();
+        assert_eq!(
+            stats.extent_resident_bytes, resident,
+            "the extent stays resident"
+        );
+        assert_eq!(stats.extent_pageouts, 0, "nothing is paged out");
+        assert_eq!(read(&handle), orig);
     }
 
     /// An RSS target with 1 MiB of headroom above the budget and warm cap

@@ -890,7 +890,7 @@
       "name": "enable_column_paged_batcher_file_extents",
       "typeName": "boolean",
       "default": "off",
-      "description": "Use the scratch directory as the buffer pool's extent store when one exists. Read once at pool installation.",
+      "description": "Use the scratch directory as the buffer pool's extent store for replica sizes with a scratch disk. Read when a replica is provisioned, so a change takes effect on the replica's next provisioning.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true

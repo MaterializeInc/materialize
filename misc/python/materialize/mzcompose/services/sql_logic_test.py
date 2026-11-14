@@ -38,6 +38,10 @@ class SqlLogicTest(Service):
                     for key, value in get_default_system_parameters().items()
                 ]
                 + ["enable_lgalloc=false"]
+                # The runner's replica scratch directory lives under the tmpfs
+                # `/tmp`, and the pool's file store refuses memory-backed
+                # directories, so a replica told to spill to files would halt.
+                + ["enable_column_paged_batcher_file_extents=false"]
             )
         ]
 
