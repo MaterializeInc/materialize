@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { greatest, max } from "d3";
+import { greatest, max, min, sort } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 
+import { LiveObjectHydration } from "~/api/materialize/cluster/hydrationHistory";
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
 
@@ -461,4 +462,84 @@ export function transformObjectHydrationSpans(
       };
     })
     .sort((a, b) => a.startedMs - b.startedMs || a.installedMs - b.installedMs);
+}
+
+/** A hydration episode read from a replica, before Materialize records it. */
+export interface ReplicaEpisode {
+  startedAt: Date;
+  finishedAt: Date;
+  objects: LiveObjectHydration[];
+}
+
+/**
+ * A replica's hydrated objects in episodes, grouped as Materialize groups them
+ * when it records an episode (`replica_collection_sql` in
+ * `src/adapter/src/coord/hydration_history.rs`): objects whose spans from
+ * installation to hydrated overlap belong to one episode. An unhydrated
+ * object's span is open, so every episode that ends at or after `openMs`, the
+ * earliest unhydrated installation, is part of the one still running.
+ */
+function groupEpisodes(objects: LiveObjectHydration[]): {
+  episodes: ReplicaEpisode[];
+  openMs: number;
+} {
+  const openMs =
+    min(objects, ({ installedAt, hydratedAt }) =>
+      hydratedAt ? undefined : installedAt.getTime(),
+    ) ?? Infinity;
+  const hydrated = sort(
+    objects.flatMap((object) =>
+      object.hydratedAt ? [{ object, hydratedAt: object.hydratedAt }] : [],
+    ),
+    ({ object }) => object.installedAt.getTime(),
+    ({ object }) => object.globalId,
+  );
+  const episodes: ReplicaEpisode[] = [];
+  let coveredMs = -Infinity;
+  for (const { object, hydratedAt } of hydrated) {
+    const current = episodes.at(-1);
+    if (current && coveredMs >= object.installedAt.getTime()) {
+      current.objects.push(object);
+      if (hydratedAt.getTime() > current.finishedAt.getTime()) {
+        current.finishedAt = hydratedAt;
+      }
+    } else {
+      episodes.push({
+        startedAt: object.installedAt,
+        finishedAt: hydratedAt,
+        objects: [object],
+      });
+    }
+    coveredMs = Math.max(coveredMs, hydratedAt.getTime());
+  }
+  return { episodes, openMs };
+}
+
+/** The latest episode a replica finished, from its objects' hydrations. */
+export function latestFinishedEpisode(
+  objects: LiveObjectHydration[],
+): ReplicaEpisode | undefined {
+  const { episodes, openMs } = groupEpisodes(objects);
+  return episodes.findLast(({ finishedAt }) => finishedAt.getTime() < openMs);
+}
+
+/**
+ * The objects of the episode a replica is still running that have hydrated so
+ * far, with `finishedAt` the latest of them. Undefined when no episode is
+ * running or none of its objects has hydrated yet.
+ */
+export function runningEpisodeSoFar(
+  objects: LiveObjectHydration[],
+): ReplicaEpisode | undefined {
+  const { episodes, openMs } = groupEpisodes(objects);
+  const running = episodes.filter(
+    ({ finishedAt }) => finishedAt.getTime() >= openMs,
+  );
+  if (running.length === 0) return undefined;
+  return {
+    startedAt: new Date(Math.min(openMs, running[0].startedAt.getTime())),
+    // Episodes are disjoint and in order, so the last one finished latest.
+    finishedAt: running[running.length - 1].finishedAt,
+    objects: running.flatMap((episode) => episode.objects),
+  };
 }

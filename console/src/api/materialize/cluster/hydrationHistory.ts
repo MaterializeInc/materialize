@@ -180,30 +180,56 @@ export interface LiveObjectHydration {
 }
 
 /**
- * Each compute object's hydration on one replica, as it happens. Reads the
- * replica's introspection, so it must run in a session pinned to the replica
- * (`cluster` and `cluster_replica`), and runs on that replica rather than on
- * `mz_catalog_server`. Only user objects, which leaves out this subscribe's
- * own transient dataflow. Requires mz >= 26.39.
+ * Each compute object's hydration on one replica. Reads the replica's
+ * introspection, so it must run in a session pinned to the replica (`cluster`
+ * and `cluster_replica`), and runs on that replica rather than on
+ * `mz_catalog_server`. Only user objects, which leaves out the query's own
+ * transient dataflow. Requires mz >= 26.39.
  */
+export function buildReplicaObjectHydrationsQuery() {
+  return queryBuilder
+    .selectFrom("mz_compute_hydration_times_per_worker as h")
+    .leftJoin("mz_object_global_ids as g", "g.global_id", "h.export_id")
+    .select([
+      "h.export_id as globalId",
+      "g.id as objectId",
+      sql<Date>`min(h.installed_at)`.as("installedAt"),
+      sql<Date | null>`min(h.started_at)`.as("startedAt"),
+      sql<Date | null>`CASE WHEN count(h.hydrated_at) = count(*) THEN max(h.hydrated_at) END`.as(
+        "hydratedAt",
+      ),
+    ])
+    .where("h.export_id", "like", "u%")
+    .groupBy(["h.export_id", "g.id"]);
+}
+
+/** `buildReplicaObjectHydrationsQuery` as it changes. */
 export function buildLiveObjectHydrationsSubscribe() {
   return buildSubscribeQuery<LiveObjectHydration>(
-    queryBuilder
-      .selectFrom("mz_compute_hydration_times_per_worker as h")
-      .leftJoin("mz_object_global_ids as g", "g.global_id", "h.export_id")
-      .select([
-        "h.export_id as globalId",
-        "g.id as objectId",
-        sql<Date>`min(h.installed_at)`.as("installedAt"),
-        sql<Date | null>`min(h.started_at)`.as("startedAt"),
-        sql<Date | null>`CASE WHEN count(h.hydrated_at) = count(*) THEN max(h.hydrated_at) END`.as(
-          "hydratedAt",
-        ),
-      ])
-      .where("h.export_id", "like", "u%")
-      .groupBy(["h.export_id", "g.id"]),
+    buildReplicaObjectHydrationsQuery(),
     { upsertKey: "globalId" },
   );
+}
+
+export async function fetchReplicaObjectHydrations({
+  params,
+  queryKey,
+  requestOptions,
+}: {
+  params: { clusterName: string; replicaName: string };
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}): Promise<LiveObjectHydration[]> {
+  const res = await executeSqlV2({
+    queries: buildReplicaObjectHydrationsQuery().compile(),
+    queryKey,
+    requestOptions,
+    sessionVariables: {
+      cluster: params.clusterName,
+      cluster_replica: params.replicaName,
+    },
+  });
+  return res.rows;
 }
 
 /**
@@ -255,13 +281,25 @@ export async function fetchEpisodeObjectHydrations({
   return res.rows;
 }
 
+/** The highest samples of any of a replica's processes over a window. */
+export interface ReplicaPeakUsage {
+  peakCpuNanoCores: number | null;
+  peakMemoryBytes: number | null;
+  /**
+   * The highest of one process's memory plus disk or swap: its reported heap,
+   * which counts swap, or its memory plus disk, whichever is larger. That is
+   * what a recorded hydration's heap peak counts.
+   */
+  peakHeapBytes: number | null;
+}
+
 /**
- * The highest CPU any of `replicaId`'s processes reported between `startDate`
- * and `endDate`, null when no sample falls in the window. Samples are a minute
- * apart, so this can miss the true peak. A lookup on
+ * The highest CPU and memory any of `replicaId`'s processes reported between
+ * `startDate` and `endDate`, each null when no sample falls in the window.
+ * Samples are a minute apart, so this can miss the true peaks. A lookup on
  * `mz_cluster_replica_metrics_history_ind`.
  */
-export function buildReplicaCpuPeakQuery({
+export function buildReplicaPeakUsageQuery({
   replicaId,
   startDate,
   endDate,
@@ -272,28 +310,40 @@ export function buildReplicaCpuPeakQuery({
 }) {
   return queryBuilder
     .selectFrom("mz_cluster_replica_metrics_history")
-    .select(
+    .select([
       sql<number | null>`max(cpu_nano_cores)::float8`.as("peakCpuNanoCores"),
-    )
+      sql<number | null>`max(memory_bytes)::float8`.as("peakMemoryBytes"),
+      sql<
+        number | null
+      >`max(greatest(heap_bytes, memory_bytes + coalesce(disk_bytes, 0)))::float8`.as(
+        "peakHeapBytes",
+      ),
+    ])
     .where("replica_id", "=", replicaId)
     .where("occurred_at", ">=", timestampLit(startDate))
     .where("occurred_at", "<=", timestampLit(endDate));
 }
 
-export async function fetchReplicaCpuPeak({
+export async function fetchReplicaPeakUsage({
   params,
   queryKey,
   requestOptions,
 }: {
-  params: Parameters<typeof buildReplicaCpuPeakQuery>[0];
+  params: Parameters<typeof buildReplicaPeakUsageQuery>[0];
   queryKey: QueryKey;
   requestOptions?: RequestInit;
-}) {
+}): Promise<ReplicaPeakUsage> {
   const res = await executeSqlV2({
-    queries: buildReplicaCpuPeakQuery(params).compile(),
+    queries: buildReplicaPeakUsageQuery(params).compile(),
     queryKey,
     requestOptions,
     sessionVariables: { transaction_isolation: "serializable" },
   });
-  return res.rows[0]?.peakCpuNanoCores ?? null;
+  return (
+    res.rows[0] ?? {
+      peakCpuNanoCores: null,
+      peakMemoryBytes: null,
+      peakHeapBytes: null,
+    }
+  );
 }

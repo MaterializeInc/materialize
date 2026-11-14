@@ -24,8 +24,9 @@ import {
   buildClusterReplicaHistoryQuery,
   buildEpisodeObjectHydrationsQuery,
   buildLiveObjectHydrationsSubscribe,
-  buildReplicaCpuPeakQuery,
   buildReplicaHydrationStatesSubscribe,
+  buildReplicaObjectHydrationsQuery,
+  buildReplicaPeakUsageQuery,
 } from "./hydrationHistory";
 
 const TEST_SCHEMA = "test_hydration_history";
@@ -371,6 +372,37 @@ describe("buildLiveObjectHydrationsSubscribe", () => {
   });
 });
 
+describe("buildReplicaObjectHydrationsQuery", () => {
+  it("reads a new index's hydration from a session pinned to the replica", async () => {
+    const { replicaName } = await quickstartIds();
+    await testdrive(`
+      > SET cluster to quickstart;
+      > CREATE TABLE hydration_peek_t (a int);
+      > CREATE INDEX hydration_peek_t_idx IN CLUSTER quickstart ON hydration_peek_t (a);
+    `);
+    const client = await getMaterializeClient();
+    const {
+      rows: [index],
+    } = await client.query(
+      "SELECT id FROM mz_indexes WHERE name = 'hydration_peek_t_idx'",
+    );
+
+    await waitFor(async () => {
+      const { rows } = await executeSqlHttp(
+        buildReplicaObjectHydrationsQuery().compile(),
+        {
+          sessionVariables: {
+            cluster: QUICKSTART_CLUSTER,
+            cluster_replica: replicaName,
+          },
+        },
+      );
+      const row = rows.find(({ objectId }) => objectId === index.id);
+      expect(row?.hydratedAt).toBeInstanceOf(Date);
+    }, 30_000);
+  });
+});
+
 describe("buildEpisodeObjectHydrationsQuery", () => {
   it("returns the replica's object hydrations installed in the window, with catalog ids", async () => {
     await testdrive(`
@@ -452,8 +484,8 @@ describe("buildEpisodeObjectHydrationsQuery", () => {
   });
 });
 
-describe("buildReplicaCpuPeakQuery", () => {
-  it("returns the highest CPU sample of any process in the window", async () => {
+describe("buildReplicaPeakUsageQuery", () => {
+  it("returns the highest samples of any process in the window", async () => {
     await testdrive(
       seed(
         "mz_cluster_replica_metrics_history",
@@ -466,36 +498,42 @@ describe("buildReplicaCpuPeakQuery", () => {
          heap_bytes UINT8,
          heap_limit UINT8,
          swap_bytes UINT8`,
-        `('u1', 0, 400, 1, 0, '2026-10-20T10:01:00Z', 1, 1, 0),
-         ('u1', 1, 900, 1, 0, '2026-10-20T10:02:00Z', 1, 1, 0),
+        `('u1', 0, 400, 50, 30, '2026-10-20T10:01:00Z', 95, 100, 0),
+         ('u1', 1, 900, 90, NULL, '2026-10-20T10:02:00Z', NULL, 100, 0),
          ('u1', 0, NULL, NULL, NULL, '2026-10-20T10:03:00Z', NULL, NULL, NULL),
-         ('u1', 0, 1000, 1, 0, '2026-10-20T10:05:00Z', 1, 1, 0),
-         ('u2', 0, 1000, 1, 0, '2026-10-20T10:02:00Z', 1, 1, 0)`,
+         ('u1', 0, 1000, 99, 99, '2026-10-20T10:05:00Z', 1, 1, 0),
+         ('u2', 0, 1000, 99, 99, '2026-10-20T10:02:00Z', 1, 1, 0)`,
       ),
     );
 
     const run = (startDate: string, endDate: string) =>
       runShadowed(
-        buildReplicaCpuPeakQuery({
+        buildReplicaPeakUsageQuery({
           replicaId: "u1",
           startDate,
           endDate,
         }).compile(),
       );
 
+    // Heap is the larger of the reported heap and memory plus disk: 95 over
+    // 80, and 90 where heap isn't reported.
     expect(
       (await run("2026-10-20T10:00:00Z", "2026-10-20T10:04:00Z")).rows,
-    ).toEqual([{ peakCpuNanoCores: 900 }]);
+    ).toEqual([
+      { peakCpuNanoCores: 900, peakMemoryBytes: 90, peakHeapBytes: 95 },
+    ]);
     expect(
       (await run("2026-10-20T11:00:00Z", "2026-10-20T11:04:00Z")).rows,
-    ).toEqual([{ peakCpuNanoCores: null }]);
+    ).toEqual([
+      { peakCpuNanoCores: null, peakMemoryBytes: null, peakHeapBytes: null },
+    ]);
   });
 
   it("runs against the catalog's metrics history", async () => {
     const { replicaId } = await quickstartIds();
 
     const { rows } = await runOnCatalog(
-      buildReplicaCpuPeakQuery({
+      buildReplicaPeakUsageQuery({
         replicaId,
         startDate: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
         endDate: new Date().toISOString(),

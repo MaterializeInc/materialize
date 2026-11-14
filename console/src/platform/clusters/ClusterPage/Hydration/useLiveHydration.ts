@@ -108,15 +108,11 @@ export function useLiveHydrationProgress({
 
 export type LiveObjectState = "queued" | "working" | "hydrated";
 
-export interface LiveObject {
-  globalId: string;
+export interface LiveObject extends LiveObjectHydration {
   /** The catalog name, or the dataflow's id for a dropped object. */
   name: string;
   objectType: string | null;
   state: LiveObjectState;
-  installedAt: Date;
-  startedAt: Date | null;
-  hydratedAt: Date | null;
 }
 
 /**
@@ -160,6 +156,7 @@ export function useLiveObjectHydrations({
   const objectsStatus = useAtomValue(allObjectsCollection.statusAtom);
   const objects = (rows ?? []).map(({ hydration, object }): LiveObject => ({
     globalId: hydration.globalId,
+    objectId: hydration.objectId,
     name: object?.name ?? hydration.globalId,
     objectType: object?.objectType ?? null,
     state: hydration.hydratedAt
