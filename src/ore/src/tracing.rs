@@ -667,6 +667,11 @@ pub struct OpenTelemetryContext {
 }
 
 impl OpenTelemetryContext {
+    /// Returns whether this context carries no propagation fields.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     /// Attaches this `Context` to the current [`tracing`] span,
     /// as its parent.
     ///
