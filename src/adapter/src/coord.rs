@@ -199,7 +199,6 @@ use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
-use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::TimelineState;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -517,8 +516,7 @@ impl Message {
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
                 Command::LookupConnection { .. } => "lookup-connection",
-                Command::RegisterPeek { .. } => "register-peek",
-                Command::UnregisterPeek { .. } => "unregister-peek",
+                Command::InstallPeekWatchSets { .. } => "install-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
@@ -1851,12 +1849,8 @@ pub struct Coordinator {
     /// Upon completing a transaction, these read holds should be dropped.
     txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds>,
 
-    /// Access to the peek fields should be restricted to methods in the [`peek`] API.
-    /// A map from pending peek ids to the queue into which responses are sent, and
-    /// the connection id of the client that initiated the peek.
-    pending_peeks: BTreeMap<Uuid, PendingPeek>,
-    /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    /// Active peeks by connection, shared with every session's `PeekClient`.
+    peek_registry: Arc<crate::peek_registry::PeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -4472,22 +4466,6 @@ impl Coordinator {
             .iter()
             .map(|(id, capability)| (id.unhandled().to_string(), format!("{capability:?}")))
             .collect();
-        let pending_peeks: BTreeMap<_, _> = self
-            .pending_peeks
-            .iter()
-            .map(|(id, peek)| (id.to_string(), format!("{peek:?}")))
-            .collect();
-        let client_pending_peeks: BTreeMap<_, _> = self
-            .client_pending_peeks
-            .iter()
-            .map(|(id, peek)| {
-                let peek: BTreeMap<_, _> = peek
-                    .iter()
-                    .map(|(uuid, storage_id)| (uuid.to_string(), storage_id))
-                    .collect();
-                (id.to_string(), peek)
-            })
-            .collect();
         let pending_linearize_read_txns: BTreeMap<_, _> = self
             .pending_linearize_read_txns
             .iter()
@@ -4498,8 +4476,6 @@ impl Coordinator {
             "global_timelines": global_timelines,
             "active_conns": active_conns,
             "txn_read_holds": txn_read_holds,
-            "pending_peeks": pending_peeks,
-            "client_pending_peeks": client_pending_peeks,
             "pending_linearize_read_txns": pending_linearize_read_txns,
             "controller": self.controller.dump().await?,
         }))
@@ -5115,8 +5091,7 @@ pub fn serve(
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
                     txn_read_holds: Default::default(),
-                    pending_peeks: BTreeMap::new(),
-                    client_pending_peeks: BTreeMap::new(),
+                    peek_registry: Arc::default(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),

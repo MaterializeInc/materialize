@@ -70,7 +70,7 @@ use crate::metrics::Metrics;
 use crate::notice::ExecutionTimeKind;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, PeekCancelSafety, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -297,6 +297,7 @@ impl Client {
         // handle termination.
         // Build the PeekClient with controller handles returned from startup.
         let StartupResponse {
+            peek_registry,
             role_id,
             write_notify,
             session_defaults,
@@ -313,8 +314,9 @@ impl Client {
             frontend_cancel_rx,
         } = response;
 
-        let peek_client = PeekClient::new(
+        let mut peek_client = PeekClient::new(
             CoordinatorClient::Session(self.clone()),
+            peek_registry,
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -325,6 +327,9 @@ impl Client {
             group_commit_notifier,
             read_only,
         );
+        // Keep the partition alive before any execution awaits. Cancellation
+        // and termination must observe the same partition as the first query.
+        peek_client.connection_peeks(session.conn_id());
 
         let mut client = SessionClient {
             inner: Some(self.clone()),
@@ -812,6 +817,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        self.frontend_cancel_rx.borrow_and_update();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
         // Owning the end-of-execution obligation in this frame is what lets
@@ -1401,8 +1407,7 @@ impl SessionClient {
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::LookupConnection { .. }
-                | Command::RegisterPeek { .. }
-                | Command::UnregisterPeek { .. }
+                | Command::InstallPeekWatchSets { .. }
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
@@ -1493,10 +1498,37 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+        let connection = self.peek_client.connection_peeks(&conn_id);
+        let mut cancellation = self.frontend_cancel_rx.clone();
+        let cancel_safety = PeekCancelSafety::new();
         let session = self.session.as_mut().expect("SessionClient invariant");
-        self.peek_client
-            .try_peek(portal_name, session, logging, connection_closed)
-            .await
+        let attempt = self
+            .peek_client
+            .try_peek(portal_name, session, logging, &cancel_safety);
+        tokio::pin!(attempt);
+        let connection_cancel = async move {
+            if cancellation.changed().await.is_err() {
+                futures::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = connection_cancel => {}
+            _ = connection_closed => {}
+            result = &mut attempt => return result,
+        }
+        if cancel_safety.can_abort() {
+            // Invalidate registration's execution epoch before dropping
+            // the future. Commands already queued for slow peeks carry
+            // the same lifecycle and cannot issue after this cancellation.
+            connection.cancel();
+            Err(AdapterError::Canceled)
+        } else {
+            // A non-peek command can already have a side effect. Dropping
+            // its waiter would lose its definitive response and ownership.
+            attempt.await
+        }
     }
 
     /// Whether the frontend read-then-write path could take this portal over.
