@@ -52,6 +52,7 @@ import {
   DeployStatePill,
   LagText,
   Muted,
+  NotSetUp,
   SectionHeading,
 } from "./deploymentComponents";
 import {
@@ -68,7 +69,6 @@ import {
   sinkCutover,
   SinkCutoverRow,
   stagingName,
-  swappedSchemas,
   timeAgo,
 } from "./deploymentModel";
 import {
@@ -99,6 +99,8 @@ const DeploymentDetail = () => {
     content = <LoadingContainer />;
   } else if (list.error) {
     content = <ErrorBox message="We couldn't load this deploy." />;
+  } else if (list.data && list.data.access !== "ok") {
+    content = <NotSetUp access={list.data.access} />;
   } else if (!deployment) {
     content = (
       <ErrorBox
@@ -138,7 +140,11 @@ const DeploymentContent = ({
     <VStack alignItems="stretch" spacing="8" pb="10">
       <DeploymentHeader deployment={deployment} />
       {isPromoted ? (
-        <PromotedSummary deployment={deployment} diff={diff} />
+        <PromotedSummary
+          deployment={deployment}
+          diff={diff}
+          tracking={tracking}
+        />
       ) : (
         <InProgressDetail detail={detail} deployment={deployment} diff={diff} />
       )}
@@ -248,10 +254,12 @@ const InProgressDetail = ({
     [catalog.data, stalls],
   );
 
-  if (catalog.isLoading || tracking.isLoading) return <LoadingContainer />;
   if (catalog.error || tracking.error) {
     return <ErrorBox message="We couldn't load this deploy's status." />;
   }
+  // NOTE: isPending, not isLoading. The catalog query is disabled until the
+  // tracking rows arrive, and a disabled query is pending without loading.
+  if (catalog.isPending || tracking.isPending) return <LoadingContainer />;
 
   const blockers = promoteBlockers(pairs, sinks);
 
@@ -552,6 +560,8 @@ function cutoverDetail(
       return `${formatDuration(gapMs)} still to write, and its frontier has not moved in the ${formatDuration(stalledForMs)} this page has watched it.`;
     case "no-replacement":
       return "The new schema has no object with this name.";
+    case "unknown":
+      return "The sink has not reported a write frontier.";
   }
 }
 
@@ -564,14 +574,10 @@ const ObjectsSection = ({
   diff: ObjectDiffEntry[];
   objects: DeployCatalogObjectRow[];
 }) => {
-  const swapped = new Set(
-    swappedSchemas(deployment).map((s) => `${s.database}.${s.schema}`),
-  );
   const changeByObject = new Map(
     diff.map((d) => [`${d.database}.${d.schema}.${d.object}`, d.change]),
   );
   const staged = objects
-    .filter((o) => !swapped.has(`${o.database}.${o.schema}`))
     .map((o) => {
       const liveSchema = o.schema.slice(
         0,
@@ -580,10 +586,7 @@ const ObjectsSection = ({
       return {
         ...o,
         liveSchema,
-        change:
-          changeByObject.get(`${o.database}.${liveSchema}.${o.name}`) ??
-          // Indexes are recorded under the view they belong to.
-          undefined,
+        change: changeByObject.get(`${o.database}.${liveSchema}.${o.name}`),
       };
     })
     .sort((a, b) =>
@@ -643,8 +646,11 @@ const ObjectsSection = ({
                     label={CHANGE_PILL[o.change].label}
                     colorScheme={CHANGE_PILL[o.change].colorScheme}
                   />
+                ) : o.type === "index" ? (
+                  // mz-deploy hashes an index with the view it is defined on.
+                  <Muted>With its view</Muted>
                 ) : (
-                  <Muted>Index</Muted>
+                  <Muted>—</Muted>
                 )}
               </Td>
               <Td>{o.clusterName ?? <Muted>—</Muted>}</Td>
@@ -696,9 +702,11 @@ const ObjectsSection = ({
 const PromotedSummary = ({
   deployment,
   diff,
+  tracking,
 }: {
   deployment: Deployment;
   diff: ObjectDiffEntry[];
+  tracking: ReturnType<typeof useDeploymentDetail>["tracking"];
 }) => {
   const promotedAt = deployment.promotedAt;
   if (!promotedAt) return null;
@@ -717,7 +725,11 @@ const PromotedSummary = ({
           title="What this deploy changed"
           description="Compared by definition hash with the deploy each schema was promoted from before it."
         />
-        {changed.length === 0 ? (
+        {tracking.isPending ? (
+          <LoadingContainer />
+        ) : tracking.error ? (
+          <ErrorBox message="We couldn't load this deploy's objects." />
+        ) : changed.length === 0 ? (
           <Text textStyle="text-base" color="gray.500">
             No definitions changed. Every object was redeployed as is.
           </Text>

@@ -7,11 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { millisecondsInHour, millisecondsInMinute } from "date-fns/constants";
+
+import { formatDurationExact } from "~/utils/format";
+
 /**
  * `mz-deploy wait`'s default `--allowed-lag`. A hydrated cluster whose objects
  * lag by more than this is "lagging", not "ready".
  */
-export const DEFAULT_ALLOWED_LAG_MS = 300_000;
+export const DEFAULT_ALLOWED_LAG_MS = 5 * millisecondsInMinute;
 
 /**
  * mz-deploy's OOM-loop rule: a replica with this many `oom-killed` status
@@ -20,7 +24,7 @@ export const DEFAULT_ALLOWED_LAG_MS = 300_000;
 export const OOM_LOOP_THRESHOLD = 3;
 
 /** How long a sink's frontier may sit still before we call it stuck. */
-export const SINK_STUCK_AFTER_MS = 60_000;
+export const SINK_STUCK_AFTER_MS = millisecondsInMinute;
 
 export interface DeploymentRow {
   deployId: string;
@@ -108,6 +112,11 @@ export interface ClusterHealth {
   replicationFactor: number | null;
   replicas: number;
   oomLoopingReplicas: number;
+  /**
+   * Some replica has reported hydration for any object, system ones included.
+   * Until then `hydrated` and `total` are both 0.
+   */
+  hydrationReported: boolean;
   /** User objects hydrated on the replica that has hydrated the most. */
   hydrated: number;
   total: number;
@@ -146,6 +155,9 @@ export function clusterVerdict(
       detail: `Out of memory ${OOM_LOOP_THRESHOLD}+ times in 24 h on every replica`,
     };
   }
+  if (!health.hydrationReported) {
+    return { status: "hydrating", detail: "Waiting for replicas to report" };
+  }
   if (health.hydrated < health.total) {
     return {
       status: "hydrating",
@@ -177,7 +189,8 @@ export interface SinkCutoverRow {
   sinkLagMs: number | null;
 }
 
-export type CutoverState = "ready" | "behind" | "stuck" | "no-replacement";
+export type CutoverState =
+  "ready" | "behind" | "stuck" | "no-replacement" | "unknown";
 
 export interface SinkCutover {
   state: CutoverState;
@@ -203,9 +216,12 @@ export function sinkCutover(
   if (!row.hasReplacement || row.replacementReadFrontierMs === null) {
     return { state: "no-replacement", gapMs: 0 };
   }
+  if (row.sinkWriteFrontierMs === null) {
+    return { state: "unknown", gapMs: 0 };
+  }
   const gapMs = Math.max(
     0,
-    row.replacementReadFrontierMs - (row.sinkWriteFrontierMs ?? 0),
+    row.replacementReadFrontierMs - row.sinkWriteFrontierMs,
   );
   if (gapMs === 0) return { state: "ready", gapMs };
   if (stalledForMs >= SINK_STUCK_AFTER_MS) return { state: "stuck", gapMs };
@@ -284,13 +300,15 @@ export function diffObjects(
 }
 
 /**
- * For each schema of `deployment`, the deploy it replaces: the latest one
- * promoted for that schema before `deployment` was staged.
+ * For each schema of `deployment`, the deploy it replaces: the one live for
+ * that schema when it was promoted, or, while it is in progress, the one live
+ * now.
  */
 export function baselineDeploys(
   deployment: Deployment,
   all: Deployment[],
 ): Map<string, string> {
+  const cutoff = deployment.promotedAt?.getTime() ?? Infinity;
   const baseline = new Map<string, string>();
   for (const { database, schema } of deployment.schemas) {
     const key = `${database}.${schema}`;
@@ -299,7 +317,7 @@ export function baselineDeploys(
       if (
         candidate.deployId === deployment.deployId ||
         candidate.promotedAt === null ||
-        candidate.promotedAt.getTime() > deployment.deployedAt.getTime() ||
+        candidate.promotedAt.getTime() >= cutoff ||
         !candidate.schemas.some(
           (s) => s.database === database && s.schema === schema,
         )
@@ -316,6 +334,21 @@ export function baselineDeploys(
     if (best) baseline.set(key, best.deployId);
   }
   return baseline;
+}
+
+/** Deploys that are the most recent promote for at least one of their schemas. */
+export function liveDeployIds(all: Deployment[]): Set<string> {
+  const latest = new Map<string, Deployment>();
+  for (const deployment of all) {
+    const promotedAt = deployment.promotedAt?.getTime();
+    if (promotedAt === undefined) continue;
+    for (const { database, schema } of deployment.schemas) {
+      const key = `${database}.${schema}`;
+      const current = latest.get(key)?.promotedAt?.getTime() ?? -Infinity;
+      if (promotedAt > current) latest.set(key, deployment);
+    }
+  }
+  return new Set([...latest.values()].map((d) => d.deployId));
 }
 
 export interface Blocker {
@@ -367,6 +400,14 @@ export function promoteBlockers(
           message: `Reads ${row.dependencySchema}.${row.dependencyName}, which this deploy does not stage, so the repoint fails`,
         });
         break;
+      case "unknown":
+        blockers.push({
+          kind: "sink",
+          name,
+          message:
+            "Sink has not reported a write frontier, so the cutover can't be checked",
+        });
+        break;
       case "ready":
         break;
     }
@@ -379,22 +420,13 @@ export function timeAgo(date: Date, now = Date.now()) {
   return `${formatDuration(Math.max(0, now - date.getTime()))} ago`;
 }
 
-/** Compact "2 h 14 min" style duration. */
+/**
+ * `formatDurationExact` at whole seconds, with days past 48 hours, since deploys
+ * can sit staged for a week.
+ */
 export function formatDuration(ms: number): string {
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) return `${totalSeconds} s`;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    const seconds = totalSeconds % 60;
-    return seconds && totalMinutes < 10
-      ? `${totalMinutes} min ${seconds} s`
-      : `${totalMinutes} min`;
+  if (ms >= 48 * millisecondsInHour) {
+    return `${(ms / (24 * millisecondsInHour)).toFixed(1)} days`;
   }
-  const totalHours = Math.floor(totalMinutes / 60);
-  if (totalHours < 48) {
-    const minutes = totalMinutes % 60;
-    return minutes ? `${totalHours} h ${minutes} min` : `${totalHours} h`;
-  }
-  const days = totalHours / 24;
-  return `${days.toFixed(1)} days`;
+  return formatDurationExact(ms < 1000 ? ms : Math.round(ms / 1000) * 1000);
 }

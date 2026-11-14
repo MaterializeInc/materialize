@@ -216,10 +216,7 @@ export function useDeploymentDetail(deployId: string) {
         ...liveClusters.map((name) => stagingName(name, deployId)),
       ],
       liveSchemas: live.map(({ database, schema }) => ({ database, schema })),
-      schemas: [
-        ...live.map(({ database, schema }) => ({ database, schema })),
-        ...staged,
-      ],
+      schemas: staged,
       pendingSinks,
     };
   }, [deployment, deployId, liveClusters, tracking.data]);
@@ -233,7 +230,8 @@ export function useDeploymentDetail(deployId: string) {
         queryKey,
         requestOptions: { signal },
       }),
-    enabled: isInProgress,
+    // Waits for the pending CREATE SINK statements, which change the query key.
+    enabled: isInProgress && tracking.isSuccess,
     refetchInterval: LIVE_REFETCH_MS,
     placeholderData: keepPreviousData,
   });

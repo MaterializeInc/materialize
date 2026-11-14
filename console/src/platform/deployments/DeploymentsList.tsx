@@ -23,7 +23,6 @@ import {
 import React from "react";
 import { useNavigate } from "react-router-dom";
 
-import { CodeBlock } from "~/components/copyableComponents";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import StatusPill from "~/components/StatusPill";
@@ -32,11 +31,6 @@ import {
   PageHeader,
   PageHeading,
 } from "~/layouts/BaseLayout";
-import {
-  EmptyListHeader,
-  EmptyListHeaderContents,
-  EmptyListWrapper,
-} from "~/layouts/listPageComponents";
 import { MaterializeTheme } from "~/theme";
 import {
   formatDate,
@@ -46,6 +40,7 @@ import {
 import {
   ClusterStatusPill,
   Muted,
+  NotSetUp,
   RelativeBar,
   SectionHeading,
 } from "./deploymentComponents";
@@ -55,6 +50,7 @@ import {
   clusterVerdict,
   Deployment,
   formatDuration,
+  liveDeployIds,
   stagingName,
   swappedSchemas,
   timeAgo,
@@ -71,34 +67,6 @@ const STATUS_RANK: Record<ClusterStatus, number> = {
   lagging: 2,
   ready: 3,
 };
-
-const NotSetUp = ({ access }: { access: "missing" | "denied" }) => (
-  <EmptyListWrapper>
-    <EmptyListHeader>
-      <EmptyListHeaderContents
-        title={
-          access === "denied"
-            ? "You can't read mz-deploy's tracking tables"
-            : "No mz-deploy deployments found"
-        }
-        helpText={
-          access === "denied"
-            ? "This page reads _mz_deploy on the _mz_deploy_server cluster. Ask an admin to grant you the materialize_monitor role that mz-deploy setup creates."
-            : "This page reads mz-deploy's tracking database, _mz_deploy. It doesn't exist here, or your role can't see it. Run setup once with an admin role, then grant materialize_monitor to people who should see deploys."
-        }
-      />
-    </EmptyListHeader>
-    {access === "missing" && (
-      <Box width="100%" maxWidth="560px">
-        <CodeBlock
-          title="Set up mz-deploy"
-          contents={"mz-deploy setup\nmz-deploy stage"}
-          lineNumbers
-        />
-      </Box>
-    )}
-  </EmptyListWrapper>
-);
 
 const DeploymentsList = () => {
   const { data, isLoading, error } = useDeployments();
@@ -193,6 +161,7 @@ const InProgress = ({ data }: { data: DeploymentsData }) => {
                     clusters={data.clustersByDeploy.get(d.deployId) ?? []}
                     healthByName={healthByName}
                     isLoading={health.isLoading}
+                    isError={health.isError && !health.data}
                   />
                 </Td>
               </Tr>
@@ -210,13 +179,16 @@ const DeployStatus = ({
   clusters,
   healthByName,
   isLoading,
+  isError,
 }: {
   deployment: Deployment;
   clusters: string[];
   healthByName: Map<string, ClusterHealth>;
   isLoading: boolean;
+  isError: boolean;
 }) => {
   if (isLoading) return <Muted>Checking…</Muted>;
+  if (isError) return <Muted>Couldn&apos;t check cluster status</Muted>;
   if (clusters.length === 0) return <Muted>No clusters staged</Muted>;
   const verdicts = clusters.map((name) =>
     clusterVerdict(healthByName.get(stagingName(name, deployment.deployId))),
@@ -247,6 +219,7 @@ const History = ({ deployments }: { deployments: Deployment[] }) => {
     (d) => d.promotedAt.getTime() - d.deployedAt.getTime(),
   );
   const longest = Math.max(1, ...durations);
+  const live = liveDeployIds(deployments);
 
   return (
     <Box>
@@ -281,7 +254,7 @@ const History = ({ deployments }: { deployments: Deployment[] }) => {
                     <Text textStyle="text-ui-med" fontFamily="mono">
                       {d.deployId}
                     </Text>
-                    {i === 0 && (
+                    {live.has(d.deployId) && (
                       <StatusPill
                         status="live"
                         label="Live"

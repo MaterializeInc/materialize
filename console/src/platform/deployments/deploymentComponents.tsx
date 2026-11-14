@@ -10,8 +10,13 @@
 import { Box, HStack, Spinner, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
-import { CopyButton } from "~/components/copyableComponents";
+import { CodeBlock, CopyButton } from "~/components/copyableComponents";
 import StatusPill from "~/components/StatusPill";
+import {
+  EmptyListHeader,
+  EmptyListHeaderContents,
+  EmptyListWrapper,
+} from "~/layouts/listPageComponents";
 import { MaterializeTheme } from "~/theme";
 
 import { ClusterStatus, CutoverState, formatDuration } from "./deploymentModel";
@@ -44,12 +49,13 @@ export const ClusterStatusPill = ({ status }: { status: ClusterStatus }) => {
 
 const CUTOVER_PILL: Record<
   CutoverState,
-  { label: string; colorScheme: "green" | "yellow" | "red" }
+  { label: string; colorScheme: "green" | "yellow" | "red" | "gray" }
 > = {
   ready: { label: "Ready to switch", colorScheme: "green" },
   behind: { label: "Promote waits", colorScheme: "yellow" },
   stuck: { label: "Would hang", colorScheme: "red" },
   "no-replacement": { label: "Repoint fails", colorScheme: "red" },
+  unknown: { label: "Can't check", colorScheme: "gray" },
 };
 
 export const CutoverPill = ({ state }: { state: CutoverState }) => {
@@ -153,3 +159,32 @@ export const RelativeBar = ({
     </Box>
   );
 };
+
+/** Why the page has no deploys to show, for an `access` other than `ok`. */
+export const NotSetUp = ({ access }: { access: "missing" | "denied" }) => (
+  <EmptyListWrapper>
+    <EmptyListHeader>
+      <EmptyListHeaderContents
+        title={
+          access === "denied"
+            ? "You can't read mz-deploy's tracking tables"
+            : "No mz-deploy deployments found"
+        }
+        helpText={
+          access === "denied"
+            ? "This page reads _mz_deploy on the _mz_deploy_server cluster. Ask an admin to grant you the materialize_monitor role that mz-deploy setup creates."
+            : "This page reads mz-deploy's tracking database, _mz_deploy. It doesn't exist here, or your role can't see it. Run setup once with an admin role, then grant materialize_monitor to people who should see deploys."
+        }
+      />
+    </EmptyListHeader>
+    {access === "missing" && (
+      <Box width="100%" maxWidth="560px">
+        <CodeBlock
+          title="Set up mz-deploy"
+          contents={"mz-deploy setup\nmz-deploy stage"}
+          lineNumbers
+        />
+      </Box>
+    )}
+  </EmptyListWrapper>
+);

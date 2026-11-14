@@ -15,6 +15,7 @@ import {
   diffObjects,
   formatDuration,
   groupDeployments,
+  liveDeployIds,
   promoteBlockers,
   SINK_STUCK_AFTER_MS,
   sinkCutover,
@@ -41,6 +42,7 @@ const health = (overrides: Partial<ClusterHealth>): ClusterHealth => ({
   replicationFactor: 1,
   replicas: 1,
   oomLoopingReplicas: 0,
+  hydrationReported: true,
   hydrated: 4,
   total: 4,
   memoryPercent: 40,
@@ -89,6 +91,11 @@ describe("clusterVerdict", () => {
     expect(
       clusterVerdict(health({ replicas: 2, oomLoopingReplicas: 1 })).status,
     ).toBe("ready");
+    expect(
+      clusterVerdict(
+        health({ hydrationReported: false, hydrated: 0, total: 0 }),
+      ).status,
+    ).toBe("hydrating");
     expect(clusterVerdict(health({ hydrated: 3 })).detail).toBe(
       "3 of 4 objects hydrated",
     );
@@ -120,6 +127,13 @@ describe("sinkCutover", () => {
         SINK_STUCK_AFTER_MS,
       ).state,
     ).toBe("stuck");
+  });
+
+  it("can't tell without a sink write frontier", () => {
+    expect(sinkCutover(sink({ sinkWriteFrontierMs: null }), 0)).toEqual({
+      state: "unknown",
+      gapMs: 0,
+    });
   });
 
   it("flags a sink whose input is not staged by the deploy", () => {
@@ -156,31 +170,66 @@ describe("diffObjects", () => {
 });
 
 describe("baselineDeploys", () => {
-  it("picks the latest deploy promoted for the schema before staging", () => {
-    const deployments = groupDeployments([
-      row({
-        deployId: "first",
-        deployedAt: new Date("2026-11-01T00:00:00Z"),
-        promotedAt: new Date("2026-11-01T01:00:00Z"),
-      }),
-      row({
-        deployId: "second",
-        deployedAt: new Date("2026-11-02T00:00:00Z"),
-        promotedAt: new Date("2026-11-02T01:00:00Z"),
-      }),
-      row({ deployId: "current" }),
-      row({
-        deployId: "later",
-        deployedAt: new Date("2026-11-20T00:00:00Z"),
-        promotedAt: new Date("2026-11-20T01:00:00Z"),
-      }),
-    ]);
-    const current = deployments.find((d) => d.deployId === "current");
-    expect(current).toBeDefined();
-    if (!current) return;
-    expect(baselineDeploys(current, deployments)).toEqual(
+  const deployments = groupDeployments([
+    row({
+      deployId: "first",
+      deployedAt: new Date("2026-11-01T00:00:00Z"),
+      promotedAt: new Date("2026-11-01T01:00:00Z"),
+    }),
+    // Staged before "second" but promoted after it.
+    row({
+      deployId: "slow",
+      deployedAt: new Date("2026-11-01T12:00:00Z"),
+      promotedAt: new Date("2026-11-03T00:00:00Z"),
+    }),
+    row({
+      deployId: "second",
+      deployedAt: new Date("2026-11-02T00:00:00Z"),
+      promotedAt: new Date("2026-11-02T01:00:00Z"),
+    }),
+    row({ deployId: "pending", deployedAt: new Date("2026-11-01T06:00:00Z") }),
+  ]);
+  const byId = (id: string) => {
+    const found = deployments.find((d) => d.deployId === id);
+    if (!found) throw new Error(`no deploy ${id}`);
+    return found;
+  };
+
+  it("compares a promoted deploy with the one live when it was promoted", () => {
+    expect(baselineDeploys(byId("slow"), deployments)).toEqual(
       new Map([["materialize.analytics", "second"]]),
     );
+  });
+
+  it("compares an in-progress deploy with the one live now", () => {
+    expect(baselineDeploys(byId("pending"), deployments)).toEqual(
+      new Map([["materialize.analytics", "slow"]]),
+    );
+  });
+});
+
+describe("liveDeployIds", () => {
+  it("marks the latest promote per schema, not the latest staged deploy", () => {
+    const deployments = groupDeployments([
+      row({
+        deployId: "x-old",
+        deployedAt: new Date("2026-11-01T00:00:00Z"),
+        promotedAt: new Date("2026-11-05T00:00:00Z"),
+      }),
+      row({
+        deployId: "x-new",
+        deployedAt: new Date("2026-11-02T00:00:00Z"),
+        promotedAt: new Date("2026-11-03T00:00:00Z"),
+      }),
+      row({
+        deployId: "y",
+        schema: "serving",
+        deployedAt: new Date("2026-11-06T00:00:00Z"),
+        promotedAt: new Date("2026-11-06T01:00:00Z"),
+      }),
+      row({ deployId: "staged", deployedAt: new Date("2026-11-07T00:00:00Z") }),
+    ]);
+    expect([...liveDeployIds(deployments)].sort()).toEqual(["x-old", "y"]);
   });
 });
 
@@ -210,9 +259,9 @@ describe("promoteBlockers", () => {
 
 describe("formatDuration", () => {
   it("picks a compact unit", () => {
-    expect(formatDuration(42_000)).toBe("42 s");
-    expect(formatDuration(270_000)).toBe("4 min 30 s");
-    expect(formatDuration(8_040_000)).toBe("2 h 14 min");
+    expect(formatDuration(42_400)).toBe("42s");
+    expect(formatDuration(270_000)).toBe("4m 30s");
+    expect(formatDuration(8_040_000)).toBe("2h 14m");
     expect(formatDuration(4.8 * 86_400_000)).toBe("4.8 days");
   });
 });

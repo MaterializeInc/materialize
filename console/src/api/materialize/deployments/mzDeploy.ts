@@ -60,8 +60,8 @@ export function buildDeploymentsQueries() {
         kind,
         mode
       FROM _mz_deploy.public.deployments`.compile(queryBuilder),
-    // Joined to `mz_clusters` by ID, so a promoted deploy's clusters drop out
-    // once the swap retires the old production cluster.
+    // The view joins `mz_clusters` by ID, so a promoted deploy's clusters drop
+    // out once the swap retires the old production cluster.
     sql<DeploymentClusterRow>`
       SELECT deploy_id AS "deployId", name
       FROM _mz_deploy.public.deployment_clusters`.compile(queryBuilder),

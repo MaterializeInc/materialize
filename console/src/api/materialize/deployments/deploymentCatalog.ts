@@ -80,11 +80,11 @@ export function buildClusterHealthQuery(clusterNames: string[]) {
     ),
     hyd AS (
       SELECT reps.cluster_id,
-        count(*) FILTER (WHERE h.hydrated) AS hydrated,
-        count(*) AS total
+        count(h.object_id) AS reported,
+        count(*) FILTER (WHERE h.object_id LIKE 'u%' AND h.hydrated) AS hydrated,
+        count(*) FILTER (WHERE h.object_id LIKE 'u%') AS total
       FROM reps
-      JOIN mz_internal.mz_hydration_statuses h ON h.replica_id = reps.id
-      WHERE h.object_id LIKE 'u%'
+      LEFT JOIN mz_internal.mz_hydration_statuses h ON h.replica_id = reps.id
       GROUP BY reps.cluster_id, reps.id
     ),
     util AS (
@@ -109,6 +109,8 @@ export function buildClusterHealthQuery(clusterNames: string[]) {
       (SELECT count(*) FROM reps WHERE reps.cluster_id = cl.id)::int AS replicas,
       (SELECT count(*) FROM reps JOIN ooms ON ooms.replica_id = reps.id
         WHERE reps.cluster_id = cl.id)::int AS "oomLoopingReplicas",
+      COALESCE((SELECT max(reported) FROM hyd WHERE hyd.cluster_id = cl.id), 0) > 0
+        AS "hydrationReported",
       COALESCE((SELECT max(hydrated) FROM hyd WHERE hyd.cluster_id = cl.id), 0)::int
         AS hydrated,
       COALESCE((SELECT max(total) FROM hyd WHERE hyd.cluster_id = cl.id), 0)::int
@@ -145,7 +147,9 @@ export function buildDeployObjectsQuery(schemas: QualifiedSchema[]) {
 }
 
 /**
- * Sinks outside the deploy that read from objects in its swapped schemas.
+ * Sinks outside the deploy that read from relations in its swapped schemas.
+ * Joining `mz_relations` drops the sink's connection, so each sink yields one
+ * row, for its input.
  * `promote` repoints each with `ALTER SINK ... SET FROM` to the staged object
  * of the same name, so this pairs the sink's write frontier with that object's
  * read frontier.
@@ -173,7 +177,7 @@ export function buildSinkCutoverQuery(
     JOIN mz_catalog.mz_schemas ks ON ks.id = k.schema_id
     JOIN mz_catalog.mz_databases kd ON kd.id = ks.database_id
     JOIN mz_internal.mz_object_dependencies od ON od.object_id = k.id
-    JOIN mz_catalog.mz_objects dep ON dep.id = od.referenced_object_id
+    JOIN mz_catalog.mz_relations dep ON dep.id = od.referenced_object_id
     JOIN mz_catalog.mz_schemas s ON s.id = dep.schema_id
     JOIN mz_catalog.mz_databases d ON d.id = s.database_id
     LEFT JOIN mz_internal.mz_sink_statuses st ON st.id = k.id
