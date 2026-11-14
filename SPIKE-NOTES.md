@@ -87,6 +87,35 @@ above, and ~0.36 s for every frontend index, so per-dataflow times from it
 are not usable for indexes that hydrate from persist. Looks like a bug, not
 investigated.
 
+Catalog query throughput vs catalog scale. Native main (ab4e4edba0) vs the
+spike, same machine, fresh environments grown identically. pgbench, 16
+clients, 20 s, simple protocol. Mix: column lookup by id 40%, `pg_attribute`
+by `attrelid` 40%, `SHOW TABLES` 10%, `count(*)` over `mz_objects` 10%.
+Replicas are `scale=1,workers=1`.
+
+| user objects | main, 1 replica | spike, 1 replica | spike, 3 replicas (load-balanced) |
+|---|---|---|---|
+| 400 | 4,099 qps (3.9 ms) | 3,937 qps (4.1 ms) | 4,626 qps (3.5 ms), 1.13x main |
+| 800 | 3,508 qps (4.6 ms) | 3,402 qps (4.7 ms) | 4,145 qps (3.9 ms), 1.18x |
+| 1600 | 2,433 qps (6.6 ms) | 2,387 qps (6.7 ms) | 3,269 qps (4.9 ms), 1.34x |
+| 3200 | 1,422 qps (11.3 ms) | 1,309 qps (12.2 ms) | 2,536 qps (6.3 ms), 1.78x |
+| 6400 | 674 qps (23.7 ms) | 608 qps (26.3 ms) | 1,487 qps (10.8 ms), 2.21x |
+
+- One spike replica is 3 to 10% slower than main, widening with scale.
+  Not investigated.
+- Load balancing helps more as queries get heavier. Lookups stay ~2 ms at
+  every scale, so environmentd dominates them and extra replicas add little.
+  The scan-heavy queries (`pg_attribute`, `SHOW TABLES`) grow with the
+  catalog, and those are where the extra replicas pay off.
+- Everything runs on one machine (18 cores), including pgbench and
+  environmentd, so 3 replicas cannot reach 3x.
+
+Found on main while doing this: `pg_attribute_all_databases_ind` is keyed
+on all 14 columns, so `pg_attribute WHERE attrelid = X` is a full scan of the
+index (~94k rows at 6400 objects, 47 ms per query). The optimizer notice
+says so. Keying the builtin index on `attrelid` should make it a lookup.
+Candidate for its own PR.
+
 Load balancing, 3 frontend replicas:
 
 - 300 fast-path peeks: exactly 100 per replica.
