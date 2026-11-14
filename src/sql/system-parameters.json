@@ -4199,6 +4199,15 @@
       "dyncfg": true
     },
     {
+      "name": "storage_suppress_restart_loop_statuses",
+      "typeName": "boolean",
+      "default": "on",
+      "description": "Whether the storage controller drops the status rows of a source or sink restart that stalls again with the same error.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "storage_suspend_and_restart_delay",
       "typeName": "duration",
       "default": "5 s",

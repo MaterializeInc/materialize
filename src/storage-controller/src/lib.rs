@@ -647,6 +647,7 @@ impl StorageController for Controller {
         // configuration itself changes, so a dropped replica's entry would
         // otherwise be retained until the next such change.
         self.replica_dyncfg_overrides.remove(&replica_id);
+        self.restart_loops.forget_replica(replica_id);
 
         let instance = self
             .instances
@@ -3485,17 +3486,24 @@ where
             return;
         }
 
-        let mut written = Vec::with_capacity(updates.len());
-        for update in updates {
-            let group = self.restart_group(update.id);
-            written.extend(self.restart_loops.observe(group, update));
+        let mut to_write = Vec::with_capacity(updates.len());
+        if dyncfgs::STORAGE_SUPPRESS_RESTART_LOOP_STATUSES.get(self.config.config_set()) {
+            for update in updates {
+                let group = self.restart_group(update.id);
+                to_write.extend(self.restart_loops.observe(group, update));
+            }
+            // After observing the statuses, so a restart whose `running` and
+            // first frontier advance arrive in one batch is released.
+            for group in progressed {
+                to_write.extend(self.restart_loops.progressed(group));
+            }
+        } else {
+            // Clearing on every call keeps a re-enabled filter from treating an
+            // object as stalled after a recovery it did not see.
+            to_write.extend(self.restart_loops.clear());
+            to_write.extend(updates);
         }
-        // After observing the statuses, so a restart whose `running` and first
-        // frontier advance arrive in one batch is released.
-        for group in progressed {
-            written.extend(self.restart_loops.progressed(group));
-        }
-        self.append_status_updates(written);
+        self.append_status_updates(to_write);
     }
 
     /// Writes status updates of sources and sinks that still exist to their
@@ -3921,11 +3929,9 @@ where
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
 
-        if !self.read_only {
-            let collections = &self.collections;
-            self.restart_loops
-                .retain_groups(|id| collections.contains_key(&id));
-        }
+        let collections = &self.collections;
+        self.restart_loops
+            .retain_groups(|id| collections.contains_key(&id));
 
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {

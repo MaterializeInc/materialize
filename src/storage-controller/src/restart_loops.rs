@@ -19,14 +19,15 @@ use mz_storage_client::client::{Status, StatusUpdate};
 /// Drops the statuses of a restart that ends in the stall it started from, so
 /// a source or sink in a restart loop writes one row per distinct error.
 ///
-/// An ingestion and its exports restart together and form a group, headed by
-/// the ingestion. A sink is a group of its own. While the head's last written
-/// status is `stalled`, `starting` and `running` statuses that repeat their
-/// object's last written status are held. They are dropped if the head stalls
-/// again with the same error, and written with their original timestamps when
-/// a collection in the group advances its write frontier or the group reports
-/// any other status. A source can report `running` before it connects, so only
-/// a frontier advance shows that a restart worked.
+/// An ingestion and its exports restart together and form a group. The
+/// ingestion is the group's primary, the object whose halt restarts the group.
+/// A sink is the primary of a group of its own. While the primary's last
+/// written status is `stalled`, `starting` and `running` statuses that repeat
+/// their object's last written status are held. They are dropped if the
+/// primary stalls again with the same error, and written with their original
+/// timestamps when a collection in the group advances its write frontier or
+/// the group reports any other status. A source can report `running` before it
+/// connects, so only a frontier advance shows that a restart worked.
 ///
 /// NOTE: A restart that is up but cannot advance, such as an Iceberg sink
 /// before its first commit or a sink whose input is stalled, keeps showing its
@@ -40,17 +41,17 @@ pub(crate) struct RestartLoops {
 }
 
 impl RestartLoops {
-    /// The statuses to write for `update`, which belongs to the group headed by
-    /// `group`, in order.
+    /// The statuses to write for `update`, which belongs to the group whose
+    /// primary is `group`, in order.
     pub(crate) fn observe(&mut self, group: GlobalId, update: StatusUpdate) -> Vec<StatusUpdate> {
         let key = (group, update.replica_id);
-        let is_head = update.id == group;
-        let head_stalled = matches!(self.written.get(&key), Some((Status::Stalled, _)));
+        let is_primary = update.id == group;
+        let primary_stalled = matches!(self.written.get(&key), Some((Status::Stalled, _)));
         match update.status {
-            // The head's restart, or an export that was already up.
+            // The primary's restart, or an export that was already up.
             Status::Starting | Status::Running
-                if head_stalled
-                    && (is_head
+                if primary_stalled
+                    && (is_primary
                         || matches!(
                             self.written.get(&(update.id, update.replica_id)),
                             Some((Status::Starting | Status::Running, _))
@@ -60,7 +61,7 @@ impl RestartLoops {
                 Vec::new()
             }
             Status::Stalled
-                if is_head
+                if is_primary
                     && self.held.contains_key(&key)
                     && matches!(
                         self.written.get(&key),
@@ -103,6 +104,26 @@ impl RestartLoops {
     pub(crate) fn retain_groups(&mut self, exists: impl Fn(GlobalId) -> bool) {
         self.written.retain(|(id, _), _| exists(*id));
         self.held.retain(|(group, _), _| exists(*group));
+    }
+
+    /// Forgets `replica_id`, which was dropped. Its held statuses are dropped
+    /// too, since releasing them would write `running` after the `Paused` the
+    /// controller writes for the dropped replica.
+    pub(crate) fn forget_replica(&mut self, replica_id: ReplicaId) {
+        self.written
+            .retain(|(_, replica), _| *replica != Some(replica_id));
+        self.held
+            .retain(|(_, replica), _| *replica != Some(replica_id));
+    }
+
+    /// Forgets all state and returns the held statuses, for when the filter is
+    /// turned off.
+    pub(crate) fn clear(&mut self) -> Vec<StatusUpdate> {
+        self.written.clear();
+        std::mem::take(&mut self.held)
+            .into_values()
+            .flatten()
+            .collect()
     }
 
     /// Records `updates` as written and returns them.
@@ -243,6 +264,28 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_clearing_returns_held_statuses_and_forgets_stalls() {
+        let mut loops = RestartLoops::default();
+        let stall = (Status::Stalled, Some("dns failure"));
+        restart(&mut loops, Some(stall));
+        restart(&mut loops, None);
+
+        let cleared: Vec<_> = loops
+            .clear()
+            .into_iter()
+            .map(|update| (update.id, update.status, update.error))
+            .collect();
+        let mut held = full_restart(stall);
+        held.pop();
+        assert_eq!(cleared, held);
+        assert_eq!(
+            restart(&mut loops, Some(stall)),
+            full_restart(stall),
+            "a cleared filter writes the next restart in full"
+        );
+    }
+
+    #[mz_ore::test]
     fn test_held_statuses_are_written_before_other_statuses() {
         let mut loops = RestartLoops::default();
         restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
@@ -259,6 +302,47 @@ mod tests {
 
         loops.retain_groups(|id| id != SOURCE && id != TABLE);
         assert!(loops.written.is_empty() && loops.held.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_a_dropped_replica_is_forgotten() {
+        let (dropped, kept) = (ReplicaId::User(1), ReplicaId::User(2));
+        let mut loops = RestartLoops::default();
+        hold_restarts(&mut loops, &[dropped, kept]);
+
+        loops.forget_replica(dropped);
+        let released: Vec<_> = loops
+            .progressed(SOURCE)
+            .into_iter()
+            .map(|update| update.replica_id)
+            .collect();
+        assert_eq!(released, vec![Some(kept)]);
+        assert!(loops.written.keys().all(|(_, r)| *r == Some(kept)));
+    }
+
+    #[mz_ore::test]
+    fn test_exports_racing_the_source_to_stall_lose_nothing() {
+        let stall = (Status::Stalled, Some("dns failure"));
+        let racing_restart = |first: GlobalId, second: GlobalId| {
+            let mut loops = RestartLoops::default();
+            restart(&mut loops, Some(stall));
+            assert_eq!(restart(&mut loops, None), vec![]);
+            [first, second]
+                .into_iter()
+                .flat_map(|id| loops.observe(SOURCE, status(id, stall.0, stall.1)))
+                .map(|update| (update.id, update.status, update.error))
+                .collect::<Vec<_>>()
+        };
+        let stalled = |id| (id, Status::Stalled, Some("dns failure".to_string()));
+
+        // The export's stall ends the hold, so the restart is written in full.
+        let mut expected = full_restart(stall);
+        expected.insert(4, stalled(TABLE));
+        assert_eq!(racing_restart(TABLE, SOURCE), expected);
+
+        // The source's stall drops the restart, and the export's is still
+        // written.
+        assert_eq!(racing_restart(SOURCE, TABLE), vec![stalled(TABLE)]);
     }
 
     #[mz_ore::test]
