@@ -903,12 +903,10 @@ impl<'w> Worker<'w> {
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
 
-                // Apply storage's upsert spill flag to both stash flavors'
-                // mechanisms: the storage chunk spill gate (chunked flavor)
-                // and the storage-owned column pager (paged flavor). The
-                // buffer pool, the pager pool, and their budgets are the
-                // shared ones configured by compute's `apply_worker_config`
-                // (compute and storage run in the same process).
+                // Apply storage's upsert spill flag to the storage chunk spill
+                // gate. The buffer pool and its budget are the shared ones
+                // configured by compute's `apply_worker_config` (compute and
+                // storage run in the same process).
                 //
                 // The flag is replica-scoped: the storage controller merges
                 // per-replica overrides into the `UpdateConfiguration`
@@ -924,7 +922,6 @@ impl<'w> Worker<'w> {
                         enabled, "upsert stash spill: applying gate",
                     );
                     crate::upsert::upsert_stash_spill::set_enabled(enabled);
-                    crate::upsert::upsert_stash_pager::set_enabled(enabled);
                 }
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self

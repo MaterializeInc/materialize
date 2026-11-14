@@ -3200,10 +3200,6 @@ class FlipFlagsAction(Action):
             "0.01",
             "0.02",
         ]
-        self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["column_paged_batcher_swap_pageout"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
             "0.0",
             "0.125",
@@ -3225,7 +3221,6 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_correction_v2_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
             "1",  # the default: fresh chunks store uncompressed

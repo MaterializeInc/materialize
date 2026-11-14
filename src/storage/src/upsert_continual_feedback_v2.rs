@@ -35,7 +35,7 @@
 //!    `(key, time)` via the `UpsertDiff` Semigroup, keeping the update with
 //!    the highest order key (latest source offset), through amortized
 //!    geometric merging as data is pushed in, and cold stash state leaves RSS
-//!    through the flavor's spill path (see below). This bounds resident
+//!    through the buffer pool (see below). This bounds resident
 //!    memory even during large source snapshots.
 //!
 //! 2. **Read persist frontier.** Check the probe on the persist arrangement
@@ -63,23 +63,13 @@
 //!    back as ineligible). Drop the capability entirely when the batcher is
 //!    empty.
 //!
-//! ## Stash flavors
+//! ## Stash and feedback arrangement
 //!
-//! [`UpsertStashFlavor`], resolved from `enable_upsert_chunked_stash` at
-//! operator construction, selects between two instantiations of the same
-//! loop:
-//!
-//! * **Chunked**: the stash is differential's chunk merge batcher over
-//!   time-major `ColumnChunk`s and the feedback arrangement is a spine of
-//!   chunk batches. Committed chunk bodies spill to the process buffer pool,
-//!   the drain loads sealed chunks one at a time, and prior state comes back
-//!   through bulk probes of the trace's batches.
-//! * **Paged**: the stash is the paged columnar merge batcher and the
-//!   feedback arrangement is a `ValRowSpine`. Cold chains page out of RSS
-//!   through the storage-owned column pager, and prior state comes back
-//!   through a trace cursor.
-//!
-//! Both flavors' spill paths are gated by `enable_upsert_paged_spill`.
+//! The stash is differential's chunk merge batcher over time-major
+//! `ColumnChunk`s and the feedback arrangement is a spine of chunk batches.
+//! Committed chunk bodies spill to the process buffer pool, gated by
+//! `enable_upsert_paged_spill`. The drain loads sealed chunks one at a time,
+//! and prior state comes back through bulk probes of the trace's batches.
 //!
 //! ## Eligibility condition (total order)
 //!
@@ -100,19 +90,14 @@ use differential_dataflow::trace::chunk::ChunkBatcher;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
 use differential_dataflow::{AsCollection, VecCollection};
-use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
-use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton, sole_capability,
 };
-use mz_timely_util::columnar::Col2ValPagedBatcher;
 use mz_timely_util::columnar::chunk::{ChunkChunker, StorageSpill};
-use mz_timely_util::columnar::merge_batcher::PagedChunker;
 use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
@@ -130,7 +115,7 @@ use crate::upsert::UpsertSourceTime;
 use crate::upsert::UpsertValue;
 
 use self::feedback::{FeedbackChunk, FeedbackSpine, encode_feedback};
-use self::stash::{ChunkedArm, PagedArm, UpsertDiff, UpsertStashArm, UpsertUpdate, seal_upper};
+use self::stash::{ChunkedArm, UpsertDiff, UpsertStashArm, UpsertUpdate, seal_upper};
 
 #[cfg(feature = "fuzzing")]
 pub use self::feedback::datum_seq_to_upsert_value;
@@ -141,34 +126,6 @@ mod feedback;
 mod stash;
 #[cfg(test)]
 mod tests;
-
-/// Which stash and feedback-arrangement representation the upsert-v2
-/// operator instantiates. The two flavors run the same operator loop; they
-/// differ in the batcher, the feedback trace, and how the drain reads prior
-/// state. See the module docs for the comparison.
-#[derive(Clone, Copy, Debug)]
-pub enum UpsertStashFlavor {
-    /// Paged columnar merge batcher stash, `ValRowSpine` feedback
-    /// arrangement, cursor-based drain. Spills through the storage-owned
-    /// column pager.
-    Paged,
-    /// Chunk merge batcher stash, chunk-spine feedback arrangement,
-    /// bulk-probe drain. Spills through the process buffer pool.
-    Chunked,
-}
-
-impl UpsertStashFlavor {
-    /// Resolve the flavor from the replica's config set. Call this once per
-    /// source at operator construction time, so a dataflow keeps one flavor
-    /// for its whole life even if the flag flips underneath it.
-    pub fn from_config(config: &ConfigSet) -> Self {
-        if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
-            Self::Chunked
-        } else {
-            Self::Paged
-        }
-    }
-}
 
 /// The operator's data-output handle. A fueled `Vec` builder so the drain can
 /// `give_fueled` each emitted update and yield to timely under large snapshot
@@ -187,12 +144,8 @@ type UpsertOutputHandle<T> =
 ///   1. **Source input** — upsert commands from the external source.
 ///   2. **Persist input** — feedback of the operator's own output, read back
 ///      from persist.  Arranged into a trace for prior-value lookups.
-///
-/// `flavor` selects the stash and feedback-arrangement representation; see
-/// the module docs.
 #[allow(clippy::disallowed_methods)]
 pub fn upsert_inner<'scope, T, FromTime>(
-    flavor: UpsertStashFlavor,
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
@@ -216,89 +169,37 @@ where
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
     FromTime: UpsertSourceTime,
 {
-    // The feedback keying and encoding are flavor-independent; the
-    // arrangement they feed is not, so each arm names its own arrange types
-    // and hands the arrangement to the shared operator loop.
     let encoded = encode_feedback(
         persist_ok,
         persist_err,
         key_indices,
         source_config.source_statistics.clone(),
     );
-    match flavor {
-        UpsertStashFlavor::Chunked => {
-            // Chains and sealed batches alike are `FeedbackChunk`s whose
-            // bodies spill to the buffer pool, behind the same storage spill
-            // gate as the source stash.
-            let persist_arranged =
-                arrange_core::<
-                    _,
-                    _,
-                    ChunkBatcher<
-                        ChunkChunker<(UpsertKey, Row), T, Diff, StorageSpill>,
-                        FeedbackChunk<T>,
-                    >,
-                    FeedbackSpine<T>,
-                >(encoded, Pipeline, "Persist feedback", MergeBatcher::new);
-            build_upsert_operator::<ChunkedArm, _, _>(
-                input,
-                resume_upper,
-                persist_arranged,
-                persist_token,
-                upsert_metrics,
-                source_config,
-            )
-        }
-        UpsertStashFlavor::Paged => {
-            // The batcher routes its spine input through the storage-owned
-            // pager, paging cold feedback chains out of RSS, while
-            // `ValRowSpine` keeps keys in a columnation arena (`UpsertKey`
-            // is fixed-size `[u8; 32]`) and values as packed `Row` bytes in
-            // a `DatumContainer`.
-            let persist_arranged = arrange_core::<
-                _,
-                _,
-                Col2ValPagedBatcher<
-                    UpsertKey,
-                    Row,
-                    T,
-                    Diff,
-                    PagedChunker<((UpsertKey, Row), T, Diff)>,
-                    ValRowColPagedBuilder<UpsertKey, T, Diff>,
-                >,
-                FundedValRowSpine<UpsertKey, T, Diff>,
-            >(
-                encoded,
-                Pipeline,
-                "Persist feedback",
-                |logger, operator_id| {
-                    // The feedback arrangement must spill under storage's gate, not compute's, so
-                    // capture the storage-owned pager here rather than falling back to the
-                    // process-global one.
-                    let mut batcher = Col2ValPagedBatcher::new(logger, operator_id);
-                    batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
-                    batcher
-                },
-            );
-            build_upsert_operator::<PagedArm, _, _>(
-                input,
-                resume_upper,
-                persist_arranged,
-                persist_token,
-                upsert_metrics,
-                source_config,
-            )
-        }
-    }
+    // Chains and sealed batches alike are `FeedbackChunk`s whose bodies spill
+    // to the buffer pool, behind the same storage spill gate as the source
+    // stash.
+    let persist_arranged = arrange_core::<
+        _,
+        _,
+        ChunkBatcher<ChunkChunker<(UpsertKey, Row), T, Diff, StorageSpill>, FeedbackChunk<T>>,
+        FeedbackSpine<T>,
+    >(encoded, Pipeline, "Persist feedback", MergeBatcher::new);
+    build_upsert_operator::<ChunkedArm, _, _>(
+        input,
+        resume_upper,
+        persist_arranged,
+        persist_token,
+        upsert_metrics,
+        source_config,
+    )
 }
 
-/// The flavor-independent upsert-v2 operator loop, generic over an
-/// [`UpsertStashArm`].
+/// The upsert-v2 operator loop, generic over an [`UpsertStashArm`].
 ///
 /// Consumes the source input and the arranged persist feedback (constructed
-/// per flavor by [`upsert_inner`]) and drives the ingest / seal / drain /
-/// capability loop described in the module docs, calling through the arm at
-/// the few points where the flavors diverge.
+/// by [`upsert_inner`]) and drives the ingest / seal / drain / capability
+/// loop described in the module docs, calling through the arm for the stash
+/// and the drain.
 #[allow(clippy::disallowed_methods)]
 fn build_upsert_operator<'scope, A, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
@@ -366,8 +267,7 @@ where
         // Source stash. The batcher maintains geometrically-sized sorted
         // chains and consolidates via the UpsertDiff Semigroup as data is
         // pushed in, bounding memory to O(unique key-time pairs) even during
-        // large initial snapshots. How cold stash state leaves RSS is
-        // flavor-specific; see the arm impls.
+        // large initial snapshots.
         let mut batcher = A::new_batcher();
         // The chunker sorts and consolidates raw input into the chunks the
         // batcher consumes.

@@ -383,7 +383,7 @@ def run_benches(
     ancestor target and then every HEAD target, keeps the machine's page
     cache and thermal state close between the two runs of a benchmark, which
     is what produced repeatable false regressions in the I/O-bound
-    mz-ore/pager benches when the two phases ran far apart. A target present
+    mz-ore benches when the two phases ran far apart. A target present
     only in the ancestor is never run, since there is no HEAD result to
     compare it against.
 
