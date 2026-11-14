@@ -97,6 +97,8 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Pipeline at most one readiness observation ahead of the coordinator.
+    logging_watch_set_semaphore: Arc<Semaphore>,
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
     /// Requests a group commit. Used to advance the write timeline when we
@@ -277,6 +279,7 @@ impl PeekClient {
             transient_id_gen,
             optimizer_metrics,
             statement_logging_frontend,
+            logging_watch_set_semaphore: Arc::new(Semaphore::new(1)),
             oracles: Default::default(), // lazily populated
             persist_client,
             occ_write_semaphore,
@@ -637,14 +640,16 @@ impl PeekClient {
                 )
             })?;
 
-        if let Some(watch_set) = watch_set {
-            self.call_coordinator(|tx| Command::InstallPeekWatchSets {
-                conn_id: conn_id.clone(),
-                watch_set,
-                tx,
-            })
-            .await??;
-        }
+        let watch_set_permit = if watch_set.is_some() {
+            Some(
+                Arc::clone(&self.logging_watch_set_semaphore)
+                    .acquire_owned()
+                    .await
+                    .expect("logging watch-set semaphore is never closed"),
+            )
+        } else {
+            None
+        };
         let peek = self
             .register_peek(
                 &conn_id,
@@ -656,6 +661,18 @@ impl PeekClient {
                 true,
             )
             .await?;
+
+        // Registration arbitrates concurrent catalog changes and cancellation.
+        // Readiness watches only produce logging milestones, so do not make
+        // issuing the peek wait for the coordinator to install them. Use the
+        // same FIFO channel as begin/end logging and connection termination.
+        if let Some(watch_set) = watch_set {
+            self.coordinator_client.send(Command::InstallPeekWatchSets {
+                conn_id: conn_id.clone(),
+                watch_set,
+                permit: watch_set_permit.expect("sampled peek acquired an observation permit"),
+            });
+        }
 
         // Test-only synchronization point: parks a peek between registration
         // and issue, so a test can land a concurrent DROP CLUSTER in this
