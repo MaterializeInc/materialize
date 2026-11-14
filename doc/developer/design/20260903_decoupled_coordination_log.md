@@ -11,8 +11,11 @@ harnesses. The four-index failure recurred after a passing exact repeat. After
 unpausing publication, incarnation 10 (generation 1, Adapter 1) alone kept its
 grant for u37 and input u34 at the cap for 300s. The active adapter and relevant
 replica grants advanced. Candidate publication repeatedly reports catalog races.
-Review timestamp allocation after sampling as a possible stale-sample window,
-without assuming that transaction-open rejection dominates CAS rejection.
+The diagnostic trace contains 24 actual publication attempts: 14 open failures,
+8 commit-stage failures and 2 commits. Oracle allocation is about 1ms, so hoisting
+it alone is insufficient. Await the user's decision on deriving bounds inside
+the transaction from sampled runtime progress and freshly applied catalog state.
+Do not add consensus refreshes or split publication merely to pass the test.
 Keep original workloads and
 bounds. Do not increase retries or timeouts to claim acceptance.
 
@@ -105,9 +108,8 @@ Owned worker `i-0b3699392b71bd7d2` expires at
 Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
-`retained-build-source-sha256.json` and `native-retained-binaries.json`. The
-All current runs cleaned up. No runtime or build is active. Oracle review of the
-adapter publication boundary is pending. Worker expiry is now
+`retained-build-source-sha256.json` and `native-retained-binaries.json`.
+All current runs cleaned up. No runtime or build is active. Worker expiry is now
 03:00 UTC November 14. Python-only harness changes have a separate
 source-exception manifest. Compiled Rust remains unchanged.
 No parser or Persist source changed. Supervision has an
@@ -145,6 +147,8 @@ Essential pointers, relative to the evidence root:
   Passing exact repeat: `index-four-retained-repeat-evidence.tar.gz`.
   Recurrence with working probes: `index-four-probe-evidence.tar.gz` and
   `index-four-limiting-grants.json`.
+  Transaction-stage trace: `index-four-trace-evidence.tar.gz`,
+  `index-four-trace-analysis.json` and `index-four-trace-findings.md`.
   Remaining zippy artifacts and restore-contract audit: `zippy-acceptance-audit.md`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
