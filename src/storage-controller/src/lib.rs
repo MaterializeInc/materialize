@@ -21,6 +21,7 @@ use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
 use crate::instance::{Instance, ReplicaConfig};
+use crate::restart_loops::RestartLoops;
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use derivative::Derivative;
@@ -103,6 +104,7 @@ mod collection_mgmt;
 mod history;
 mod instance;
 mod persist_handles;
+mod restart_loops;
 mod rtr;
 mod statistics;
 
@@ -229,6 +231,8 @@ pub struct Controller {
     storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     /// Migrated storage collections that can be written even in read only mode.
     migrated_storage_collections: BTreeSet<GlobalId>,
+    /// Statuses held back from sources and sinks that may be in a restart loop.
+    restart_loops: RestartLoops,
 
     /// Ticker for scheduling periodic maintenance work.
     maintenance_ticker: tokio::time::Interval,
@@ -643,6 +647,7 @@ impl StorageController for Controller {
         // configuration itself changes, so a dropped replica's entry would
         // otherwise be retained until the next such change.
         self.replica_dyncfg_overrides.remove(&replica_id);
+        self.restart_loops.forget_replica(replica_id);
 
         let instance = self
             .instances
@@ -2290,6 +2295,7 @@ impl StorageController for Controller {
         }
 
         let mut status_updates = vec![];
+        let mut progressed = BTreeSet::new();
         let mut updated_frontiers = BTreeMap::new();
 
         // Take the currently stashed responses so that we can call mut receiver functions in the loop.
@@ -2297,7 +2303,9 @@ impl StorageController for Controller {
         for resp in stashed_responses {
             match resp {
                 (_replica_id, StorageResponse::FrontierUpper(id, upper)) => {
-                    self.update_write_frontier(id, &upper);
+                    if self.update_write_frontier(id, &upper) {
+                        progressed.insert(self.restart_group(id));
+                    }
                     updated_frontiers.insert(id, upper);
                 }
                 (replica_id, StorageResponse::DroppedId(id)) => {
@@ -2515,7 +2523,7 @@ impl StorageController for Controller {
             }
         }
 
-        self.record_status_updates(status_updates);
+        self.record_status_updates(status_updates, progressed);
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
@@ -2747,6 +2755,7 @@ impl StorageController for Controller {
             wallclock_lag_last_recorded,
             storage_collections: _,
             migrated_storage_collections,
+            restart_loops: _,
             maintenance_ticker: _,
             maintenance_scheduled,
             instance_response_tx: _,
@@ -2954,6 +2963,7 @@ where
             wallclock_lag_last_recorded: now_dt,
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
+            restart_loops: RestartLoops::default(),
             maintenance_ticker,
             maintenance_scheduled: false,
             instance_response_rx,
@@ -3007,9 +3017,11 @@ where
         }
     }
 
+    /// Returns whether `new_upper` advanced the write frontier of `id`.
     #[instrument(level = "debug", fields(updates))]
-    fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) {
+    fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) -> bool {
         let mut read_capability_changes = BTreeMap::default();
+        let mut advanced = false;
 
         if let Some(collection) = self.collections.get_mut(&id) {
             let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state {
@@ -3028,7 +3040,7 @@ where
                             "updated write frontier for collection which is not an ingestion"
                         );
                     }
-                    return;
+                    return false;
                 }
                 CollectionStateExtra::Export(export) => (
                     &mut export.write_frontier,
@@ -3039,6 +3051,7 @@ where
 
             if PartialOrder::less_than(write_frontier, new_upper) {
                 write_frontier.clone_from(new_upper);
+                advanced = true;
             }
 
             let new_derived_since = hold_policy.frontier(write_frontier.borrow());
@@ -3056,6 +3069,7 @@ where
         if !read_capability_changes.is_empty() {
             self.update_hold_capabilities(&mut read_capability_changes);
         }
+        advanced
     }
 
     // This is different from `update_read_capabilities`, which is for external users.
@@ -3460,11 +3474,41 @@ where
 
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
-    fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+    ///
+    /// `progressed` holds the restart groups in which a collection advanced its
+    /// write frontier.
+    fn record_status_updates(
+        &mut self,
+        updates: Vec<StatusUpdate>,
+        progressed: BTreeSet<GlobalId>,
+    ) {
         if self.read_only {
             return;
         }
 
+        let mut to_write = Vec::with_capacity(updates.len());
+        if dyncfgs::STORAGE_SUPPRESS_RESTART_LOOP_STATUSES.get(self.config.config_set()) {
+            for update in updates {
+                let group = self.restart_group(update.id);
+                to_write.extend(self.restart_loops.observe(group, update));
+            }
+            // After observing the statuses, so a restart whose `running` and
+            // first frontier advance arrive in one batch is released.
+            for group in progressed {
+                to_write.extend(self.restart_loops.progressed(group));
+            }
+        } else {
+            // Clearing on every call keeps a re-enabled filter from treating an
+            // object as stalled after a recovery it did not see.
+            to_write.extend(self.restart_loops.clear());
+            to_write.extend(updates);
+        }
+        self.append_status_updates(to_write);
+    }
+
+    /// Writes status updates of sources and sinks that still exist to their
+    /// status histories.
+    fn append_status_updates(&mut self, updates: Vec<StatusUpdate>) {
         let mut sink_status_updates = vec![];
         let mut source_status_updates = vec![];
 
@@ -3485,6 +3529,15 @@ where
             IntrospectionType::SinkStatusHistory,
             sink_status_updates,
         );
+    }
+
+    /// The object whose restarts also restart `id`: its ingestion if `id` is an
+    /// ingestion export, otherwise `id` itself.
+    fn restart_group(&self, id: GlobalId) -> GlobalId {
+        match self.collections.get(&id).map(|c| &c.data_source) {
+            Some(DataSource::IngestionExport { ingestion_id, .. }) => *ingestion_id,
+            _ => id,
+        }
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState, StorageError> {
@@ -3875,6 +3928,10 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
+
+        let collections = &self.collections;
+        self.restart_loops
+            .retain_groups(|id| collections.contains_key(&id));
 
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {

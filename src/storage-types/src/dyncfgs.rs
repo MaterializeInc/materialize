@@ -594,6 +594,16 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the storage controller drops the status rows of source and sink
+/// restarts that stall again with the same error.
+pub const STORAGE_SUPPRESS_RESTART_LOOP_STATUSES: Config<bool> = Config::new(
+    "storage_suppress_restart_loop_statuses",
+    true,
+    "Whether the storage controller drops the status rows of a source or sink restart that \
+    stalls again with the same error.",
+    ParameterScope::Environment,
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -649,4 +659,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::sources::sql_server::MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
         .add(&STATISTICS_RETENTION_DURATION)
+        .add(&STORAGE_SUPPRESS_RESTART_LOOP_STATUSES)
 }

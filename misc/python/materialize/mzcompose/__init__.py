@@ -712,6 +712,9 @@ def get_variable_system_parameters(
             "storage_statistics_interval", "2000", ["100", "1000", "10000"]
         ),
         VariableSystemParameter(
+            "storage_suppress_restart_loop_statuses", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
         ),
         # End of list (ordered by name)
