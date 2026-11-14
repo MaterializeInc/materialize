@@ -31,8 +31,9 @@ use mz_adapter::{
     PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
-use mz_auth::Authenticated;
 use mz_auth::password::Password;
+use mz_auth::user::ExternalUserMetadata;
+use mz_auth::{Authenticated, is_jwt};
 use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::cast::CastFrom;
@@ -64,6 +65,7 @@ use mz_sql::session::vars::VarInput;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
+use tokio::sync::watch;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
 use tracing::{Instrument, debug, debug_span, info, warn};
@@ -209,42 +211,76 @@ where
 
             let group_claim =
                 OIDC_GROUP_CLAIM.get(adapter_client.get_system_vars().await.dyncfgs());
-            let auth_response = frontegg
-                .authenticate(&user, &password, Some(&group_claim))
-                .await;
-            match auth_response {
-                // Create a session based on the auth session.
-                //
-                // In particular, it's important that the username come from the
-                // auth session, as Frontegg may return an email address with
-                // different casing than the user supplied via the pgwire
-                // username fN
-                Ok((mut auth_session, authenticated)) => {
-                    let groups = auth_session.groups();
-                    let session = adapter_client.new_session(
-                        SessionConfig {
-                            conn_id: conn.conn_id().clone(),
-                            uuid: conn_uuid,
-                            user: auth_session.user().into(),
-                            client_ip: conn.peer_addr().clone(),
-                            external_metadata_rx: Some(auth_session.external_metadata_rx()),
+            if is_jwt(&password) {
+                match frontegg.validate_access_token(&password, Some(&user), Some(&group_claim)) {
+                    Ok((claims, authenticated)) => {
+                        let expired = frontegg.access_token_expiry(&claims);
+                        let session = new_jwt_session(
+                            conn,
+                            &adapter_client,
+                            conn_uuid,
                             helm_chart_version,
                             authenticator_kind,
-                            groups,
-                        },
-                        authenticated,
-                    );
-                    let expired = async move { auth_session.expired().await };
-                    (session, expired.left_future())
+                            JwtIdentity {
+                                user: claims.user,
+                                groups: claims.groups,
+                                external_metadata: Some(ExternalUserMetadata {
+                                    user_id: claims.user_id,
+                                    admin: claims.is_admin,
+                                }),
+                            },
+                            authenticated,
+                        );
+                        (session, expired.boxed().left_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
+                    }
                 }
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_PASSWORD,
-                            "invalid password",
-                        ))
-                        .await;
+            } else {
+                let auth_response = frontegg
+                    .authenticate(&user, &password, Some(&group_claim))
+                    .await;
+                match auth_response {
+                    // Create a session based on the auth session.
+                    //
+                    // In particular, it's important that the username come from the
+                    // auth session, as Frontegg may return an email address with
+                    // different casing than the user supplied via the pgwire
+                    // username fN
+                    Ok((mut auth_session, authenticated)) => {
+                        let groups = auth_session.groups();
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: auth_session.user().into(),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                                helm_chart_version,
+                                authenticator_kind,
+                                groups,
+                            },
+                            authenticated,
+                        );
+                        let expired = async move { auth_session.expired().await };
+                        (session, expired.boxed().left_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
+                    }
                 }
             }
         }
@@ -262,17 +298,16 @@ where
                 let auth_response = oidc.authenticate(&password, Some(&user)).await;
                 match auth_response {
                     Ok((mut claims, authenticated)) => {
-                        let groups = claims.groups.take();
-                        let session = adapter_client.new_session(
-                            SessionConfig {
-                                conn_id: conn.conn_id().clone(),
-                                uuid: conn_uuid,
+                        let session = new_jwt_session(
+                            conn,
+                            &adapter_client,
+                            conn_uuid,
+                            helm_chart_version,
+                            authenticator_kind,
+                            JwtIdentity {
                                 user: std::mem::take(&mut claims.user),
-                                client_ip: conn.peer_addr().clone(),
-                                external_metadata_rx: None,
-                                helm_chart_version,
-                                authenticator_kind,
-                                groups,
+                                groups: claims.groups.take(),
+                                external_metadata: None,
                             },
                             authenticated,
                         );
@@ -672,12 +707,6 @@ where
     }
 }
 
-/// Decides if a given password is a JWT by checking
-/// if we can decode its header.
-fn is_jwt(password: &str) -> bool {
-    jsonwebtoken::decode_header(password).is_ok()
-}
-
 /// Returns (name, value) session settings pairs from an options value.
 ///
 /// From Postgres, see pg_split_opts in postinit.c and process_postgres_switches
@@ -799,6 +828,50 @@ where
             "expected Password message",
         ),
     ))
+}
+
+/// The identity a validated JWT establishes for a pgwire session.
+struct JwtIdentity {
+    user: String,
+    groups: Option<Vec<String>>,
+    external_metadata: Option<ExternalUserMetadata>,
+}
+
+/// Creates the session for a connection authenticated with a validated JWT.
+///
+/// The caller decides how long the session lasts.
+fn new_jwt_session<A>(
+    conn: &FramedConn<A>,
+    adapter_client: &mz_adapter::Client,
+    conn_uuid: Uuid,
+    helm_chart_version: Option<String>,
+    authenticator_kind: mz_auth::AuthenticatorKind,
+    identity: JwtIdentity,
+    authenticated: Authenticated,
+) -> Session
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    // The sender is dropped right away: the claims never change for the life
+    // of the token, and the session keeps the initial value of a closed
+    // channel. Callers that grant authority from these claims must end the
+    // session when the token expires.
+    let external_metadata_rx = identity
+        .external_metadata
+        .map(|metadata| watch::channel(metadata).1);
+    adapter_client.new_session(
+        SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user: identity.user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx,
+            helm_chart_version,
+            authenticator_kind,
+            groups: identity.groups,
+        },
+        authenticated,
+    )
 }
 
 /// Helper for password-based authentication using AdapterClient
@@ -4001,23 +4074,6 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
-        }
-    }
-
-    #[mz_ore::test]
-    fn test_is_jwt() {
-        // A real JWT header decodes successfully.
-        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
-        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
-        for s in [
-            "",
-            "secure_password",
-            "p4ss.w0rd",
-            "aaa.bbb.ccc",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
-        ] {
-            assert!(!is_jwt(s), "is_jwt({s:?})");
         }
     }
 }
