@@ -1,0 +1,171 @@
+# Out-of-core hydration experiment
+
+`run.py` measures hydration time of TPCH indexes and materialized views on a
+staging region, with one arm per buffer-pool configuration. The module
+docstring describes the phases and the cluster layout.
+
+## Arms
+
+Each arm owns the clusters `idx_<arm>` and `mv_<arm>`. LaunchDarkly rules on the
+replica context's `cluster_name` set the flags that differ from the staging
+fallthrough. The fallthrough itself is the `pool_lz4` arm.
+
+| Arm | Deviation from the staging fallthrough |
+|---|---|
+| `columnation` | `enable_column_paged_batcher = false`, `enable_column_paged_batcher_spill = false`, `enable_compute_correction_v2_spill = false` |
+| `chunked` | `enable_column_paged_batcher_spill = false`, `enable_compute_correction_v2_spill = false` |
+| `pool_raw` | `column_chunk_compress_min_depth = 255` |
+| `pool_lz4` | none |
+| `pool_lz4_1` | `column_paged_batcher_budget_fraction = 0.01` |
+| `pool_lz4_rss100` | `column_paged_batcher_pool_rss_target_fraction = 1.0` |
+| `pool_lz4_b50_rss100` | `column_paged_batcher_budget_fraction = 0.5`, `column_paged_batcher_pool_rss_target_fraction = 1.0` |
+| `pool_lz4_nocorr` | `enable_compute_correction_v2_spill = false` |
+| `chunked_corr` | `enable_column_paged_batcher_spill = false` |
+
+`column_chunk_compress_min_depth = 255` disables compression in practice, because
+no chunk reaches generation 255. `column_paged_batcher_lz4` only affects the old
+pager and has no effect on the buffer pool.
+
+The last four arms isolate the pool's cost when the working set fits in memory,
+and the default arm list omits them. Pass them with `--arms`. An RSS target of
+1.0 lifts the ceiling on resident compressed extents to all of RAM, so
+`pool_lz4_rss100` against `pool_lz4` measures paging out without memory
+pressure. A budget of 0.5 keeps half of RAM in uncompressed slots, so
+`pool_lz4_b50_rss100` against `pool_lz4_rss100` measures compression. The
+budget arm needs the higher target too, because a budget above the target
+leaves the compressed tier no capacity.
+
+`pool_lz4_nocorr` and `chunked_corr` split the two spill gates for the MV
+phases. Each enables exactly one of batcher spill and MV sink correction
+spill, so against `pool_lz4` and `chunked` they attribute the cost to one gate.
+The buffer pool is installed whenever either gate is on.
+
+## Running
+
+```
+python3 misc/experiments/ooc-hydration/run.py --mz-bin target/debug/mz \
+  --config <writable mz.toml> --size M.1-3xlarge --outdir <dir>
+```
+
+The run is resumable: it skips (phase, trial, size) cells already present in
+`windows.csv`. `--phases` and `--arms` select subsets, so the index and MV
+phases can run as two concurrent processes with separate `--outdir`s.
+
+`--parallel-trials` runs all trials of a phase at once, trial n on clusters
+suffixed `_t<n>`. Add those cluster names to the LaunchDarkly rules first, and
+give `mv_first` at least as many trials as `mv_second`, because each
+second-write trial rehydrates the MVs of the first-write trial in its slot.
+More replicas share more nodes, so check pod placement when comparing arms.
+
+The LaunchDarkly rules live in the `staging` environment only. Each rule
+matches the region's environment id and a list of `cluster_name`s, so a rule
+written for one staging environment does not apply to another. Confirm the
+flags each replica saw in the `flags` column of `windows.csv`.
+
+## Setting up the LaunchDarkly rules
+
+`run.py` does not set any flag itself. Without a matching rule, every arm runs
+the staging fallthrough and all arms measure the same configuration. Before a
+run, give each flag below one rule per value. The rule matches the region's
+environment and the clusters of the listed arms.
+
+| Flag | Value | Arms |
+|---|---|---|
+| `enable_column_paged_batcher` | `false` | `columnation` |
+| `enable_column_paged_batcher_spill` | `false` | `columnation`, `chunked`, `chunked_corr` |
+| `enable_compute_correction_v2_spill` | `false` | `columnation`, `chunked`, `pool_lz4_nocorr` |
+| `column_chunk_compress_min_depth` | `255` | `pool_raw` |
+| `column_paged_batcher_budget_fraction` | `0.01` | `pool_lz4_1` |
+| `column_paged_batcher_budget_fraction` | `0.5` | `pool_lz4_b50_rss100` |
+| `column_paged_batcher_pool_rss_target_fraction` | `1.0` | `pool_lz4_rss100`, `pool_lz4_b50_rss100` |
+
+Only the arms of the planned run need rules. An arm `<arm>` uses the clusters
+`idx_<arm>` and `mv_<arm>`, and with `--parallel-trials` also
+`idx_<arm>_t<n>` and `mv_<arm>_t<n>` for trials 2 and up.
+
+Instructions for an agent setting the rules with the LaunchDarkly MCP server:
+
+* Use project `default` and environment `staging`. Never write to `production`.
+* Read the environment key from `SELECT mz_environment_id();` against the
+  target region. `run.py` prints it at start, for example
+  `aws-us-east-1-<uuid>-0`.
+* Call `get-flag` for each flag in the table. Confirm the staging fallthrough
+  matches the `pool_lz4` arm: both spill gates and the paged batcher enabled,
+  compression on. Find the id of the variation with the listed value. If no
+  variation has that value, stop and ask a human, because adding a variation
+  changes the flag in every environment.
+* Call `update-targeting-rules` with one `addRule` instruction per row. The
+  rule has two clauses and serves the row's variation id:
+  * context kind `environment`, attribute `key`, op `in`, the environment key;
+  * context kind `replica`, attribute `cluster_name`, op `in`, the cluster
+    names of the row's arms.
+* When rules for the same arms already exist for another environment, add the
+  environment key to their `environment` clause instead of a second rule.
+* Name the experiment and the author in the rule description and the change
+  comment, so the rules can be found and removed after the run.
+
+After the run, check the `flags` column of `windows.csv`. It lists the
+replica-level overrides of the experiment's flags, so `pool_lz4` rows are empty
+and a `columnation` row that lacks `enable_column_paged_batcher=false` ran
+without its rule.
+
+## Reproducing the measured configurations
+
+The working set fits in memory at SF30 on `M.1-3xlarge`. This is where the pool
+costs time against `columnation`:
+
+```
+run.py ... --size M.1-3xlarge --scale-factor 30 --parallel-trials \
+  --trials idx=2 --phases idx \
+  --arms columnation,pool_lz4,pool_lz4_rss100,pool_lz4_b50_rss100 --outdir sf30-idx
+run.py ... --size M.1-3xlarge --scale-factor 30 --parallel-trials \
+  --trials mv_first=3,mv_second=3 --phases mv_first,mv_second \
+  --arms columnation,chunked,pool_lz4,pool_lz4_nocorr,chunked_corr --outdir sf30-mv
+```
+
+Memory pressure comes from SF150 with the default arms, about 3x to 4x the
+working set on `M.1-3xlarge` and 4x to 6x on `M.1-2xlarge`. Measured from RSS
+plus swap over RAM, the ratio varies by phase.
+
+Trial times for one arm varied by up to 25% within a run, so compare arms from
+the same run only. Before a run, drop every other workload's objects from the
+arm clusters. Leftover indexes from another scale factor hydrate along with the
+measured ones and inflate their times. The region allows 100 materialized
+views, so drop the MVs of earlier runs before starting a new MV run. Keep the
+load generator sources across runs, since a recreated source ingests from scratch.
+
+## Summarizing
+
+```
+python3 misc/experiments/ooc-hydration/summarize.py --mz-bin target/debug/mz \
+  --config <writable mz.toml> <dir> [<dir> ...]
+```
+
+`summarize.py` prints the mean hydration time per phase and arm, the speedup
+against `columnation`, and the mean peak RSS and swap. A speedup below 1 means
+slower than `columnation`.
+
+## Memory
+
+`summarize.py` reads the peaks for each window in `windows.csv` from
+`mz_internal.mz_cluster_replica_metrics_history`, sampled once a minute.
+`memory_bytes` is RSS and `heap_bytes - memory_bytes` is swap; cast to
+`numeric` before subtracting, since both are unsigned. Pool extents are
+swap-backed, so swap includes them. Staging Prometheus had only a handful of
+cAdvisor samples per window.
+
+Confirm the arm from `mz_column_pool_extent_bytes_written_total`: the
+`columnation` and `chunked` arms must write no extents, and `pool_raw` writes
+more extent bytes than `pool_lz4`. `mz_column_pool_evictions_compress_total`
+counts every extent-writing eviction regardless of codec, so it does not tell
+`pool_raw` apart.
+
+## Profiling
+
+Polar Signals profiles the staging replicas. Select a replica by its
+environment's namespace and replica id together, because replica ids repeat
+across environments. Worker threads are named `compute:<n>`, and the pool's
+spill threads run apart from them. Compare an arm with `chunked` over the same
+window. The pool's worker-side cost sits under `ComputeSpill::spill_body`
+(insert, serialize into a slot, budget enforcement) and
+`ComputeSpill::into_body` (read, lz4 decode, copy out).
