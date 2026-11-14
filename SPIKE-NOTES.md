@@ -65,6 +65,28 @@ catalog_server run 1 read memory before introspection caught up.
 "main" is the v26.50 Docker image, so cross-environment timings are
 approximate. Comparisons within the spike are like for like.
 
+Frontend hydration vs data volume. Production's slow catalog server is not
+driven by object count (the analytics environment has ~3k objects) but by
+history-style relations (activity log, wallclock lag history, console
+utilization), so this measures an index on an MV of activity-log-shaped rows.
+Time is from replica creation until the first query on the index returns
+(three runs). An index on an empty MV gives the fixed overhead (0.25 s).
+
+| rows | arrangement | 1 worker | 2 workers |
+|---|---|---|---|
+| 1M | 64 MB | 0.87 / 0.88 / 0.88 s | 0.67 / 0.66 / 0.60 s |
+| 4M | 248 MB | 3.08 / 3.16 / 2.98 s | 2.17 / 1.95 / 1.63 s |
+| 16M | 980 MB | 11.89 / 11.87 / 11.59 s | 6.97 / 6.64 / 7.13 s |
+
+Linear in data: about 0.72 s per million rows (85 MB/s of arrangement) on
+one worker, about 0.42 s per million (145 MB/s) on two. Local persist is a
+file blob on local disk. S3 throughput needs measuring on staging.
+
+NOTE: `mz_compute_hydration_times` reported 0.05 ms for the 1M-row index
+above, and ~0.36 s for every frontend index, so per-dataflow times from it
+are not usable for indexes that hydrate from persist. Looks like a bug, not
+investigated.
+
 Load balancing, 3 frontend replicas:
 
 - 300 fast-path peeks: exactly 100 per replica.
