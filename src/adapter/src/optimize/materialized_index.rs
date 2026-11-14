@@ -282,15 +282,21 @@ fn plan_lookup(
             })
             .collect();
         for lookup_input in 0..inputs.len() {
-            if resolve(&inputs[lookup_input], &aliases) != Some(mi) {
+            let Some(positions) =
+                stored_column_positions(&inputs[lookup_input], mi, route.typ.arity(), &aliases)
+            else {
                 continue;
-            }
+            };
+            let key_positions: Vec<usize> = positions[..route.desc.key.len()]
+                .iter()
+                .map_while(|position| *position)
+                .collect();
             let Some((probe_input, keys)) = pinned_by_one_input(
                 equivalences,
                 &arities,
                 &offsets,
                 lookup_input,
-                route.desc.key.len(),
+                &key_positions,
                 inputs,
                 &lookups,
             ) else {
@@ -370,7 +376,7 @@ fn pinned_by_one_input(
     arities: &[usize],
     offsets: &[usize],
     lookup_input: usize,
-    key_len: usize,
+    key_positions: &[usize],
     inputs: &[MirRelationExpr],
     lookups: &BTreeSet<GlobalId>,
 ) -> Option<(usize, Vec<MirScalarExpr>)> {
@@ -381,8 +387,8 @@ fn pinned_by_one_input(
         }
         let columns = offsets[probe_input]..offsets[probe_input] + arities[probe_input];
         let mut keys = Vec::new();
-        for key_column in 0..key_len {
-            let column = MirScalarExpr::column(offsets[lookup_input] + key_column);
+        for key_position in key_positions {
+            let column = MirScalarExpr::column(offsets[lookup_input] + key_position);
             let pinned = equivalences
                 .iter()
                 .filter(|class| class.contains(&column))
@@ -448,6 +454,43 @@ fn strip_arrange_mut(expr: &mut MirRelationExpr) -> &mut MirRelationExpr {
     match expr {
         MirRelationExpr::ArrangeBy { input, .. } => strip_arrange_mut(input),
         other => other,
+    }
+}
+
+/// For each column of materialized index `mi` (`arity` columns, stored order),
+/// where `expr`'s output holds it, if `expr` reads `mi` through operators that
+/// keep its rows: arrangements, filters, projections and let bindings.
+/// Projection pushdown wraps a read in a `Project` whenever a query uses only
+/// some of the columns.
+fn stored_column_positions(
+    expr: &MirRelationExpr,
+    mi: GlobalId,
+    arity: usize,
+    aliases: &BTreeMap<LocalId, GlobalId>,
+) -> Option<Vec<Option<usize>>> {
+    match expr {
+        MirRelationExpr::Get {
+            id: Id::Global(id), ..
+        } if *id == mi => Some((0..arity).map(Some).collect()),
+        // `let_aliases` only records bindings whose value keeps the columns.
+        MirRelationExpr::Get {
+            id: Id::Local(id), ..
+        } if aliases.get(id) == Some(&mi) => Some((0..arity).map(Some).collect()),
+        MirRelationExpr::ArrangeBy { input, .. } | MirRelationExpr::Filter { input, .. } => {
+            stored_column_positions(input, mi, arity, aliases)
+        }
+        MirRelationExpr::Project { input, outputs } => {
+            let inner = stored_column_positions(input, mi, arity, aliases)?;
+            Some(
+                inner
+                    .into_iter()
+                    .map(|position| {
+                        position.and_then(|p| outputs.iter().position(|output| *output == p))
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
     }
 }
 
