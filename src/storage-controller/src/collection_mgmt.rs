@@ -1358,7 +1358,9 @@ impl AppendOnlyWriteTask {
 
                     let capacity: usize = batch
                         .iter()
-                        .map(|(rows, _)| rows.len())
+                        .map(|(updates, _)| {
+                            updates.iter().map(AppendOnlyUpdate::row_count).sum::<usize>()
+                        })
                         .sum();
                     let mut all_rows = Vec::with_capacity(capacity);
                     let mut responders = Vec::with_capacity(batch.len());
@@ -1428,7 +1430,7 @@ impl AppendOnlyWriteTask {
             let new: Vec<_> = updates
                 .into_iter()
                 .filter(|r| match r {
-                    AppendOnlyUpdate::Row(_) => true,
+                    AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Rows(_) => true,
                     AppendOnlyUpdate::Status(update) => {
                         match (
                             previous_statuses
@@ -1443,7 +1445,7 @@ impl AppendOnlyWriteTask {
                 })
                 .collect();
             previous_statuses.extend(new.iter().filter_map(|update| match update {
-                AppendOnlyUpdate::Row(_) => None,
+                AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Rows(_) => None,
                 AppendOnlyUpdate::Status(update) => {
                     Some(((update.id, update.replica_id), update.status))
                 }
@@ -1453,7 +1455,7 @@ impl AppendOnlyWriteTask {
             updates
         };
 
-        updates.into_iter().map(AppendOnlyUpdate::into_row)
+        updates.into_iter().flat_map(AppendOnlyUpdate::into_rows)
     }
 }
 
