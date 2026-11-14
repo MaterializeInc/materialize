@@ -103,6 +103,9 @@ pub struct InjectedAuditEvent {
 #[derive(Debug, Clone)]
 pub enum Op {
     RenameCommand(Arc<super::command::RenameCommand>),
+    /// Publishes rotated public keys, failing if the connection's definition changed since the
+    /// rotation read it.
+    RotatedKeys(Arc<super::command::connection::RotatedKeys>),
     AlterRetainHistory {
         id: CatalogItemId,
         value: Option<Value>,
@@ -1195,6 +1198,12 @@ impl Catalog {
                     }
                     continue;
                 }
+                if let Op::RotatedKeys(command) = op {
+                    for op in command.execute(&preliminary_state)?.into_iter().rev() {
+                        pending_ops.push_front(op);
+                    }
+                    continue;
+                }
                 let result = Self::transact_op(
                     oracle_write_ts,
                     session,
@@ -1313,7 +1322,7 @@ impl Catalog {
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), AdapterError> {
         match op {
-            Op::RenameCommand(_) => {
+            Op::RenameCommand(_) | Op::RotatedKeys(_) => {
                 unreachable!("commands are expanded by transact_inner")
             }
             Op::CheckClusterState {
