@@ -570,8 +570,9 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_index_columns",
         ),
-        // Adding the `disabled` column to mz_cluster_replica_sizes. The table
-        // is rewritten at every startup, so replacing the shard loses nothing.
+        // `mz_cluster_replica_sizes` gained trailing `disabled` and
+        // `allowed_workloads` columns. The table is rewritten at every startup,
+        // so replacing the shard loses nothing.
         MigrationStep::replacement(
             "26.51.0-dev.0",
             CatalogItemType::Table,
