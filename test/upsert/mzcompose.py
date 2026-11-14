@@ -35,6 +35,9 @@ additional_system_parameter_defaults = {
     "storage_dataflow_delay_sources_past_rehydration": "true",
     "unsafe_enable_unorchestrated_cluster_replicas": "true",
     "memory_limiter_interval": "0",
+    # The fail_* state failpoints and the RocksDB state files exist only in the
+    # v1 upsert operator.
+    "enable_upsert_v2": "false",
 }
 
 SERVICES = [
