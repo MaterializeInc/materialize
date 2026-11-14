@@ -252,7 +252,7 @@ Explained Query:
                   Map (record_get[0](record_get[1](#1)), record_get[0](#1))
                     FlatMap unnest_list(#0{rank})
                       Project (#1{rank})
-                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
+                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first] from=orig_row[1]](row(list[row(#0{product_id}, #2{count})]))]
                           Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
                             Project (#1{product_id}, #6{category_id})
                               Join on=(#1{product_id} = #5{product_id}) type=differential
@@ -265,7 +265,7 @@ Explained Query:
         Filter (#2) IS NOT NULL
           Map (record_get[0](record_get[1](#1)), record_get[0](#1))
             FlatMap unnest_list(#0{rank})
-              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{sum_stock})], #1{sum_stock}))]
+              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first] from=orig_row[1]](row(list[row(#0{product_id}, #1{sum_stock})]))]
                 Reduce group_by=[#0{product_id}] aggregates=[sum(#1{stock})]
                   Project (#1{product_id}, #2{stock})
                     ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
@@ -1115,7 +1115,7 @@ Explained Query:
                   Map (record_get[0](record_get[1](#1)), record_get[0](#1))
                     FlatMap unnest_list(#0{rank})
                       Project (#1{rank})
-                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
+                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first] from=orig_row[1]](row(list[row(#0{product_id}, #2{count})]))]
                           Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
                             Project (#1{product_id}, #6{category_id})
                               Join on=(#1{product_id} = #5{product_id}) type=differential
@@ -1128,7 +1128,7 @@ Explained Query:
         Filter (#2) IS NOT NULL
           Map (record_get[0](record_get[1](#1)), record_get[0](#1))
             FlatMap unnest_list(#0{rank})
-              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{sum_stock})], #1{sum_stock}))]
+              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first] from=orig_row[1]](row(list[row(#0{product_id}, #1{sum_stock})]))]
                 Reduce group_by=[#0{product_id}] aggregates=[sum(#1{stock})]
                   Project (#1{product_id}, #2{stock})
                     ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
