@@ -20,6 +20,8 @@ import {
 } from "~/utils/camera";
 
 const ZOOM_STEP = 0.1;
+/** The share of the viewport fitted content may fill. */
+const FIT_PADDING = 0.92;
 
 export function useCamera() {
   const cameraRef = useRef<HTMLElement | null>(null);
@@ -109,6 +111,25 @@ export function useCamera() {
     }));
   }, []);
 
+  /** Centers content of the given size and zooms out until it fits. */
+  const fitTo = React.useCallback(
+    (contentWidth: number, contentHeight: number) => {
+      setCamera((prev: Camera) => {
+        if (!prev.width || !prev.height || !contentWidth || !contentHeight) {
+          return prev;
+        }
+        const z = clamp(
+          Math.min(prev.width / contentWidth, prev.height / contentHeight) *
+            FIT_PADDING,
+          MIN_ZOOM,
+          MAX_ZOOM,
+        );
+        return { ...prev, x: 0, y: 0, z };
+      });
+    },
+    [],
+  );
+
   const formatZoomValue = React.useCallback((value: number) => {
     return `${Math.round(value * 100)}%`;
   }, []);
@@ -118,6 +139,7 @@ export function useCamera() {
     formatZoomValue,
     cameraRef,
     resetZoom,
+    fitTo,
     cssTransform,
     zoomIn,
     zoomOut,

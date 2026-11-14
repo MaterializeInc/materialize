@@ -349,6 +349,7 @@
   "/docs/transform-data/": "https://materialize.com/docs/transform-data/",
   "/docs/transform-data/patterns/partition-by/": "https://materialize.com/docs/transform-data/patterns/partition-by/",
   "/docs/transform-data/patterns/": "https://materialize.com/docs/transform-data/patterns/",
+  "/docs/transform-data/patterns/ontology/": "https://materialize.com/docs/transform-data/patterns/ontology/",
   "/docs/transform-data/patterns/percentiles/": "https://materialize.com/docs/transform-data/patterns/percentiles/",
   "/docs/sql/system-catalog/pg_catalog/": "https://materialize.com/docs/sql/system-catalog/pg_catalog/",
   "/docs/integrations/client-libraries/php/": "https://materialize.com/docs/integrations/client-libraries/php/",

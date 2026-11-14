@@ -65,6 +65,11 @@ export interface BaseLayoutProps {
   accountOnlyNav?: boolean;
   navBarOverride?: React.FunctionComponent;
   sectionNav?: React.ReactNode;
+  /**
+   * Shows the navigation bar as icons only, for pages that need the width.
+   * A `sectionNav` implies it.
+   */
+  collapseNav?: boolean;
 }
 
 export const MAIN_CONTENT_MARGIN = 10;
@@ -117,7 +122,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
         minHeight="0"
       >
         <NavigationBar
-          isCollapsed={Boolean(props.sectionNav)}
+          isCollapsed={Boolean(props.collapseNav || props.sectionNav)}
           accountOnly={props.accountOnlyNav}
         />
         <HStack

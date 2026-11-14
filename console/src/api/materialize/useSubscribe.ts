@@ -91,6 +91,12 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
     target: subscribe,
     subscribe,
     request,
+    // The connection manager passes these on every connect, replacing the
+    // ones the manager was built with, so without them `clusterName` is lost.
+    // An explicit undefined cluster would also override the catalog server
+    // default, so pass nothing when no cluster is pinned.
+    getSessionVariables: () =>
+      options.clusterName ? { cluster: options.clusterName } : undefined,
   });
 
   const { data, error, snapshotComplete, resubscribing } =

@@ -42,6 +42,7 @@ import { DataIcon } from "~/svg/nav/DataIcon";
 import GalleryIcon from "~/svg/nav/GalleryIcon";
 import HelpIcon from "~/svg/nav/HelpIcon";
 import { MonitoringIcon } from "~/svg/nav/MonitoringIcon";
+import { OntologyIcon } from "~/svg/nav/OntologyIcon";
 import { ShellIcon } from "~/svg/nav/ShellIcon";
 import { MaterializeTheme } from "~/theme";
 
@@ -90,6 +91,15 @@ const getNavItems = ({
       label: "Data",
       href: `/regions/${regionSlug}/objects`,
     },
+    ...(flags["ontology-explorer"]
+      ? [
+          {
+            href: `/regions/${regionSlug}/ontology`,
+            icon: <OntologyIcon />,
+            label: "Ontology",
+          },
+        ]
+      : []),
     {
       href: `/regions/${regionSlug}/clusters`,
       icon: <ClustersIcon />,
