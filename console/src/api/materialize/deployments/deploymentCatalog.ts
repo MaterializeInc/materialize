@@ -13,6 +13,7 @@ import { sql } from "kysely";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import {
   ClusterHealth,
+  DefinitionRow,
   OOM_LOOP_THRESHOLD,
   SinkCutoverRow,
 } from "~/platform/deployments/deploymentModel";
@@ -34,13 +35,9 @@ export interface DeployCatalogObjectRow {
   lagMs: number | null;
 }
 
-export interface QualifiedObject {
-  database: string;
-  schema: string;
-  name: string;
-}
-
 const NO_MATCH = sql<boolean>`false`;
+
+const COMMIT_INTERVAL_PATTERN = "COMMIT INTERVAL = '([^']+)'";
 
 function schemaFilter(schemas: QualifiedSchema[]) {
   if (schemas.length === 0) return NO_MATCH;
@@ -146,21 +143,32 @@ export function buildDeployObjectsQuery(schemas: QualifiedSchema[]) {
   );
 }
 
+export interface DeploySchemas {
+  deployId: string;
+  /** The live schemas the deploy swaps. */
+  schemas: QualifiedSchema[];
+}
+
 /**
- * Sinks outside the deploy that read from relations in its swapped schemas.
- * Joining `mz_relations` drops the sink's connection, so each sink yields one
- * row, for its input.
+ * Sinks outside each deploy that read from relations in its swapped schemas.
  * `promote` repoints each with `ALTER SINK ... SET FROM` to the staged object
  * of the same name, so this pairs the sink's write frontier with that object's
- * read frontier.
+ * read frontier. Joining `mz_relations` drops the sink's connection, so a sink
+ * yields one row per deploy, for its input.
  */
-export function buildSinkCutoverQuery(
-  liveSchemas: QualifiedSchema[],
-  deployId: string,
-) {
-  const suffix = `_${deployId}`;
+export function buildSinkCutoverQuery(deploys: DeploySchemas[]) {
+  const rows = deploys.flatMap(({ deployId, schemas }) =>
+    schemas.map(
+      (s) => sql`(${deployId}::text, ${s.database}::text, ${s.schema}::text)`,
+    ),
+  );
+  const values =
+    rows.length > 0
+      ? sql.join(rows)
+      : sql`(NULL::text, NULL::text, NULL::text)`;
   return sql<SinkCutoverRow>`
     SELECT
+      sd.deploy_id AS "deployId",
       k.id AS "sinkId",
       kd.name AS "sinkDatabase",
       ks.name AS "sinkSchema",
@@ -172,68 +180,81 @@ export function buildSinkCutoverQuery(
       (nobj.id IS NOT NULL) AS "hasReplacement",
       kf.write_frontier::text::float8 AS "sinkWriteFrontierMs",
       nf.read_frontier::text::float8 AS "replacementReadFrontierMs",
-      (EXTRACT(EPOCH FROM kl.lag) * 1000)::float8 AS "sinkLagMs"
-    FROM mz_catalog.mz_sinks k
+      (EXTRACT(EPOCH FROM kl.lag) * 1000)::float8 AS "sinkLagMs",
+      -- Planning parsed this as an interval, so the cast cannot fail.
+      (EXTRACT(EPOCH FROM (regexp_match(
+        k.create_sql, ${COMMIT_INTERVAL_PATTERN}, 'i'
+      ))[1]::interval) * 1000)::float8 AS "commitIntervalMs"
+    FROM (VALUES ${values}) AS sd(deploy_id, database_name, schema_name)
+    JOIN mz_catalog.mz_databases d ON d.name = sd.database_name
+    JOIN mz_catalog.mz_schemas s
+      ON s.database_id = d.id AND s.name = sd.schema_name
+    JOIN mz_catalog.mz_relations dep ON dep.schema_id = s.id
+    JOIN mz_internal.mz_object_dependencies od
+      ON od.referenced_object_id = dep.id
+    JOIN mz_catalog.mz_sinks k ON k.id = od.object_id
     JOIN mz_catalog.mz_schemas ks ON ks.id = k.schema_id
     JOIN mz_catalog.mz_databases kd ON kd.id = ks.database_id
-    JOIN mz_internal.mz_object_dependencies od ON od.object_id = k.id
-    JOIN mz_catalog.mz_relations dep ON dep.id = od.referenced_object_id
-    JOIN mz_catalog.mz_schemas s ON s.id = dep.schema_id
-    JOIN mz_catalog.mz_databases d ON d.id = s.database_id
     LEFT JOIN mz_internal.mz_sink_statuses st ON st.id = k.id
     LEFT JOIN mz_internal.mz_frontiers kf ON kf.object_id = k.id
     LEFT JOIN mz_catalog.mz_schemas ns
-      ON ns.database_id = d.id AND ns.name = s.name || ${suffix}
+      ON ns.database_id = d.id AND ns.name = s.name || '_' || sd.deploy_id
     LEFT JOIN mz_catalog.mz_objects nobj
       ON nobj.schema_id = ns.id AND nobj.name = dep.name
     LEFT JOIN mz_internal.mz_frontiers nf ON nf.object_id = nobj.id
-    LEFT JOIN mz_internal.mz_wallclock_global_lag kl ON kl.object_id = k.id
-    WHERE ${schemaFilter(liveSchemas)}`.compile(queryBuilder);
+    LEFT JOIN mz_internal.mz_wallclock_global_lag kl
+      ON kl.object_id = k.id`.compile(queryBuilder);
 }
 
-/** Which of the given sinks already exist, so `promote` will skip creating them. */
-export function buildExistingSinksQuery(sinks: QualifiedObject[]) {
-  const filter =
-    sinks.length === 0
-      ? NO_MATCH
-      : sql<boolean>`(${sql.join(
-          sinks.map(
-            (k) =>
-              sql`(d.name = ${k.database} AND s.name = ${k.schema} AND k.name = ${k.name})`,
-          ),
-          sql` OR `,
-        )})`;
-  return sql<QualifiedObject>`
-    SELECT d.name AS database, s.name AS schema, k.name
-    FROM mz_catalog.mz_sinks k
-    JOIN mz_catalog.mz_schemas s ON s.id = k.schema_id
+/** Definitions of every object in the given schemas, for the change diff. */
+export function buildDefinitionsQuery(schemas: QualifiedSchema[]) {
+  return sql<DefinitionRow>`
+    SELECT
+      o.id,
+      d.name AS database,
+      s.name AS schema,
+      o.name,
+      o.type,
+      c.name AS "clusterName",
+      COALESCE(
+        v.create_sql, mv.create_sql, i.create_sql,
+        t.create_sql, so.create_sql, k.create_sql
+      ) AS "createSql"
+    FROM mz_catalog.mz_objects o
+    JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
     JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-    WHERE ${filter}`.compile(queryBuilder);
+    LEFT JOIN mz_catalog.mz_clusters c ON c.id = o.cluster_id
+    LEFT JOIN mz_catalog.mz_views v ON v.id = o.id
+    LEFT JOIN mz_catalog.mz_materialized_views mv ON mv.id = o.id
+    LEFT JOIN mz_catalog.mz_indexes i ON i.id = o.id
+    LEFT JOIN mz_catalog.mz_tables t ON t.id = o.id
+    LEFT JOIN mz_catalog.mz_sources so ON so.id = o.id
+    LEFT JOIN mz_catalog.mz_sinks k ON k.id = o.id
+    WHERE ${schemaFilter(schemas)}`.compile(queryBuilder);
 }
 
+/** Live catalog state of one in-progress deploy. */
 export async function fetchDeploymentCatalog({
   clusterNames,
-  schemas,
   liveSchemas,
-  deployId,
-  pendingSinks,
+  stagedSchemas,
+  suffix,
   queryKey,
   requestOptions,
 }: {
   clusterNames: string[];
-  schemas: QualifiedSchema[];
   liveSchemas: QualifiedSchema[];
-  deployId: string;
-  pendingSinks: QualifiedObject[];
+  stagedSchemas: QualifiedSchema[];
+  suffix: string;
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const [clusters, objects, sinks, existingSinks] = await executeSqlV2({
+  const [clusters, objects, sinks, definitions] = await executeSqlV2({
     queries: [
       buildClusterHealthQuery(clusterNames),
-      buildDeployObjectsQuery(schemas),
-      buildSinkCutoverQuery(liveSchemas, deployId),
-      buildExistingSinksQuery(pendingSinks),
+      buildDeployObjectsQuery(stagedSchemas),
+      buildSinkCutoverQuery([{ deployId: suffix, schemas: liveSchemas }]),
+      buildDefinitionsQuery([...liveSchemas, ...stagedSchemas]),
     ] as const,
     queryKey,
     requestOptions,
@@ -242,26 +263,31 @@ export async function fetchDeploymentCatalog({
     clusters: clusters.rows,
     objects: objects.rows,
     sinks: sinks.rows,
-    existingSinks: existingSinks.rows,
+    definitions: definitions.rows,
   };
 }
 
-/** Cluster health only, for the list page's per-deploy status. */
-export async function fetchClusterHealth({
+/** Staged cluster health and sink cutovers for every deploy in progress. */
+export async function fetchInProgressStatus({
   clusterNames,
+  deploys,
   queryKey,
   requestOptions,
 }: {
   clusterNames: string[];
+  deploys: DeploySchemas[];
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const { rows } = await executeSqlV2({
-    queries: buildClusterHealthQuery(clusterNames),
+  const [clusters, sinks] = await executeSqlV2({
+    queries: [
+      buildClusterHealthQuery(clusterNames),
+      buildSinkCutoverQuery(deploys),
+    ] as const,
     queryKey,
     requestOptions,
   });
-  return rows;
+  return { clusters: clusters.rows, sinks: sinks.rows };
 }
 
 /** How long after promote the "after the swap" summary covers. */
@@ -281,20 +307,22 @@ export interface AfterSwapRow {
 
 /**
  * Load on the clusters a deploy promoted, in the window right after promote.
- *
- * `_mz_deploy` keeps only the IDs of the clusters a deploy replaced, and
- * `promote` drops those. The clusters that took over are the ones `stage`
- * created as `<name>_<deploy id>`, so they are found by that name in the audit
- * log, which outlives the rename.
+ * The clusters keep their IDs through the swap.
  */
-export function buildAfterSwapQuery(deployId: string, promotedAt: Date) {
+export function buildAfterSwapQuery(
+  clusters: { id: string; stagedName: string }[],
+  promotedAt: Date,
+) {
+  const values =
+    clusters.length > 0
+      ? sql.join(
+          clusters.map((c) => sql`(${c.id}::text, ${c.stagedName}::text)`),
+        )
+      : sql`(NULL::text, NULL::text)`;
   return sql<AfterSwapRow>`
     WITH
     staged AS (
-      SELECT DISTINCT details->>'id' AS cluster_id, details->>'name' AS staged_name
-      FROM mz_catalog.mz_audit_events
-      WHERE object_type = 'cluster' AND event_type = 'create'
-        AND details->>'name' LIKE ${`%\\_${deployId}`}
+      SELECT * FROM (VALUES ${values}) AS v(cluster_id, staged_name)
     ),
     reps AS (
       SELECT rh.replica_id, rh.cluster_id, rh.size
@@ -348,18 +376,18 @@ export function buildAfterSwapQuery(deployId: string, promotedAt: Date) {
 }
 
 export async function fetchAfterSwap({
-  deployId,
+  clusters,
   promotedAt,
   queryKey,
   requestOptions,
 }: {
-  deployId: string;
+  clusters: { id: string; stagedName: string }[];
   promotedAt: Date;
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
   const { rows } = await executeSqlV2({
-    queries: buildAfterSwapQuery(deployId, promotedAt),
+    queries: buildAfterSwapQuery(clusters, promotedAt),
     queryKey,
     requestOptions,
   });

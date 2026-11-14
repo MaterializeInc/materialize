@@ -8,235 +8,190 @@
 // by the Apache License, Version 2.0.
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { millisecondsInSecond } from "date-fns/constants";
 import React from "react";
 
 import {
   buildQueryKeyPart,
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
-import { PermissionError } from "~/api/materialize/DatabaseError";
 import {
   fetchAfterSwap,
-  fetchClusterHealth,
   fetchDeploymentCatalog,
+  fetchInProgressStatus,
+  QualifiedSchema,
 } from "~/api/materialize/deployments/deploymentCatalog";
 import {
-  fetchDeploymentDetail,
-  fetchDeployments,
-  isMzDeployMissing,
-} from "~/api/materialize/deployments/mzDeploy";
+  fetchHistory,
+  fetchStaged,
+} from "~/api/materialize/deployments/deploymentDiscovery";
 
-import {
-  baselineDeploys,
-  Deployment,
-  groupDeployments,
-  stagingName,
-  swappedSchemas,
-} from "./deploymentModel";
+import { Deployment, groupDeployments } from "./deploymentModel";
 
 /** In-progress deploys change by the second while they hydrate. */
-const LIVE_REFETCH_MS = 5_000;
-const LIST_REFETCH_MS = 15_000;
+const LIVE_REFETCH_MS = 5 * millisecondsInSecond;
+const LIST_REFETCH_MS = 15 * millisecondsInSecond;
+/**
+ * History scans all of `mz_audit_events`, which grows for the life of the
+ * environment, and only changes when a deploy finishes.
+ */
+const HISTORY_REFETCH_MS = 60 * millisecondsInSecond;
+
+interface CatalogInput {
+  clusterNames: string[];
+  liveSchemas: QualifiedSchema[];
+  stagedSchemas: QualifiedSchema[];
+  suffix: string;
+}
+
+interface InProgressInput {
+  clusterNames: string[];
+  deploys: { deployId: string; schemas: QualifiedSchema[] }[];
+}
+
+const schemaList = (schemas: QualifiedSchema[]) =>
+  schemas.map((s) => `${s.database}.${s.schema}`).join(",");
 
 export const deploymentQueryKeys = {
   all: () => buildRegionQueryKey("deployments"),
-  list: () =>
-    [...deploymentQueryKeys.all(), buildQueryKeyPart("list")] as const,
-  listHealth: (clusterNames: string[]) =>
+  staged: () =>
+    [...deploymentQueryKeys.all(), buildQueryKeyPart("staged")] as const,
+  history: () =>
+    [...deploymentQueryKeys.all(), buildQueryKeyPart("history")] as const,
+  inProgress: (input: InProgressInput) =>
     [
       ...deploymentQueryKeys.all(),
-      buildQueryKeyPart("listHealth", {
-        clusterNames: [...clusterNames].sort().join(","),
+      buildQueryKeyPart("inProgress", {
+        clusterNames: input.clusterNames.join(","),
+        deploys: input.deploys
+          .map((d) => `${d.deployId}:${schemaList(d.schemas)}`)
+          .join(";"),
       }),
     ] as const,
-  detail: (deployIds: string[]) =>
-    [
-      ...deploymentQueryKeys.all(),
-      buildQueryKeyPart("detail", { deployIds: deployIds.join(",") }),
-    ] as const,
-  afterSwap: (deployId: string, promotedAt: Date | null) =>
-    [
-      ...deploymentQueryKeys.all(),
-      buildQueryKeyPart("afterSwap", {
-        deployId,
-        promotedAt: promotedAt?.toISOString() ?? null,
-      }),
-    ] as const,
-  catalog: (
-    deployId: string,
-    input: {
-      clusterNames: string[];
-      schemas: { database: string; schema: string }[];
-      pendingSinks: { database: string; schema: string; name: string }[];
-    },
-  ) =>
+  catalog: (key: string, input: CatalogInput | null) =>
     [
       ...deploymentQueryKeys.all(),
       buildQueryKeyPart("catalog", {
-        deployId,
-        clusterNames: [...input.clusterNames].sort().join(","),
-        schemas: input.schemas
-          .map((s) => `${s.database}.${s.schema}`)
-          .sort()
-          .join(","),
-        pendingSinks: input.pendingSinks
-          .map((k) => `${k.database}.${k.schema}.${k.name}`)
-          .sort()
-          .join(","),
+        key,
+        clusterNames: input?.clusterNames.join(",") ?? "",
+        liveSchemas: schemaList(input?.liveSchemas ?? []),
+        stagedSchemas: schemaList(input?.stagedSchemas ?? []),
+        suffix: input?.suffix ?? "",
+      }),
+    ] as const,
+  afterSwap: (key: string, clusterIds: string[], promotedAt: Date | null) =>
+    [
+      ...deploymentQueryKeys.all(),
+      buildQueryKeyPart("afterSwap", {
+        key,
+        clusterIds: clusterIds.join(","),
+        promotedAt: promotedAt?.toISOString() ?? "",
       }),
     ] as const,
 };
 
-export interface DeploymentsData {
-  /**
-   * `missing` when `_mz_deploy` does not exist (Materialize also reports it
-   * missing to a user without USAGE on it), `denied` when the user can see it
-   * but not read it.
-   */
-  access: "ok" | "missing" | "denied";
-  deployments: Deployment[];
-  /** Production cluster names each deploy stages, keyed by deploy ID. */
-  clustersByDeploy: Map<string, string[]>;
-}
+const liveSchemas = (d: Deployment) =>
+  d.schemas.map((s) => ({ database: s.database ?? "", schema: s.liveName }));
 
+/** Every deploy the catalog shows: staged now, promoted or aborted. */
 export function useDeployments() {
-  return useQuery({
-    queryKey: deploymentQueryKeys.list(),
-    queryFn: async ({ queryKey, signal }): Promise<DeploymentsData> => {
-      try {
-        const { deployments, clusters } = await fetchDeployments({
-          queryKey,
-          requestOptions: { signal },
-        });
-        const clustersByDeploy = new Map<string, string[]>();
-        for (const { deployId, name } of clusters) {
-          clustersByDeploy.set(deployId, [
-            ...(clustersByDeploy.get(deployId) ?? []),
-            name,
-          ]);
-        }
-        return {
-          access: "ok",
-          deployments: groupDeployments(deployments),
-          clustersByDeploy,
-        };
-      } catch (error) {
-        if (isMzDeployMissing(error) || error instanceof PermissionError) {
-          return {
-            access: error instanceof PermissionError ? "denied" : "missing",
-            deployments: [],
-            clustersByDeploy: new Map(),
-          };
-        }
-        throw error;
-      }
-    },
+  const staged = useQuery({
+    queryKey: deploymentQueryKeys.staged(),
+    queryFn: ({ queryKey, signal }) =>
+      fetchStaged({ queryKey, requestOptions: { signal } }),
     refetchInterval: LIST_REFETCH_MS,
   });
+  const history = useQuery({
+    queryKey: deploymentQueryKeys.history(),
+    queryFn: ({ queryKey, signal }) =>
+      fetchHistory({ queryKey, requestOptions: { signal } }),
+    refetchInterval: HISTORY_REFETCH_MS,
+  });
+  const data = React.useMemo(
+    () =>
+      staged.data && history.data
+        ? groupDeployments(
+            staged.data.staged,
+            history.data,
+            staged.data.hasMzDeploy,
+          )
+        : undefined,
+    [staged.data, history.data],
+  );
+  return {
+    data,
+    isLoading: staged.isLoading || history.isLoading,
+    error: staged.error ?? history.error,
+  };
 }
 
-/** Health of every in-progress deploy's staged clusters, for the list page. */
-export function useStagedClusterHealth(data: DeploymentsData | undefined) {
-  const clusterNames = React.useMemo(() => {
-    if (!data) return [];
-    return data.deployments
-      .filter((d) => d.promotedAt === null)
-      .flatMap((d) =>
-        (data.clustersByDeploy.get(d.deployId) ?? []).map((name) =>
-          stagingName(name, d.deployId),
-        ),
-      );
-  }, [data]);
+/** Staged cluster health and sink cutovers of every in-progress deploy. */
+export function useInProgressStatus(deployments: Deployment[] | undefined) {
+  const input = React.useMemo((): InProgressInput => {
+    const inProgress = (deployments ?? []).filter(
+      (d) => d.state === "in-progress",
+    );
+    return {
+      clusterNames: inProgress.flatMap((d) =>
+        d.clusters.map((c) => c.stagedName),
+      ),
+      deploys: inProgress.map((d) => ({
+        deployId: d.suffix,
+        schemas: liveSchemas(d),
+      })),
+    };
+  }, [deployments]);
   return useQuery({
-    queryKey: deploymentQueryKeys.listHealth(clusterNames),
+    queryKey: deploymentQueryKeys.inProgress(input),
     queryFn: ({ queryKey, signal }) =>
-      fetchClusterHealth({
-        clusterNames,
+      fetchInProgressStatus({
+        ...input,
         queryKey,
         requestOptions: { signal },
       }),
-    enabled: clusterNames.length > 0,
+    enabled: input.deploys.length > 0,
     refetchInterval: LIVE_REFETCH_MS,
     placeholderData: keepPreviousData,
   });
 }
 
-/**
- * Everything the detail page shows for one deploy: tracking rows from
- * `_mz_deploy`, then the live catalog state of the clusters, schemas and sinks
- * those rows name.
- */
-export function useDeploymentDetail(deployId: string) {
+/** One deploy, and for an in-progress one, the live state of what it staged. */
+export function useDeploymentDetail(key: string) {
   const list = useDeployments();
-  const deployment = list.data?.deployments.find(
-    (d) => d.deployId === deployId,
-  );
-  const isInProgress = deployment?.promotedAt === null;
+  const deployment = list.data?.find((d) => d.key === key);
 
-  const baseline = React.useMemo(
-    () =>
-      deployment && list.data
-        ? baselineDeploys(deployment, list.data.deployments)
-        : new Map<string, string>(),
-    [deployment, list.data],
-  );
-  const deployIds = React.useMemo(
-    () => [deployId, ...new Set(baseline.values())],
-    [deployId, baseline],
-  );
-
-  const tracking = useQuery({
-    queryKey: deploymentQueryKeys.detail(deployIds),
-    queryFn: ({ queryKey, signal }) =>
-      fetchDeploymentDetail({
-        deployIds,
-        queryKey,
-        requestOptions: { signal },
-      }),
-    enabled: deployment !== undefined,
-    refetchInterval: isInProgress ? LIVE_REFETCH_MS : false,
-  });
-
-  const liveClusters = React.useMemo(
-    () => list.data?.clustersByDeploy.get(deployId) ?? [],
-    [list.data, deployId],
-  );
-  const catalogInput = React.useMemo(() => {
-    const live = deployment ? swappedSchemas(deployment) : [];
-    const staged = live.map((s) => ({
-      database: s.database,
-      schema: stagingName(s.schema, deployId),
-    }));
-    const pendingSinks = (tracking.data?.pendingStatements ?? [])
-      .filter((p) => p.statementKind === "sink")
-      .map((p) => ({ database: p.database, schema: p.schema, name: p.object }));
+  const input = React.useMemo((): CatalogInput | null => {
+    if (!deployment) return null;
     return {
-      clusterNames: [
-        ...liveClusters,
-        ...liveClusters.map((name) => stagingName(name, deployId)),
-      ],
-      liveSchemas: live.map(({ database, schema }) => ({ database, schema })),
-      schemas: staged,
-      pendingSinks,
+      clusterNames: deployment.clusters.flatMap((c) => [
+        c.liveName,
+        c.stagedName,
+      ]),
+      liveSchemas: liveSchemas(deployment),
+      stagedSchemas: deployment.schemas.map((s) => ({
+        database: s.database ?? "",
+        schema: s.stagedName,
+      })),
+      suffix: deployment.suffix,
     };
-  }, [deployment, deployId, liveClusters, tracking.data]);
+  }, [deployment]);
 
   const catalog = useQuery({
-    queryKey: deploymentQueryKeys.catalog(deployId, catalogInput),
-    queryFn: ({ queryKey, signal }) =>
-      fetchDeploymentCatalog({
-        ...catalogInput,
-        deployId,
+    queryKey: deploymentQueryKeys.catalog(key, input),
+    queryFn: ({ queryKey, signal }) => {
+      if (!input) return null;
+      return fetchDeploymentCatalog({
+        ...input,
         queryKey,
         requestOptions: { signal },
-      }),
-    // Waits for the pending CREATE SINK statements, which change the query key.
-    enabled: isInProgress && tracking.isSuccess,
+      });
+    },
+    enabled: deployment?.state === "in-progress",
     refetchInterval: LIVE_REFETCH_MS,
     placeholderData: keepPreviousData,
   });
 
-  return { list, deployment, baseline, tracking, catalog, liveClusters };
+  return { list, deployment, catalog };
 }
 
 /**
@@ -267,18 +222,22 @@ export function useFrontierStalls(
 
 /** Load on a promoted deploy's clusters in the window right after promote. */
 export function useAfterSwap(deployment: Deployment) {
-  const { deployId, promotedAt } = deployment;
+  const { key, clusters, endedAt, state } = deployment;
   return useQuery({
-    queryKey: deploymentQueryKeys.afterSwap(deployId, promotedAt),
+    queryKey: deploymentQueryKeys.afterSwap(
+      key,
+      clusters.map((c) => c.id),
+      endedAt,
+    ),
     queryFn: ({ queryKey, signal }) => {
-      if (!promotedAt) return [];
+      if (!endedAt) return [];
       return fetchAfterSwap({
-        deployId,
-        promotedAt,
+        clusters,
+        promotedAt: endedAt,
         queryKey,
         requestOptions: { signal },
       });
     },
-    enabled: promotedAt !== null,
+    enabled: state === "promoted" && endedAt !== null,
   });
 }

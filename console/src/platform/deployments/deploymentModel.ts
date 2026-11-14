@@ -9,6 +9,7 @@
 
 import { millisecondsInHour, millisecondsInMinute } from "date-fns/constants";
 
+import { quoteIdentifier } from "~/api/materialize";
 import { formatDurationExact } from "~/utils/format";
 
 /**
@@ -23,86 +24,213 @@ export const DEFAULT_ALLOWED_LAG_MS = 5 * millisecondsInMinute;
  */
 export const OOM_LOOP_THRESHOLD = 3;
 
-/** How long a sink's frontier may sit still before we call it stuck. */
+/**
+ * How long a sink's frontier may sit still before we call it stuck. A sink that
+ * commits on an interval (Iceberg) gets its interval on top.
+ */
 export const SINK_STUCK_AFTER_MS = millisecondsInMinute;
 
-export interface DeploymentRow {
-  deployId: string;
-  deployedAt: Date;
-  promotedAt: Date | null;
-  database: string;
-  schema: string;
-  deployedBy: string;
-  commit: string | null;
-  kind: string;
-  mode: string;
+/** A schema or cluster a deploy staged, from the catalog or the audit log. */
+export interface StagedObjectRow {
+  kind: "schema" | "cluster";
+  id: string;
+  /** Null for clusters. */
+  database: string | null;
+  liveName: string;
+  stagedName: string;
+  suffix: string;
+  /** Null once the audit log no longer has the create event. */
+  stagedAt: Date | null;
+  stagedBy: string | null;
 }
 
-export interface DeploymentSchema {
-  database: string;
-  schema: string;
-  /** `objects` schemas are staged and swapped; `sinks` schemas are not. */
-  kind: string;
+export interface DeployEventRow extends StagedObjectRow {
+  state: "promoted" | "aborted";
+  endedAt: Date;
+  endedBy: string | null;
 }
+
+export interface StagedPair {
+  id: string;
+  database: string | null;
+  liveName: string;
+  stagedName: string;
+}
+
+export type DeployState = "in-progress" | "promoted" | "aborted";
+
+export type DeployTool = "mz-deploy" | "dbt" | "unknown";
 
 export interface Deployment {
-  deployId: string;
-  deployedAt: Date;
-  promotedAt: Date | null;
-  deployedBy: string;
-  commit: string | null;
-  mode: string;
-  schemas: DeploymentSchema[];
+  /** Unique on the page, unlike the suffix, which dbt reuses every deploy. */
+  key: string;
+  suffix: string;
+  state: DeployState;
+  tool: DeployTool;
+  stagedAt: Date | null;
+  stagedBy: string | null;
+  /** When it was promoted or aborted. */
+  endedAt: Date | null;
+  endedBy: string | null;
+  schemas: StagedPair[];
+  clusters: StagedPair[];
 }
 
+/** dbt-materialize's `deploy_init` stages `X` as `X_dbt_deploy`. */
+export const DBT_DEPLOY_SUFFIX = "dbt_deploy";
+
 /**
- * Folds mz-deploy's one-row-per-schema `deployments` table into one entry per
- * deploy, newest first.
+ * mz-deploy's default deploy ID: a git SHA prefix or random hex, 7 characters.
+ * A custom `--deploy-id` is not recognized, so its deploy shows no tool.
  */
-export function groupDeployments(rows: DeploymentRow[]): Deployment[] {
-  const byId = new Map<string, Deployment>();
-  for (const row of rows) {
-    let deployment = byId.get(row.deployId);
-    if (!deployment) {
-      deployment = {
-        deployId: row.deployId,
-        deployedAt: row.deployedAt,
-        promotedAt: row.promotedAt,
-        deployedBy: row.deployedBy,
-        commit: row.commit,
-        mode: row.mode,
-        schemas: [],
-      };
-      byId.set(row.deployId, deployment);
+const MZ_DEPLOY_ID = /^[0-9a-f]{7}$/;
+
+/** Aborted objects dropped further apart than this are separate deploys. */
+const ABORT_GROUP_GAP_MS = 10 * millisecondsInMinute;
+
+type GroupedRow = StagedObjectRow & {
+  endedAt?: Date;
+  endedBy?: string | null;
+};
+
+/**
+ * Folds staged objects and audit-log events into deploys: in progress first,
+ * then the rest newest first. One promote is one swap statement, so its
+ * renames share a timestamp.
+ */
+export function groupDeployments(
+  staged: StagedObjectRow[],
+  history: DeployEventRow[],
+  hasMzDeploy: boolean,
+): Deployment[] {
+  const groups = new Map<string, { state: DeployState; rows: GroupedRow[] }>();
+  const add = (key: string, state: DeployState, row: GroupedRow) => {
+    const group = groups.get(key) ?? { state, rows: [] };
+    group.rows.push(row);
+    groups.set(key, group);
+  };
+
+  for (const row of staged) add(row.suffix, "in-progress", row);
+  for (const row of history) {
+    if (row.state === "promoted") {
+      add(`${row.suffix}-${row.endedAt.getTime()}`, "promoted", row);
     }
-    deployment.schemas.push({
-      database: row.database,
-      schema: row.schema,
-      kind: row.kind,
-    });
   }
-  for (const deployment of byId.values()) {
-    deployment.schemas.sort((a, b) =>
-      `${a.database}.${a.schema}`.localeCompare(`${b.database}.${b.schema}`),
+  const aborted = history
+    .filter((row) => row.state === "aborted")
+    .sort(
+      (a, b) =>
+        a.suffix.localeCompare(b.suffix) ||
+        a.endedAt.getTime() - b.endedAt.getTime(),
     );
+  let abortKey = "";
+  let previous: DeployEventRow | undefined;
+  for (const row of aborted) {
+    if (
+      !previous ||
+      previous.suffix !== row.suffix ||
+      row.endedAt.getTime() - previous.endedAt.getTime() > ABORT_GROUP_GAP_MS
+    ) {
+      abortKey = `${row.suffix}-${row.endedAt.getTime()}`;
+    }
+    add(abortKey, "aborted", row);
+    previous = row;
   }
-  return [...byId.values()].sort(
-    (a, b) => b.deployedAt.getTime() - a.deployedAt.getTime(),
+
+  const tool = (suffix: string): DeployTool =>
+    suffix === DBT_DEPLOY_SUFFIX
+      ? "dbt"
+      : hasMzDeploy && MZ_DEPLOY_ID.test(suffix)
+        ? "mz-deploy"
+        : "unknown";
+  const recency = (d: Deployment) =>
+    d.state === "in-progress"
+      ? Infinity
+      : (d.endedAt ?? d.stagedAt ?? new Date(0)).getTime();
+  return [...groups]
+    .map(([key, { state, rows }]) => toDeployment(key, state, rows, tool))
+    .sort(
+      (a, b) =>
+        recency(b) - recency(a) ||
+        (b.stagedAt?.getTime() ?? 0) - (a.stagedAt?.getTime() ?? 0),
+    );
+}
+
+function toDeployment(
+  key: string,
+  state: DeployState,
+  rows: GroupedRow[],
+  tool: (suffix: string) => DeployTool,
+): Deployment {
+  const earliest = rows.reduce<GroupedRow | undefined>(
+    (best, row) =>
+      row.stagedAt && (!best?.stagedAt || row.stagedAt < best.stagedAt)
+        ? row
+        : best,
+    undefined,
   );
+  const latest = rows.reduce<GroupedRow | undefined>(
+    (best, row) =>
+      row.endedAt && (!best?.endedAt || row.endedAt > best.endedAt)
+        ? row
+        : best,
+    undefined,
+  );
+  // A staged name can extend two live names (`a_b_1` extends `a` and `a_b`);
+  // the longer live name is the one it copies.
+  const byId = new Map<string, GroupedRow>();
+  for (const row of rows) {
+    const seen = byId.get(row.id);
+    if (!seen || row.liveName.length > seen.liveName.length) {
+      byId.set(row.id, row);
+    }
+  }
+  const pairs = (kind: StagedObjectRow["kind"]) =>
+    [...byId.values()]
+      .filter((row) => row.kind === kind)
+      .map(({ id, database, liveName, stagedName }) => ({
+        id,
+        database,
+        liveName,
+        stagedName,
+      }))
+      .sort((a, b) =>
+        `${a.database ?? ""}.${a.liveName}`.localeCompare(
+          `${b.database ?? ""}.${b.liveName}`,
+        ),
+      );
+  return {
+    key,
+    suffix: rows[0].suffix,
+    state,
+    tool: tool(rows[0].suffix),
+    stagedAt: earliest?.stagedAt ?? null,
+    stagedBy: earliest?.stagedBy ?? null,
+    endedAt: latest?.endedAt ?? null,
+    endedBy: latest?.endedBy ?? null,
+    schemas: pairs("schema"),
+    clusters: pairs("cluster"),
+  };
 }
 
-/** Schemas that `stage` copies under a suffix and `promote` swaps. */
-export function swappedSchemas(deployment: Deployment) {
-  return deployment.schemas.filter((s) => s.kind === "objects");
-}
-
-/**
- * mz-deploy names a staged cluster or schema `<live name>_<deploy id>`.
- * `promote` swaps the two, so after promotion the suffixed name holds the old
- * production objects until they are dropped.
- */
-export function stagingName(liveName: string, deployId: string) {
-  return `${liveName}_${deployId}`;
+/** The commands that finish a deploy, when the tool that staged it is known. */
+export function finishCommands(
+  deployment: Deployment,
+): { promote: string; abort: string } | null {
+  switch (deployment.tool) {
+    case "mz-deploy":
+      return {
+        promote: `mz-deploy promote ${deployment.suffix}`,
+        abort: `mz-deploy abort ${deployment.suffix}`,
+      };
+    case "dbt":
+      return {
+        promote: "dbt run-operation deploy_promote",
+        abort: "dbt run-operation deploy_cleanup",
+      };
+    case "unknown":
+      return null;
+  }
 }
 
 export interface ClusterHealth {
@@ -174,6 +302,8 @@ export function clusterVerdict(
 }
 
 export interface SinkCutoverRow {
+  /** The deploy whose promote would repoint this sink. */
+  deployId: string;
   sinkId: string;
   sinkDatabase: string;
   sinkSchema: string;
@@ -187,6 +317,8 @@ export interface SinkCutoverRow {
   sinkWriteFrontierMs: number | null;
   replacementReadFrontierMs: number | null;
   sinkLagMs: number | null;
+  /** The sink's `COMMIT INTERVAL`. Its frontier only moves once per interval. */
+  commitIntervalMs: number | null;
 }
 
 export type CutoverState =
@@ -224,131 +356,148 @@ export function sinkCutover(
     row.replacementReadFrontierMs - row.sinkWriteFrontierMs,
   );
   if (gapMs === 0) return { state: "ready", gapMs };
-  if (stalledForMs >= SINK_STUCK_AFTER_MS) return { state: "stuck", gapMs };
+  const stuckAfterMs = SINK_STUCK_AFTER_MS + (row.commitIntervalMs ?? 0);
+  if (stalledForMs >= stuckAfterMs) return { state: "stuck", gapMs };
   return { state: "behind", gapMs };
 }
 
-export interface DeployObjectRow {
-  deployId: string;
+export interface DefinitionRow {
+  id: string;
   database: string;
   schema: string;
-  object: string;
-  hash: string;
+  name: string;
+  type: string;
+  clusterName: string | null;
+  createSql: string | null;
 }
 
 export type ObjectChange = "added" | "changed" | "unchanged" | "removed";
 
 export interface ObjectDiffEntry {
   database: string;
+  /** The live schema's name, for staged objects too. */
   schema: string;
   object: string;
+  type: string;
   change: ObjectChange;
+  /** Null for removed objects. */
+  stagedId: string | null;
 }
 
-const objectKey = (o: { database: string; schema: string; object: string }) =>
-  `${o.database}.${o.schema}.${o.object}`;
+/**
+ * A `create_sql` as it would read with every staged schema and cluster under
+ * its live name, so an unchanged staged object compares equal to its live one.
+ * The catalog writes references by ID (`[u5 AS "db"."s"."x"]`, `IN CLUSTER
+ * [u7]`) and ends a materialized view with the `AS OF` it was created at, and
+ * both always differ between the two copies.
+ */
+export function normalizeCreateSql(
+  createSql: string,
+  clusterName: string | null,
+  renames: Map<string, string>,
+) {
+  let normalized = createSql
+    .replace(/ AS OF \d+$/, "")
+    .replace(/\[[us]\d+ AS ((?:"(?:[^"]|"")*"\.)*"(?:[^"]|"")*")\]/g, "$1")
+    .replace(
+      /IN CLUSTER \[[us]\d+\]/g,
+      clusterName ? `IN CLUSTER ${quoteIdentifier(clusterName)}` : "IN CLUSTER",
+    );
+  for (const [from, to] of renames) {
+    normalized = normalized
+      .split(quoteIdentifier(from))
+      .join(quoteIdentifier(to));
+  }
+  return normalized;
+}
 
 /**
- * Compares a deploy's object hashes with the deploy each schema was last
- * promoted from. `unchanged` objects are still redeployed, because mz-deploy
- * stages and swaps whole schemas.
+ * What promoting `deployment` changes, by comparing each staged object's
+ * definition with the live object of the same name. `unchanged` objects are
+ * still rebuilt, because blue/green deploys swap whole schemas.
  *
- * @param baseline - per `database.schema`, the deploy it is compared against.
- * Schemas with no baseline are new, so all their objects are `added`.
+ * @param rows - definitions in the deploy's live and staged schemas.
  */
-export function diffObjects(
-  deployId: string,
-  rows: DeployObjectRow[],
-  baseline: Map<string, string>,
+export function diffDefinitions(
+  deployment: Deployment,
+  rows: DefinitionRow[],
 ): ObjectDiffEntry[] {
-  const current = rows.filter((r) => r.deployId === deployId);
-  const schemas = new Set(current.map((r) => `${r.database}.${r.schema}`));
-  const previous = new Map<string, DeployObjectRow>();
+  const renames = new Map(
+    [...deployment.schemas, ...deployment.clusters].map((p) => [
+      p.stagedName,
+      p.liveName,
+    ]),
+  );
+  const liveSchemaOf = new Map(
+    deployment.schemas.map((p) => [
+      `${p.database}.${p.stagedName}`,
+      p.liveName,
+    ]),
+  );
+  const live = new Map<string, DefinitionRow>();
+  const staged = new Map<string, { row: DefinitionRow; liveSchema: string }>();
   for (const row of rows) {
-    const schemaKey = `${row.database}.${row.schema}`;
-    if (schemas.has(schemaKey) && baseline.get(schemaKey) === row.deployId) {
-      previous.set(objectKey(row), row);
-    }
-  }
-
-  const entries: ObjectDiffEntry[] = current.map((row) => {
-    const before = previous.get(objectKey(row));
-    const change: ObjectChange = !before
-      ? "added"
-      : before.hash === row.hash
-        ? "unchanged"
-        : "changed";
-    return {
-      database: row.database,
-      schema: row.schema,
-      object: row.object,
-      change,
-    };
-  });
-  const currentKeys = new Set(current.map(objectKey));
-  for (const [key, row] of previous) {
-    if (!currentKeys.has(key)) {
-      entries.push({
-        database: row.database,
-        schema: row.schema,
-        object: row.object,
-        change: "removed",
+    const liveSchema = liveSchemaOf.get(`${row.database}.${row.schema}`);
+    if (liveSchema === undefined) {
+      live.set(`${row.database}.${row.schema}.${row.name}`, row);
+    } else {
+      staged.set(`${row.database}.${liveSchema}.${row.name}`, {
+        row,
+        liveSchema,
       });
     }
   }
-  return entries.sort((a, b) => objectKey(a).localeCompare(objectKey(b)));
-}
+  const normalize = (row: DefinitionRow) =>
+    row.createSql === null
+      ? null
+      : normalizeCreateSql(row.createSql, row.clusterName, renames);
 
-/**
- * For each schema of `deployment`, the deploy it replaces: the one live for
- * that schema when it was promoted, or, while it is in progress, the one live
- * now.
- */
-export function baselineDeploys(
-  deployment: Deployment,
-  all: Deployment[],
-): Map<string, string> {
-  const cutoff = deployment.promotedAt?.getTime() ?? Infinity;
-  const baseline = new Map<string, string>();
-  for (const { database, schema } of deployment.schemas) {
-    const key = `${database}.${schema}`;
-    let best: Deployment | undefined;
-    for (const candidate of all) {
-      if (
-        candidate.deployId === deployment.deployId ||
-        candidate.promotedAt === null ||
-        candidate.promotedAt.getTime() >= cutoff ||
-        !candidate.schemas.some(
-          (s) => s.database === database && s.schema === schema,
-        )
-      ) {
-        continue;
-      }
-      if (
-        !best ||
-        (best.promotedAt?.getTime() ?? 0) < candidate.promotedAt.getTime()
-      ) {
-        best = candidate;
-      }
-    }
-    if (best) baseline.set(key, best.deployId);
+  const entries: ObjectDiffEntry[] = [];
+  for (const [key, { row, liveSchema }] of staged) {
+    const before = live.get(key);
+    entries.push({
+      database: row.database,
+      schema: liveSchema,
+      object: row.name,
+      type: row.type,
+      change: !before
+        ? "added"
+        : normalize(before) === normalize(row)
+          ? "unchanged"
+          : "changed",
+      stagedId: row.id,
+    });
   }
-  return baseline;
+  for (const [key, row] of live) {
+    if (!staged.has(key)) {
+      entries.push({
+        database: row.database,
+        schema: row.schema,
+        object: row.name,
+        type: row.type,
+        change: "removed",
+        stagedId: null,
+      });
+    }
+  }
+  return entries.sort((a, b) =>
+    `${a.schema}.${a.object}`.localeCompare(`${b.schema}.${b.object}`),
+  );
 }
 
-/** Deploys that are the most recent promote for at least one of their schemas. */
-export function liveDeployIds(all: Deployment[]): Set<string> {
+/** Promoted deploys that are the latest promote for one of their schemas. */
+export function liveDeployKeys(all: Deployment[]): Set<string> {
   const latest = new Map<string, Deployment>();
   for (const deployment of all) {
-    const promotedAt = deployment.promotedAt?.getTime();
-    if (promotedAt === undefined) continue;
-    for (const { database, schema } of deployment.schemas) {
-      const key = `${database}.${schema}`;
-      const current = latest.get(key)?.promotedAt?.getTime() ?? -Infinity;
-      if (promotedAt > current) latest.set(key, deployment);
+    const endedAt = deployment.endedAt?.getTime();
+    if (deployment.state !== "promoted" || endedAt === undefined) continue;
+    for (const { database, liveName } of deployment.schemas) {
+      const key = `${database}.${liveName}`;
+      const current = latest.get(key)?.endedAt?.getTime() ?? -Infinity;
+      if (endedAt > current) latest.set(key, deployment);
     }
   }
-  return new Set([...latest.values()].map((d) => d.deployId));
+  return new Set([...latest.values()].map((d) => d.key));
 }
 
 export interface Blocker {

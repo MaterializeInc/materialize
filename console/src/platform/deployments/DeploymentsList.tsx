@@ -31,6 +31,11 @@ import {
   PageHeader,
   PageHeading,
 } from "~/layouts/BaseLayout";
+import {
+  EmptyListHeader,
+  EmptyListHeaderContents,
+  EmptyListWrapper,
+} from "~/layouts/listPageComponents";
 import { MaterializeTheme } from "~/theme";
 import {
   formatDate,
@@ -39,8 +44,9 @@ import {
 
 import {
   ClusterStatusPill,
+  CutoverPill,
+  DeployStatePill,
   Muted,
-  NotSetUp,
   RelativeBar,
   SectionHeading,
 } from "./deploymentComponents";
@@ -48,25 +54,53 @@ import {
   ClusterHealth,
   ClusterStatus,
   clusterVerdict,
+  CutoverState,
   Deployment,
+  DeployTool,
   formatDuration,
-  liveDeployIds,
-  stagingName,
-  swappedSchemas,
+  liveDeployKeys,
+  promoteBlockers,
+  sinkCutover,
+  SinkCutoverRow,
   timeAgo,
 } from "./deploymentModel";
 import {
-  DeploymentsData,
   useDeployments,
-  useStagedClusterHealth,
+  useFrontierStalls,
+  useInProgressStatus,
 } from "./queries";
 
-const STATUS_RANK: Record<ClusterStatus, number> = {
+const CLUSTER_RANK: Record<ClusterStatus, number> = {
   failing: 0,
   hydrating: 1,
   lagging: 2,
   ready: 3,
 };
+
+const CUTOVER_RANK: Record<CutoverState, number> = {
+  "no-replacement": 0,
+  stuck: 1,
+  unknown: 2,
+  behind: 3,
+  ready: 4,
+};
+
+const TOOL_LABEL: Record<DeployTool, string | null> = {
+  "mz-deploy": "mz-deploy",
+  dbt: "dbt",
+  unknown: null,
+};
+
+const NoDeploys = () => (
+  <EmptyListWrapper>
+    <EmptyListHeader>
+      <EmptyListHeaderContents
+        title="No blue/green deploys found"
+        helpText="Deploys show up here when a schema is staged next to its live copy as <schema>_<suffix>, the way mz-deploy and dbt-materialize stage them, and when they are swapped into place."
+      />
+    </EmptyListHeader>
+  </EmptyListWrapper>
+);
 
 const DeploymentsList = () => {
   const { data, isLoading, error } = useDeployments();
@@ -77,7 +111,7 @@ const DeploymentsList = () => {
         <VStack alignItems="start" spacing="0">
           <PageHeading>Deployments</PageHeading>
           <Text textStyle="text-small" color="gray.500">
-            Blue/green deploys staged with mz-deploy
+            Blue/green deploys, found from the catalog and the audit log
           </Text>
         </VStack>
       </PageHeader>
@@ -85,32 +119,57 @@ const DeploymentsList = () => {
         <LoadingContainer />
       ) : error ? (
         <ErrorBox message="We couldn't load deployments." />
-      ) : data && data.access !== "ok" ? (
-        <NotSetUp access={data.access} />
-      ) : !data ? null : (
+      ) : !data || data.length === 0 ? (
+        <NoDeploys />
+      ) : (
         <VStack alignItems="stretch" spacing="10">
-          <InProgress data={data} />
-          <History deployments={data.deployments} />
+          <InProgress deployments={data} />
+          <History deployments={data} />
         </VStack>
       )}
     </MainContentContainer>
   );
 };
 
-const InProgress = ({ data }: { data: DeploymentsData }) => {
-  const navigate = useNavigate();
-  const health = useStagedClusterHealth(data);
-  const inProgress = data.deployments.filter((d) => d.promotedAt === null);
-  const healthByName = React.useMemo(
-    () => new Map((health.data ?? []).map((h) => [h.name, h])),
-    [health.data],
+const DeployName = ({ deployment }: { deployment: Deployment }) => {
+  const tool = TOOL_LABEL[deployment.tool];
+  return (
+    <Box>
+      <Text textStyle="text-ui-med" fontFamily="mono">
+        {deployment.suffix}
+      </Text>
+      {tool && (
+        <Text textStyle="text-small" color="gray.500">
+          {tool}
+        </Text>
+      )}
+    </Box>
   );
+};
+
+const InProgress = ({ deployments }: { deployments: Deployment[] }) => {
+  const navigate = useNavigate();
+  const status = useInProgressStatus(deployments);
+  const inProgress = deployments.filter((d) => d.state === "in-progress");
+  const healthByName = React.useMemo(
+    () => new Map((status.data?.clusters ?? []).map((h) => [h.name, h])),
+    [status.data],
+  );
+  const frontiers = React.useMemo(
+    () =>
+      status.data?.sinks.map((s) => ({
+        id: s.sinkId,
+        frontier: s.sinkWriteFrontierMs,
+      })),
+    [status.data],
+  );
+  const stalls = useFrontierStalls(frontiers);
 
   return (
     <Box>
       <SectionHeading
         title="In progress"
-        description="Staged with mz-deploy stage and not yet promoted or aborted."
+        description="Staged next to the live schemas and not yet swapped in."
       />
       {inProgress.length === 0 ? (
         <Text textStyle="text-base" color="gray.500">
@@ -124,45 +183,54 @@ const InProgress = ({ data }: { data: DeploymentsData }) => {
               <Th>Staged</Th>
               <Th>Schemas</Th>
               <Th>New clusters</Th>
-              <Th width="30%">Status</Th>
+              <Th width="32%">Status</Th>
             </Tr>
           </Thead>
           <Tbody>
             {inProgress.map((d) => (
               <Tr
-                key={d.deployId}
+                key={d.key}
                 cursor="pointer"
-                onClick={() => navigate(d.deployId)}
+                onClick={() => navigate(encodeURIComponent(d.key))}
               >
                 <Td>
-                  <Text textStyle="text-ui-med" fontFamily="mono">
-                    {d.deployId}
-                  </Text>
+                  <DeployName deployment={d} />
                 </Td>
                 <Td>
-                  <Text textStyle="text-ui-reg">{timeAgo(d.deployedAt)}</Text>
-                  <Text textStyle="text-small" color="gray.500">
-                    by {d.deployedBy}
-                  </Text>
+                  {d.stagedAt ? (
+                    <>
+                      <Text textStyle="text-ui-reg">{timeAgo(d.stagedAt)}</Text>
+                      {d.stagedBy && (
+                        <Text textStyle="text-small" color="gray.500">
+                          by {d.stagedBy}
+                        </Text>
+                      )}
+                    </>
+                  ) : (
+                    <Muted>—</Muted>
+                  )}
+                </Td>
+                <Td>{d.schemas.map((s) => s.liveName).join(", ")}</Td>
+                <Td>
+                  {d.clusters.map((c) => c.stagedName).join(", ") || (
+                    <Muted>—</Muted>
+                  )}
                 </Td>
                 <Td>
-                  {swappedSchemas(d)
-                    .map((s) => s.schema)
-                    .join(", ") || <Muted>—</Muted>}
-                </Td>
-                <Td>
-                  {(data.clustersByDeploy.get(d.deployId) ?? [])
-                    .map((name) => stagingName(name, d.deployId))
-                    .join(", ")}
-                </Td>
-                <Td>
-                  <DeployStatus
-                    deployment={d}
-                    clusters={data.clustersByDeploy.get(d.deployId) ?? []}
-                    healthByName={healthByName}
-                    isLoading={health.isLoading}
-                    isError={health.isError && !health.data}
-                  />
+                  {status.isLoading ? (
+                    <Muted>Checking…</Muted>
+                  ) : status.isError && !status.data ? (
+                    <Muted>Couldn&apos;t check status</Muted>
+                  ) : (
+                    <DeployStatus
+                      deployment={d}
+                      healthByName={healthByName}
+                      sinks={(status.data?.sinks ?? []).filter(
+                        (s) => s.deployId === d.suffix,
+                      )}
+                      stalls={stalls}
+                    />
+                  )}
                 </Td>
               </Tr>
             ))}
@@ -173,37 +241,56 @@ const InProgress = ({ data }: { data: DeploymentsData }) => {
   );
 };
 
-/** The worst status across a deploy's staged clusters. */
+/** The worst cluster or sink problem standing between a deploy and promote. */
 const DeployStatus = ({
   deployment,
-  clusters,
   healthByName,
-  isLoading,
-  isError,
+  sinks,
+  stalls,
 }: {
   deployment: Deployment;
-  clusters: string[];
   healthByName: Map<string, ClusterHealth>;
-  isLoading: boolean;
-  isError: boolean;
+  sinks: SinkCutoverRow[];
+  stalls: Map<string, number>;
 }) => {
-  if (isLoading) return <Muted>Checking…</Muted>;
-  if (isError) return <Muted>Couldn&apos;t check cluster status</Muted>;
-  if (clusters.length === 0) return <Muted>No clusters staged</Muted>;
-  const verdicts = clusters.map((name) =>
-    clusterVerdict(healthByName.get(stagingName(name, deployment.deployId))),
+  const clusters = deployment.clusters.map((c) => ({
+    liveName: c.liveName,
+    stagingName: c.stagedName,
+    verdict: clusterVerdict(healthByName.get(c.stagedName)),
+  }));
+  const cutovers = sinks.map((row) => ({
+    row,
+    cutover: sinkCutover(row, stalls.get(row.sinkId) ?? 0),
+  }));
+  const blockers = promoteBlockers(clusters, cutovers);
+  const worstCluster = clusters.reduce<ClusterStatus>(
+    (worst, c) =>
+      CLUSTER_RANK[c.verdict.status] < CLUSTER_RANK[worst]
+        ? c.verdict.status
+        : worst,
+    "ready",
   );
-  const worst = verdicts.reduce((a, b) =>
-    STATUS_RANK[b.status] < STATUS_RANK[a.status] ? b : a,
+  const worstSink = cutovers.reduce<CutoverState>(
+    (worst, s) =>
+      CUTOVER_RANK[s.cutover.state] < CUTOVER_RANK[worst]
+        ? s.cutover.state
+        : worst,
+    "ready",
   );
-  const notReady = verdicts.filter((v) => v.status !== "ready").length;
+
   return (
-    <HStack spacing="3">
-      <ClusterStatusPill status={worst.status} />
+    <HStack spacing="3" alignItems="start">
+      {worstCluster !== "ready" || worstSink === "ready" ? (
+        <ClusterStatusPill status={worstCluster} />
+      ) : (
+        <CutoverPill state={worstSink} />
+      )}
       <Text textStyle="text-small" color="gray.500">
-        {notReady === 0
-          ? "Clusters ready, open to check sinks"
-          : `${worst.detail}${notReady > 1 ? ` (+${notReady - 1} more)` : ""}`}
+        {blockers.length === 0
+          ? "Ready to promote"
+          : `${blockers[0].name}: ${blockers[0].message}${
+              blockers.length > 1 ? ` (+${blockers.length - 1} more)` : ""
+            }`}
       </Text>
     </HStack>
   );
@@ -212,82 +299,88 @@ const DeployStatus = ({
 const History = ({ deployments }: { deployments: Deployment[] }) => {
   const navigate = useNavigate();
   const { colors } = useTheme<MaterializeTheme>();
-  const promoted = deployments.filter(
-    (d): d is Deployment & { promotedAt: Date } => d.promotedAt !== null,
+  const past = deployments.filter(
+    (d): d is Deployment & { endedAt: Date } =>
+      d.state !== "in-progress" && d.endedAt !== null,
   );
-  const durations = promoted.map(
-    (d) => d.promotedAt.getTime() - d.deployedAt.getTime(),
-  );
-  const longest = Math.max(1, ...durations);
-  const live = liveDeployIds(deployments);
+  const staged = (d: Deployment & { endedAt: Date }) =>
+    d.stagedAt ? d.endedAt.getTime() - d.stagedAt.getTime() : null;
+  const longest = Math.max(1, ...past.map((d) => staged(d) ?? 0));
+  const live = liveDeployKeys(deployments);
 
   return (
     <Box>
       <SectionHeading
         title="History"
-        description="Promoted deploys. mz-deploy removes aborted deploys from its tracking tables, so they are not listed."
+        description="Promotes are swaps in the audit log. Aborted deploys staged a schema and dropped it without a swap."
       />
-      {promoted.length === 0 ? (
+      {past.length === 0 ? (
         <Text textStyle="text-base" color="gray.500">
-          No deploys promoted yet.
+          No deploys promoted or aborted yet.
         </Text>
       ) : (
         <Table variant="linkable" borderRadius="xl">
           <Thead>
             <Tr>
               <Th>Deploy</Th>
-              <Th>Promoted</Th>
-              <Th>Time staged before promote</Th>
+              <Th>Outcome</Th>
+              <Th>When</Th>
+              <Th>Time staged</Th>
               <Th>Schemas</Th>
               <Th>By</Th>
             </Tr>
           </Thead>
           <Tbody>
-            {promoted.map((d, i) => (
-              <Tr
-                key={d.deployId}
-                cursor="pointer"
-                onClick={() => navigate(d.deployId)}
-              >
-                <Td>
-                  <HStack spacing="3">
-                    <Text textStyle="text-ui-med" fontFamily="mono">
-                      {d.deployId}
-                    </Text>
-                    {live.has(d.deployId) && (
-                      <StatusPill
-                        status="live"
-                        label="Live"
-                        colorScheme="green"
-                      />
+            {past.map((d) => {
+              const duration = staged(d);
+              return (
+                <Tr
+                  key={d.key}
+                  cursor="pointer"
+                  onClick={() => navigate(encodeURIComponent(d.key))}
+                >
+                  <Td>
+                    <DeployName deployment={d} />
+                  </Td>
+                  <Td>
+                    <HStack spacing="2">
+                      <DeployStatePill state={d.state} />
+                      {live.has(d.key) && (
+                        <StatusPill
+                          status="live"
+                          label="Live"
+                          colorScheme="green"
+                        />
+                      )}
+                    </HStack>
+                  </Td>
+                  <Td>
+                    {formatDate(d.endedAt, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
+                  </Td>
+                  <Td>
+                    {duration === null ? (
+                      <Muted>—</Muted>
+                    ) : (
+                      <HStack spacing="3">
+                        <RelativeBar
+                          fraction={duration / longest}
+                          color={
+                            d.state === "promoted"
+                              ? colors.accent.purple
+                              : colors.foreground.tertiary
+                          }
+                        />
+                        <Text textStyle="text-ui-reg">
+                          {formatDuration(duration)}
+                        </Text>
+                      </HStack>
                     )}
-                  </HStack>
-                </Td>
-                <Td>
-                  {formatDate(
-                    d.promotedAt,
-                    FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-                  )}
-                </Td>
-                <Td>
-                  <HStack spacing="3">
-                    <RelativeBar
-                      fraction={durations[i] / longest}
-                      color={colors.accent.purple}
-                    />
-                    <Text textStyle="text-ui-reg">
-                      {formatDuration(durations[i])}
-                    </Text>
-                  </HStack>
-                </Td>
-                <Td>
-                  {swappedSchemas(d)
-                    .map((s) => s.schema)
-                    .join(", ")}
-                </Td>
-                <Td>{d.deployedBy}</Td>
-              </Tr>
-            ))}
+                  </Td>
+                  <Td>{d.schemas.map((s) => s.liveName).join(", ")}</Td>
+                  <Td>{d.endedBy ?? <Muted>—</Muted>}</Td>
+                </Tr>
+              );
+            })}
           </Tbody>
         </Table>
       )}

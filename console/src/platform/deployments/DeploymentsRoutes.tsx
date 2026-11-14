@@ -18,7 +18,7 @@ import DeploymentsList from "./DeploymentsList";
 const DeploymentsRoutes = () => (
   <SentryRoutes>
     <Route index element={<DeploymentsList />} />
-    <Route path=":deployId" element={<DeploymentDetail />} />
+    <Route path=":deployKey" element={<DeploymentDetail />} />
     <Route path="*" element={<Navigate to="." replace />} />
   </SentryRoutes>
 );
