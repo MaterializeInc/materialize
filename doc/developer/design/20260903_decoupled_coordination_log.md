@@ -19,11 +19,16 @@ catalog-server replicas. Adapter final application fell to roughly 8–12ms, but
 candidate construction still took 165–202ms and lost most commits. This is not a
 resolved starvation bug or green acceptance.
 
-Collect `index-four-marks-profile-launch.json` and its separately capped CPU
-profile next. The workload remains unchanged. The profile records adapter stacks
-and cgroup pressure to distinguish remaining computation from throttling before
-choosing another repair. Compare every publisher, not just adapter turns. No
-unrelated performance changes or retry/cadence increases are authorized.
+The profiled run passed, but both deployments saturated their four-CPU limits:
+3.92/3.73 average cores, with throttling in 85%/62% of quota periods. Most CPU
+samples could not be unwound, so the profile does not establish function-level
+attribution. The timing evidence still shows expensive candidate construction.
+
+Next decision: one diagnostic with six CPUs per deployment and twelve aggregate
+on the sixteen-CPU worker, keeping memory, workload, cadence and assertions
+unchanged. Do not treat that experiment as acceptance or a fix. No limits have
+been changed. The reviewed transaction repair is committed as `e112e930` locally,
+not pushed. All owned runtimes and profilers have stopped.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -111,26 +116,18 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
-Owned worker `i-0b3699392b71bd7d2` expires at
-`2026-11-14T00:31:57.921677+00:00`. Its helper and receipts are in
-`upsert-oom-investigation/`. Build receipts and binaries are in
-`frontier-build-receipts.tar.gz` and worker directory `native-frontier-candidate`.
-Cache binaries are in `native-cache-candidate`, verified by
-`cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
-build is complete. Repaired binaries are in `native-retained-candidate`, with
-`retained-build-source-sha256.json` and `native-retained-binaries.json`.
-Prior runtime runs cleaned up. The worker remains available and its lease now ends
-at 22:30 UTC November 14. A sequential guarded build/test is active there, using
-the verified six-file repair transfer. No local build or test runtime is active.
-Local disk has 35GiB free. The repair remains uncommitted pending executed tests.
-Current patch and compiler/OOM receipts are in `native-only/publication-rederive`
-under the evidence root's parent. Prior Python-only harness changes have
-a separate source-exception manifest. The pinned runtime binaries do not include
-the current publication repair.
-No parser or Persist source changed. Supervision has an
-independent systemd post-stop cleanup, verified with a real SIGKILL. Restored CLI
-credentials expire at 06:22 UTC November 15. No access rules changed. The prior worker
-`i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
+Owned worker `i-0b3699392b71bd7d2` has a lease ending at 22:30 UTC November 14.
+Helpers and receipts are in `upsert-oom-investigation/`. Current debug binaries
+are pinned there as `native-publication-marks-candidate`, verified by
+`marks-publication-build-source-sha256.json` and
+`native-publication-marks-binaries.json`. The eight-file transfer is recorded in
+`publication-marks-source-transfer.json`. No worker or local runtime is active.
+Local disk has about 41GiB free after removing disposable incremental caches.
+
+No Persist source changed. Runtime supervision has independent systemd post-stop
+cleanup, verified with a real SIGKILL. CLI credentials expire at 06:22 UTC
+November 15. No access rules changed. Prior worker `i-064fa517ec1d8bbdb` is
+terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
 40 GiB, eight CPUs and no swap. Builds use one job, 32 GiB and four CPUs.
@@ -163,6 +160,8 @@ Essential pointers, relative to the evidence root:
   `index-four-limiting-grants.json`.
   Transaction-stage trace: `index-four-trace-evidence.tar.gz`,
   `index-four-trace-analysis.json` and `index-four-trace-findings.md`.
+  CPU/quota findings: `publication-cpu-findings.json`,
+  `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
   Corrected runtime failure/repeat: `index-four-marks-trace-evidence.tar.gz`,
   `index-four-marks-repeat-evidence.tar.gz`, and
