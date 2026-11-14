@@ -1235,6 +1235,157 @@ mod tests {
         assert_eq!(updates, all_ok(&data, 10));
     }
 
+    /// Compacts unsorted user batches, then the compacted output with another user batch, with
+    /// and without sorting user parts on write. Parts are small and hollow so that batches span
+    /// many single-part runs.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn compact_sorted_user_parts(dyncfgs: ConfigUpdates) {
+        use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, SORT_UNORDERED_PARTS};
+
+        // Few distinct keys and values, pushed out of order, with duplicates and retractions
+        // that cancel across parts and batches.
+        let mut data = vec![];
+        let mut x = 7u64;
+        for i in 0..600u64 {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let key = format!("key-{:02}", (x >> 33) % 23);
+            let val = format!("val-{}", (x >> 40) % 3);
+            let t = i / 100;
+            let d = if (x >> 50) % 4 == 0 { -1 } else { 1 };
+            data.push(((key, val), t, d));
+        }
+        let schemas = Schemas {
+            id: None,
+            key: Arc::new(StringSchema),
+            val: Arc::new(StringSchema),
+        };
+
+        for sort_parts in [false, true] {
+            let cache = new_test_client_cache(&dyncfgs);
+            cache.cfg.set_config(&BLOB_TARGET_SIZE, 1000);
+            cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+            cache.cfg.set_config(&SORT_UNORDERED_PARTS, sort_parts);
+            let (mut write, _) = cache
+                .open(PersistLocation::new_in_mem())
+                .await
+                .expect("client construction failed")
+                .expect_open::<String, String, u64, i64>(ShardId::new())
+                .await;
+
+            let mut batches = vec![];
+            for (lower, upper) in [(0, 2), (2, 4), (4, 6)] {
+                let updates: Vec<_> = data
+                    .iter()
+                    .filter(|(_, t, _)| lower <= *t && *t < upper)
+                    .cloned()
+                    .collect();
+                let batch = write
+                    .expect_batch(&updates, lower, upper)
+                    .await
+                    .into_hollow_batch();
+                assert!(batch.run_meta.len() > 1, "expected many single-part runs");
+                let expected_order = if sort_parts {
+                    RunOrder::Structured
+                } else {
+                    RunOrder::Unordered
+                };
+                assert!(
+                    batch
+                        .run_meta
+                        .iter()
+                        .all(|m| m.order == Some(expected_order)),
+                    "unexpected run order"
+                );
+                if sort_parts {
+                    for part in &batch.parts {
+                        let part = part.expect_hollow_part();
+                        let (_, updates) = expect_fetch_part::<String, String, u64, i64>(
+                            write.blob.as_ref(),
+                            &part.key.complete(&write.machine.shard_id()),
+                            &write.metrics,
+                            &schemas,
+                        )
+                        .await;
+                        assert!(
+                            updates.is_sorted_by_key(|((k, v), t, _)| (k.clone(), v.clone(), *t)),
+                            "part not sorted"
+                        );
+                    }
+                }
+                batches.push(batch);
+            }
+
+            let compact = |inputs: Vec<HollowBatch<u64>>, since: u64| {
+                let req = CompactReq {
+                    shard_id: write.machine.shard_id(),
+                    desc: Description::new(
+                        inputs[0].desc.lower().clone(),
+                        inputs[inputs.len() - 1].desc.upper().clone(),
+                        Antichain::from_elem(since),
+                    ),
+                    inputs: inputs
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, batch)| IdHollowBatch {
+                            batch: Arc::new(batch),
+                            id: SpineId(i, i + 1),
+                        })
+                        .collect(),
+                };
+                Compactor::<String, String, u64, i64>::compact(
+                    CompactConfig::new(&write.cfg, write.shard_id()),
+                    Arc::clone(&write.blob),
+                    Arc::clone(&write.metrics),
+                    write.metrics.shards.shard(&write.machine.shard_id(), ""),
+                    Arc::new(IsolatedRuntime::new_for_tests()),
+                    req,
+                    schemas.clone(),
+                )
+            };
+            let read_all = |batch: HollowBatch<u64>| {
+                let write = &write;
+                let schemas = &schemas;
+                async move {
+                    let mut updates = vec![];
+                    for part in &batch.parts {
+                        let part = part.expect_hollow_part();
+                        let (_, part_updates) = expect_fetch_part::<String, String, u64, i64>(
+                            write.blob.as_ref(),
+                            &part.key.complete(&write.machine.shard_id()),
+                            &write.metrics,
+                            schemas,
+                        )
+                        .await;
+                        updates.extend(part_updates);
+                    }
+                    updates
+                }
+            };
+
+            let b2 = batches.pop().expect("three batches");
+            let first = compact(batches, 3).await.expect("compaction failed").output;
+            assert_eq!(first.run_meta.len(), 1);
+            let mut first_updates = read_all(first.clone()).await;
+            differential_dataflow::consolidation::consolidate_updates(&mut first_updates);
+            let first_data: Vec<_> = data.iter().filter(|(_, t, _)| *t < 4).collect();
+            assert_eq!(
+                first_updates,
+                all_ok(first_data, 3),
+                "sort_parts={sort_parts}"
+            );
+
+            let second = compact(vec![first, b2], 5)
+                .await
+                .expect("compaction failed")
+                .output;
+            let second_updates = read_all(second).await;
+            assert_eq!(second_updates, all_ok(&data, 5), "sort_parts={sort_parts}");
+        }
+    }
+
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn disable_compaction(dyncfgs: ConfigUpdates) {
