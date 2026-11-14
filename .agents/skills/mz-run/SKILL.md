@@ -61,11 +61,13 @@ exits and cleans up. Before restarting, wait until ports 6875 (SQL) and 6879
 `target/`, so a `/proc/<pid>/exe` ending in `(deleted)` means the process
 still runs a binary that has since been rebuilt.
 
-The compute memory limiter is off locally and in mzcompose. clusterd gets
-`--heap-limit` only for replica sizes with `swap_enabled` and a non-zero
-`disk_limit` (`src/controller/src/clusters.rs`), and no size in
-`cluster_replica_size_map()` sets `swap_enabled`. To test the limiter, pass
-`bin/environmentd -- --cluster-replica-sizes='<json>'` with such a size. The
+clusterd gets `--heap-limit`, which enables the compute memory limiter, only
+for replica sizes with `swap_enabled` and a non-zero `disk_limit`
+(`src/controller/src/clusters.rs`). In `cluster_replica_size_map()`, locally
+and in mzcompose, those are the `,swap` sizes, e.g. `scale=1,workers=1,swap`,
+with a heap limit of twice the memory limit. All other sizes run without the
+limiter. For another heap limit, pass
+`bin/environmentd -- --cluster-replica-sizes='<json>'`. The
 last occurrence of the flag wins, so the map must contain every size you need,
 including `bootstrap` and `scale=1,workers=1`, the default size of the
 builtin clusters. Without the latter, environmentd panics at boot because

@@ -167,6 +167,10 @@ IGNORE_RE = re.compile(
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     | cluster-clusterd1-1\ .*\ replica\ expired
+    # Expected in cluster test-memory-limiter and test-memory-limiter-swap-size,
+    # the latter matched by the 640 MiB heap limit of its small replica
+    | cluster-clusterd1-1\ .*\ memory\ utilization\ exceeded\ configured\ limits
+    | cluster-materialized-1\ .*\ memory\ utilization\ exceeded\ configured\ limits\ memory_usage=\d+\ memory_limit=671088640\b
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.

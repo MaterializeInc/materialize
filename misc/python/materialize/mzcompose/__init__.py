@@ -1113,7 +1113,7 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
-    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy]"""
+    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy|,swap]"""
 
     def replica_size(
         scale: int,
@@ -1159,5 +1159,17 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         replica_sizes[f"scale=1,workers={workers},mem={workers}GiB"] = replica_size(
             1, workers, memory_limit=f"{workers} GiB"
         )
+
+    # The controller runs the compute memory limiter only on swap sizes, with a
+    # heap limit of `memory_limit + disk_limit`. Swap sizes get no scratch
+    # directory either, so upsert state and buffer pool extents stay in process
+    # memory, where the limiter counts them.
+    for name, size in list(replica_sizes.items()):
+        if name.startswith("scale=") and size["is_cc"]:
+            replica_sizes[f"{name},swap"] = {
+                **size,
+                "disk_limit": size["memory_limit"],
+                "swap_enabled": True,
+            }
 
     return replica_sizes
