@@ -499,5 +499,14 @@ describe("ClusterDetail redesign preview", () => {
         await screen.findByText("ClusterOverview component"),
       ).toBeVisible();
     });
+
+    it("sends a redesigned Freshness URL to the classic overview", async () => {
+      await renderClusterDetail("/u1/default/freshness?timePeriod=360");
+
+      await expectPathname("/u1/default");
+      expect(
+        await screen.findByText("ClusterOverview component"),
+      ).toBeVisible();
+    });
   });
 });

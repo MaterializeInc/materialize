@@ -20,6 +20,11 @@ export const TIME_PERIOD_OPTIONS = {
   "1440": "24 hours",
 };
 
+export const rangeLabelFor = (timePeriodMinutes: number) =>
+  TIME_PERIOD_OPTIONS[
+    String(timePeriodMinutes) as keyof typeof TIME_PERIOD_OPTIONS
+  ] ?? `${timePeriodMinutes}m`;
+
 /**
  * Search params carrying the page's controls, so a view is linkable. The time
  * period reuses the app-wide `timePeriod` key from `useTimePeriodSelect`.
