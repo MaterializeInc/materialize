@@ -992,7 +992,21 @@ fn add_new_remove_old_builtin_items_migration(
     // using this object and that the upgrade checker does not show any issues.
     //
     // Objects can be removed from this set after one release.
-    let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
+    let delete_exceptions: HashSet<SystemObjectDescription> = [
+        // Converted from builtin views to builtin materialized views. The MV
+        // replaces the view under the same name.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".into(),
+            object_type: CatalogItemType::View,
+            object_name: "mz_objects".into(),
+        },
+        SystemObjectDescription {
+            schema_name: "mz_catalog".into(),
+            object_type: CatalogItemType::View,
+            object_name: "mz_recent_storage_usage".into(),
+        },
+    ]
+    .into();
     // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
     // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
     // handle that scenario correctly.
