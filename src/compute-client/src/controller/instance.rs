@@ -52,6 +52,7 @@ use crate::controller::error::{
     CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::instance_client::PeekError;
+use crate::controller::peek_lifecycle::PeekLifecycle;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionReadiness, ComputeControllerResponse, IntrospectionUpdates, PeekNotification,
@@ -1360,15 +1361,15 @@ impl Instance {
         let mut peek_responses = Vec::new();
         let mut to_drop = Vec::new();
         for (uuid, peek) in self.peeks_targeting(id) {
-            peek_responses.push(ComputeControllerResponse::PeekNotification(
+            peek_responses.push((
                 uuid,
                 PeekNotification::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
             ));
             to_drop.push(uuid);
         }
-        for response in peek_responses {
-            self.deliver_response(response);
+        for (uuid, notification, otel_ctx) in peek_responses {
+            self.deliver_peek_notification(uuid, notification, otel_ctx);
         }
         for uuid in to_drop {
             let response =
@@ -1777,6 +1778,7 @@ impl Instance {
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1807,6 +1809,7 @@ impl Instance {
                 requested_at: Instant::now(),
                 read_hold,
                 peek_response_tx,
+                lifecycle,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
             },
@@ -1845,11 +1848,7 @@ impl Instance {
         let otel_ctx = peek.otel_ctx.clone();
         otel_ctx.attach_as_parent();
 
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            PeekNotification::Canceled,
-            otel_ctx,
-        ));
+        self.deliver_peek_notification(uuid, PeekNotification::Canceled, otel_ctx);
 
         // Finish the peek.
         // This will also propagate the cancellation to the replicas.
@@ -2035,6 +2034,30 @@ impl Instance {
         drop(peek.read_hold);
     }
 
+    /// Routes a peek's terminal notification to its lifecycle, or to the
+    /// coordinator if it has none. Must run before `finish_peek` removes the peek.
+    fn deliver_peek_notification(
+        &self,
+        uuid: Uuid,
+        notification: PeekNotification,
+        otel_ctx: OpenTelemetryContext,
+    ) {
+        if let Some(lifecycle) = self
+            .peeks
+            .get(&uuid)
+            .and_then(|peek| peek.lifecycle.as_ref())
+        {
+            otel_ctx.attach_as_parent();
+            lifecycle.complete(notification);
+        } else {
+            self.deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                notification,
+                otel_ctx,
+            ));
+        }
+    }
+
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
     /// use the replica epoch to drop stale responses.
     fn handle_response(&mut self, (replica_id, epoch, response): ReplicaResponse) {
@@ -2139,11 +2162,7 @@ impl Instance {
         let notification = PeekNotification::new(&response, peek.offset, peek.limit);
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            notification,
-            otel_ctx,
-        ));
+        self.deliver_peek_notification(uuid, notification, otel_ctx);
 
         self.finish_peek(uuid, response)
     }
@@ -3075,6 +3094,8 @@ impl RefreshIntrospectionState {
 /// A note of an outstanding peek response.
 #[derive(Debug)]
 struct PendingPeek {
+    /// Receives the peek's terminal notification. If `None`, the coordinator does.
+    lifecycle: Option<Arc<PeekLifecycle>>,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
     ///
     /// If this value is `None`, we pass on the first response.
@@ -3514,17 +3535,38 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
+pub(super) mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
+    use async_trait::async_trait;
+    use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
     use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
     use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
-    use mz_persist_types::PersistLocation;
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_ore::tracing::OpenTelemetryContext;
+    use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
+    use mz_persist_types::{PersistLocation, ShardId};
+    use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
+    use mz_storage_client::client::TimestamplessUpdateBuilder;
+    use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
+    use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
+    use mz_storage_types::StorageDiff;
+    use mz_storage_types::controller::{CollectionMetadata, StorageError};
+    use mz_storage_types::errors::CollectionMissing;
+    use mz_storage_types::parameters::StorageParameters;
+    use mz_storage_types::read_holds::ReadHold;
+    use mz_storage_types::read_policy::ReadPolicy;
+    use mz_storage_types::sources::SourceData;
+    use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
     use timely::progress::Antichain;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
+    use uuid::Uuid;
 
-    use crate::protocol::command::{ComputeCommand, InstanceConfig};
+    use crate::controller::peek_lifecycle::PeekLifecycle;
+    use crate::controller::{ComputeControllerResponse, PeekNotification};
+    use crate::protocol::command::{ComputeCommand, InstanceConfig, PeekTarget};
+    use crate::protocol::response::{PeekError as ProtocolPeekError, PeekResponse};
 
     use super::{
         CollectionReadiness, Instance, ReplicaCollectionIntrospection, ReplicaCollectionState,
@@ -3824,6 +3866,409 @@ mod tests {
                 Some(&ConfigVal::Bool(true)),
             ),
             other => panic!("expected UpdateConfiguration, got {other:?}"),
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnusedStorage;
+
+    #[async_trait]
+    impl mz_storage_client::storage_collections::StorageCollections for UnusedStorage {
+        async fn initialize_state(
+            &self,
+            _txn: &mut (dyn StorageTxn + Send),
+            _init_ids: BTreeSet<GlobalId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        fn update_parameters(&self, _config_params: StorageParameters) {
+            unimplemented!()
+        }
+
+        fn collection_metadata(
+            &self,
+            _id: GlobalId,
+        ) -> Result<CollectionMetadata, CollectionMissing> {
+            unimplemented!()
+        }
+
+        fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
+            unimplemented!()
+        }
+
+        fn collections_frontiers(
+            &self,
+            _ids: Vec<GlobalId>,
+        ) -> Result<Vec<CollectionFrontiers>, CollectionMissing> {
+            unimplemented!("peek routing must not access storage")
+        }
+
+        fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers> {
+            unimplemented!()
+        }
+
+        fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        async fn snapshot_stats(
+            &self,
+            _id: GlobalId,
+            _as_of: Antichain<Timestamp>,
+        ) -> Result<SnapshotStats, StorageError> {
+            unimplemented!()
+        }
+
+        async fn snapshot_parts_stats(
+            &self,
+            _id: GlobalId,
+            _as_of: Antichain<Timestamp>,
+        ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError>> {
+            unimplemented!()
+        }
+
+        fn snapshot(
+            &self,
+            _id: GlobalId,
+            _as_of: Timestamp,
+        ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError>> {
+            unimplemented!()
+        }
+
+        async fn snapshot_latest(&self, _id: GlobalId) -> Result<Vec<Row>, StorageError> {
+            unimplemented!()
+        }
+
+        fn snapshot_cursor(
+            &self,
+            _id: GlobalId,
+            _as_of: Timestamp,
+        ) -> BoxFuture<'static, Result<SnapshotCursor, StorageError>> {
+            unimplemented!()
+        }
+
+        fn snapshot_and_stream(
+            &self,
+            _id: GlobalId,
+            _as_of: Timestamp,
+        ) -> BoxFuture<
+            'static,
+            Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
+        > {
+            unimplemented!()
+        }
+
+        fn create_update_builder(
+            &self,
+            _id: GlobalId,
+        ) -> BoxFuture<
+            'static,
+            Result<TimestamplessUpdateBuilder<SourceData, (), StorageDiff>, StorageError>,
+        > {
+            unimplemented!()
+        }
+
+        async fn prepare_state(
+            &self,
+            _txn: &mut (dyn StorageTxn + Send),
+            _ids_to_add: BTreeSet<GlobalId>,
+            _ids_to_drop: BTreeSet<GlobalId>,
+            _ids_to_register: BTreeMap<GlobalId, ShardId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        async fn create_collections_for_bootstrap(
+            &self,
+            _storage_metadata: &StorageMetadata,
+            _register_ts: Option<Timestamp>,
+            _collections: Vec<(GlobalId, CollectionDescription)>,
+            _migrated_storage_collections: &BTreeSet<GlobalId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        async fn alter_table_desc(
+            &self,
+            _existing_collection: GlobalId,
+            _new_collection: GlobalId,
+            _new_desc: RelationDesc,
+            _expected_version: RelationVersion,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        fn drop_collections_unvalidated(
+            &self,
+            _storage_metadata: &StorageMetadata,
+            _identifiers: Vec<GlobalId>,
+        ) {
+            unimplemented!()
+        }
+
+        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy)>) {
+            unimplemented!()
+        }
+
+        fn acquire_read_holds(
+            &self,
+            _desired_holds: Vec<GlobalId>,
+        ) -> Result<Vec<ReadHold>, CollectionMissing> {
+            unimplemented!("peek routing must not access storage")
+        }
+
+        fn determine_time_dependence(
+            &self,
+            _id: GlobalId,
+        ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+            unimplemented!()
+        }
+
+        fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+            unimplemented!()
+        }
+    }
+
+    pub(in crate::controller) fn peek_test_instance()
+    -> (Instance, mpsc::UnboundedReceiver<ComputeControllerResponse>) {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = crate::metrics::ComputeControllerMetrics::new(
+            &registry,
+            mz_cluster_client::metrics::ControllerMetrics::new(&registry),
+        )
+        .for_instance(mz_compute_types::ComputeInstanceId::User(1));
+        let (_, command_rx) = mpsc::unbounded_channel();
+        let (response_tx, response_rx) = mpsc::unbounded_channel();
+        let (introspection_tx, _) = mpsc::unbounded_channel();
+        let now = mz_ore::now::SYSTEM_TIME.clone();
+        let instance = Instance::new(
+            &mz_build_info::DUMMY_BUILD_INFO,
+            Arc::new(UnusedStorage),
+            PersistLocation::new_in_mem(),
+            Vec::new(),
+            metrics,
+            now.clone(),
+            mz_cluster_client::WallclockLagFn::new(now),
+            Arc::new(mz_dyncfgs::all_dyncfgs()),
+            command_rx,
+            response_tx,
+            Arc::new(|_, _| Ok(())),
+            introspection_tx,
+            false,
+        );
+        (instance, response_rx)
+    }
+
+    fn issue_peek(
+        instance: &mut Instance,
+        target: Option<ReplicaId>,
+        lifecycle_owned: bool,
+    ) -> (
+        Uuid,
+        oneshot::Receiver<PeekResponse>,
+        mpsc::UnboundedReceiver<PeekNotification>,
+    ) {
+        let uuid = Uuid::new_v4();
+        let id = GlobalId::User(1);
+        let (result_tx, result_rx) = oneshot::channel();
+        let (retire_tx, retire_rx) = mpsc::unbounded_channel();
+        let lifecycle = lifecycle_owned.then(|| {
+            Arc::new(PeekLifecycle::new(move |outcome| {
+                retire_tx.send(outcome).unwrap();
+            }))
+        });
+        let issue = || {
+            instance.peek(
+                PeekTarget::Index { id },
+                None,
+                uuid,
+                Timestamp::MIN,
+                RelationDesc::empty(),
+                mz_expr::RowSetFinishing::trivial(0),
+                mz_expr::SafeMfpPlan::from_mfp(mz_expr::MapFilterProject::new(0)),
+                ReadHold::new(id, ac(0), Arc::new(|_, _| Ok(()))),
+                target,
+                result_tx,
+                lifecycle.clone(),
+            )
+        };
+        if let Some(lifecycle) = &lifecycle {
+            assert_eq!(
+                lifecycle
+                    .issue(issue, |_| panic!("completion must not cancel lifecycle"))
+                    .unwrap(),
+                None
+            );
+        } else {
+            issue().unwrap();
+        }
+        (uuid, result_rx, retire_rx)
+    }
+
+    fn assert_peek_routing(
+        lifecycle_owned: bool,
+        uuid: Uuid,
+        expected: PeekNotification,
+        retired: &mut mpsc::UnboundedReceiver<PeekNotification>,
+        coordinator: &mut mpsc::UnboundedReceiver<ComputeControllerResponse>,
+    ) {
+        if lifecycle_owned {
+            assert_eq!(retired.try_recv().unwrap(), expected);
+        } else {
+            match coordinator.try_recv().unwrap() {
+                ComputeControllerResponse::PeekNotification(id, notification, _) => {
+                    assert_eq!(id, uuid);
+                    assert_eq!(notification, expected);
+                }
+                other => panic!("expected peek notification, got {other:?}"),
+            }
+        }
+        assert!(retired.try_recv().is_err());
+        assert!(coordinator.try_recv().is_err());
+    }
+
+    #[mz_ore::test]
+    fn peek_response_routes_retirement_and_result() {
+        for lifecycle_owned in [false, true] {
+            let (mut instance, mut coordinator) = peek_test_instance();
+            let (uuid, mut result, mut retired) = issue_peek(&mut instance, None, lifecycle_owned);
+            let response = PeekResponse::Rows(Vec::new());
+            instance.handle_peek_response(
+                uuid,
+                response.clone(),
+                OpenTelemetryContext::empty(),
+                ReplicaId::User(1),
+            );
+            assert_eq!(result.try_recv().unwrap(), response);
+            assert!(!instance.peeks.contains_key(&uuid));
+            // Late replica responses must not retire or notify a second time.
+            instance.handle_peek_response(
+                uuid,
+                PeekResponse::Canceled,
+                OpenTelemetryContext::empty(),
+                ReplicaId::User(2),
+            );
+            assert_peek_routing(
+                lifecycle_owned,
+                uuid,
+                PeekNotification::Success {
+                    rows: 0,
+                    result_size: 0,
+                },
+                &mut retired,
+                &mut coordinator,
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn cancel_peek_routes_retirement_and_preserves_result_reason() {
+        for lifecycle_owned in [false, true] {
+            for reason in [
+                PeekResponse::Canceled,
+                PeekResponse::Error(ProtocolPeekError::unstructured("dependency dropped")),
+            ] {
+                let (mut instance, mut coordinator) = peek_test_instance();
+                let (uuid, mut result, mut retired) =
+                    issue_peek(&mut instance, None, lifecycle_owned);
+                instance.cancel_peek(uuid, reason.clone());
+                assert_eq!(result.try_recv().unwrap(), reason);
+                assert!(!instance.peeks.contains_key(&uuid));
+                instance.cancel_peek(uuid, PeekResponse::Canceled);
+                instance.handle_peek_response(
+                    uuid,
+                    PeekResponse::Rows(Vec::new()),
+                    OpenTelemetryContext::empty(),
+                    ReplicaId::User(1),
+                );
+                assert_peek_routing(
+                    lifecycle_owned,
+                    uuid,
+                    PeekNotification::Canceled,
+                    &mut retired,
+                    &mut coordinator,
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn targeted_replica_removal_routes_failure_only_to_targeted_peeks() {
+        for lifecycle_owned in [false, true] {
+            let (mut instance, mut coordinator) = peek_test_instance();
+            let target = ReplicaId::User(1);
+            let other = ReplicaId::User(2);
+            for replica in [target, other] {
+                instance
+                    .add_replica(
+                        replica,
+                        super::ReplicaConfig {
+                            location: mz_cluster_client::client::ClusterReplicaLocation {
+                                ctl_addrs: Vec::new(),
+                            },
+                            logging: Default::default(),
+                            grpc_client: Default::default(),
+                            expiration_offset: None,
+                            arrangement_dictionary_compression: false,
+                        },
+                        None,
+                        Default::default(),
+                    )
+                    .unwrap();
+            }
+            let (uuid, mut result, mut retired) =
+                issue_peek(&mut instance, Some(target), lifecycle_owned);
+            let (other_uuid, mut other_result, mut other_retired) =
+                issue_peek(&mut instance, Some(other), lifecycle_owned);
+            let (untargeted_uuid, mut untargeted_result, mut untargeted_retired) =
+                issue_peek(&mut instance, None, lifecycle_owned);
+            instance.handle_peek_response(
+                uuid,
+                PeekResponse::Rows(Vec::new()),
+                OpenTelemetryContext::empty(),
+                other,
+            );
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(retired.try_recv().is_err());
+            assert!(coordinator.try_recv().is_err());
+
+            instance.remove_replica(target).unwrap();
+            assert_eq!(
+                result.try_recv().unwrap(),
+                PeekResponse::Error(ProtocolPeekError::unstructured(
+                    super::ERROR_TARGET_REPLICA_FAILED
+                ))
+            );
+            assert!(!instance.peeks.contains_key(&uuid));
+            assert!(instance.peeks.contains_key(&other_uuid));
+            assert!(instance.peeks.contains_key(&untargeted_uuid));
+            assert!(matches!(
+                other_result.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                untargeted_result.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(other_retired.try_recv().is_err());
+            assert!(untargeted_retired.try_recv().is_err());
+            instance.handle_peek_response(
+                uuid,
+                PeekResponse::Rows(Vec::new()),
+                OpenTelemetryContext::empty(),
+                target,
+            );
+            assert_peek_routing(
+                lifecycle_owned,
+                uuid,
+                PeekNotification::Error(super::ERROR_TARGET_REPLICA_FAILED.into()),
+                &mut retired,
+                &mut coordinator,
+            );
         }
     }
 }

@@ -916,6 +916,7 @@ impl crate::coord::Coordinator {
                 read_hold,
                 target_replica,
                 rows_tx,
+                None,
             )
             .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
         if let Err(e) = peek_result {
