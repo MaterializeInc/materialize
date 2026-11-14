@@ -575,6 +575,10 @@ where
     T: Ord + Columnation + Clone + PartialOrder + 'static,
     R: Default + Semigroup + Columnation + Clone + 'static,
 {
+    /// Most chunks [`Self::recycle`] keeps. `merge` draws one `result` chunk at a time and
+    /// `extract` draws a `keep` and a `ready` chunk, so two cover both.
+    const STASH_CAP: usize = 2;
+
     /// Target chunk capacity in elements, mirroring [`ColumnationChunker`].
     fn chunk_capacity() -> usize {
         const BUFFER_SIZE_BYTES: usize = 64 << 10;
@@ -600,13 +604,18 @@ where
         }
     }
 
-    /// Recycle a consumed chunk into `stash`, retaining its allocations.
+    /// Recycle a consumed chunk into `stash`, retaining its allocations, unless `stash` already
+    /// holds [`Self::STASH_CAP`] chunks.
     fn recycle(
         mut chunk: ColumnationStack<(D, T, R)>,
         stash: &mut Vec<ColumnationStack<(D, T, R)>>,
     ) {
-        chunk.clear();
-        stash.push(chunk);
+        // Differential's `MergeLadder` keeps its stash for the batcher's lifetime and offers no
+        // way to clear it, so an uncapped stash retains every chunk the largest merge consumed.
+        if stash.len() < Self::STASH_CAP {
+            chunk.clear();
+            stash.push(chunk);
+        }
     }
 
     /// Drain remaining items from one side into `result`/`output`.
@@ -796,5 +805,53 @@ where
         if !ready.is_empty() {
             readied.push(ready);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::trace::implementations::merge_batcher::Merger;
+    use timely::container::PushInto;
+
+    use super::{ColInternalMerger, ColumnationStack};
+
+    type Update = (u64, u64, i64);
+
+    fn chain(diff: i64, keys: u64, chunk_len: usize) -> Vec<ColumnationStack<Update>> {
+        let mut chain = Vec::new();
+        let mut chunk = ColumnationStack::with_capacity(chunk_len);
+        for key in 0..keys {
+            if chunk.len() == chunk_len {
+                chain.push(std::mem::replace(
+                    &mut chunk,
+                    ColumnationStack::with_capacity(chunk_len),
+                ));
+            }
+            chunk.push_into(&(key, 0, diff));
+        }
+        chain.push(chunk);
+        chain
+    }
+
+    #[mz_ore::test]
+    fn merge_caps_recycled_chunks() {
+        let chunk_len = ColInternalMerger::<u64, u64, i64>::chunk_capacity();
+        let keys = u64::try_from(chunk_len * 32).expect("fits");
+        let mut merger = ColInternalMerger::<u64, u64, i64>::default();
+        let mut output = Vec::new();
+        let mut stash = Vec::new();
+        // Every insertion meets its retraction, so the merge consumes 64 chunks and outputs nothing.
+        merger.merge(
+            chain(1, keys, chunk_len),
+            chain(-1, keys, chunk_len),
+            &mut output,
+            &mut stash,
+        );
+        assert!(output.iter().all(|chunk| chunk.len() == 0));
+        assert!(
+            stash.len() <= ColInternalMerger::<u64, u64, i64>::STASH_CAP,
+            "stash holds {} chunks",
+            stash.len()
+        );
     }
 }
