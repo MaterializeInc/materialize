@@ -49,7 +49,7 @@ SERVICES = [
         ports=["30123:30123"],
         allow_host_ports=True,
         advertised_listeners=[
-            "HOST://localhost:30123",
+            "HOST://127.0.0.1:30123",
             "PLAINTEXT://kafka:9092",
         ],
         environment_extra=[
