@@ -2294,6 +2294,7 @@ impl StorageController for Controller {
         }
 
         let mut status_updates = vec![];
+        let mut progressed = BTreeSet::new();
         let mut updated_frontiers = BTreeMap::new();
 
         // Take the currently stashed responses so that we can call mut receiver functions in the loop.
@@ -2301,7 +2302,9 @@ impl StorageController for Controller {
         for resp in stashed_responses {
             match resp {
                 (_replica_id, StorageResponse::FrontierUpper(id, upper)) => {
-                    self.update_write_frontier(id, &upper);
+                    if self.update_write_frontier(id, &upper) {
+                        progressed.insert(self.restart_group(id));
+                    }
                     updated_frontiers.insert(id, upper);
                 }
                 (replica_id, StorageResponse::DroppedId(id)) => {
@@ -2519,7 +2522,7 @@ impl StorageController for Controller {
             }
         }
 
-        self.record_status_updates(status_updates);
+        self.record_status_updates(status_updates, progressed);
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
@@ -3013,9 +3016,11 @@ where
         }
     }
 
+    /// Returns whether `new_upper` advanced the write frontier of `id`.
     #[instrument(level = "debug", fields(updates))]
-    fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) {
+    fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) -> bool {
         let mut read_capability_changes = BTreeMap::default();
+        let mut advanced = false;
 
         if let Some(collection) = self.collections.get_mut(&id) {
             let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state {
@@ -3034,7 +3039,7 @@ where
                             "updated write frontier for collection which is not an ingestion"
                         );
                     }
-                    return;
+                    return false;
                 }
                 CollectionStateExtra::Export(export) => (
                     &mut export.write_frontier,
@@ -3045,6 +3050,7 @@ where
 
             if PartialOrder::less_than(write_frontier, new_upper) {
                 write_frontier.clone_from(new_upper);
+                advanced = true;
             }
 
             let new_derived_since = hold_policy.frontier(write_frontier.borrow());
@@ -3062,6 +3068,7 @@ where
         if !read_capability_changes.is_empty() {
             self.update_hold_capabilities(&mut read_capability_changes);
         }
+        advanced
     }
 
     // This is different from `update_read_capabilities`, which is for external users.
@@ -3466,18 +3473,28 @@ where
 
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
-    fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+    ///
+    /// `progressed` holds the restart groups in which a collection advanced its
+    /// write frontier.
+    fn record_status_updates(
+        &mut self,
+        updates: Vec<StatusUpdate>,
+        progressed: BTreeSet<GlobalId>,
+    ) {
         if self.read_only {
             return;
         }
 
-        let now = (self.now)();
         let mut written = Vec::with_capacity(updates.len());
         for update in updates {
             let group = self.restart_group(update.id);
-            written.extend(self.restart_loops.observe(group, update, now));
+            written.extend(self.restart_loops.observe(group, update));
         }
-        written.extend(self.restart_loops.release_expired(now));
+        // After observing the statuses, so a restart whose `running` and first
+        // frontier advance arrive in one batch is released.
+        for group in progressed {
+            written.extend(self.restart_loops.progressed(group));
+        }
         self.append_status_updates(written);
     }
 
@@ -3908,8 +3925,6 @@ where
             let collections = &self.collections;
             self.restart_loops
                 .retain_groups(|id| collections.contains_key(&id));
-            let released = self.restart_loops.release_expired((self.now)());
-            self.append_status_updates(released);
         }
 
         // Perform instance maintenance work.

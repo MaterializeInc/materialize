@@ -11,17 +11,10 @@
 //! every restart.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
-use mz_ore::now::EpochMillis;
 use mz_repr::GlobalId;
 use mz_storage_client::client::{Status, StatusUpdate};
-
-/// How long [`RestartLoops`] holds a restart's statuses. Restarts that fail on
-/// connect stalled within 0.3 s in production, and a recovering object shows
-/// `running` this much later.
-const RESTART_LOOP_HOLD: Duration = Duration::from_secs(5);
 
 /// Drops the statuses of a restart that ends in the stall it started from, so
 /// a source or sink in a restart loop writes one row per distinct error.
@@ -30,26 +23,26 @@ const RESTART_LOOP_HOLD: Duration = Duration::from_secs(5);
 /// the ingestion. A sink is a group of its own. While the head's last written
 /// status is `stalled`, `starting` and `running` statuses that repeat their
 /// object's last written status are held. They are dropped if the head stalls
-/// again with the same error. Any other status writes them first, with their
-/// original timestamps.
+/// again with the same error, and written with their original timestamps when
+/// a collection in the group advances its write frontier or the group reports
+/// any other status. A source can report `running` before it connects, so only
+/// a frontier advance shows that a restart worked.
+///
+/// NOTE: A restart that is up but cannot advance, such as an Iceberg sink
+/// before its first commit or a sink whose input is stalled, keeps showing its
+/// previous stall until it advances.
 #[derive(Debug, Default)]
 pub(crate) struct RestartLoops {
     /// The last status and error written for each object, per replica.
     written: BTreeMap<(GlobalId, Option<ReplicaId>), (Status, Option<String>)>,
-    /// The statuses held since each group's restart began, with the time the
-    /// first one arrived.
-    held: BTreeMap<(GlobalId, Option<ReplicaId>), (EpochMillis, Vec<StatusUpdate>)>,
+    /// The statuses held since each group's restart began.
+    held: BTreeMap<(GlobalId, Option<ReplicaId>), Vec<StatusUpdate>>,
 }
 
 impl RestartLoops {
     /// The statuses to write for `update`, which belongs to the group headed by
-    /// `group` and arrived at `now`, in order.
-    pub(crate) fn observe(
-        &mut self,
-        group: GlobalId,
-        update: StatusUpdate,
-        now: EpochMillis,
-    ) -> Vec<StatusUpdate> {
+    /// `group`, in order.
+    pub(crate) fn observe(&mut self, group: GlobalId, update: StatusUpdate) -> Vec<StatusUpdate> {
         let key = (group, update.replica_id);
         let is_head = update.id == group;
         let head_stalled = matches!(self.written.get(&key), Some((Status::Stalled, _)));
@@ -63,11 +56,7 @@ impl RestartLoops {
                             Some((Status::Starting | Status::Running, _))
                         )) =>
             {
-                self.held
-                    .entry(key)
-                    .or_insert_with(|| (now, Vec::new()))
-                    .1
-                    .push(update);
+                self.held.entry(key).or_default().push(update);
                 Vec::new()
             }
             Status::Stalled
@@ -83,27 +72,27 @@ impl RestartLoops {
                 Vec::new()
             }
             _ => {
-                let held = self.held.remove(&key).map(|(_, held)| held);
-                self.write(held.into_iter().flatten().chain([update]).collect())
+                let held = self.held.remove(&key).unwrap_or_default();
+                self.write(held.into_iter().chain([update]).collect())
             }
         }
     }
 
-    /// The held statuses of restarts that have been up for at least
-    /// [`RESTART_LOOP_HOLD`] at `now`.
-    pub(crate) fn release_expired(&mut self, now: EpochMillis) -> Vec<StatusUpdate> {
-        let hold = u64::try_from(RESTART_LOOP_HOLD.as_millis()).expect("hold fits in u64");
-        let expired: Vec<_> = self
-            .held
-            .iter()
-            .filter(|(_, (since, _))| now.saturating_sub(*since) >= hold)
-            .map(|(key, _)| *key)
-            .collect();
+    /// The held statuses of `group`'s restart on every replica, which is up
+    /// because a collection in the group advanced its write frontier.
+    ///
+    /// The write frontier is shared by all replicas, and only the first to
+    /// report an advance moves it. Releasing just that replica would leave the
+    /// others showing their stall indefinitely.
+    pub(crate) fn progressed(&mut self, group: GlobalId) -> Vec<StatusUpdate> {
         let mut released = Vec::new();
-        for key in expired {
-            let (_, held) = self.held.remove(&key).expect("key was just listed");
-            released.extend(held);
-        }
+        self.held.retain(|(held_group, _), held| {
+            let keep = *held_group != group;
+            if !keep {
+                released.append(held);
+            }
+            keep
+        });
         self.write(released)
     }
 
@@ -147,12 +136,11 @@ mod tests {
         update
     }
 
-    /// Feeds one restart of `SOURCE` and its export `TABLE` to `loops` at
-    /// `now`: both report `starting` and `running`, then `SOURCE` reports
-    /// `last`. Returns what is written, as (id, status, error).
+    /// Feeds one restart of `SOURCE` and its export `TABLE` to `loops`: both
+    /// report `starting` and `running`, then `SOURCE` reports `last`. Returns
+    /// what is written, as (id, status, error).
     fn restart(
         loops: &mut RestartLoops,
-        now: EpochMillis,
         last: Option<(Status, Option<&str>)>,
     ) -> Vec<(GlobalId, Status, Option<String>)> {
         let mut updates = vec![
@@ -164,9 +152,25 @@ mod tests {
         updates.extend(last.map(|(s, error)| status(SOURCE, s, error)));
         updates
             .into_iter()
-            .flat_map(|update| loops.observe(SOURCE, update, now))
+            .flat_map(|update| loops.observe(SOURCE, update))
             .map(|update| (update.id, update.status, update.error))
             .collect()
+    }
+
+    /// Has `SOURCE` stall and then start a restart on each of `replicas`.
+    fn hold_restarts(loops: &mut RestartLoops, replicas: &[ReplicaId]) {
+        for replica_id in replicas {
+            for update in [
+                status(SOURCE, Status::Stalled, Some("dns failure")),
+                status(SOURCE, Status::Starting, None),
+            ] {
+                let update = StatusUpdate {
+                    replica_id: Some(*replica_id),
+                    ..update
+                };
+                loops.observe(SOURCE, update);
+            }
+        }
     }
 
     fn full_restart(last: (Status, Option<&str>)) -> Vec<(GlobalId, Status, Option<String>)> {
@@ -185,72 +189,73 @@ mod tests {
         let stall = (Status::Stalled, Some("dns failure"));
 
         assert_eq!(
-            restart(&mut loops, 0, Some(stall)),
+            restart(&mut loops, Some(stall)),
             full_restart(stall),
             "the first run is written in full"
         );
         for cycle in 1..=10 {
-            let now = cycle * 5_000;
-            assert_eq!(
-                restart(&mut loops, now, Some(stall)),
-                vec![],
-                "restart {cycle}"
-            );
-            assert_eq!(loops.release_expired(now + 300), vec![]);
+            assert_eq!(restart(&mut loops, Some(stall)), vec![], "restart {cycle}");
         }
     }
 
     #[mz_ore::test]
     fn test_a_restart_that_stalls_differently_is_written() {
         let mut loops = RestartLoops::default();
-        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
+        restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
 
         let other = (Status::Stalled, Some("connection refused"));
-        assert_eq!(restart(&mut loops, 5_000, Some(other)), full_restart(other));
+        assert_eq!(restart(&mut loops, Some(other)), full_restart(other));
     }
 
     #[mz_ore::test]
-    fn test_a_restart_that_stays_up_is_released_after_the_hold() {
+    fn test_a_restart_whose_frontier_advances_is_released() {
         let mut loops = RestartLoops::default();
         let stall = (Status::Stalled, Some("dns failure"));
-        restart(&mut loops, 0, Some(stall));
-        assert_eq!(restart(&mut loops, 5_000, None), vec![]);
+        restart(&mut loops, Some(stall));
+        assert_eq!(restart(&mut loops, None), vec![]);
 
-        let hold = u64::try_from(RESTART_LOOP_HOLD.as_millis()).expect("fits");
-        assert_eq!(loops.release_expired(5_000 + hold - 1), vec![]);
         let released: Vec<_> = loops
-            .release_expired(5_000 + hold)
+            .progressed(SOURCE)
             .into_iter()
             .map(|update| (update.id, update.status, update.error))
             .collect();
         let mut expected = full_restart(stall);
         expected.pop();
         assert_eq!(released, expected);
+        assert_eq!(loops.progressed(SOURCE), vec![]);
 
         // The source recovered, so a later stall is a new one and is written.
-        assert_eq!(
-            restart(&mut loops, 60_000, Some(stall)),
-            full_restart(stall)
-        );
+        assert_eq!(restart(&mut loops, Some(stall)), full_restart(stall));
+    }
+
+    #[mz_ore::test]
+    fn test_a_frontier_advance_releases_every_replica() {
+        let replicas = [ReplicaId::User(1), ReplicaId::User(2)];
+        let mut loops = RestartLoops::default();
+        hold_restarts(&mut loops, &replicas);
+
+        let released: Vec<_> = loops
+            .progressed(SOURCE)
+            .into_iter()
+            .map(|update| update.replica_id)
+            .collect();
+        assert_eq!(released, replicas.map(Some));
     }
 
     #[mz_ore::test]
     fn test_held_statuses_are_written_before_other_statuses() {
         let mut loops = RestartLoops::default();
-        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
+        restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
 
         let paused = (Status::Paused, None);
-        assert_eq!(
-            restart(&mut loops, 5_000, Some(paused)),
-            full_restart(paused)
-        );
+        assert_eq!(restart(&mut loops, Some(paused)), full_restart(paused));
     }
 
     #[mz_ore::test]
     fn test_dropped_groups_are_forgotten() {
         let mut loops = RestartLoops::default();
-        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
-        restart(&mut loops, 5_000, None);
+        restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
+        restart(&mut loops, None);
 
         loops.retain_groups(|id| id != SOURCE && id != TABLE);
         assert!(loops.written.is_empty() && loops.held.is_empty());
@@ -259,15 +264,14 @@ mod tests {
     #[mz_ore::test]
     fn test_an_export_stall_is_written() {
         let mut loops = RestartLoops::default();
-        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
-        assert_eq!(restart(&mut loops, 5_000, None), vec![]);
+        restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
+        assert_eq!(restart(&mut loops, None), vec![]);
 
         // An export's own stall does not end the source's restart.
         let written: Vec<_> = loops
             .observe(
                 SOURCE,
                 status(TABLE, Status::Stalled, Some("schema change")),
-                5_100,
             )
             .into_iter()
             .map(|update| (update.id, update.status, update.error))
@@ -285,17 +289,14 @@ mod tests {
 
         // The source is up again, so its next identical stall is a new one.
         let stall = (Status::Stalled, Some("dns failure"));
-        assert_eq!(
-            restart(&mut loops, 60_000, Some(stall)),
-            full_restart(stall)
-        );
+        assert_eq!(restart(&mut loops, Some(stall)), full_restart(stall));
     }
 
     #[mz_ore::test]
     fn test_a_new_export_writes_its_first_status() {
         const NEW_TABLE: GlobalId = GlobalId::User(3);
         let mut loops = RestartLoops::default();
-        restart(&mut loops, 0, Some((Status::Stalled, Some("dns failure"))));
+        restart(&mut loops, Some((Status::Stalled, Some("dns failure"))));
 
         let written: Vec<_> = [
             status(SOURCE, Status::Starting, None),
@@ -303,7 +304,7 @@ mod tests {
             status(SOURCE, Status::Stalled, Some("dns failure")),
         ]
         .into_iter()
-        .flat_map(|update| loops.observe(SOURCE, update, 5_000))
+        .flat_map(|update| loops.observe(SOURCE, update))
         .map(|update| (update.id, update.status, update.error))
         .collect();
         assert_eq!(
@@ -320,14 +321,13 @@ mod tests {
     fn test_an_export_recovering_from_its_own_stall_is_written() {
         let mut loops = RestartLoops::default();
         let stall = (Status::Stalled, Some("dns failure"));
-        restart(&mut loops, 0, None);
+        restart(&mut loops, None);
         loops.observe(
             SOURCE,
             status(TABLE, Status::Stalled, Some("schema change")),
-            100,
         );
-        loops.observe(SOURCE, status(SOURCE, Status::Stalled, stall.1), 200);
+        loops.observe(SOURCE, status(SOURCE, Status::Stalled, stall.1));
 
-        assert_eq!(restart(&mut loops, 5_000, Some(stall)), full_restart(stall));
+        assert_eq!(restart(&mut loops, Some(stall)), full_restart(stall));
     }
 }
