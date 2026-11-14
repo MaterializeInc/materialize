@@ -827,13 +827,13 @@ const USER_INDEXES_CTE: &str = "\
             parsed->>'type' = 'index'
     )";
 
-/// Resolves the catalog id of the `mz_catalog_server` cluster at query time so
-/// the MV doesn't hardcode a system id literal.
+/// Resolves cluster ids by name at query time so the MV doesn't hardcode
+/// system id literals.
 const CATALOG_SERVER_CLUSTER_CTE: &str = "\
-    catalog_server_cluster AS (
-        SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
+    builtin_clusters AS (
+        SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id, data->'value'->>'name' AS name
         FROM mz_internal.mz_catalog_raw
-        WHERE data->>'kind' = 'Cluster' AND data->'value'->>'name' = 'mz_catalog_server'
+        WHERE data->>'kind' = 'Cluster'
     )";
 
 /// CTE over `GidMapping` rows that looks up the system id of a builtin index
@@ -888,7 +888,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
             FROM mz_internal.mz_builtin_indexes biv
             JOIN builtin_index_gid_mappings bigm ON bigm.name = biv.name
             JOIN on_gid_mappings om ON om.schema_name = biv.on_schema_name AND om.object_name = biv.on_name
-            CROSS JOIN catalog_server_cluster csc
+            JOIN builtin_clusters csc ON csc.name = biv.cluster_name
         ) AS t
     )");
 
@@ -3430,14 +3430,15 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         ontology: None,
     });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
-    LazyLock::new(|| BuiltinIndex {
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| {
+    BuiltinIndex {
         name: "mz_cluster_replica_frontiers_ind",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::INDEX_MZ_CLUSTER_REPLICA_FRONTIERS_IND_OID,
         sql: "IN CLUSTER mz_catalog_server_frontend ON mz_catalog.mz_cluster_replica_frontiers (object_id)",
         is_retained_metrics_object: false,
-    });
+    }
+});
 
 pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
@@ -3683,7 +3684,7 @@ pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinMaterializedView> = LazyLock
         ("object_id", "The ID of the table, source, or materialized view."),
         ("size_bytes", "The number of storage bytes used by the object in the most recent assessment."),
     ]),
-    sql: "IN CLUSTER mz_catalog_server_frontend AS
+    sql: "IN CLUSTER mz_catalog_server AS
 
 WITH
 

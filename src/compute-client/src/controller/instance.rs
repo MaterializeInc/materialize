@@ -1265,11 +1265,9 @@ impl Instance {
                 }
                 target_replica
             }
-            ComputeCommand::Peek(peek) => self
-                .peeks
-                .get(&peek.uuid)
-                .filter(|p| p.load_balanced)
-                .and_then(|p| p.target_replica),
+            // A targeted peek may read a collection that only its target replica hosts (a
+            // transient dataflow placed by `create_dataflow`), so other replicas must not see it.
+            ComputeCommand::Peek(peek) => self.peeks.get(&peek.uuid).and_then(|p| p.target_replica),
             ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
@@ -1413,8 +1411,7 @@ impl Instance {
             .collect();
         for uuid in to_move {
             let command = self.peeks[&uuid].command.clone().expect("checked above");
-            let Some(new_target) =
-                self.choose_replica(&[command.target.id()], &command.timestamp)
+            let Some(new_target) = self.choose_replica(&[command.target.id()], &command.timestamp)
             else {
                 continue;
             };
@@ -1891,7 +1888,11 @@ impl Instance {
         let mut target_replica = target_replica;
         let mut load_balanced = false;
         if target_replica.is_none() && self.load_balanced {
-            target_replica = match self.collection(target_id).ok().and_then(|c| c.target_replica) {
+            target_replica = match self
+                .collection(target_id)
+                .ok()
+                .and_then(|c| c.target_replica)
+            {
                 Some(replica) => Some(replica),
                 None => {
                     load_balanced = true;

@@ -1631,10 +1631,10 @@ pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
 pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
     &MZ_SYSTEM_CLUSTER,
     &MZ_CATALOG_SERVER_CLUSTER,
-    &MZ_CATALOG_SERVER_FRONTEND_CLUSTER,
     &MZ_PROBE_CLUSTER,
     &MZ_SUPPORT_CLUSTER,
     &MZ_ANALYTICS_CLUSTER,
+    &MZ_CATALOG_SERVER_FRONTEND_CLUSTER,
 ];
 
 #[allow(non_snake_case)]
@@ -1818,6 +1818,23 @@ mod tests {
 
         let rewritten = format!("{}{}{}", &contents[..begin], table, &contents[end..]);
         std::fs::write(PATH, rewritten).unwrap_or_else(|e| panic!("writing '{PATH}': {e}"));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_builtin_materialized_views_parse() {
+        let mut failures = Vec::new();
+        for b in BUILTINS_STATIC.iter() {
+            if let Builtin::MaterializedView(mv) = b {
+                if !mv.create_sql().contains("IN CLUSTER") {
+                    failures.push(format!("{}: no cluster", mv.name));
+                }
+                if let Err(e) = mz_sql::parse::parse(&mv.create_sql()) {
+                    failures.push(format!("{}: {e}", mv.name));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[mz_ore::test]

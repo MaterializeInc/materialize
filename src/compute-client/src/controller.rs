@@ -910,8 +910,10 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            // A transient index serves a single targeted peek, which is sent only to its target
+            // replica. Maintained indexes must stay on every replica.
             assert!(
-                dataflow.exported_index_ids().next().is_none(),
+                dataflow.exported_index_ids().all(|id| id.is_transient()),
                 "Replica-targeted indexes are not supported"
             );
         }
