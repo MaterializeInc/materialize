@@ -18,13 +18,14 @@ use std::mem;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use arrow::array::{Array, Int64Array};
+use arrow::array::{Array, Int64Array, UInt64Array};
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
@@ -39,10 +40,12 @@ use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
 use crate::ShardId;
-use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
+use crate::fetch::{
+    EncodedPart, EncodedPartBatches, FetchBatchFilter, FetchConfig, fetch_batch_part_blob,
+};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
-use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
+use crate::internal::state::{BatchPart, HollowRun, RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
 
 /// Versions prior to this had bugs in consolidation, or used a different sort. However,
@@ -221,9 +224,27 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 }
 
-type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
+#[derive(Debug)]
+enum FetchResult<T> {
+    /// A part decoded whole.
+    Whole(EncodedPart<T>),
+    /// A part from a structured-order run, kept encoded and decoded in batches on demand.
+    Batches(EncodedPartBatches<T>),
+    /// The parts of a hollow run, still to be fetched.
+    Run(HollowRun<T>),
+}
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
+    /// Whether this part is decoded in batches instead of whole.
+    ///
+    /// Batched decode skips the index sort in [`ConsolidationPart::from_encoded`], so it is only
+    /// sound for parts whose updates are sorted, which a structured-order run guarantees.
+    fn decode_batched(&self, cfg: &FetchConfig) -> bool {
+        cfg.consolidator_decode_batched
+            && cfg.part_decode_batch_rows.is_some()
+            && self.run_meta.order == Some(RunOrder::Structured)
+    }
+
     async fn fetch(
         self,
         cfg: &FetchConfig,
@@ -233,6 +254,31 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
     ) -> anyhow::Result<FetchResult<T>> {
+        if let (Some(batch_rows), RunPart::Single(BatchPart::Hollow(part))) =
+            (cfg.part_decode_batch_rows, &self.part)
+        {
+            if self.decode_batched(cfg) {
+                let buf = fetch_batch_part_blob(
+                    &shard_id,
+                    blob,
+                    metrics,
+                    shard_metrics,
+                    read_metrics,
+                    part,
+                )
+                .await
+                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
+                return Ok(FetchResult::Batches(EncodedPartBatches::new(
+                    cfg,
+                    batch_rows,
+                    metrics,
+                    read_metrics.clone(),
+                    self.part_desc.clone(),
+                    part,
+                    buf,
+                )));
+            }
+        }
         match self.part {
             RunPart::Single(part) => {
                 let part = EncodedPart::fetch(
@@ -247,14 +293,14 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 )
                 .await
                 .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
-                Ok(Ok(part))
+                Ok(FetchResult::Whole(part))
             }
             RunPart::Many(run_ref) => {
                 let runs = run_ref
                     .get(shard_id, blob, metrics)
                     .await
                     .ok_or_else(|| anyhow!("missing run ref {}", run_ref.key))?;
-                Ok(Err(runs))
+                Ok(FetchResult::Run(runs))
             }
         }
     }
@@ -296,6 +342,14 @@ enum ConsolidationPart<T, D> {
         part: StructuredUpdates,
         cursor: PartIndices,
     },
+    /// The not yet decoded remainder of a part from a structured-order run. It follows the
+    /// [`ConsolidationPart::Encoded`] batch decoded from it, if any, in its run.
+    Batches {
+        reader: Box<EncodedPartBatches<T>>,
+        /// The key of the last row of the previously decoded batch. The part is sorted, so this
+        /// bounds every remaining key from below. `None` until the first batch is decoded.
+        key_lower: Option<ArrayBound>,
+    },
 }
 
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
@@ -331,6 +385,9 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     fn kvt_lower(&self) -> Option<(SortKV<'_>, T)> {
         match self {
             ConsolidationPart::Queued { data, .. } => Some((kv_lower(data)?, T::minimum())),
+            ConsolidationPart::Batches { key_lower, .. } => {
+                Some(((key_lower.as_ref()?.get(), None), T::minimum()))
+            }
             ConsolidationPart::Encoded { part, cursor } => {
                 let (kv, t, _d) = part.get::<T, D>(cursor.index())?;
                 Some((kv, t))
@@ -343,7 +400,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             ConsolidationPart::Encoded { part, cursor, .. } => cursor.index() >= part.len(),
-            ConsolidationPart::Queued { .. } => false,
+            ConsolidationPart::Queued { .. } | ConsolidationPart::Batches { .. } => false,
         }
     }
 }
@@ -491,7 +548,7 @@ where
             ConsolidationPart::Queued { data, .. } => {
                 data.run_meta.order != Some(RunOrder::Structured)
             }
-            ConsolidationPart::Encoded { .. } => false,
+            ConsolidationPart::Encoded { .. } | ConsolidationPart::Batches { .. } => false,
         });
 
         if wrong_sort {
@@ -554,7 +611,8 @@ where
                     ConsolidationPart::Encoded { part, cursor } => {
                         iter.push(part, cursor, last_in_run);
                     }
-                    other @ ConsolidationPart::Queued { .. } => {
+                    other @ (ConsolidationPart::Queued { .. }
+                    | ConsolidationPart::Batches { .. }) => {
                         // We don't want the iterator to return anything at or above this bound,
                         // since it might require data that we haven't fetched yet.
                         if let Some(bound) = other.kvt_lower() {
@@ -574,9 +632,22 @@ where
     ///
     /// Returns success when we've successfully fetched enough parts to be able to make progress.
     async fn unblock_progress(&mut self) -> anyhow::Result<()> {
-        if self.runs.is_empty() {
-            return Ok(());
+        // A run whose last part is decoded in batches can run out of rows here, leaving no
+        // ready part among the runs we waited on. Trim and retry with the remaining runs.
+        loop {
+            if self.runs.is_empty() {
+                return Ok(());
+            }
+            if self.unblock_progress_once().await? > 0 {
+                return Ok(());
+            }
+            self.trim();
         }
+    }
+
+    /// One attempt of [`Self::unblock_progress`]. Returns the number of runs that have a decoded
+    /// part at their front. Requires every run to be nonempty.
+    async fn unblock_progress_once(&mut self) -> anyhow::Result<usize> {
         self.runs
             .sort_by(|a, b| a[0].0.kvt_lower().cmp(&b[0].0.kvt_lower()));
 
@@ -597,7 +668,38 @@ where
                 // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
                 // hit some unrecoverable error.
                 loop {
-                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+                    let Some((mut part, size)) = run.pop_front() else {
+                        // The run's last part was decoded in batches and had no rows left.
+                        return Ok(false);
+                    };
+
+                    if let ConsolidationPart::Batches { reader, key_lower } = &mut part {
+                        let Some(updates) = reader.next_updates(&self.metrics) else {
+                            // All batches of this part have been decoded. Drop it.
+                            continue;
+                        };
+                        let updates = self.sort.updates_from_blob(updates);
+                        let len = updates.len();
+                        if len == 0 {
+                            // Normalization can filter out every row of a batch.
+                            run.push_front((part, size));
+                            continue;
+                        }
+                        // A single-row copy, so the bound does not keep the batch's buffers alive.
+                        let last = UInt64Array::from_value(u64::cast_from(len - 1), 1);
+                        let key = ::arrow::compute::take(updates.data.key.as_ref(), &last, None)
+                            .expect("valid index");
+                        *key_lower = Some(ArrayBound::new(key, 0));
+                        run.push_front((part, size));
+                        run.push_front((
+                            ConsolidationPart::Encoded {
+                                part: updates,
+                                cursor: PartIndices::default(),
+                            },
+                            0,
+                        ));
+                        return Ok(true);
+                    }
 
                     let ConsolidationPart::Queued { data, task, .. } = &mut part else {
                         run.push_front((part, size));
@@ -633,7 +735,7 @@ where
                             run.push_front((part, size));
                             return Err(err);
                         }
-                        Ok(Err(run_part)) => {
+                        Ok(FetchResult::Run(run_part)) => {
                             // Since we're pushing these onto the _front_ of the queue, we need to
                             // iterate in reverse order.
                             for part in run_part.parts.into_iter().rev() {
@@ -654,7 +756,17 @@ where
                                 ));
                             }
                         }
-                        Ok(Ok(part)) => {
+                        Ok(FetchResult::Batches(reader)) => {
+                            // The next iteration decodes the first batch.
+                            run.push_front((
+                                ConsolidationPart::Batches {
+                                    reader: Box::new(reader),
+                                    key_lower: None,
+                                },
+                                size,
+                            ));
+                        }
+                        Ok(FetchResult::Whole(part)) => {
                             run.push_front((
                                 ConsolidationPart::from_encoded(
                                     part,
@@ -670,19 +782,14 @@ where
             })
             .collect();
 
-        // Wait for all the needed parts to be fetched, and assert that there's at least one.
         let mut total_ready = 0;
         while let Some(awaited) = ready_futures.next().await {
             if awaited? {
                 total_ready += 1;
             }
         }
-        assert!(
-            total_ready > 0,
-            "at least one part should be fetched and ready to go"
-        );
 
-        Ok(())
+        Ok(total_ready)
     }
 
     /// Wait until data is available, then return an iterator over the next
@@ -748,7 +855,8 @@ where
                 run.iter().map(|(part, size)| match part {
                     ConsolidationPart::Queued { task: None, .. } => 0,
                     ConsolidationPart::Queued { task: Some(_), .. }
-                    | ConsolidationPart::Encoded { .. } => *size,
+                    | ConsolidationPart::Encoded { .. }
+                    | ConsolidationPart::Batches { .. } => *size,
                 })
             })
             .sum()
@@ -1139,6 +1247,7 @@ mod tests {
                 let fetch_cfg = FetchConfig {
                     validate_bounds_on_read: true,
                     part_decode_batch_rows: None,
+                    consolidator_decode_batched: false,
                 };
                 let mut consolidator = Consolidator {
                     cfg: fetch_cfg.clone(),
@@ -1263,6 +1372,7 @@ mod tests {
             let fetch_cfg = FetchConfig {
                 validate_bounds_on_read: true,
                 part_decode_batch_rows: None,
+                consolidator_decode_batched: false,
             };
 
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =

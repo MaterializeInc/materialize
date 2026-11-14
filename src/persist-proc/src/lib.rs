@@ -117,6 +117,19 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_enable_incremental_compaction", ::mz_dyncfg::ConfigVal::Bool(false));
                     x
                 },
+                {
+                    // Batched consolidator decode, with batches small enough that parts span
+                    // several of them.
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_part_decode_batch_rows", ::mz_dyncfg::ConfigVal::OptUsize(Some(3)));
+                    x
+                },
+                {
+                    // The consolidator decodes every part whole.
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_consolidator_decode_batched", ::mz_dyncfg::ConfigVal::Bool(false));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {
