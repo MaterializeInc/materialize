@@ -24,11 +24,20 @@ The profiled run passed, but both deployments saturated their four-CPU limits:
 samples could not be unwound, so the profile does not establish function-level
 attribution. The timing evidence still shows expensive candidate construction.
 
-Next decision: one diagnostic with six CPUs per deployment and twelve aggregate
-on the sixteen-CPU worker, keeping memory, workload, cadence and assertions
-unchanged. Do not treat that experiment as acceptance or a fix. No limits have
-been changed. The reviewed transaction repair is committed as `e112e930` locally,
-not pushed. All owned runtimes and profilers have stopped.
+The user approved one six-CPU-per-deployment diagnostic with a twelve-CPU
+aggregate cap, then restoration of the original four/eight caps. Memory, workload,
+cadence, assertions and retry limits remain unchanged. Passing alone is not
+acceptance. Compare per-publisher candidate timings, CPU/throttling and commit
+success rates, and obtain usable CPU attribution or narrower stage measurements
+before another behavioral change.
+
+Runtime is blocked by expired scratch SSO. The old worker's lease has also expired
+and its state cannot yet be queried. The local fallback has only 9.3GiB available
+and older binaries, insufficient for this unchanged fixture. The diagnostic runner
+and independent post-stop restoration helper are prepared and mock-checked. After
+authentication, verify the worker/artifacts, test restoration under supervisor
+termination, then launch `index-four-six-cpu-launch.json`. No CPU limits have been
+changed. Transaction repair `e112e930` remains local and unpushed.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -116,7 +125,8 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
-Owned worker `i-0b3699392b71bd7d2` has a lease ending at 22:30 UTC November 14.
+Prior worker `i-0b3699392b71bd7d2` had a lease ending at 22:30 UTC November 14.
+Its current state is unknown until scratch authentication is restored.
 Helpers and receipts are in `upsert-oom-investigation/`. Current debug binaries
 are pinned there as `native-publication-marks-candidate`, verified by
 `marks-publication-build-source-sha256.json` and
@@ -125,8 +135,7 @@ are pinned there as `native-publication-marks-candidate`, verified by
 Local disk has about 41GiB free after removing disposable incremental caches.
 
 No Persist source changed. Runtime supervision has independent systemd post-stop
-cleanup, verified with a real SIGKILL. CLI credentials expire at 06:22 UTC
-November 15. No access rules changed. Prior worker `i-064fa517ec1d8bbdb` is
+cleanup, verified with a real SIGKILL. CLI authentication failed with an expired SSO token on November 15. No access rules changed. Prior worker `i-064fa517ec1d8bbdb` is
 terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
@@ -160,6 +169,8 @@ Essential pointers, relative to the evidence root:
   `index-four-limiting-grants.json`.
   Transaction-stage trace: `index-four-trace-evidence.tar.gz`,
   `index-four-trace-analysis.json` and `index-four-trace-findings.md`.
+  Prepared diagnostic: `native_index_four_six_cpu.py`, `diagnostic_cpu_caps.py`,
+  `index-four-six-cpu-launch.json`, and `six-cpu-preparation-checks.json`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
