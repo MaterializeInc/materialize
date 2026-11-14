@@ -9,7 +9,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# website.sh — deploys the website to materialize.com in CI.
+# website.sh — deploys the docs to materialize.com/docs from
+# .github/workflows/deploy-docs.yml.
 
 set -euo pipefail
 
@@ -50,8 +51,8 @@ declare -A external_redirects=(
 export HUGO_NUMWORKERMULTIPLIER=1
 
 cd doc/user
-if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
-    VERSION=${BUILDKITE_BRANCH#self-managed-docs/}
+if [[ "$GITHUB_REPOSITORY" == "MaterializeInc/materialize" ]] && [[ "$GITHUB_REF_NAME" == self-managed-docs/* ]]; then
+    VERSION=${GITHUB_REF_NAME#self-managed-docs/}
     hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
 else
     hugo --gc --baseURL /docs --destination public/docs
