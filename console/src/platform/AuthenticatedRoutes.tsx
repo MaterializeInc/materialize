@@ -30,6 +30,7 @@ import { useFlags } from "~/hooks/useFlags";
 import { BaseLayout } from "~/layouts/BaseLayout";
 import { ShellLayout } from "~/layouts/ShellLayout";
 import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
+import DeploymentsRoutes from "~/platform/deployments/DeploymentsRoutes";
 import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
@@ -360,6 +361,17 @@ const EnvironmentRoutes = () => {
           />
         )}
 
+        {/* TODO: default to off before this leaves draft, as in NavMenu. */}
+        {flags["deployments-ui-prototype"] !== false && (
+          <Route
+            path="deployments/*"
+            element={
+              <BaseLayout>
+                <DeploymentsRoutes />
+              </BaseLayout>
+            }
+          />
+        )}
         <Route path="freshness">
           <Route
             index
