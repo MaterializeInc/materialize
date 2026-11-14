@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.50.1
+*Released to Materialize Cloud: 2026-11-19* <br>
+*Released to Materialize Self-Managed: 2026-11-20* <br>
+
+### Bug Fixes {#v26.50.1-bug-fixes}
+- Fixed a dataflow retaining memory proportional to the largest batch it consolidated until the dataflow was dropped, a regression introduced in v26.50.0 that affected consolidation during rendering, including the final consolidation of top-K results.
+
 ## v26.50.0
 *Released to Materialize Cloud: 2026-11-12* <br>
 *Released to Materialize Self-Managed: 2026-11-13* <br>
