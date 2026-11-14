@@ -359,3 +359,36 @@ rather than per serving cluster. For an index on an MV or table there is
 little to gain: hydration already only reads persist, and the arrangement is
 hash-distributed and sorted by encoded `Row`, so the key-sorted shard doesn't
 save that work.
+
+## Staging results (aws/us-east-1, S3-backed, image fca5a094f3)
+
+Fresh environment. `producer` 100cc maintains indexes, `serving` 50cc runs
+queries. Latencies measured from a laptop, so they include the round trip to
+us-east-1 (most of the in-memory column). Median of 5, results identical.
+
+| Query (2M rows) | Plain MV | Materialized index | In-memory index |
+|---|---|---|---|
+| Point lookup | 525 ms | 83 ms | 52 ms |
+| 2-way join, 5 keys | 2,064 ms | 99 ms | 78 ms |
+| Aggregated probe join | 2,040 ms | 105 ms | 78 ms |
+| Same relation joined twice | 2,048 ms | 100 ms | 80 ms |
+| 2000 contiguous keys | 2,034 ms | 110 ms | 84 ms |
+
+In-memory index hydration on views, compute dataflow hydration times from
+`mz_internal.mz_compute_hydration_times`:
+
+| View | Index computes the view | Materialized index (producer, once) | Index reads the materialized index |
+|---|---|---|---|
+| `vexp`: 2M-row join + aggregate | 36.8 s | 23.5 s | 3.2 s |
+| `vbig`: 16x fan-out, ~32M rows aggregated | 449 s | 263.5 s (about 16 min until reported hydrated) | 2.0 s |
+
+Open: the `vbig` materialized index reported hydrated about 16 minutes after
+creation although its dataflow hydrated in 263.5 s. Not measured; suspected
+sink write cost of sorting on write (merge rewrites) with 1 MiB parts on S3.
+
+Deployment gotcha: the first deploy crash-looped because the environment's
+durable catalog held a cluster with the `Idle` schedule from another spike
+build, which this build can't deserialize (`unknown variant Idle`). Any
+catalog written by a build with extra serialized variants pins the
+environment to builds that know them. The environment was hard-deleted and
+recreated.
