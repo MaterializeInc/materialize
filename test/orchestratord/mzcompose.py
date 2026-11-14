@@ -14,6 +14,7 @@ Test `orchestratord`
 import argparse
 import copy
 import datetime
+import ipaddress
 import json
 import os
 import random
@@ -25,12 +26,17 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 import psycopg
 import requests
 import yaml
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from psycopg import sql as psycopg_sql
 from semver.version import Version
 
@@ -4112,6 +4118,8 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["system_params_configmap"])
     if "balancerd_configmap" in definition:
         defs.append(definition["balancerd_configmap"])
+    if "trust_bundle_configmap" in definition:
+        defs.append(definition["trust_bundle_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
@@ -5926,7 +5934,9 @@ OIDC_HYDRA_NAMESPACE = "hydra"
 OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0"
 OIDC_HYDRA_PUBLIC_PORT = 4444
 OIDC_HYDRA_ADMIN_PORT = 4445
-OIDC_HYDRA_ISSUER = f"http://hydra-public.{OIDC_HYDRA_NAMESPACE}.svc.cluster.local:{OIDC_HYDRA_PUBLIC_PORT}"
+OIDC_HYDRA_PUBLIC_HOST = f"hydra-public.{OIDC_HYDRA_NAMESPACE}.svc.cluster.local"
+OIDC_HYDRA_TLS_DIR = "/etc/hydra-tls"
+OIDC_TRUST_BUNDLE_CM = "oidc-trust-bundle"
 OIDC_CLIENT_ID = "mz-test-client"
 OIDC_CLIENT_SECRET = "mz-test-client-secret"
 OIDC_AUDIENCE = "mz-test-audience"
@@ -5934,28 +5944,174 @@ OIDC_SYSTEM_PARAMS_CM = "oidc-system-params"
 OIDC_MZ_SYSTEM_PASSWORD = "oidc-test-mz-system-password"
 
 
-def _hydra_manifests() -> list[dict[str, Any]]:
-    # `hydra serve all --dev` relaxes TLS requirements for the public/admin
-    # endpoints, which is required since the kind cluster has no TLS.
+@dataclass
+class HydraTls:
+    """A throwaway CA and the certificate it signs for Hydra to serve."""
+
+    ca_pem: str
+    cert_pem: str
+    key_pem: str
+    # The CA certificate on disk, for `requests` to verify Hydra against.
+    ca_file: str
+
+    @classmethod
+    def generate(cls) -> "HydraTls":
+        now = datetime.datetime.now(datetime.UTC)
+        not_before = now - datetime.timedelta(minutes=5)
+        not_after = now + datetime.timedelta(days=1)
+
+        ca_key = ec.generate_private_key(ec.SECP256R1())
+        ca_name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "mz-orchestratord-test-ca")]
+        )
+        ca_cert = (
+            x509.CertificateBuilder()
+            .subject_name(ca_name)
+            .issuer_name(ca_name)
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_before)
+            .not_valid_after(not_after)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=True,
+                    crl_sign=True,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                True,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), False
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(
+                x509.Name(
+                    [x509.NameAttribute(NameOID.COMMON_NAME, OIDC_HYDRA_PUBLIC_HOST)]
+                )
+            )
+            .issuer_name(ca_name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_before)
+            .not_valid_after(not_after)
+            # environmentd reaches Hydra by its service name. The test reaches
+            # it through `kubectl port-forward` on 127.0.0.1.
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName(OIDC_HYDRA_PUBLIC_HOST),
+                        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                    ]
+                ),
+                False,
+            )
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
+            .add_extension(
+                x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+
+        ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as ca_file:
+            ca_file.write(ca_pem)
+        return cls(
+            ca_pem=ca_pem,
+            cert_pem=cert.public_bytes(serialization.Encoding.PEM).decode(),
+            key_pem=key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode(),
+            ca_file=ca_file.name,
+        )
+
+
+def _hydra_scheme(tls: HydraTls | None) -> str:
+    return "https" if tls else "http"
+
+
+def _hydra_issuer(tls: HydraTls | None) -> str:
+    return f"{_hydra_scheme(tls)}://{OIDC_HYDRA_PUBLIC_HOST}:{OIDC_HYDRA_PUBLIC_PORT}"
+
+
+def _hydra_verify(tls: HydraTls | None) -> str | bool:
+    """The `verify` argument for `requests` calls to Hydra."""
+    return tls.ca_file if tls else True
+
+
+def _hydra_manifests(tls: HydraTls | None) -> list[dict[str, Any]]:
+    # `hydra serve all --dev` serves plain HTTP when no certificate is
+    # configured. With `serve.tls`, the public and admin endpoints both serve
+    # that certificate.
     # `secrets.system` must be >= 16 bytes; `dsn: memory` keeps everything
     # in-memory so no separate database is needed for the test.
-    hydra_config = yaml.dump(
+    config: dict[str, Any] = {
+        "dsn": "memory",
+        "secrets": {"system": ["mz-test-secret-please-change-me"]},
+        "urls": {
+            "self": {"issuer": _hydra_issuer(tls)},
+            "login": "http://unused/login",
+            "consent": "http://unused/consent",
+        },
+        "oauth2": {
+            "expose_internal_errors": True,
+        },
+        "strategies": {"access_token": "jwt"},
+        "log": {"level": "info", "leak_sensitive_values": True},
+        "ttl": {"access_token": "10m"},
+    }
+    volumes: list[dict[str, Any]] = [
         {
-            "dsn": "memory",
-            "secrets": {"system": ["mz-test-secret-please-change-me"]},
-            "urls": {
-                "self": {"issuer": OIDC_HYDRA_ISSUER},
-                "login": "http://unused/login",
-                "consent": "http://unused/consent",
-            },
-            "oauth2": {
-                "expose_internal_errors": True,
-            },
-            "strategies": {"access_token": "jwt"},
-            "log": {"level": "info", "leak_sensitive_values": True},
-            "ttl": {"access_token": "10m"},
+            "name": "config",
+            "configMap": {"name": "hydra-config"},
         }
-    )
+    ]
+    volume_mounts: list[dict[str, Any]] = [
+        {
+            "name": "config",
+            "mountPath": "/etc/hydra",
+            "readOnly": True,
+        }
+    ]
+    tls_manifests: list[dict[str, Any]] = []
+    if tls:
+        config["serve"] = {
+            "tls": {
+                "cert": {"path": f"{OIDC_HYDRA_TLS_DIR}/tls.crt"},
+                "key": {"path": f"{OIDC_HYDRA_TLS_DIR}/tls.key"},
+            }
+        }
+        volumes.append({"name": "tls", "secret": {"secretName": "hydra-tls"}})
+        volume_mounts.append(
+            {"name": "tls", "mountPath": OIDC_HYDRA_TLS_DIR, "readOnly": True}
+        )
+        tls_manifests.append(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": "hydra-tls", "namespace": OIDC_HYDRA_NAMESPACE},
+                "type": "kubernetes.io/tls",
+                "stringData": {"tls.crt": tls.cert_pem, "tls.key": tls.key_pem},
+            }
+        )
+    hydra_config = yaml.dump(config)
     return [
         {
             "apiVersion": "v1",
@@ -5968,6 +6124,7 @@ def _hydra_manifests() -> list[dict[str, Any]]:
             "metadata": {"name": "hydra-config", "namespace": OIDC_HYDRA_NAMESPACE},
             "data": {"hydra.yaml": hydra_config},
         },
+        *tls_manifests,
         {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -5998,25 +6155,15 @@ def _hydra_manifests() -> list[dict[str, Any]]:
                                     "httpGet": {
                                         "path": "/health/ready",
                                         "port": OIDC_HYDRA_ADMIN_PORT,
+                                        "scheme": _hydra_scheme(tls).upper(),
                                     },
                                     "initialDelaySeconds": 2,
                                     "periodSeconds": 2,
                                 },
-                                "volumeMounts": [
-                                    {
-                                        "name": "config",
-                                        "mountPath": "/etc/hydra",
-                                        "readOnly": True,
-                                    }
-                                ],
+                                "volumeMounts": volume_mounts,
                             }
                         ],
-                        "volumes": [
-                            {
-                                "name": "config",
-                                "configMap": {"name": "hydra-config"},
-                            }
-                        ],
+                        "volumes": volumes,
                     },
                 },
             },
@@ -6058,11 +6205,11 @@ def _hydra_manifests() -> list[dict[str, Any]]:
     ]
 
 
-def install_hydra() -> None:
+def install_hydra(tls: HydraTls | None) -> None:
     """Deploy Ory Hydra into the kind cluster and create the test client."""
     spawn.runv(
         ["kubectl", "apply", "-f", "-"],
-        stdin=yaml.dump_all(_hydra_manifests()).encode(),
+        stdin=yaml.dump_all(_hydra_manifests(tls)).encode(),
     )
     spawn.runv(
         [
@@ -6075,10 +6222,10 @@ def install_hydra() -> None:
             "--timeout=300s",
         ]
     )
-    _create_hydra_client()
+    _create_hydra_client(tls)
 
 
-def _create_hydra_client() -> None:
+def _create_hydra_client(tls: HydraTls | None) -> None:
     """Idempotently register the OAuth2 client used by the test."""
     with _port_forward(
         "deployment/hydra",
@@ -6088,15 +6235,16 @@ def _create_hydra_client() -> None:
         # Delete any pre-existing client of the same id (best effort).
         try:
             requests.delete(
-                f"http://127.0.0.1:{admin_port}/admin/clients/{OIDC_CLIENT_ID}",
+                f"{_hydra_scheme(tls)}://127.0.0.1:{admin_port}/admin/clients/{OIDC_CLIENT_ID}",
                 timeout=10,
+                verify=_hydra_verify(tls),
             )
         except requests.RequestException:
             pass
         # `audience` on the client constrains which audiences the client may
         # request; the `aud` claim is asserted in the token request below.
         resp = requests.post(
-            f"http://127.0.0.1:{admin_port}/admin/clients",
+            f"{_hydra_scheme(tls)}://127.0.0.1:{admin_port}/admin/clients",
             json={
                 "client_id": OIDC_CLIENT_ID,
                 "client_secret": OIDC_CLIENT_SECRET,
@@ -6106,6 +6254,7 @@ def _create_hydra_client() -> None:
                 "access_token_strategy": "jwt",
             },
             timeout=10,
+            verify=_hydra_verify(tls),
         )
         assert resp.status_code in (
             200,
@@ -6149,7 +6298,7 @@ def _port_forward(
             process.wait()
 
 
-def _fetch_hydra_jwt() -> str:
+def _fetch_hydra_jwt(tls: HydraTls | None) -> str:
     """Run a client_credentials grant against Hydra and return the access token."""
     with _port_forward(
         "deployment/hydra",
@@ -6157,7 +6306,7 @@ def _fetch_hydra_jwt() -> str:
         namespace=OIDC_HYDRA_NAMESPACE,
     ) as public_port:
         resp = requests.post(
-            f"http://127.0.0.1:{public_port}/oauth2/token",
+            f"{_hydra_scheme(tls)}://127.0.0.1:{public_port}/oauth2/token",
             data={
                 "grant_type": "client_credentials",
                 "client_id": OIDC_CLIENT_ID,
@@ -6165,6 +6314,7 @@ def _fetch_hydra_jwt() -> str:
                 "audience": OIDC_AUDIENCE,
             },
             timeout=10,
+            verify=_hydra_verify(tls),
         )
         assert (
             resp.status_code == 200
@@ -6179,7 +6329,7 @@ def _fetch_hydra_jwt() -> str:
         return token
 
 
-def _oidc_system_params_configmap() -> dict[str, Any]:
+def _oidc_system_params_configmap(tls: HydraTls | None) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -6190,7 +6340,7 @@ def _oidc_system_params_configmap() -> dict[str, Any]:
         "data": {
             "system-params.json": json.dumps(
                 {
-                    "oidc_issuer": OIDC_HYDRA_ISSUER,
+                    "oidc_issuer": _hydra_issuer(tls),
                     "oidc_audience": [OIDC_AUDIENCE],
                     "oidc_authentication_claim": "sub",
                 }
@@ -6201,6 +6351,16 @@ def _oidc_system_params_configmap() -> dict[str, Any]:
 
 def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
     """End-to-end OIDC auth test via orchestratord + Ory Hydra."""
+    run_oidc_auth(c, parser, tls=False)
+
+
+def workflow_oidc_auth_tls(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Like `workflow_oidc_auth`, but Hydra serves a certificate from a
+    private CA, which Materialize trusts through `additionalTrustBundle`."""
+    run_oidc_auth(c, parser, tls=True)
+
+
+def run_oidc_auth(c: Composition, parser: WorkflowArgumentParser, tls: bool) -> None:
     parser.add_argument(
         "--recreate-cluster",
         action=argparse.BooleanOptionalAction,
@@ -6220,15 +6380,30 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     version = get_version(args.tag)
-    min_version = MzVersion.parse_mz("v26.16.0-dev.0")
+    # `additionalTrustBundle` needs v26.52.
+    min_version = MzVersion.parse_mz("v26.52.0-dev.0" if tls else "v26.16.0-dev.0")
     if version < min_version:
         raise ValueError(
-            f"workflow_oidc_auth requires environmentd >= {min_version}, got {version}"
+            f"OIDC auth with tls={tls} requires environmentd >= {min_version}, got {version}"
         )
 
     definition = setup(c, args)
 
-    install_hydra()
+    hydra_tls = HydraTls.generate() if tls else None
+    install_hydra(hydra_tls)
+    if hydra_tls:
+        definition["trust_bundle_configmap"] = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": OIDC_TRUST_BUNDLE_CM,
+                "namespace": "materialize-environment",
+            },
+            "data": {"ca.crt": hydra_tls.ca_pem},
+        }
+        definition["materialize"]["spec"]["additionalTrustBundle"] = {
+            "configMapKeyRef": {"name": OIDC_TRUST_BUNDLE_CM, "key": "ca.crt"}
+        }
 
     definition["materialize"]["spec"]["authenticatorKind"] = "Oidc"
     definition["materialize"]["spec"][
@@ -6237,7 +6412,7 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition["secret"]["stringData"][
         "external_login_password_mz_system"
     ] = OIDC_MZ_SYSTEM_PASSWORD
-    definition["system_params_configmap"] = _oidc_system_params_configmap()
+    definition["system_params_configmap"] = _oidc_system_params_configmap(hydra_tls)
 
     init(definition)
     run(definition, expect_fail=False)
@@ -6260,7 +6435,7 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
             assert row == ("mz_system",), f"unexpected current_user: {row}"
 
         print(f"Fetching JWT from Hydra for client {OIDC_CLIENT_ID}...")
-        token = _fetch_hydra_jwt()
+        token = _fetch_hydra_jwt(hydra_tls)
 
         print(f"Verifying OIDC pgwire login as {OIDC_CLIENT_ID}...")
         with (
@@ -6296,7 +6471,37 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "OIDC login with tampered token unexpectedly succeeded"
             )
 
+    if hydra_tls:
+        check_additional_trust_bundle(OIDC_TRUST_BUNDLE_CM)
+
     print("OIDC end-to-end auth test passed.")
+
+
+def check_additional_trust_bundle(configmap_name: str) -> None:
+    """Checks that environmentd and every clusterd pod mount the trust bundle
+    and are running, which they only do once they have installed it."""
+    path = "/etc/materialize/additional-trust-bundle/ca.crt"
+
+    def check() -> None:
+        pods = get_environmentd_data()["items"] + get_clusterd_data()["items"]
+        assert pods, "no environmentd or clusterd pods found"
+        for pod in pods:
+            name = pod["metadata"]["name"]
+            volumes = {volume["name"]: volume for volume in pod["spec"]["volumes"]}
+            volume = volumes.get("additional-trust-bundle")
+            assert volume, f"{name}: no additional-trust-bundle volume in {volumes}"
+            assert (
+                volume["configMap"]["name"] == configmap_name
+            ), f"{name}: unexpected volume {volume}"
+            container = pod["spec"]["containers"][0]
+            assert (
+                f"--additional-trust-bundle={path}" in container["args"]
+            ), f"{name}: missing --additional-trust-bundle in {container['args']}"
+            assert (
+                pod["status"]["phase"] == "Running"
+            ), f"{name}: phase {pod['status']['phase']}"
+
+    retry(check, 240)
 
 
 def workflow_clusterd_generation_scheduling(

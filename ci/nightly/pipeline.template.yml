@@ -2748,6 +2748,21 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-oidc-auth-tls
+        topics: [self-managed]
+        label: Orchestratord OIDC auth end-to-end with a private CA
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: oidc-auth-tls
+              args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-clusterd-generation-scheduling
         topics: [self-managed]
         label: Orchestratord clusterd generation scheduling

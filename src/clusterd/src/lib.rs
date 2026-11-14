@@ -138,6 +138,11 @@ struct Args {
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
 
+    /// A file of PEM-encoded CA certificates that outbound TLS connections
+    /// trust in addition to the system's CAs.
+    #[clap(long, env = "ADDITIONAL_TRUST_BUNDLE", value_name = "PATH")]
+    additional_trust_bundle: Option<PathBuf>,
+
     /// The replica runs without swap.
     #[clap(long)]
     no_swap: bool,
@@ -220,10 +225,21 @@ pub fn main() {
         }
     }
 
-    let args = cli::parse_args(CliConfig {
+    let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
+
+    if let Some(path) = &args.additional_trust_bundle {
+        // SAFETY: as for `CLUSTERD_PROCESS` above, no threads exist yet. The
+        // Tokio runtime is built below.
+        if let Err(err) = unsafe { mz_tls_util::install_additional_trust_bundle(path) } {
+            panic!(
+                "clusterd: fatal: installing additional trust bundle: {}",
+                err.display_with_causes()
+            );
+        }
+    }
 
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()

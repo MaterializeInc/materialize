@@ -482,7 +482,7 @@ impl k8s_controller::Context for Context {
         // environment resources because when we apply them, we want to apply
         // them with data that uses the new generation
         let active_resources =
-            generation::Resources::new(&self.config, mz, status.active_generation);
+            generation::Resources::new(&self.config, mz, status.active_generation)?;
         let has_current_changes = status.resources_hash != active_resources.generate_hash();
         let active_generation = status.active_generation;
         let next_generation = active_generation + 1;
@@ -494,7 +494,7 @@ impl k8s_controller::Context for Context {
 
         // here we regenerate the environment resources using the
         // same inputs except with an updated generation
-        let resources = generation::Resources::new(&self.config, mz, desired_generation);
+        let resources = generation::Resources::new(&self.config, mz, desired_generation)?;
         let resources_hash = resources.generate_hash();
 
         let mut result = match (
