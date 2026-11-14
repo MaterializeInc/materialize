@@ -79,9 +79,15 @@ upstream_identity_providers = [
     issuer_url    = "https://your-org.okta.com" # or .../oauth2/default, see Step 1
     scope         = ["openid", "email", "profile"]
     label         = "Sign in with Okta"
+
+    allowed_email_domains = ["example.com"]
   },
 ]
 ```
+
+`allowed_email_domains` is required. Only users whose email is in one of
+these domains can sign in through this provider; see
+[Sign-in checks](#sign-in-checks).
 
 Run `terraform apply`. Kratos will reload its config and pick up the new
 provider. The label text becomes the button on the login screen.
@@ -217,9 +223,14 @@ saml_providers = [
     issuer_url    = "https://<your-polis-hostname>"
     auth_url      = "https://<your-polis-hostname>/api/oauth/authorize"
     token_url     = "https://<your-polis-hostname>/api/oauth/token"
+
+    allowed_email_domains = ["example.com"]
   },
 ]
 ```
+
+As with OIDC providers, `allowed_email_domains` is required; see
+[Sign-in checks](#sign-in-checks).
 
 The `issuer_url` is the base Polis URL, with no `/saml` suffix. Save the
 SAML metadata from Step 1 as `idp-metadata.xml` next to your
@@ -321,9 +332,10 @@ Group memberships flow through the stack in two independent ways:
 
 1. **SAML attribute statement**: on each login, the IdP attaches the
    user's group memberships to the SAML assertion. Polis passes them
-   through as an OIDC claim, Kratos writes them onto the identity
-   trait, and the Ory stack embeds them in the JWT as a `groups` claim
-   that Materialize can read. **Refreshed on every login.**
+   through as an OIDC claim, Kratos writes them to the identity's
+   `metadata_public`, which users can't edit, and the Ory stack embeds
+   them in the JWT as a `groups` claim that Materialize can read.
+   **Refreshed on every login.**
 2. **SCIM directory push**: the IdP synchronizes group entities and
    memberships into Polis's directory. **Refreshed continuously**, but
    doesn't itself change the contents of a JWT already in flight; the
@@ -356,6 +368,24 @@ each login. Enable it via the `oidc_group_role_sync_enabled` system
 parameter; see [Enable role mapping](/self-managed-deployments/sso/advanced/role-mapping/)
 for details and the naming convention.
 
+## Sign-in checks
+
+Each provider in `upstream_identity_providers` and `saml_providers`
+checks the user's email and groups at sign-in. These options go on the
+provider's entry:
+
+| Option | Default | What it does |
+|---|---|---|
+| `allowed_email_domains` | required | Only emails in these domains can sign in through this provider. Domains match exactly, so list subdomains separately. |
+| `require_email_verified` | `true` for OIDC, `false` for SAML | Refuses emails the provider doesn't mark as verified (`email_verified`). Microsoft Entra ID doesn't send `email_verified` by default, so set it to `false` there and rely on `allowed_email_domains`. SAML has no such claim. |
+| `allowed_groups` | all groups | Only these groups from the provider reach Materialize. |
+| `group_prefix` | none | Only groups starting with this prefix reach Materialize. With `allowed_groups` also set, a group must pass both. |
+
+A user who fails a check sees an error page and isn't signed in. The
+email and groups are stored in the identity's `metadata_public`, which
+only the provider can set at sign-in, and the tokens take them from
+there.
+
 ## What happens when users sign in
 
 The Ory stack issues OIDC tokens with the user's email as the `email`
@@ -365,10 +395,14 @@ claim. Materialize is configured with `oidc_authentication_claim =
 - **First login**: Materialize creates a SQL role named after the user's
   email (JIT role creation). The role has no privileges by default.
 - **Subsequent logins**: Same role is reused.
-- **Deprovisioned in IdP**: SCIM deactivates the user in Polis, but the
-  Materialize SQL role isn't dropped automatically. You'll need to
-  `DROP ROLE "user@email"` separately or let it become a stale (but
-  inactive) record.
+- **Deprovisioned in IdP**: SCIM deactivates the user in Polis, but this
+  doesn't reach Kratos. The user can't sign in again through the IdP,
+  but keeps access until their Kratos session expires (8 hours by
+  default) and their refresh tokens stop working (after the token hook's
+  max auth age, 7 days by default). To end access sooner, delete the
+  identity in Kratos. The Materialize SQL role isn't dropped
+  automatically either: `DROP ROLE "user@email"` separately or let it
+  become a stale (but inactive) record.
 
 To grant privileges, see the role / permission management docs at
 [RBAC](/security/self-managed/access-control/).
