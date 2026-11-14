@@ -21,7 +21,7 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, Eval, ResultSpec, RowSetFinishing};
+use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
@@ -2085,7 +2085,7 @@ fn eval_copy_to_uri(
     let mut to = to.lower_uncorrelated(catalog_state.system_config())?;
     style.prep_scalar_expr(&mut to)?;
     let temp_storage = RowArena::new();
-    let evaled = to.eval(&[], &temp_storage)?;
+    let evaled = to.eval_constant(&temp_storage)?;
     if evaled == Datum::Null {
         coord_bail!("COPY TO target value can not be null");
     }

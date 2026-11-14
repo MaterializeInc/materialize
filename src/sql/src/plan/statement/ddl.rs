@@ -609,6 +609,10 @@ pub fn plan_create_webhook_source(
         if expression.contains_unmaterializable_except(&[UnmaterializableFunc::CurrentTimestamp]) {
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
+        // Validation runs in `environmentd`, on every request.
+        if expression.contains_unbounded() {
+            bail_unsupported!("jq in a webhook CHECK expression");
+        }
     }
 
     let body_format = match body_format {

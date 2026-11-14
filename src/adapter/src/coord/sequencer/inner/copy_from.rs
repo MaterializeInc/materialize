@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_expr::Eval;
 use mz_ore::cast::CastInto;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
@@ -105,7 +104,7 @@ impl Coordinator {
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
             // and AdapterError::Unstructured.
             let temp_storage = RowArena::new();
-            let eval_result = from.eval(&[], &temp_storage)?;
+            let eval_result = from.eval_constant(&temp_storage)?;
             let eval_string = match eval_result {
                 Datum::Null => coord_bail!("COPY FROM target value cannot be NULL"),
                 Datum::String(url_str) => url_str,
@@ -376,9 +375,12 @@ impl Coordinator {
             )?;
             let mir = optimize::Optimize::optimize(&mut optimizer, hir)?;
             let mir_expr = mir.into_inner();
-            let (result_ref, _) = mir_expr
-                .as_const()
-                .expect("optimizer should produce constant");
+            // Constant folding leaves some defaults alone, such as a jq call.
+            let Some((result_ref, _)) = mir_expr.as_const() else {
+                return Err(AdapterError::Unsupported(
+                    "column defaults that do not reduce to a constant in COPY FROM STDIN",
+                ));
+            };
             let result_rows = result_ref
                 .clone()
                 .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("eval error: {e}")))?;

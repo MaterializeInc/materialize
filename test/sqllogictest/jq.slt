@@ -193,3 +193,58 @@ SELECT jq(j, upper(p) || lower(p)) FROM jq_programs
 
 query error regexp_extract requires a string literal as its first argument
 SELECT * FROM jq_programs, regexp_extract(p || '', 'x')
+
+# environmentd evaluates the expressions below itself. jq is refused there.
+
+query error jq in a constant expression not yet supported
+SELECT 1 LIMIT jq('1', '.')::int8
+
+statement ok
+PREPARE jq_param AS SELECT $1::jsonb
+
+query error jq in a constant expression not yet supported
+EXECUTE jq_param(jq('1', '.'))
+
+statement error jq in a constant expression not yet supported
+SELECT pg_cancel_backend(jq('999999', '.')::int4)
+
+# The secret's error never says more, so that it cannot leak the value.
+statement error could not evaluate secret value
+CREATE SECRET jq_secret AS (jq('"x"', '.') #>> '{}')::bytea
+
+statement ok
+CREATE SECRET jq_aws_secret AS 'secret_key'
+
+statement ok
+CREATE CONNECTION jq_aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET jq_aws_secret) WITH (VALIDATE = false)
+
+statement error jq in a constant expression not yet supported
+COPY (SELECT 1) TO (jq('"s3://path/to/dir"', '.') #>> '{}') WITH (AWS CONNECTION = jq_aws_conn, FORMAT = 'csv')
+
+statement error jq in a constant expression not yet supported
+COPY INTO docs FROM (jq('"s3://path/to/dir"', '.') #>> '{}') (FORMAT CSV, AWS CONNECTION = jq_aws_conn)
+
+statement error jq in a webhook CHECK expression not yet supported
+CREATE SOURCE jq_webhook FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (WITH (BODY) jq(body::jsonb, '.ok') = 'true')
+
+statement error jq in a RETURNING clause not yet supported
+INSERT INTO docs VALUES ('{"name": "dee"}', '.name') RETURNING jq(doc, '.name')
+
+# Equivalence propagation prunes constant rows by evaluating the filter on
+# them, and must leave a jq call out of that.
+# TODO: Make this a transform spec test once specs support such expressions.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM (VALUES ('{"a": 1}'::jsonb), ('{"a": 2}'::jsonb)) AS t (x) WHERE jq(x, '.a') = '1'
+----
+Explained Query:
+  Filter (1 = jq[".a"](#0{x}))
+    Constant
+      - ({a: 1})
+      - ({a: 2})
+
+Target cluster: quickstart
+
+EOF

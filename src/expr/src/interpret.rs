@@ -1046,6 +1046,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let input_multivalued = !summary.range.is_single_value();
         let mapped_spec = if let Some(special) = SpecialUnary::for_func(func) {
             (special.map_fn)(self, summary.range)
+        } else if func.is_unbounded() {
+            // The call must not be evaluated, so nothing is known about its result.
+            ResultSpec::anything()
         } else {
             let is_monotone = func.is_monotone();
             let mut expr = MirScalarExpr::CallUnary {
@@ -1349,6 +1352,10 @@ impl Interpreter for Trace {
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+        // `ColumnSpecs` does not evaluate an unbounded call, not even on a constant.
+        if func.is_unbounded() {
+            return TraceSummary::Unknown;
+        }
         let pushdownable = match SpecialUnary::for_func(func) {
             None => func.is_monotone(),
             Some(special) => special.pushdownable,
@@ -2820,6 +2827,22 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(0.into())));
         assert!(range_out.may_contain(Datum::Numeric(200.into())));
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
+    }
+
+    #[mz_ore::test]
+    fn test_unbounded_call_is_opaque() {
+        let arena = RowArena::new();
+
+        // Evaluating the call would give `2`, and rule out every other value.
+        let expr = MirScalarExpr::literal_ok(Datum::Numeric(1.into()), ReprScalarType::Jsonb)
+            .call_unary(Jq(JqProgram::new(". + 1").expect("valid program")));
+
+        let relation = ReprRelationType::new(vec![]);
+        let interpreter = ColumnSpecs::new(&relation, &arena);
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(range_out.may_contain(Datum::Numeric(3.into())));
+        assert_eq!(super::Trace.expr(&expr), TraceSummary::Unknown);
     }
 
     #[mz_ore::test]
