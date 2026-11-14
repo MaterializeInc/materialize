@@ -131,6 +131,16 @@ const getNavItems = ({
           label: "Freshness",
           href: `/regions/${regionSlug}/freshness`,
         },
+        // TODO: default to off before this leaves draft. A flag LaunchDarkly
+        // doesn't define reads as undefined, which shows the page.
+        ...(flags["deployments-ui-prototype"] !== false
+          ? [
+              {
+                label: "Deployments",
+                href: `/regions/${regionSlug}/deployments`,
+              },
+            ]
+          : []),
         {
           label: "Sources",
           href: `/regions/${regionSlug}/sources`,
