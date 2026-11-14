@@ -12,6 +12,7 @@ import {
   SupportOrganization,
   SupportTicketEnvironmentType,
 } from "~/api/cloudGlobalApi";
+import { formatBytesShort } from "~/utils/format";
 
 /**
  * Severities shown in the form. The global API opens urgent tickets as
@@ -61,28 +62,166 @@ export const ENVIRONMENT_OPTIONS: {
   { value: "development", label: "Development" },
 ];
 
-/** What the description box starts with, so tickets arrive with the basics. */
-export const TICKET_TEMPLATE = `What's affected:
-When it started (with time zone):
-Is it still happening?
-What changed recently (upgrade, deploy, upstream change):
-Error messages, if available:`;
+/**
+ * Files a ticket can carry, matching the global API's limits: screenshots,
+ * logs and PDFs, up to 10 files (Intercom's limit per reply) and 5 MB in
+ * total. Larger files and recordings go through the Messenger or a reply to
+ * the confirmation email.
+ */
+export const ATTACHMENT_EXTENSIONS = [
+  "gif",
+  "jpeg",
+  "jpg",
+  "pdf",
+  "png",
+  "txt",
+];
+export const MAX_ATTACHMENTS = 10;
+/** The most a ticket's files can add up to, and so the most for one file. */
+export const MAX_ATTACHMENTS_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS_SIZE = formatBytesShort(BigInt(MAX_ATTACHMENTS_BYTES));
+const DOTTED_EXTENSIONS = ATTACHMENT_EXTENSIONS.map(
+  (extension) => `.${extension}`,
+);
 
-export const OUTAGE_TEMPLATE = `What's down (whole environment, or specific clusters, sources, sinks, or queries):
-When it started (with time zone):
-What changed right before (upgrade, deploy, upstream change):
-Error messages, if available:`;
+/** The limits, for the attachment button's tooltip. */
+export const ATTACHMENT_LIMITS = `Up to ${MAX_ATTACHMENTS} files, ${MAX_ATTACHMENTS_SIZE} in total: ${DOTTED_EXTENSIONS.join(", ")}.`;
 
-const withoutBlankLines = (text: string) =>
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+/** The value for the file input's `accept`. */
+export const ATTACHMENT_ACCEPT = DOTTED_EXTENSIONS.join(",");
 
-/** Whether a description adds nothing to the template it started from. */
-export const isUnchangedTemplate = (description: string, template: string) =>
-  withoutBlankLines(description) === withoutBlankLines(template);
+export const MAX_FILE_NAME_LENGTH = 255;
+
+const extensionOf = (name: string) =>
+  name.includes(".") ? name.split(".").pop()?.toLowerCase() : undefined;
+
+/**
+ * Control characters, and characters that don't show or that change how the
+ * text around them is displayed, so a name could look like it has a
+ * different extension. The global API rejects the same ones: keep this in
+ * sync with `is_invisible` in cloud's `src/sync/src/support_tickets.rs`.
+ */
+const HIDDEN_CHARACTER_RANGES: [number, number][] = [
+  [0x0000, 0x001f],
+  [0x007f, 0x009f],
+  [0x00ad, 0x00ad],
+  [0x034f, 0x034f],
+  [0x061c, 0x061c],
+  [0x115f, 0x1160],
+  [0x17b4, 0x17b5],
+  [0x180b, 0x180f],
+  [0x200b, 0x200f],
+  [0x2028, 0x202e],
+  [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+  [0xfff0, 0xfffb],
+  [0xe0000, 0xe0fff],
+];
+
+const isHiddenCharacter = (character: string) => {
+  const code = character.codePointAt(0) ?? 0;
+  return HIDDEN_CHARACTER_RANGES.some(
+    ([first, last]) => code >= first && code <= last,
+  );
+};
+
+/**
+ * Whether the global API takes this file name: a name before the extension,
+ * at most 255 characters once trimmed, and no slashes, control characters or
+ * hidden characters anywhere.
+ */
+export const isValidFileName = (name: string) => {
+  const characters = [...name];
+  if (
+    characters.some(
+      (character) =>
+        character === "/" || character === "\\" || isHiddenCharacter(character),
+    )
+  ) {
+    return false;
+  }
+  const trimmed = name.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = trimmed
+    .slice(0, Math.max(dot, 0))
+    .replace(/^\.+|\.+$/g, "")
+    .trim();
+  return dot > 0 && stem !== "" && [...trimmed].length <= MAX_FILE_NAME_LENGTH;
+};
+
+/**
+ * The name a file is sent with: without hidden characters, which the global
+ * API rejects, so `invoice\u202Efdp.txt` goes as `invoicefdp.txt`.
+ */
+export const attachmentFileName = (name: string) =>
+  [...name]
+    .filter((character) => !isHiddenCharacter(character))
+    .join("")
+    .trim();
+
+/** Why these files can't be attached, or undefined if they can. */
+export const attachmentError = (files: { name: string; size: number }[]) => {
+  if (files.length > MAX_ATTACHMENTS) {
+    return `Attach up to ${MAX_ATTACHMENTS} files.`;
+  }
+  const named = files.map((file) => ({
+    name: attachmentFileName(file.name),
+    size: file.size,
+  }));
+  const badName = named.find(({ name }) => !isValidFileName(name));
+  if (badName) {
+    return `${badName.name || "A file"} can't be attached: file names need a name before the extension, at most ${MAX_FILE_NAME_LENGTH} characters, and no slashes.`;
+  }
+  const unsupported = named.find(
+    ({ name }) => !ATTACHMENT_EXTENSIONS.includes(extensionOf(name) ?? ""),
+  );
+  if (unsupported) {
+    return `${unsupported.name} can't be attached. Supported types: ${DOTTED_EXTENSIONS.join(", ")}.`;
+  }
+  const tooLarge = named.find(({ size }) => size > MAX_ATTACHMENTS_BYTES);
+  if (tooLarge) {
+    return `${tooLarge.name} is larger than ${MAX_ATTACHMENTS_SIZE}.`;
+  }
+  const empty = named.find(({ size }) => size === 0);
+  if (empty) {
+    return `${empty.name} is empty.`;
+  }
+  const total = files.reduce((sum, { size }) => sum + size, 0);
+  if (total > MAX_ATTACHMENTS_BYTES) {
+    return `Files can be up to ${MAX_ATTACHMENTS_SIZE} in total.`;
+  }
+  return undefined;
+};
+
+/** A file's contents, base64-encoded, as the global API takes them. */
+export const readAsBase64 = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      // A data URL: everything after the comma is the base64 data.
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+/** Placeholder prompts for a regular support ticket. */
+export const TICKET_TEMPLATE = `Include what you can:
+• What's affected
+• When it started (with time zone), and whether it's still happening
+• What changed recently: an upgrade, deploy, or upstream change
+• Any error messages`;
+
+/** Placeholder prompts for an outage report. */
+export const OUTAGE_TEMPLATE = `Include what you can:
+• What's down: the whole environment, or specific clusters, sources, sinks, or queries
+• When it started (with time zone)
+• What changed right before: an upgrade, deploy, or upstream change
+• Any error messages`;
 
 export type TicketFormValues = {
   title: string;
@@ -91,6 +230,8 @@ export type TicketFormValues = {
   description: string;
   /** The `key` of the chosen `TicketTarget`. */
   target: string;
+  /** Files to add once the ticket is open. */
+  files: File[];
 };
 
 /** An organization, and one of its regions, that a ticket can be about. */
@@ -184,7 +325,7 @@ export const defaultTicketTarget = (
  * login and adds the org ID and their email to the description.
  */
 export const buildCreateTicketRequest = (
-  values: Omit<TicketFormValues, "target">,
+  values: Omit<TicketFormValues, "target" | "files">,
   target: TicketTarget | undefined,
 ): CreateSupportTicketRequest => ({
   title: values.title.trim(),

@@ -8,11 +8,13 @@
 // by the Apache License, Version 2.0.
 
 import {
+  ATTACHMENT_LIMITS,
+  attachmentError,
+  attachmentFileName,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
-  isUnchangedTemplate,
-  TICKET_TEMPLATE,
+  isValidFileName,
 } from "./ticketForm";
 
 const values = {
@@ -104,17 +106,91 @@ describe("buildTicketTargets", () => {
   });
 });
 
-describe("isUnchangedTemplate", () => {
-  it("treats the untouched template, or only whitespace changes, as empty", () => {
-    expect(isUnchangedTemplate(TICKET_TEMPLATE, TICKET_TEMPLATE)).toBe(true);
+describe("attachmentError", () => {
+  const file = (name: string, megabytes = 0.01) => ({
+    name,
+    size: Math.round(megabytes * 1024 * 1024),
+  });
+
+  it("allows screenshots, logs and PDFs within the limits", () => {
     expect(
-      isUnchangedTemplate(`\n${TICKET_TEMPLATE}\n\n `, TICKET_TEMPLATE),
-    ).toBe(true);
+      attachmentError([file("error.TXT"), file("screen.png", 4.9)]),
+    ).toBeUndefined();
+    expect(attachmentError([])).toBeUndefined();
+  });
+
+  it("explains what can't be attached", () => {
+    expect(attachmentError([file("debug.zip")])).toMatch(
+      "debug.zip can't be attached",
+    );
+    expect(attachmentError([file("README")])).toMatch("can't be attached");
+    // Recordings go through the Messenger.
+    expect(attachmentError([file("recording.mp4")])).toMatch(
+      "recording.mp4 can't be attached",
+    );
+    expect(attachmentError([file("screen.png", 5.5)])).toBe(
+      "screen.png is larger than 5 MB.",
+    );
+    expect(attachmentError([file("empty.txt", 0)])).toBe("empty.txt is empty.");
     expect(
-      isUnchangedTemplate(
-        TICKET_TEMPLATE.replace("What's affected:", "What's affected: a sink"),
-        TICKET_TEMPLATE,
-      ),
-    ).toBe(false);
+      attachmentError([file("a.png", 2), file("b.png", 2), file("c.png", 2)]),
+    ).toBe("Files can be up to 5 MB in total.");
+    expect(
+      attachmentError(Array.from({ length: 11 }, () => file("a.txt"))),
+    ).toBe("Attach up to 10 files.");
+  });
+
+  it("takes names with hidden characters, which are left out", () => {
+    expect(attachmentFileName("invoice\u202Efdp.txt")).toBe("invoicefdp.txt");
+    expect(attachmentFileName("name.png\uFEFF")).toBe("name.png");
+    expect(attachmentError([file("invoice\u202Efdp.txt")])).toBeUndefined();
+    // Without them, the name still needs a name before the extension.
+    expect(attachmentError([file("\u200B.txt")])).toMatch(
+      /^\.txt can't be attached: file names need a name before the extension/,
+    );
+    expect(attachmentError([file("a/b.txt")])).toMatch(
+      "a/b.txt can't be attached",
+    );
+  });
+
+  it("lists the limits for the tooltip", () => {
+    expect(ATTACHMENT_LIMITS).toBe(
+      "Up to 10 files, 5 MB in total: .gif, .jpeg, .jpg, .pdf, .png, .txt.",
+    );
+  });
+});
+
+// The same cases as the global API's file name check.
+describe("isValidFileName", () => {
+  it.each([
+    "error.txt",
+    "error log.TXT",
+    "a.b.png",
+    "résumé.pdf",
+    "日本語.png",
+    " padded.txt ",
+    `${"a".repeat(251)}.txt`,
+  ])("accepts %j", (name) => {
+    expect(isValidFileName(name)).toBe(true);
+  });
+
+  it.each([
+    ".txt",
+    "..txt",
+    ". .png",
+    "txt",
+    "a/b.txt",
+    "a\\b.txt",
+    "a\nb.txt",
+    // Shows as "invoicetxt.pdf" but is a .txt file.
+    "invoice\u202Efdp.txt",
+    "zero\u200Bwidth.png",
+    "\uFEFF.png",
+    // Trimmed away by JavaScript, but not by the global API.
+    "name.png\uFEFF",
+    "tag\u{E0041}.png",
+    `${"a".repeat(252)}.txt`,
+  ])("rejects %j", (name) => {
+    expect(isValidFileName(name)).toBe(false);
   });
 });

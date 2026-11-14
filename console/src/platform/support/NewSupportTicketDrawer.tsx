@@ -35,7 +35,7 @@ import {
 } from "@chakra-ui/react";
 import { useAtomValue } from "jotai";
 import React from "react";
-import { useForm, UseFormRegisterReturn } from "react-hook-form";
+import { useController, useForm, UseFormRegisterReturn } from "react-hook-form";
 
 import {
   CreatedSupportTicket,
@@ -58,15 +58,17 @@ import {
 } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
+import { AttachFilesStatus } from "./AttachFilesStatus";
+import { AttachmentPicker } from "./AttachmentPicker";
 import { EXTERNAL_LINK_PROPS } from "./externalLink";
 import { useCreateSupportTicket, useSupportOrganizations } from "./queries";
 import { SegmentedControl, SegmentOption } from "./SegmentedControl";
 import {
+  attachmentError,
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
   ENVIRONMENT_OPTIONS,
-  isUnchangedTemplate,
   OUTAGE_TEMPLATE,
   SEVERITY_OPTIONS,
   TICKET_SEVERITY_OPTIONS,
@@ -76,6 +78,32 @@ import {
 } from "./ticketForm";
 
 type CreateTicketMutation = ReturnType<typeof useCreateSupportTicket>;
+
+/**
+ * How to share files after the ticket is open: more than the form takes, or
+ * if adding them failed. Intercom limits incoming email to 20 MB in total.
+ */
+const FilesNote = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Text
+      textStyle="text-small"
+      color={colors.foreground.secondary}
+      data-testid="support-ticket-files-note"
+    >
+      <Text as="span" fontWeight="600" color={colors.foreground.primary}>
+        Need to share more files?
+      </Text>{" "}
+      Reply to the confirmation email (up to 20 MB in total) or open the ticket
+      in the{" "}
+      <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
+        Help Center ↗
+      </TextLink>
+      . Please make sure they don&apos;t include passwords, credentials, or
+      other sensitive data.
+    </Text>
+  );
+};
 
 /** Context the console knows, attached so the customer doesn't retype it. */
 const useTicketContext = () => {
@@ -168,19 +196,30 @@ const NewTicketForm = ({
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
   const targets = buildTicketTargets(supportOrganizations.data ?? [], signedIn);
-  const template = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
-  const { register, handleSubmit, formState, watch } =
+  const descriptionPlaceholder = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
+  const { register, handleSubmit, formState, watch, control, setValue } =
     useForm<TicketFormValues>({
       mode: "onTouched",
       defaultValues: {
         title: "",
         severity: isOutage ? "urgent" : "normal",
         environmentType: "production",
-        description: template,
+        description: "",
         target: defaultTicketTarget(targets, signedIn)?.key ?? "",
+        files: [],
       },
     });
   const { errors } = formState;
+  // Checked like the other fields, so the ticket waits until the files can go
+  // with it.
+  const filesField = useController({
+    control,
+    name: "files",
+    rules: { validate: (files) => attachmentError(files) ?? true },
+  });
+  // Picked files that may repeat earlier ones join the form once their
+  // contents are compared; the ticket waits for them.
+  const [checkingFiles, setCheckingFiles] = React.useState(false);
   const severity = watch("severity");
   const environmentType = watch("environmentType");
   const targetKey = watch("target");
@@ -226,21 +265,31 @@ const NewTicketForm = ({
     }
   }
 
-  const onSubmit = (values: TicketFormValues) =>
-    submit.mutate(
-      buildCreateTicketRequest(
+  const onSubmit = ({ files, ...values }: TicketFormValues) => {
+    // The files are added once the ticket is open, even if the drawer has
+    // closed by then.
+    submit.mutate({
+      request: buildCreateTicketRequest(
         // Outages are always about production.
         isOutage
           ? { ...values, severity: "urgent", environmentType: "production" }
           : values,
         target,
       ),
-    );
+      files,
+    });
+  };
 
   return (
     <Flex
       as="form"
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={(event) => {
+        if (checkingFiles) {
+          event.preventDefault();
+          return;
+        }
+        void handleSubmit(onSubmit)(event);
+      }}
       noValidate
       direction="column"
       height="100%"
@@ -390,17 +439,18 @@ const NewTicketForm = ({
             <FormLabel fontWeight="600">What happened?</FormLabel>
             <Textarea
               {...register("description", {
-                // Neither empty nor just the template.
                 validate: (value) =>
-                  (value.trim().length > 0 &&
-                    !isUnchangedTemplate(value, template)) ||
-                  "Describe what happened.",
+                  value.trim().length > 0 || "Describe what happened.",
                 maxLength: {
                   value: 10000,
                   message: "Keep the description under 10,000 characters.",
                 },
               })}
+              placeholder={descriptionPlaceholder}
+              variant={errors.description ? "error" : "default"}
               rows={6}
+              minH="9.5rem"
+              lineHeight="1.4"
               resize="vertical"
             />
             <FormErrorMessage>{errors.description?.message}</FormErrorMessage>
@@ -424,6 +474,17 @@ const NewTicketForm = ({
               </TextLink>
             </Text>
           )}
+
+          <AttachmentPicker
+            files={filesField.field.value}
+            error={errors.files?.message}
+            isDisabled={submit.isPending}
+            // The hidden input is never touched, so check on every change.
+            onChange={(files) =>
+              setValue("files", files, { shouldValidate: true })
+            }
+            onCheckingChange={setCheckingFiles}
+          />
 
           {sentDetails.length > 0 && (
             <Box
@@ -472,7 +533,11 @@ const NewTicketForm = ({
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" variant="primary" isLoading={submit.isPending}>
+        <Button
+          type="submit"
+          variant="primary"
+          isLoading={submit.isPending || checkingFiles}
+        >
           {isOutage ? "Report outage" : "Open ticket"}
         </Button>
       </DrawerFooter>
@@ -588,6 +653,8 @@ const TicketSent = ({
             </ListItem>
             <ListItem>Replies arrive by email and in Help Center.</ListItem>
           </OrderedList>
+          <AttachFilesStatus ticketId={ticket.id} />
+          <FilesNote />
         </VStack>
 
         <HStack spacing="2" flexWrap="wrap">
@@ -653,9 +720,10 @@ export const NewSupportTicketDrawer = ({
   // The Messenger launcher floats over the drawer's footer buttons.
   useHideIntercomLauncher(isOpen);
   const submit = useCreateSupportTicket();
+  const startOver = () => submit.reset();
   const sent =
     submit.isSuccess && submit.variables
-      ? { ticket: submit.data, request: submit.variables }
+      ? { ticket: submit.data, request: submit.variables.request }
       : null;
 
   return (
@@ -663,7 +731,7 @@ export const NewSupportTicketDrawer = ({
       isOpen={isOpen}
       onClose={onClose}
       // Start over the next time it opens.
-      onCloseComplete={() => submit.reset()}
+      onCloseComplete={startOver}
       placement="right"
       size="md"
     >
@@ -700,7 +768,7 @@ export const NewSupportTicketDrawer = ({
               request={sent.request}
               signedInOrganizationId={organizationId}
               onReportOutage={() => {
-                submit.reset();
+                startOver();
                 onReportOutage();
               }}
               onClose={onClose}
@@ -714,7 +782,7 @@ export const NewSupportTicketDrawer = ({
               isOutage={isOutage}
               submit={submit}
               onReportOutage={() => {
-                submit.reset();
+                startOver();
                 onReportOutage();
               }}
               onClose={onClose}

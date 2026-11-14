@@ -19,6 +19,7 @@ import { SupportTicket, SupportTicketDetail } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
+import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
 import {
   HELP_CENTER_TICKETS_URL,
@@ -32,9 +33,18 @@ import { resetMessengerStateForTests, useIntercom } from "~/hooks/useIntercom";
 import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { defaultRegionId, renderComponent } from "~/test/utils";
 
-import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
+import {
+  isAttachUnconfirmedError,
+  retryWhenUploadsAreBusy,
+  supportTicketQueryKeys,
+  supportTicketsQueryOptions,
+} from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
-import { OUTAGE_TEMPLATE, TICKET_TEMPLATE } from "./ticketForm";
+import {
+  ATTACHMENT_LIMITS,
+  OUTAGE_TEMPLATE,
+  TICKET_TEMPLATE,
+} from "./ticketForm";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
 
@@ -179,9 +189,7 @@ const fillTicketForm = async (
     await screen.findByRole("textbox", { name: /Subject/ }),
     title,
   );
-  // Replaces the template the description starts with.
   const details = screen.getByRole("textbox", { name: /What happened/ });
-  await user.clear(details);
   await user.type(details, description);
 };
 
@@ -236,6 +244,26 @@ describe("SupportPage", () => {
     expect(
       screen.getByRole("link", { name: "support@materialize.com" }),
     ).toHaveAttribute("href", SUPPORT_MAILTO);
+  });
+
+  it("shows quick answers in the sidebar and support plans under the ticket buttons", async () => {
+    await renderComponent(<SupportPageWithIntercom />);
+
+    const sidebar = await screen.findByRole("complementary", {
+      name: "More ways to get help",
+    });
+    expect(
+      within(sidebar).getByRole("region", { name: "Get answers now" }),
+    ).toBeVisible();
+    // The form explains severities, so the page doesn't repeat them.
+    expect(
+      screen.queryByRole("region", { name: "Before you open a ticket" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("support-ticket-actions")).getByRole("link", {
+        name: "Support plans and response times ↗",
+      }),
+    ).toHaveAttribute("href", SUPPORT_PLANS_URL);
   });
 
   it("opens the Messenger for tickets and outages once Intercom has booted", async () => {
@@ -1235,9 +1263,8 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("radio", { name: /^High/ }));
       await user.click(screen.getByRole("radio", { name: /^Staging/ }));
       const details = screen.getByRole("textbox", { name: /What happened/ });
-      expect(details).toHaveValue(TICKET_TEMPLATE);
-      // Clearing the template doesn't count as a description either.
-      await user.clear(details);
+      expect(details).toHaveValue("");
+      expect(details).toHaveAttribute("placeholder", TICKET_TEMPLATE);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
       expect(screen.getByText("Describe what happened.")).toBeVisible();
       expect(createdWith).toBeUndefined();
@@ -1262,6 +1289,624 @@ describe("SupportPage", () => {
       expect(
         within(sent).getByRole("link", { name: "View in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+    });
+
+    const attachHandler = (onRequest: (body: unknown) => void, status = 200) =>
+      http.post(
+        `${TICKETS_URL}/:ticketId/attachments`,
+        async ({ request, params }) => {
+          const body = (await request.json()) as Record<string, unknown>;
+          onRequest({ ticketId: params.ticketId, ...body });
+          return status === 200
+            ? HttpResponse.json({ attached: 2 })
+            : HttpResponse.json({}, { status });
+        },
+      );
+
+    it("adds attached files to the ticket once it's open", async () => {
+      let attachedWith: Record<string, unknown> | undefined;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const attach = await screen.findByRole("button", {
+        name: "Attach files",
+      });
+      // The limits are in the button's tooltip.
+      await user.hover(attach);
+      expect(await screen.findByText(ATTACHMENT_LIMITS)).toBeInTheDocument();
+
+      await user.upload(screen.getByTestId("support-ticket-file-input"), [
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+        new File(["png"], "screen.png", { type: "image/png" }),
+        new File(["extra"], "extra.txt", { type: "text/plain" }),
+      ]);
+      await user.click(
+        screen.getByRole("button", { name: "Remove extra.txt" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(
+          within(sent).getByTestId("support-ticket-attachments-status"),
+        ).toHaveTextContent("2 files added to your ticket."),
+      );
+      expect(attachedWith).toEqual({
+        ticketId: "42",
+        files: [
+          { name: "error.txt", data: window.btoa("hi") },
+          { name: "screen.png", data: window.btoa("png") },
+        ],
+      });
+      // More files can still go by email or the Help Center.
+      const note = within(sent).getByTestId("support-ticket-files-note");
+      expect(note).toHaveTextContent("up to 20 MB in total");
+      expect(
+        within(note).getByRole("link", { name: "Help Center ↗" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+    });
+
+    it("keeps keyboard focus in the file picker when files are removed", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      // The Attach files button opens it; the hidden input isn't a tab stop.
+      expect(input).toHaveAttribute("tabindex", "-1");
+      await user.upload(input, [
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+        new File(["png"], "screen.png", { type: "image/png" }),
+      ]);
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove error.txt" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Remove screen.png" }),
+        ).toHaveFocus(),
+      );
+      await user.click(
+        screen.getByRole("button", { name: "Remove screen.png" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Attach files" }),
+        ).toHaveFocus(),
+      );
+    });
+
+    it("doesn't add the same file twice", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      const file = new File(["hi"], "error.txt", { type: "text/plain" });
+      await user.upload(input, file);
+      await user.upload(input, [
+        file,
+        new File(["png"], "screen.png", { type: "image/png" }),
+      ]);
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole("button", { name: /^Remove / })
+            .map((button) => button.getAttribute("aria-label")),
+        ).toEqual(["Remove error.txt", "Remove screen.png"]),
+      );
+    });
+
+    it("keeps different files that share a name, size and date", async () => {
+      server.use(ticketsHandler([]));
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      // Same-named logs from different folders.
+      const log = (contents: string) =>
+        new File([contents], "error.txt", {
+          type: "text/plain",
+          lastModified: 1,
+        });
+      await user.upload(input, log("worker A failed"));
+      await user.upload(input, log("worker B failed"));
+
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole("button", { name: "Remove error.txt" }),
+        ).toHaveLength(2),
+      );
+    });
+
+    it("waits for picked files to be checked before opening the ticket", async () => {
+      let createdWith: unknown;
+      let attachedWith: Record<string, unknown> | undefined;
+      server.use(
+        ticketsHandler([]),
+        createHandler((body) => {
+          createdWith = body;
+        }),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      const input = await screen.findByTestId("support-ticket-file-input");
+      const log = () =>
+        new File(["hi"], "error.txt", { type: "text/plain", lastModified: 1 });
+      await user.upload(input, log());
+      await fillTicketForm(user);
+
+      // Hold the reads that compare the new error.txt with the first one.
+      const held: (() => void)[] = [];
+      const read = FileReader.prototype.readAsArrayBuffer;
+      const readSpy = vi
+        .spyOn(FileReader.prototype, "readAsArrayBuffer")
+        .mockImplementation(function (this: FileReader, blob: Blob) {
+          held.push(() => read.call(this, blob));
+        });
+      try {
+        await user.upload(input, [
+          log(),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ]);
+        await waitFor(() => expect(held).toHaveLength(2));
+
+        // Loading, so its name starts with the spinner's.
+        expect(
+          screen.getByRole("button", { name: /Open ticket/ }),
+        ).toBeDisabled();
+        // Enter in a field doesn't send it either.
+        await user.click(screen.getByRole("textbox", { name: /Subject/ }));
+        await user.keyboard("{Enter}");
+        expect(createdWith).toBeUndefined();
+        // Files can still be removed meanwhile.
+        expect(
+          screen.getByRole("button", { name: "Remove error.txt" }),
+        ).toBeEnabled();
+      } finally {
+        readSpy.mockRestore();
+      }
+      held.forEach((release) => release());
+
+      await screen.findByRole("button", { name: "Remove screen.png" });
+      expect(
+        screen.getAllByRole("button", { name: "Remove error.txt" }),
+      ).toHaveLength(1);
+      const open = screen.getByRole("button", { name: "Open ticket" });
+      await waitFor(() => expect(open).toBeEnabled());
+      await user.click(open);
+
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attachedWith).toEqual({
+          ticketId: "42",
+          files: [
+            { name: "error.txt", data: window.btoa("hi") },
+            { name: "screen.png", data: window.btoa("png") },
+          ],
+        }),
+      );
+    });
+
+    it("sends file names without hidden characters", async () => {
+      let attachedWith: Record<string, unknown> | undefined;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler((body) => {
+          attachedWith = body as Record<string, unknown>;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        // Shows as "invoicetxt.pdf" but is a .txt file.
+        new File(["hi"], "invoice\u202Efdp.txt", { type: "text/plain" }),
+      );
+      // Listed with the name it's sent with.
+      expect(
+        screen.getByRole("button", { name: "Remove invoicefdp.txt" }),
+      ).toBeVisible();
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attachedWith).toEqual({
+          ticketId: "42",
+          files: [{ name: "invoicefdp.txt", data: window.btoa("hi") }],
+        }),
+      );
+    });
+
+    it("doesn't open a ticket with files that can't be attached", async () => {
+      let createdWith: unknown;
+      server.use(
+        ticketsHandler([]),
+        createHandler((body) => {
+          createdWith = body;
+        }),
+      );
+      // e.g. dropped in, past the file picker's filter.
+      const user = userEvent.setup({ applyAccept: false });
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["zip"], "debug.zip"),
+      );
+      expect(
+        within(screen.getByTestId("support-ticket-attachments")).getByRole(
+          "alert",
+        ),
+      ).toHaveTextContent("debug.zip can't be attached");
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      expect(createdWith).toBeUndefined();
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove debug.zip" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      await screen.findByTestId("support-ticket-sent");
+      expect(createdWith).toBeDefined();
+    });
+
+    it("keeps the ticket open when its files can't be added", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {}, 502),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(sent).toHaveTextContent("Ticket #4821 is open");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but the 1 file couldn't be added.",
+      );
+      // Says how to send it instead.
+      expect(
+        within(sent).getByTestId("support-ticket-files-note"),
+      ).toBeVisible();
+    });
+
+    it("adds the files even if the drawer closes before the ticket opens", async () => {
+      let openTicket = () => {};
+      const ticketOpened = new Promise<void>((resolve) => {
+        openTicket = resolve;
+      });
+      const attached: unknown[] = [];
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, async () => {
+          await ticketOpened;
+          return HttpResponse.json(
+            {
+              ...buildTicket({ title: "Sink is lagging" }),
+              pagesOnCall: false,
+            },
+            { status: 201 },
+          );
+        }),
+        attachHandler((body) => {
+          attached.push(body);
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      await user.click(
+        screen.getByRole("button", { name: "Back to help and support" }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Open ticket" }),
+        ).not.toBeInTheDocument(),
+      );
+
+      openTicket();
+      await waitFor(() =>
+        expect(attached).toEqual([
+          {
+            ticketId: "42",
+            files: [{ name: "error.txt", data: window.btoa("hi") }],
+          },
+        ]),
+      );
+    });
+
+    it("says to check the ticket when the files may have been added", async () => {
+      let attachRequests = 0;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {
+          attachRequests++;
+        }, 504),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        [
+          new File(["hi"], "error.txt", { type: "text/plain" }),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ],
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but we couldn't confirm the 2 files were added. Check the ticket in Help Center before adding them again.",
+      );
+      // Sending them again could add them twice.
+      expect(attachRequests).toBe(1);
+    });
+
+    it("treats a network drop while adding files as unconfirmed", async () => {
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        http.post(`${TICKETS_URL}/:ticketId/attachments`, () =>
+          HttpResponse.error(),
+        ),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but we couldn't confirm the 1 file was added. Check the ticket in Help Center before adding them again.",
+      );
+    });
+
+    it("keeps the files as they were while the ticket opens", async () => {
+      let openTicket = () => {};
+      const ticketOpened = new Promise<void>((resolve) => {
+        openTicket = resolve;
+      });
+      const attached: unknown[] = [];
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, async () => {
+          await ticketOpened;
+          return HttpResponse.json(
+            {
+              ...buildTicket({ title: "Sink is lagging" }),
+              pagesOnCall: false,
+            },
+            { status: 201 },
+          );
+        }),
+        attachHandler((body) => {
+          attached.push(body);
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        [
+          new File(["hi"], "error.txt", { type: "text/plain" }),
+          new File(["png"], "screen.png", { type: "image/png" }),
+        ],
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      // The ticket gets the files picked when it was sent.
+      expect(
+        screen.getByRole("button", { name: "Remove error.txt" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Attach files" }),
+      ).toBeDisabled();
+      expect(screen.getByTestId("support-ticket-file-input")).toBeDisabled();
+
+      openTicket();
+      await screen.findByTestId("support-ticket-sent");
+      await waitFor(() =>
+        expect(attached).toEqual([
+          {
+            ticketId: "42",
+            files: [
+              { name: "error.txt", data: window.btoa("hi") },
+              { name: "screen.png", data: window.btoa("png") },
+            ],
+          },
+        ]),
+      );
+    });
+
+    it("says when files fail after the confirmation closes", async () => {
+      let failUpload = () => {};
+      const uploadFailed = new Promise<void>((resolve) => {
+        failUpload = resolve;
+      });
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        http.post(`${TICKETS_URL}/:ticketId/attachments`, async () => {
+          await uploadFailed;
+          return HttpResponse.json({}, { status: 502 });
+        }),
+        ticketDetailHandler(),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.upload(
+        await screen.findByTestId("support-ticket-file-input"),
+        new File(["hi"], "error.txt", { type: "text/plain" }),
+      );
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        await within(sent).findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent("Adding 1 file\u2026");
+      // A spinner shows the upload is still going.
+      expect(
+        within(sent)
+          .getByTestId("support-ticket-attachments-status")
+          .querySelector(".chakra-spinner"),
+      ).not.toBeNull();
+      await user.click(within(sent).getByRole("button", { name: "Done" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId("support-ticket-sent"),
+        ).not.toBeInTheDocument(),
+      );
+
+      failUpload();
+      const toast = await screen.findByText(
+        "Ticket #4821 is open, but the 1 file couldn't be added. Reply to the confirmation email or open the ticket in Help Center to share them.",
+      );
+      // It stays until it's closed.
+      await user.click(
+        within(toast.closest("[role=status]") ?? document.body).getByRole(
+          "button",
+          { name: "Close" },
+        ),
+      );
+      await waitFor(() => expect(toast).not.toBeInTheDocument());
+
+      // The ticket says so too.
+      await user.click(
+        await screen.findByRole("link", { name: "Sink is lagging" }),
+      );
+      expect(
+        await screen.findByTestId("support-ticket-attachments-status"),
+      ).toHaveTextContent(
+        "Your ticket is open, but the 1 file couldn't be added. Reply to the confirmation email or open the ticket in Help Center to share them.",
+      );
+    });
+
+    it("only retries adding files when the server turned them away unread", () => {
+      const status = (code: number) => new OpenApiFetchError(code, {});
+      expect(retryWhenUploadsAreBusy(0, status(503))).toBe(true);
+      expect(retryWhenUploadsAreBusy(1, status(503))).toBe(true);
+      expect(retryWhenUploadsAreBusy(2, status(503))).toBe(false);
+      for (const code of [400, 404, 413, 500, 502, 504]) {
+        expect(retryWhenUploadsAreBusy(0, status(code))).toBe(false);
+      }
+      // A network error may have happened after the files arrived.
+      expect(retryWhenUploadsAreBusy(0, new TypeError("Failed to fetch"))).toBe(
+        false,
+      );
+    });
+
+    it("treats only request-level ambiguity as unconfirmed", () => {
+      expect(isAttachUnconfirmedError(new OpenApiFetchError(504, {}))).toBe(
+        true,
+      );
+      expect(isAttachUnconfirmedError(new TypeError("Failed to fetch"))).toBe(
+        true,
+      );
+      expect(isAttachUnconfirmedError(new OpenApiFetchError(502, {}))).toBe(
+        false,
+      );
+      // FileReader failures happen before anything is sent.
+      expect(
+        isAttachUnconfirmedError(new DOMException("NotReadableError")),
+      ).toBe(false);
+    });
+
+    it("opens a ticket without files as before", async () => {
+      let attachRequests = 0;
+      server.use(
+        ticketsHandler([]),
+        createHandler(() => {}),
+        attachHandler(() => {
+          attachRequests++;
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPageWithIntercom />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await fillTicketForm(user);
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      const sent = await screen.findByTestId("support-ticket-sent");
+      expect(
+        within(sent).queryByTestId("support-ticket-attachments-status"),
+      ).not.toBeInTheDocument();
+      expect(attachRequests).toBe(0);
     });
 
     it("keeps a new ticket in the list before the search catches up", async () => {
@@ -1505,7 +2150,7 @@ describe("SupportPage", () => {
       ).toHaveTextContent("Production");
       expect(
         screen.getByRole("textbox", { name: /What happened/ }),
-      ).toHaveValue(OUTAGE_TEMPLATE);
+      ).toHaveAttribute("placeholder", OUTAGE_TEMPLATE);
       expect(
         screen.getByRole("link", { name: "How to run mz-debug ↗" }),
       ).toHaveAttribute("href", MZ_DEBUG_SELF_MANAGED_URL);
