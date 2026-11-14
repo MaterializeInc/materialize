@@ -441,8 +441,17 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
+    Connection(super::command::connection::ConnectionPreparation),
+    ConnectionSecret(super::command::connection::ConnectionSecret),
     Prepare(mz_sql::pure::SourcePreparationRequest),
     Allocate(Vec<super::command::source::SourceObject>),
+}
+
+#[derive(Debug)]
+pub(crate) enum CommandResponse {
+    Source(mz_sql::pure::SourcePreparationResponse),
+    Connection(super::command::connection::ConnectionPreparationResponse),
+    ConnectionSecret(super::command::connection::ConnectionSecretResponse),
 }
 
 #[derive(Debug)]
@@ -470,7 +479,7 @@ enum TransactionOperations<'a> {
     Raw(Vec<Op>),
     Commands {
         commands: &'a mut [super::command::CatalogCommand],
-        responses: &'a mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &'a mut BTreeMap<usize, CommandResponse>,
     },
 }
 
@@ -834,7 +843,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         commands: &mut [super::command::CatalogCommand],
-        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &mut BTreeMap<usize, CommandResponse>,
     ) -> Result<TransactionResult, CommandExecutionError> {
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!("failpoint: {arg:?}")).into())
