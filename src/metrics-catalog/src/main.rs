@@ -36,6 +36,11 @@ use walkdir::WalkDir;
 // Known directories that we want to ignore when walking the source tree.
 static IGNORED_DIRS: &[&str] = &["target", "tests", "benches", "examples"];
 
+// Out-of-line test modules (`#[cfg(test)] mod tests;`). The `cfg(test)` gate
+// sits on the declaration in the parent file, which the per-file AST walk never
+// connects to this file, so `is_test_only` cannot prune it.
+static IGNORED_FILES: &[&str] = &["tests.rs"];
+
 /// Maps a `metric!`'s `visibility:` expression to a [`MetricVisibility`].
 fn visibility_from_expr(expr: Option<&Expr>) -> MetricVisibility {
     let Some(Expr::Path(path)) = expr else {
@@ -521,7 +526,9 @@ fn run() -> anyhow::Result<()> {
     for entry in walker {
         let entry = entry.context("walking source tree")?;
         let path = entry.path();
-        if path.extension().map(|e| e == "rs").unwrap_or(false) {
+        if path.extension().map(|e| e == "rs").unwrap_or(false)
+            && !IGNORED_FILES.contains(&entry.file_name().to_str().unwrap_or(""))
+        {
             let content =
                 std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))?;
             if !content.contains("metric!") && !content.contains("PrometheusMetrics::new") {
