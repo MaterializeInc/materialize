@@ -6,12 +6,14 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Collect `index-four-retained-repeat-launch.json` next and investigate publication
-starvation before the remaining harnesses. The first four-index run failed after
-unpausing publication: the writer's committed bound stayed unchanged for 300s.
-The preceding post-DROP advancement took 291s. Replica logs repeatedly report
-unapplied catalog updates preventing protection publication. This is evidence,
-not yet a causal diagnosis. Keep original workloads and
+Investigate candidate-adapter publication starvation before the remaining
+harnesses. The four-index failure recurred after a passing exact repeat. After
+unpausing publication, incarnation 10 (generation 1, Adapter 1) alone kept its
+grant for u37 and input u34 at the cap for 300s. The active adapter and relevant
+replica grants advanced. Candidate publication repeatedly reports catalog races.
+Review timestamp allocation after sampling as a possible stale-sample window,
+without assuming that transaction-open rejection dominates CAS rejection.
+Keep original workloads and
 bounds. Do not increase retries or timeouts to claim acceptance.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
@@ -104,8 +106,8 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`. The
-stress, one-index, source-status and failed four-index runs cleaned up. The exact
-four-index repeat is active, without a concurrent build. Worker expiry is now
+All current runs cleaned up. No runtime or build is active. Oracle review of the
+adapter publication boundary is pending. Worker expiry is now
 03:00 UTC November 14. Python-only harness changes have a separate
 source-exception manifest. Compiled Rust remains unchanged.
 No parser or Persist source changed. Supervision has an
@@ -140,6 +142,9 @@ Essential pointers, relative to the evidence root:
   failure-only probe has a port-helper argument error, so limiting-grant state
   was not captured. `native_index_four_probe_fixed.py` corrects that probe only
   and is not used in the unchanged repeat.
+  Passing exact repeat: `index-four-retained-repeat-evidence.tar.gz`.
+  Recurrence with working probes: `index-four-probe-evidence.tar.gz` and
+  `index-four-limiting-grants.json`.
   Remaining zippy artifacts and restore-contract audit: `zippy-acceptance-audit.md`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.
