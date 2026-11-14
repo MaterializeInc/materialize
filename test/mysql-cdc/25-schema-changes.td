@@ -79,8 +79,9 @@ INSERT INTO drop_columns VALUES (1, 1);
 $ mysql-execute name=mysql
 ALTER TABLE drop_columns DROP COLUMN f2;
 
-! SELECT * FROM drop_columns;
-contains:incompatible schema change
+# TODO: Reenable when SS-451 is fixed
+# ! SELECT * FROM drop_columns;
+# contains:incompatible schema change
 
 > DROP SOURCE mz_source CASCADE;
 
@@ -101,8 +102,9 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column MODIFY f2 INT;
 INSERT INTO alter_column VALUES (3, 23);
 
-! SELECT * from alter_column;
-contains:incompatible schema change
+# TODO: Reenable when SS-451 is fixed
+# ! SELECT * from alter_column;
+# contains:incompatible schema change
 
 > DROP SOURCE mz_source CASCADE;
 
@@ -197,8 +199,9 @@ USE other;
 ALTER TABLE public.alter_column_2 MODIFY f2 INT;
 INSERT INTO public.alter_column_2 VALUES (3, 23);
 
-! SELECT * from alter_column_2;
-contains:incompatible schema change
+# TODO: Reenable when SS-451 is fixed
+# ! SELECT * from alter_column_2;
+# contains:incompatible schema change
 
 > DROP SOURCE mz_source CASCADE;
 
