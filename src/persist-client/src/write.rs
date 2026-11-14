@@ -882,6 +882,26 @@ where
         )
     }
 
+    /// Like [Self::builder], but for batches that go through [Batch::rewrite_ts], e.g. txn-wal
+    /// commits. These never contain hollow runs, whose parts the rewrite can't reach.
+    pub fn rewritable_builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+        let mut compact_cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        // Never spill a run into a hollow run.
+        compact_cfg.batch.run_length_limit = usize::MAX;
+        Self::builder_inner(
+            &self.cfg,
+            compact_cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            &self.metrics.user,
+            Arc::clone(&self.isolated_runtime),
+            Arc::clone(&self.blob),
+            self.shard_id(),
+            self.write_schemas.clone(),
+            lower,
+        )
+    }
+
     /// Implementation of [Self::builder], so that we can share the
     /// implementation in `PersistClient`.
     pub(crate) fn builder_inner(

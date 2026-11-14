@@ -556,7 +556,7 @@ impl Coordinator {
         // re-timestamp it during commit.
         let lower = mz_repr::Timestamp::MIN;
         let upper = Antichain::from_elem(lower.step_forward());
-        let mut batch_builder = write_handle.builder(Antichain::from_elem(lower));
+        let mut batch_builder = write_handle.rewritable_builder(Antichain::from_elem(lower));
         let mut row_count: u64 = 0;
         let mut row_count_in_batch: u64 = 0;
         let mut batch_bytes: usize = 0;
@@ -650,7 +650,7 @@ impl Coordinator {
                 })?;
                 proto_batches.push(batch.into_transmittable_batch());
 
-                batch_builder = write_handle.builder(Antichain::from_elem(lower));
+                batch_builder = write_handle.rewritable_builder(Antichain::from_elem(lower));
                 row_count_in_batch = 0;
                 batch_bytes = 0;
             }
