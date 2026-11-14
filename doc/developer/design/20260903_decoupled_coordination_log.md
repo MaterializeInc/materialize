@@ -6,26 +6,28 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Investigate candidate-adapter publication starvation before the remaining
-harnesses. The four-index failure recurred after a passing exact repeat. After
-unpausing publication, incarnation 10 (generation 1, Adapter 1) alone kept its
-grant for u37 and input u34 at the cap for 300s. The active adapter and relevant
-replica grants advanced. Candidate publication repeatedly reports catalog races.
-The diagnostic trace contains 24 actual publication attempts: 14 open failures,
-8 commit-stage failures and 2 commits. Oracle allocation is about 1ms, so hoisting
-it alone is insufficient. The user approved deriving bounds inside the transaction
-from owner runtime samples and freshly applied catalog state, including proposed
-client updates. The core path is implemented and the catalog, adapter and clusterd
-check passes. Independent review found missing adapter dispatch and idle empty
-commits, now repaired. Test type-checking passes. Retention test builds hit the
-6GiB cap twice, then again with only generated-protobuf debug information disabled.
-No test execution or post-repair runtime result is claimed. The final cached test
-type-check passes, including the fixture's actual Persist advancement. Resume execution on
-scratch after reauthentication, then run the unchanged four-index workload and
-compare transaction stages and latency. Do not raise local resource limits.
-Do not add consensus refreshes or split publication merely to pass the test.
-Keep original workloads and
-bounds. Do not increase retries or timeouts to claim acceptance.
+Finish publication-starvation verification before the remaining harnesses. Owners
+submit runtime samples and proposed client changes together. Each transaction
+attempt derives protection against its current catalog candidate. Frontier-only
+batches apply late bounds incrementally and derive consolidated final effects and
+change marks. Other batches retain full reprojection. Independent findings are
+resolved, and affected type-checks, retention tests and change-mark tests pass.
+
+The corrected four-index run still failed its release deadline. Its exact repeat
+passed. In the failed trace, incremental projection ran for both adapters and both
+catalog-server replicas. Adapter final application fell to roughly 8–12ms, but
+candidate construction still took 165–202ms and lost most commits. This is not a
+resolved starvation bug or green acceptance.
+
+Collect `index-four-marks-profile-launch.json` and its separately capped CPU
+profile next. The workload remains unchanged. The profile records adapter stacks
+and cgroup pressure to distinguish remaining computation from throttling before
+choosing another repair. Compare every publisher, not just adapter turns. No
+unrelated performance changes or retry/cadence increases are authorized.
+
+Keep the original workloads, bounds and resource caps. Do not increase publication
+cadence, retries or timeouts, split publication, or add consensus refreshes merely
+to pass the test.
 
 The upsert investigation reproduced the original-limit debug OOM on pinned
 upstream base `d9a2c5dc`, twice. Both native and baseline sampled heaps are dominated
@@ -117,16 +119,17 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`.
-Prior runtime runs cleaned up. The old worker lease ended at 03:00 UTC November
-14 and scratch authentication is expired. No local build or test runtime is active.
+Prior runtime runs cleaned up. The worker remains available and its lease now ends
+at 22:30 UTC November 14. A sequential guarded build/test is active there, using
+the verified six-file repair transfer. No local build or test runtime is active.
 Local disk has 35GiB free. The repair remains uncommitted pending executed tests.
 Current patch and compiler/OOM receipts are in `native-only/publication-rederive`
 under the evidence root's parent. Prior Python-only harness changes have
 a separate source-exception manifest. The pinned runtime binaries do not include
 the current publication repair.
 No parser or Persist source changed. Supervision has an
-independent systemd post-stop cleanup, verified with a real SIGKILL. Both SSO and
-the prior CLI credentials expired. No access rules changed. The prior worker
+independent systemd post-stop cleanup, verified with a real SIGKILL. Restored CLI
+credentials expire at 06:22 UTC November 15. No access rules changed. The prior worker
 `i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
@@ -160,6 +163,27 @@ Essential pointers, relative to the evidence root:
   `index-four-limiting-grants.json`.
   Transaction-stage trace: `index-four-trace-evidence.tar.gz`,
   `index-four-trace-analysis.json` and `index-four-trace-findings.md`.
+  Corrected build: `marks-publication-build-evidence.tar.gz`.
+  Corrected runtime failure/repeat: `index-four-marks-trace-evidence.tar.gz`,
+  `index-four-marks-repeat-evidence.tar.gz`, and
+  `publication-marks{,-repeat}-all-processes.txt`.
+  Diagnostic runtime: `index-four-diagnostic-trace-evidence.tar.gz`,
+  `index-four-diagnostic-repeat-evidence.tar.gz`, and
+  `publication-trace-diagnostic{,-repeat}-summary.json`.
+  Per-publisher baseline: `publication-diagnostic-all-processes.txt`.
+  Review resolution: `publication-incremental-review-resolution.json`.
+  Diagnostic build: `diagnostic-publication-build-evidence.tar.gz`.
+  Static projection advice: `publication-final-projection-review.json`.
+  Combined-operation tests/build: `combined-publication-build-evidence.tar.gz`.
+  Combined-operation runtime failure/repeat:
+  `index-four-combined-trace-evidence.tar.gz`,
+  `index-four-combined-repeat-evidence.tar.gz`,
+  `publication-trace-combined{,-repeat}-summary.json`, and
+  `index-four-combined-limiting-grants.json`.
+  First rederivation tests/build: `publication-build-evidence.tar.gz`.
+  First rederivation runtime failure/repeat/trace:
+  `index-four-publication{,-repeat,-trace}-evidence.tar.gz`.
+  Per-stage traces with different observation windows: `publication-trace-{baseline,repaired}-summary.json`.
   Remaining zippy artifacts and restore-contract audit: `zippy-acceptance-audit.md`.
 - Passing unchanged stress repeat and observed resource pressure:
   `upsert-oom-investigation/parallel-fixed-repeat-evidence.tar.gz`.

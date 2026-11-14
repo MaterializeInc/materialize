@@ -378,6 +378,13 @@ pub enum Op {
         requirements: Vec<MaintainedReadRequirement>,
         bounds: Vec<CollectionCompactionBound>,
     },
+    /// Derives protection against the current candidate, including its client
+    /// updates. Runtime samples may cross compatible frontier-only catch-up, but
+    /// never structural, policy, binding or execution-ownership changes.
+    DeriveReadProtection {
+        sample: crate::read_protection::publication::PublicationSample,
+        client_update: Option<(u64, BTreeMap<GlobalId, Option<mz_repr::Timestamp>>)>,
+    },
     /// Replaces a realization's expected execution, transferring its protection.
     /// The startup attempt must retain its expectation across catalog retries.
     CreateClientIncarnation {
@@ -476,6 +483,7 @@ impl Op {
             | Self::GrantClientReadRequirements { .. }
             | Self::PublishCreatorReadRequirements { .. }
             | Self::SetReadProtection { .. }
+            | Self::DeriveReadProtection { .. }
             | Self::SetWrittenPlan { .. } => true,
             Self::UpdateScopedSystemParameters {
                 scoped,
@@ -938,7 +946,7 @@ impl Catalog {
     /// `catch_up` permits bounded retry across committed frontier changes.
     /// Its incarnation must identify the caller's protection execution, and the
     /// caller must enact its returned effects even when the candidate fails.
-    /// Captured own grants and sampled publications still require owner refresh.
+    /// Captured own grants and precomputed publications still require owner refresh.
     /// Without this context, pending content requires an explicit refresh.
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
@@ -960,8 +968,19 @@ impl Catalog {
             )))
         });
 
+        // A publication owns its client changes and runtime sample together.
+        // Other operations could invalidate the sample's bindings within the batch.
+        if ops
+            .iter()
+            .any(|op| matches!(op, Op::DeriveReadProtection { .. }))
+            && ops.len() != 1
+        {
+            return Err(CatalogError::Unstructured(anyhow::anyhow!(
+                "runtime protection samples require a standalone publication operation"
+            )));
+        }
         // Preparation is retained, but every attempt derives a new candidate from
-        // the committed base. Publications sampled outside this boundary must go
+        // the committed base. Precomputed bounds, unlike runtime samples, must go
         // back to their owner.
         let may_catch_up = catch_up.is_some()
             && !ops.iter().any(|op| {
@@ -987,7 +1006,11 @@ impl Catalog {
         }
         for op in &ops {
             match op {
-                Op::UpdateClientReadRequirements { incarnation, .. }
+                Op::DeriveReadProtection {
+                    client_update: Some((incarnation, _)),
+                    ..
+                }
+                | Op::UpdateClientReadRequirements { incarnation, .. }
                 | Op::GrantClientReadRequirements { incarnation, .. }
                 | Op::PublishCreatorReadRequirements { incarnation, .. } => {
                     owned_incarnations.insert(*incarnation);
@@ -1391,6 +1414,8 @@ impl Catalog {
         // including mutations derived by admission and storage preparation.
         // If exactly one batch was applied and no later mutations were staged,
         // that candidate and its effects already describe the final batch.
+        // Frontier-only batches can also incorporate late bounds incrementally,
+        // but their effects must still exclude intermediate permissions.
         let mut preliminary_state = Cow::Borrowed(state);
         let mut preliminary_apply_count = 0;
         let mut preliminary_outputs = None;
@@ -1434,6 +1459,37 @@ impl Catalog {
             BTreeMap::<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>::new();
 
         for op in ops {
+            let op = match op {
+                Op::DeriveReadProtection {
+                    sample,
+                    client_update,
+                } => {
+                    let candidates = sample.derive(
+                        &preliminary_state,
+                        client_update
+                            .as_ref()
+                            .map(|(incarnation, updates)| (*incarnation, updates)),
+                    );
+                    // Stage both changes before consuming op updates, so the
+                    // existing single-projection reuse path applies to this batch.
+                    if let Some((incarnation, requirements)) = client_update {
+                        tx.update_client_read_requirements(incarnation, requirements)?;
+                    }
+                    debug!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        requirement_updates = candidates.requirements.len(),
+                        bound_updates = candidates.bounds.len(),
+                        max_policy_lag_ts = candidates.max_policy_lag_ts,
+                        unbounded_policy_lag = candidates.unbounded_policy_lag,
+                        "catalog publication derived",
+                    );
+                    Op::SetReadProtection {
+                        requirements: candidates.requirements,
+                        bounds: candidates.bounds,
+                    }
+                }
+                op => op,
+            };
             if let Op::PublishCreatorReadRequirements {
                 incarnation,
                 requirements,
@@ -1782,6 +1838,7 @@ impl Catalog {
         }
 
         tx.finalize_index_compaction_bounds();
+        let retention_started = Instant::now();
         if matches!(mode, TransactInnerMode::Commit) {
             // A dry run has synthetic storage identities and grants no compaction
             // permission. Validate the committing candidate against complete
@@ -1796,10 +1853,22 @@ impl Catalog {
             )
             .await?;
         }
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate_index_retention", elapsed = ?retention_started.elapsed(),
+            "catalog candidate section complete");
+        let plan_inputs_started = Instant::now();
         super::retention::constrain_plan_inputs(tx, &state, &preliminary_state, &admitted_plans)?;
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate_plan_inputs", elapsed = ?plan_inputs_started.elapsed(),
+            "catalog candidate section complete");
+        let protection_validation_started = Instant::now();
         tx.validate_ephemeral_item_ownership()?;
         tx.validate_read_protection()?;
         tx.validate_prewarming_writes()?;
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate_protection_validation",
+            elapsed = ?protection_validation_started.elapsed(),
+            "catalog candidate section complete");
         debug!(target: "mz_adapter::frontend_read_then_write",
             phase = "candidate_validation", ?admission_elapsed,
             elapsed = ?validation_started.elapsed(),
@@ -1810,6 +1879,23 @@ impl Catalog {
         // final batch, never from such intermediate permission.
         let late_updates = tx.get_and_commit_op_updates();
         let reuse_preliminary = preliminary_apply_count == 1 && late_updates.is_empty();
+        let late_bounds = (preliminary_apply_count == 1
+            && !late_updates.is_empty()
+            && preliminary_outputs
+                .as_ref()
+                .is_some_and(|(builtin, _)| builtin.is_empty())
+            && updates.iter().all(|update| {
+                matches!(
+                    update.kind,
+                    StateUpdateKind::ClientReadRequirement(_)
+                        | StateUpdateKind::MaintainedReadRequirement(_)
+                        | StateUpdateKind::CollectionCompactionBound(_)
+                )
+            })
+            && late_updates.iter().all(|update| {
+                matches!(update.kind, StateUpdateKind::CollectionCompactionBound(_))
+            }))
+        .then(|| late_updates.clone());
         updates.extend(late_updates);
         // Classify raw updates, not parsed implications, which omit
         // planning-visible changes.
@@ -1820,28 +1906,70 @@ impl Catalog {
         if !updates.is_empty() {
             let started = Instant::now();
             let update_count = updates.len();
-            let (op_builtin_table_updates, op_catalog_updates) = if reuse_preliminary {
-                // Planning impact and base/candidate validation above still use
-                // the original state. Only the final projection can be reused.
-                state = preliminary_state;
-                preliminary_outputs.expect("one preliminary application retains its outputs")
-            } else {
+            let mut incremental_outputs = None;
+            if let Some(late_bounds) = late_bounds {
                 let mut local_expr_cache = LocalExpressionCache::for_transaction(
                     cached_exprs.clone(),
                     Arc::clone(&prepared_mvs),
                 );
-                state
+                let (builtin, _) = preliminary_state
                     .to_mut()
-                    .apply_updates(updates.clone(), &mut local_expr_cache)
-                    .await
-            };
+                    .apply_updates(late_bounds, &mut local_expr_cache)
+                    .await;
+                if builtin.is_empty() {
+                    // Effects and change marks must describe the consolidated
+                    // batch. A proposal clipped back to its base value must not
+                    // schedule another publication or suppress a caught-up bound.
+                    let final_updates = CatalogState::consolidate_updates(updates.clone());
+                    preliminary_state.to_mut().read_protection_changes =
+                        state.read_protection_changes.clone();
+                    for update in &final_updates {
+                        preliminary_state
+                            .to_mut()
+                            .mark_protection_record_changed(&update.kind);
+                    }
+                    incremental_outputs = Some(
+                        final_updates
+                            .into_iter()
+                            .filter_map(|update| {
+                                let catalog = match update.diff {
+                                    StateDiff::Retraction => &*state,
+                                    StateDiff::Addition => &*preliminary_state,
+                                };
+                                super::apply::parse_state_update(catalog, update)
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            let incremental = incremental_outputs.is_some();
+            let (op_builtin_table_updates, op_catalog_updates) =
+                if let Some(outputs) = incremental_outputs {
+                    state = preliminary_state;
+                    (Vec::new(), outputs)
+                } else if reuse_preliminary {
+                    // Planning impact and base/candidate validation above still use
+                    // the original state. Only the final projection can be reused.
+                    state = preliminary_state;
+                    preliminary_outputs.expect("one preliminary application retains its outputs")
+                } else {
+                    let mut local_expr_cache = LocalExpressionCache::for_transaction(
+                        cached_exprs.clone(),
+                        Arc::clone(&prepared_mvs),
+                    );
+                    state
+                        .to_mut()
+                        .apply_updates(updates.clone(), &mut local_expr_cache)
+                        .await
+                };
             let op_builtin_table_updates = state
                 .to_mut()
                 .resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
             parsed_catalog_updates.extend(op_catalog_updates);
             debug!(target: "mz_adapter::frontend_read_then_write",
-                phase = "candidate_final_apply", update_count, reused = reuse_preliminary,
+                phase = "candidate_final_apply", update_count,
+                reused = reuse_preliminary || incremental, incremental,
                 elapsed = ?started.elapsed(),
                 "catalog candidate section complete");
         }
@@ -4540,6 +4668,9 @@ impl Catalog {
                 bounds,
             } => {
                 tx.set_read_protection(requirements, bounds)?;
+            }
+            Op::DeriveReadProtection { .. } => {
+                unreachable!("runtime samples are derived before staging candidate operations");
             }
             Op::InjectAuditEvents { events } => {
                 for event in events {

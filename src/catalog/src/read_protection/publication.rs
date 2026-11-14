@@ -16,6 +16,63 @@ use mz_storage_client::storage_collections::CollectionFrontiers;
 use std::collections::{BTreeMap, BTreeSet};
 use timely::progress::Antichain;
 
+/// Runtime progress captured by a protection owner, not a catalog-bound proposal.
+///
+/// Reuse requires unchanged structure, policy, collection bindings and execution
+/// ownership. Compatible frontier changes are incorporated when deriving the
+/// candidate, including the owner's proposed client-hold changes.
+#[derive(Clone, Debug, Default)]
+pub struct PublicationSample {
+    pub frontiers: Vec<CollectionFrontiers>,
+    pub compaction_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    pub compute_proposals: BTreeMap<GlobalId, Antichain<Timestamp>>,
+}
+
+impl PublicationSample {
+    /// Avoids an idle publication when no client changes are being proposed.
+    /// This is only a work hint. A transaction must derive again from its own
+    /// current candidate and must never commit the result of this check.
+    pub fn has_changes(&self, state: &crate::catalog::CatalogState) -> bool {
+        let candidates = self.derive(state, None);
+        !candidates.requirements.is_empty() || !candidates.bounds.is_empty()
+    }
+
+    pub(crate) fn derive(
+        &self,
+        state: &crate::catalog::CatalogState,
+        client_update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
+    ) -> PublicationCandidates {
+        publication_candidates(
+            state.maintained_read_requirements(),
+            state.collection_compaction_bounds(),
+            &self.frontiers,
+            &self.compaction_frontiers,
+            &self.compute_proposals,
+            |id| {
+                use crate::memory::objects::CatalogItem;
+                state
+                    .try_get_entry_by_global_id(&id)
+                    .is_some_and(|entry| match entry.item() {
+                        CatalogItem::MaterializedView(mv) => {
+                            mv.replacement_target.is_none() && mv.global_id_writes() == id
+                        }
+                        CatalogItem::Source(_) | CatalogItem::Table(_) | CatalogItem::Sink(_) => {
+                            true
+                        }
+                        _ => false,
+                    })
+            },
+            |id, excluding| {
+                state
+                    .maintained_read_frontier(id, excluding)
+                    .into_iter()
+                    .chain(state.client_read_frontier_after_update(id, client_update))
+                    .min()
+            },
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct PublicationCandidates {
     pub requirements: Vec<MaintainedReadRequirement>,

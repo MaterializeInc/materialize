@@ -319,9 +319,10 @@ impl Coordinator {
         Box::pin(self.complete_catalog_transaction(ctx, committed, start)).await
     }
 
-    /// Attempts a resampled maintenance write once and finishes every committed effect.
-    /// A definitive conflict refreshes the catalog and returns to the maintenance
-    /// owner, which must resample its proposal before retrying. This must not be
+    /// Runs one bounded maintenance transaction turn and finishes committed effects.
+    /// Frontier-only catch-up may rederive runtime samples within that turn.
+    /// A remaining conflict refreshes the catalog and returns to the maintenance
+    /// owner for resampling and backoff. This must not be
     /// used for DDL whose prepared plans and holds need a retained continuation.
     pub(super) async fn catalog_transact_once(
         &mut self,
@@ -333,6 +334,7 @@ impl Coordinator {
                 | Op::UpdateClientReadRequirements { .. }
                 | Op::GrantClientReadRequirements { .. }
                 | Op::SetReadProtection { .. }
+                | Op::DeriveReadProtection { .. }
                 | Op::ReclaimRetiredTemporaryItems { .. }
         )));
         let start = Instant::now();
@@ -2477,6 +2479,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::SetReadProtection { .. }
+                | Op::DeriveReadProtection { .. }
                 | Op::SetWrittenPlan { .. }
                 | Op::CreateClientIncarnation { .. }
                 | Op::UpdateClientReadRequirements { .. }

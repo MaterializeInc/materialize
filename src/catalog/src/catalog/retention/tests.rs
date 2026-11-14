@@ -199,6 +199,7 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
                     compute_proposals: BTreeMap::from([(id, Antichain::from_elem(grant))]),
                     ..Default::default()
                 },
+                client_update: None,
             }]
         } else if sampled == Some("bounds") {
             vec![Op::SetReadProtection {
@@ -290,6 +291,22 @@ async fn derived_publication_recomputes_peer_limits_and_own_updates() {
             requirements: BTreeMap::from([(id, initial)]),
         }])
         .await;
+        // Advance only runtime progress. Fixture::append also publishes the
+        // recovery requirement, which this transaction must derive itself.
+        let mut source = f.source_writer(&f.persist, id).await;
+        let expected = source.upper().clone();
+        let upper = Antichain::from_elem(proposal.step_forward());
+        source
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                expected,
+                upper.clone(),
+            )
+            .await
+            .expect("valid source progress")
+            .expect("uncontended source progress");
+        source.expire().await;
+        f.observed_uppers.insert(id, upper);
         let mut peer = f.peer().await;
 
         // Capture progress before the peer acquires a stronger hold, then reuse
@@ -304,6 +321,7 @@ async fn derived_publication_recomputes_peer_limits_and_own_updates() {
             compaction_frontiers: BTreeMap::from([(id, Antichain::from_elem(proposal))]),
             compute_proposals: BTreeMap::new(),
         };
+        assert!(sample.has_changes(f.catalog.state()));
         for advance_peer in [false, true] {
             let peer_frontier = if advance_peer { proposal } else { peer_hold };
             let publish = async {
@@ -330,15 +348,10 @@ async fn derived_publication_recomputes_peer_limits_and_own_updates() {
             if !after_candidate {
                 publish.take().expect("unpublished peer").await;
             }
-            let ops = vec![
-                Op::UpdateClientReadRequirements {
-                    incarnation: catch_up.incarnation,
-                    requirements: BTreeMap::from([(id, Some(own_hold))]),
-                },
-                Op::DeriveReadProtection {
-                    sample: sample.clone(),
-                },
-            ];
+            let ops = vec![Op::DeriveReadProtection {
+                sample: sample.clone(),
+                client_update: Some((catch_up.incarnation, BTreeMap::from([(id, Some(own_hold))]))),
+            }];
             let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
             f.catalog.before_commit = Some(hook);
             let ts = f.catalog.current_upper().await;
@@ -372,6 +385,8 @@ async fn derived_publication_recomputes_peer_limits_and_own_updates() {
             // also checks the own update and maintained frontier are durable.
             f = f.reopen().await;
             let state = f.catalog.state();
+            // An unchanged sample must not cause an idle owner to commit again.
+            assert!(!sample.has_changes(state));
             assert_eq!(
                 state.collection_compaction_bounds()[&id],
                 Antichain::from_elem(if advance_peer { own_hold } else { peer_hold })
@@ -1222,6 +1237,169 @@ async fn index_retention_tracks_durable_input_upper_without_replicas() {
     f.propose_bounds(&[input, index], 120_000, 110_000).await;
     assert!(f.catalog.state().client_incarnations().is_empty());
     assert!(f.catalog.state().client_read_requirements().is_empty());
+
+    let mut catch_up = f.catch_up().await;
+    for (upper, peer_bound, input_only) in [
+        (140_000, false, false),
+        (140_000, false, false),
+        (160_000, true, false),
+        (180_000, false, true),
+    ] {
+        if input_only {
+            let held = *f.catalog.state().collection_compaction_bounds()[&input]
+                .as_option()
+                .expect("readable input");
+            f.transact(vec![Op::GrantClientReadRequirements {
+                incarnation: catch_up.incarnation,
+                requirements: BTreeMap::from([(input, held)]),
+            }])
+            .await;
+            // Leave recovery unpublished so the sample and client change produce
+            // all three protection record kinds before late index constraints.
+            let mut writer = f.source_writer(&f.persist, input).await;
+            let expected = writer.upper().clone();
+            let frontier = Antichain::from_elem(Timestamp::new(upper));
+            writer
+                .compare_and_append(
+                    Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                    expected,
+                    frontier.clone(),
+                )
+                .await
+                .expect("valid input progress")
+                .expect("uncontended input progress");
+            writer.expire().await;
+            f.observed_uppers.insert(input, frontier);
+        } else if f.observed_uppers[&input] != Antichain::from_elem(Timestamp::new(upper)) {
+            f.advance_upper(input, upper).await;
+        }
+        let final_bound = Timestamp::new(upper - 10_000);
+        let old_bounds = f.catalog.state().collection_compaction_bounds().clone();
+        if peer_bound {
+            let mut peer = f.peer().await;
+            peer.sync_to_current_updates()
+                .await
+                .expect("initialize peer catalog snapshot");
+            let mut tx = peer
+                .transaction()
+                .await
+                .expect("open peer bound publication");
+            tx.set_collection_compaction_bound(index, Some(final_bound))
+                .expect("publish peer index bound");
+            let _ = tx.get_and_commit_op_updates();
+            let ts = tx.upper();
+            tx.commit(ts).await.expect("commit peer index bound");
+        }
+
+        // The first proposal is clipped between old and proposed. Repeating it
+        // clips back to old, first without and then with a caught-up peer bound.
+        // Finally only the input proposes advancement. Its constraint must also
+        // advance the index, even though the owner supplied no index proposal.
+        let proposal = Antichain::from_elem(Timestamp::new(upper));
+        let sample = if input_only {
+            PublicationSample {
+                frontiers: vec![CollectionFrontiers {
+                    id: input,
+                    write_frontier: proposal.clone(),
+                    implied_capability: proposal.clone(),
+                    read_capabilities: old_bounds[&input].clone(),
+                }],
+                compaction_frontiers: BTreeMap::from([(input, proposal)]),
+                compute_proposals: BTreeMap::new(),
+            }
+        } else {
+            PublicationSample {
+                compute_proposals: BTreeMap::from([(index, proposal)]),
+                ..Default::default()
+            }
+        };
+        f.catalog.take_read_protection_changes();
+        let client_update = input_only.then(|| {
+            (
+                catch_up.incarnation,
+                BTreeMap::from([(input, Some(Timestamp::new(upper)))]),
+            )
+        });
+        let ts = f.catalog.current_upper().await;
+        let result = f
+            .catalog
+            .transact(
+                Some(&mut catch_up),
+                None,
+                ts,
+                None,
+                vec![Op::DeriveReadProtection {
+                    sample,
+                    client_update,
+                }],
+            )
+            .await
+            .expect("publish constrained final bounds");
+        assert!(catch_up.updates.is_empty());
+        let changes = f.catalog.take_read_protection_changes();
+        for id in [input, index] {
+            let effects: Vec<_> = result
+                .catalog_updates
+                .iter()
+                .filter_map(|update| match &update.kind {
+                    ParsedStateUpdateKind::CollectionCompactionBound(bound) if bound.id == id => {
+                        Some((update.diff, bound.frontier))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let old = old_bounds[&id].as_option().copied();
+            let expected = if id == index || input_only {
+                Some(final_bound)
+            } else {
+                old
+            };
+            let expected_effects = if peer_bound && id == index {
+                // A net-zero candidate must not suppress the peer's permission.
+                vec![(StateDiff::Addition, expected)]
+            } else if old != expected {
+                vec![
+                    (StateDiff::Retraction, old),
+                    (StateDiff::Addition, expected),
+                ]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                effects.len(),
+                expected_effects.len(),
+                "bound effects for {id}"
+            );
+            for effect in expected_effects {
+                assert!(
+                    effects.contains(&effect),
+                    "missing {effect:?} for {id}: {effects:?}"
+                );
+            }
+            assert_eq!(
+                f.catalog.state().collection_compaction_bounds()[&id],
+                expected.into_iter().collect::<Antichain<_>>(),
+            );
+            assert_eq!(
+                changes.contains(&id),
+                old != expected || (peer_bound && id == index) || (input_only && id == input),
+                "only net changes should schedule publication for {id}",
+            );
+        }
+        f = f.reopen().await;
+        f.assert_bound(index, upper - 10_000);
+        if input_only {
+            f.assert_bound(input, upper - 10_000);
+            assert_eq!(
+                f.catalog.state().client_read_requirements()[&(catch_up.incarnation, input)],
+                Timestamp::new(upper),
+            );
+            assert_eq!(
+                f.catalog.state().maintained_read_requirements()[&input].frontier,
+                Some(Timestamp::new(upper - 1)),
+            );
+        }
+    }
     f.catalog.expire().await;
 }
 

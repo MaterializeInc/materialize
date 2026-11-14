@@ -18,7 +18,7 @@ use anyhow::{Context, bail, ensure};
 use differential_dataflow::lattice::Lattice;
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::memory::objects::CatalogItem;
-use mz_catalog::read_protection::publication::publication_candidates;
+use mz_catalog::read_protection::publication::PublicationSample;
 use mz_catalog::read_protection::{ClientReadProtection, RecoveryReadHolds};
 use mz_compute::server::ReplicaCompute;
 use mz_compute_client::as_of_selection::{self, CapturedLiveInput};
@@ -1375,42 +1375,12 @@ impl ReplicaEnactment {
                 compute_proposals.entry(id).or_default().extend(proposal);
             }
             let requirements = self.protection.prepare_updates_if_needed();
-            let candidates = publication_candidates(
-                catalog.state().maintained_read_requirements(),
-                catalog.state().collection_compaction_bounds(),
-                &frontiers,
-                &storage_proposals,
-                &compute_proposals,
-                |id| {
-                    catalog
-                        .try_get_entry_by_global_id(&id)
-                        .is_some_and(|entry| match entry.item() {
-                            CatalogItem::MaterializedView(mv) => {
-                                mv.replacement_target.is_none() && mv.global_id_writes() == id
-                            }
-                            CatalogItem::Table(_)
-                            | CatalogItem::Source(_)
-                            | CatalogItem::Sink(_) => true,
-                            _ => false,
-                        })
-                },
-                |id, excluding| {
-                    catalog
-                        .state()
-                        .maintained_read_frontier(id, excluding)
-                        .into_iter()
-                        .chain(
-                            catalog.state().client_read_frontier_after_update(
-                                id,
-                                requirements
-                                    .as_ref()
-                                    .map(|updates| (self.protection.incarnation(), updates)),
-                            ),
-                        )
-                        .min()
-                },
-            );
-            (requirements, Some(candidates))
+            let sample = PublicationSample {
+                frontiers,
+                compaction_frontiers: storage_proposals,
+                compute_proposals,
+            };
+            (requirements, Some(sample))
         } else {
             (
                 publish_requirements
@@ -1420,20 +1390,21 @@ impl ReplicaEnactment {
             )
         };
         let prepared = requirements.is_some();
+        let client_update =
+            requirements.map(|requirements| (self.protection.incarnation(), requirements));
         let mut ops = Vec::new();
-        if let Some(requirements) = requirements {
-            ops.push(Op::UpdateClientReadRequirements {
-                incarnation: self.protection.incarnation(),
-                requirements,
-            });
-        }
-        if let Some(candidates) = publication {
-            if !candidates.requirements.is_empty() || !candidates.bounds.is_empty() {
-                ops.push(Op::SetReadProtection {
-                    requirements: candidates.requirements,
-                    bounds: candidates.bounds,
+        if let Some(sample) = publication {
+            if prepared || sample.has_changes(catalog.state()) {
+                ops.push(Op::DeriveReadProtection {
+                    sample,
+                    client_update,
                 });
             }
+        } else if let Some((incarnation, requirements)) = client_update {
+            ops.push(Op::UpdateClientReadRequirements {
+                incarnation,
+                requirements,
+            });
         }
         if !ops.is_empty() {
             tracing::debug!(

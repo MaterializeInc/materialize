@@ -71,6 +71,7 @@ use crate::memory::error::ItemError;
 use crate::memory::implications::ParsedStateUpdate;
 
 mod parsed_state_updates;
+pub(super) use parsed_state_updates::parse_state_update;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -270,7 +271,7 @@ impl CatalogState {
     /// and access things, and then a retraction for that intermediate table
     /// state. By consolidating, the intermediate state addition/retraction will
     /// cancel out and we'll only see the retraction for the original state.
-    fn consolidate_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+    pub(super) fn consolidate_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut updates: Vec<(StateUpdateKind, Timestamp, mz_repr::Diff)> = updates
             .into_iter()
             .map(|update| (update.kind, update.ts, update.diff.into()))
@@ -386,6 +387,23 @@ impl CatalogState {
         Ok((builtin_table_updates, catalog_updates))
     }
 
+    pub(super) fn mark_protection_record_changed(&mut self, kind: &StateUpdateKind) {
+        match kind {
+            StateUpdateKind::CollectionCompactionBound(bound) => {
+                self.read_protection_changes.insert(bound.id);
+            }
+            StateUpdateKind::MaintainedReadRequirement(requirement) => {
+                self.read_protection_changes.insert(requirement.id);
+                self.read_protection_changes
+                    .extend(requirement.inputs.iter().copied());
+            }
+            StateUpdateKind::ClientReadRequirement(requirement) => {
+                self.read_protection_changes.insert(requirement.id);
+            }
+            _ => (),
+        }
+    }
+
     #[instrument(level = "debug")]
     fn apply_update(
         &mut self,
@@ -394,6 +412,7 @@ impl CatalogState {
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<(), CatalogError> {
+        self.mark_protection_record_changed(&kind);
         match kind {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff, retractions);
@@ -529,14 +548,10 @@ impl CatalogState {
                     bound.frontier.into_iter().collect(),
                     diff,
                 );
-                self.read_protection_changes.insert(bound.id);
                 self.update_storage_compaction_bound(bound.id);
             }
             StateUpdateKind::MaintainedReadRequirement(requirement) => {
                 let id = requirement.id;
-                self.read_protection_changes.insert(id);
-                self.read_protection_changes
-                    .extend(requirement.inputs.iter().copied());
                 if let Some(frontier) = requirement.frontier {
                     for input in &requirement.inputs {
                         let edge = (*input, frontier, id);
@@ -619,7 +634,6 @@ impl CatalogState {
                     requirement.frontier,
                     diff,
                 );
-                self.read_protection_changes.insert(requirement.id);
             }
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);

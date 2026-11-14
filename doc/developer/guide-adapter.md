@@ -100,8 +100,8 @@ global FIFO ordering. Transaction-end plans retain their own acquisition and cle
 
 Single-attempt client-protection writes catch up after oracle allocation, whose
 await can make an earlier refresh stale. A structural change invalidates preparation and yields
-before retry. Sampled compaction proposals instead retain their
-prefix check so their owners resample, rather than replaying them after catch-up.
+before retry. Precomputed compaction proposals retain their prefix check. Runtime
+publication samples instead derive new proposals inside each transaction attempt.
 
 Creator admission also catches up after allocation and before preparing its grant.
 Recheck the revision, incarnation and resource limits after catch-up. A builtin
@@ -110,7 +110,7 @@ Transaction open and compare-and-append still enforce subsequent freshness.
 Common catalog transactions can absorb complete frontier-only prefixes, including
 peer client grants, maintained frontiers with unchanged inputs, and compaction
 bounds. The caller supplies its protection incarnation and owns caught-up effects
-even on failure. Own-map changes, structural changes and sampled outgoing
+even on failure. Own-map changes, structural changes and precomputed outgoing
 publications still return to their owner. Apply accepted changes to the committed
 base, then reconstruct the candidate's birth, protection and cleanup decisions.
 Never reappend a failed candidate's diffs. Selected plans and fixed timestamps
@@ -171,9 +171,19 @@ remains until a definitive successful write. New dependency routes require fresh
 grant admission, including builtin reconstruction under a retained index identity.
 
 Periodic client advances, maintained recovery requirements and permitted bounds
-commit together. Sample bounds with the sparse client changes overlaid on the
-indexed frontier, not the preceding committed minimum. Sampled batches retain
-their prefix check and must be recomputed after conflict. Acquisition only adds
+commit together. Owners sample runtime progress. Each transaction attempt derives
+maintained requirements and bounds against its current catalog candidate, including
+proposed sparse client updates. Stage client changes and derived records as one
+operation so the candidate can reuse its preliminary projection. Frontier-only
+batches may apply late bound constraints incrementally, but effects must describe
+only consolidated base-to-final permissions. Intermediate permissions must never
+escape, and net-unchanged bounds must not suppress caught-up peer effects.
+Other batches retain full final projection. Reuse samples only across compatible
+frontier changes. Structural, policy, collection-binding and execution-ownership changes
+return to the owner for revalidation or resampling. Never replay derived bounds
+after catch-up. Keep derivation indexed by affected collections and retain the
+pending-publication barrier through the definitive combined outcome. Precomputed
+proposals still require their original prefix. Acquisition only adds
 or strengthens grants and must not postpone the maintenance deadline.
 
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content

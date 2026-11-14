@@ -361,6 +361,9 @@ pub(super) async fn constrain_index_retention(
             bound.join_assign(&current);
         }
         if bound != current {
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                ?id, proposed = ?current, constrained = ?bound,
+                "index retention constrained publication");
             tx.set_collection_compaction_bound(id, bound.into_option())?;
         }
     }
@@ -495,6 +498,9 @@ pub(super) fn constrain_plan_inputs(
             return Err(CatalogError::DDLTransactionRace);
         }
         if tx.proposed_compaction_bound(id).as_ref() != Some(&bound) {
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                ?id, proposed = ?tx.proposed_compaction_bound(id), constrained = ?bound,
+                "plan inputs constrained publication");
             tx.set_collection_compaction_bound(id, bound.into_option())?;
         }
     }

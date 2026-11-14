@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
 use mz_catalog::memory::objects::CatalogItem;
+use mz_catalog::read_protection::publication::PublicationSample;
+#[cfg(test)]
 use mz_catalog::read_protection::publication::{PublicationCandidates, publication_candidates};
 use mz_expr::CollectionPlan;
 use mz_repr::{GlobalId, Timestamp};
@@ -914,10 +916,10 @@ impl Coordinator {
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
         let start = Instant::now();
         if self.catalog().state().catalog_read_protection_enabled() {
-            // Apply available committed changes before sampling. Transaction-open
-            // validation and CAS reject a stale candidate rather than refreshing
-            // past the sampled prefix. Native following already repairs lost
-            // notifications through its retained Persist watch.
+            // Apply available changes before sampling policies and bindings.
+            // The transaction can incorporate compatible frontier changes, but
+            // structural changes return here for a fresh owner sample. Native
+            // following repairs lost notifications through its retained watch.
             {
                 self.refresh_observed_catalog().await?;
             }
@@ -940,41 +942,31 @@ impl Coordinator {
             self.read_protection_pending
                 .extend(requirements.keys().copied());
         }
-        let candidates = self.read_protection_publication_candidates(requirements.as_ref().map(
-            |requirements| {
-                (
-                    client
-                        .as_ref()
-                        .expect("prepared client")
-                        .protection
-                        .incarnation(),
-                    requirements,
-                )
-            },
-        ));
-        let mut ops = Vec::new();
-        if let Some(requirements) = requirements {
-            ops.push(Op::UpdateClientReadRequirements {
-                incarnation: client
+        let sample = self.read_protection_publication_sample();
+        let client_update = requirements.map(|requirements| {
+            (
+                client
                     .as_ref()
                     .expect("prepared client")
                     .protection
                     .incarnation(),
                 requirements,
-            });
-        }
-        let sampled_bounds = candidates.is_some();
-        let requirement_updates = candidates.as_ref().map_or(0, |c| c.requirements.len());
-        let bound_updates = candidates.as_ref().map_or(0, |c| c.bounds.len());
-        let max_policy_lag_ts = candidates.as_ref().map_or(0, |c| c.max_policy_lag_ts);
-        let unbounded_policy_lag = candidates.as_ref().map_or(0, |c| c.unbounded_policy_lag);
-        if let Some(candidates) = candidates {
-            if !candidates.requirements.is_empty() || !candidates.bounds.is_empty() {
-                ops.push(Op::SetReadProtection {
-                    requirements: candidates.requirements,
-                    bounds: candidates.bounds,
+            )
+        });
+        let sampled_bounds = sample.is_some();
+        let mut ops = Vec::new();
+        if let Some(sample) = sample {
+            if prepared || sample.has_changes(self.catalog().state()) {
+                ops.push(Op::DeriveReadProtection {
+                    sample,
+                    client_update,
                 });
             }
+        } else if let Some((incarnation, requirements)) = client_update {
+            ops.push(Op::UpdateClientReadRequirements {
+                incarnation,
+                requirements,
+            });
         }
         if ops.is_empty() {
             if sampled_bounds {
@@ -1002,20 +994,13 @@ impl Coordinator {
             self.read_protection_pending.clear();
         }
         tracing::info!(
-            requirement_updates,
-            bound_updates,
-            max_policy_lag_ts,
-            unbounded_policy_lag,
             duration_seconds = start.elapsed().as_secs_f64(),
             "published catalog read protection"
         );
         Ok(())
     }
 
-    fn read_protection_publication_candidates(
-        &mut self,
-        client_update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
-    ) -> Option<PublicationCandidates> {
+    fn read_protection_publication_sample(&mut self) -> Option<PublicationSample> {
         if !self.catalog().state().catalog_read_protection_enabled() {
             return None;
         }
@@ -1053,40 +1038,11 @@ impl Coordinator {
         // Committed input progress determines retention even without an
         // installed replica. Execution observations do not grant permission.
         let compute_proposals = self.catalog().state().index_retention_proposals(&frontiers);
-        let candidates = publication_candidates(
-            self.catalog().state().maintained_read_requirements(),
-            self.catalog().state().collection_compaction_bounds(),
-            &frontiers,
-            &compaction_frontiers,
-            &compute_proposals,
-            |id| {
-                let Some(entry) = self.catalog().try_get_entry_by_global_id(&id) else {
-                    return false;
-                };
-                match entry.item() {
-                    // A pending replacement observes the target's shared upper, not its own
-                    // progress. Retired writers' requirements are completed by replacement.
-                    CatalogItem::MaterializedView(mv) => {
-                        mv.replacement_target.is_none() && mv.global_id_writes() == id
-                    }
-                    CatalogItem::Source(_) | CatalogItem::Table(_) | CatalogItem::Sink(_) => true,
-                    _ => false,
-                }
-            },
-            |id, excluding| {
-                self.catalog()
-                    .state()
-                    .maintained_read_frontier(id, excluding)
-                    .into_iter()
-                    .chain(
-                        self.catalog()
-                            .state()
-                            .client_read_frontier_after_update(id, client_update),
-                    )
-                    .min()
-            },
-        );
-        Some(candidates)
+        Some(PublicationSample {
+            frontiers,
+            compaction_frontiers,
+            compute_proposals,
+        })
     }
 }
 
