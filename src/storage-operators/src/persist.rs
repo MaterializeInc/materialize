@@ -95,6 +95,7 @@ impl SharedBatches {
         schemas: Schemas<SourceData, ()>,
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
+        max_runs: Option<usize>,
     ) -> SharedBatchBuilder {
         let mut guard = self.data.lock().unwrap();
         let inner = &mut *guard;
@@ -132,7 +133,7 @@ impl SharedBatches {
                                         &shard_name,
                                         schemas.clone(),
                                         lower.clone(),
-                                        None,
+                                        max_runs,
                                     )
                                 });
                                 builder.add_part(part).await.expect("valid timestamps");
@@ -283,6 +284,7 @@ mod tests {
             schemas.clone(),
             lower.clone(),
             upper.clone(),
+            None,
         );
         let second = shared.builder(
             batch_id,
@@ -292,6 +294,7 @@ mod tests {
             schemas.clone(),
             lower.clone(),
             upper.clone(),
+            None,
         );
         let part = bool_part(&schemas);
         first.push(part.clone()).await;
@@ -327,6 +330,7 @@ mod tests {
             bool_schemas(),
             Antichain::from_elem(0.into()),
             Antichain::from_elem(1.into()),
+            None,
         )
     }
 
@@ -346,6 +350,7 @@ mod tests {
             bool_schemas(),
             Antichain::from_elem(0.into()),
             Antichain::from_elem(2.into()),
+            None,
         );
     }
 
@@ -424,6 +429,7 @@ mod tests {
                     schemas.clone(),
                     lower.clone(),
                     upper.clone(),
+                    None,
                 )
             }
         };

@@ -762,7 +762,45 @@ impl PeekClient {
             })
             .transpose()?;
 
-        let source_ids = depends_on;
+        let mut source_ids = depends_on;
+        // Materialized index routes change which collections the query reads, so they are chosen
+        // from a locally optimized plan before the timestamp, which is picked from the routed
+        // plan's dependencies. The peek optimizer applies the same routes below.
+        let materialized_index_routes = match &query_plan {
+            QueryPlan::Select(s)
+                if optimize::materialized_index::any_materialized_index(
+                    catalog.state(),
+                    source_ids.iter().copied(),
+                ) =>
+            {
+                let mut optimizer = optimize::view::Optimizer::new(
+                    optimize::OptimizerConfig::from(catalog.system_config()),
+                    None,
+                );
+                let raw_plan = s.source.clone();
+                let optimized = mz_ore::task::spawn_blocking(
+                    || "optimize materialized index routes",
+                    move || optimizer.catch_unwind_optimize(raw_plan),
+                )
+                .await?;
+                let routes = optimize::materialized_index::choose_routes(
+                    optimized.as_inner(),
+                    catalog.state(),
+                    cluster.id(),
+                );
+                if !routes.is_empty() {
+                    let mut routed = optimized.into_inner();
+                    optimize::materialized_index::apply_routes(&mut routed, &routes);
+                    source_ids = routed.depends_on();
+                }
+                routes
+            }
+            _ => Default::default(),
+        };
+        // Each route can use an id per hoisted probe input plus one for its keys.
+        let lookup_ids: Vec<_> = (0..4 * materialized_index_routes.len())
+            .map(|_| self.transient_id_gen.allocate_id().1)
+            .collect();
         // TODO(peek-seq): validate_timeline_context can be expensive in real scenarios (not in
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
@@ -1180,7 +1218,8 @@ impl PeekClient {
                     index_id,
                     optimizer_config,
                     self.optimizer_metrics.clone(),
-                );
+                )
+                .with_materialized_index_routes(materialized_index_routes, lookup_ids);
 
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",

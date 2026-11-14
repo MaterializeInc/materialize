@@ -1502,6 +1502,11 @@ pub struct MaterializedView {
     ///
     /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
     pub non_null_assertions: Vec<usize>,
+    /// Number of leading columns the persist shard is sorted by, from
+    /// `PARTITION BY`.
+    pub partition_by: Option<usize>,
+    /// Set when this item implements `CREATE MATERIALIZED INDEX`.
+    pub materialized_index: Option<mz_sql::plan::MaterializedIndexDesc>,
     /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Schedule to refresh this materialized view, e.g. set via `REFRESH EVERY` option.
@@ -1622,6 +1627,8 @@ impl MaterializedView {
             cluster_id: replacement.cluster_id,
             target_replica: replacement.target_replica,
             non_null_assertions: replacement.non_null_assertions,
+            partition_by: replacement.partition_by,
+            materialized_index: replacement.materialized_index,
             custom_logical_compaction_window: replacement.custom_logical_compaction_window,
             refresh_schedule: replacement.refresh_schedule,
             initial_as_of: replacement.initial_as_of,
@@ -1834,6 +1841,9 @@ impl CatalogItem {
             CatalogItem::Log(_) => CatalogItemType::Source,
             CatalogItem::Sink(_) => CatalogItemType::Sink,
             CatalogItem::View(_) => CatalogItemType::View,
+            CatalogItem::MaterializedView(mv) if mv.materialized_index.is_some() => {
+                CatalogItemType::MaterializedIndex
+            }
             CatalogItem::MaterializedView(_) => CatalogItemType::MaterializedView,
             CatalogItem::Index(_) => CatalogItemType::Index,
             CatalogItem::Type(_) => CatalogItemType::Type,
@@ -3228,7 +3238,7 @@ impl CatalogEntry {
             Sink => CommentObjectId::Sink(self.id),
             View => CommentObjectId::View(self.id),
             MaterializedView => CommentObjectId::MaterializedView(self.id),
-            Index => CommentObjectId::Index(self.id),
+            Index | MaterializedIndex => CommentObjectId::Index(self.id),
             Func => CommentObjectId::Func(self.id),
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),

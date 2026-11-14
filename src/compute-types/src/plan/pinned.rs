@@ -307,7 +307,10 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
                     monotonic,
                     with_snapshot,
                     upper: _,
+                    lookup,
                 } = import;
+                // Pinned plans belong to long-lived dataflows, and lookups only to one-shot ones.
+                assert!(lookup.is_none(), "pinned dataflow with a lookup import");
                 (
                     id,
                     PinnedSourceImport {
@@ -441,6 +444,8 @@ pub struct MaterializedViewInfo {
     pub desc: RelationDesc,
     /// Columns asserted non-null.
     pub non_null_assertions: Vec<usize>,
+    /// Number of leading columns the shard is sorted by (`PARTITION BY`).
+    pub partition_by: Option<usize>,
     /// The view's refresh schedule.
     pub refresh_schedule: Option<RefreshSchedule>,
 }
@@ -586,6 +591,7 @@ impl PinnedDataflow {
                 monotonic,
                 with_snapshot,
                 upper: Antichain::new(),
+                lookup: None,
             };
             rebuilt_source_imports.insert(id, import);
         }
@@ -762,6 +768,7 @@ impl PinnedDataflow {
                             MaterializedViewSinkConnection {
                                 value_desc: rel_desc,
                                 storage_metadata: (),
+                                partition_by: info.partition_by,
                             },
                         ),
                         with_snapshot: true,

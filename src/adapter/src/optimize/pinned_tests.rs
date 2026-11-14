@@ -119,6 +119,7 @@ fn optimize_materialized_view(
         internal_view_id(),
         mv.desc.latest().iter_names().cloned().collect(),
         mv.non_null_assertions.clone(),
+        mv.partition_by,
         mv.refresh_schedule.clone(),
         debug_name,
         config,

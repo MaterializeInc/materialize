@@ -1051,7 +1051,7 @@ impl ExecuteResponse {
             CreateSink => &[CreatedSink],
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
-            CreateMaterializedView => &[CreatedMaterializedView],
+            CreateMaterializedView => &[CreatedMaterializedView, CreatedIndex],
             CreateIndex => &[CreatedIndex],
             CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],
