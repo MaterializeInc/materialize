@@ -1051,6 +1051,11 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
+    /// See [`CatalogState::catalog_server_route_cluster`].
+    pub fn catalog_server_route_cluster(&self) -> &Cluster {
+        self.state.catalog_server_route_cluster()
+    }
+
     pub fn get_mz_catalog_server_cluster_id(&self) -> &ClusterId {
         &self.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER).id
     }
@@ -1062,9 +1067,7 @@ impl Catalog {
         session: &Session,
     ) -> Result<&Cluster, AdapterError> {
         match target_cluster {
-            TargetCluster::CatalogServer => {
-                Ok(self.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER))
-            }
+            TargetCluster::CatalogServer => Ok(self.catalog_server_route_cluster()),
             TargetCluster::Active => self.active_cluster(session),
             TargetCluster::Transaction(cluster_id) => self
                 .try_get_cluster(cluster_id)

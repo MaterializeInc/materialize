@@ -3435,7 +3435,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
         name: "mz_cluster_replica_frontiers_ind",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::INDEX_MZ_CLUSTER_REPLICA_FRONTIERS_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_cluster_replica_frontiers (object_id)",
+        sql: "IN CLUSTER mz_catalog_server_frontend ON mz_catalog.mz_cluster_replica_frontiers (object_id)",
         is_retained_metrics_object: false,
     });
 
@@ -3669,11 +3669,11 @@ GROUP BY object_id, collection_timestamp",
     }),
 });
 
-pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_recent_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
+    oid: oid::MV_MZ_RECENT_STORAGE_USAGE_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("size_bytes", SqlScalarType::UInt64.nullable(true))
@@ -3683,7 +3683,8 @@ pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("object_id", "The ID of the table, source, or materialized view."),
         ("size_bytes", "The number of storage bytes used by the object in the most recent assessment."),
     ]),
-    sql: "
+    sql: "IN CLUSTER mz_catalog_server_frontend AS
+
 WITH
 
 recent_storage_usage_by_shard AS (
@@ -3710,6 +3711,7 @@ FROM
         ON mz_storage_shards.shard_id = recent_storage_usage_by_shard.shard_id
         AND most_recent_collection_timestamp_by_shard.collection_timestamp = recent_storage_usage_by_shard.collection_timestamp
 GROUP BY object_id",
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "recent_storage",
@@ -3726,7 +3728,7 @@ pub static MZ_RECENT_STORAGE_USAGE_IND: LazyLock<BuiltinIndex> = LazyLock::new(|
     name: "mz_recent_storage_usage_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_RECENT_STORAGE_USAGE_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_recent_storage_usage (object_id)",
+    sql: "IN CLUSTER mz_catalog_server_frontend ON mz_catalog.mz_recent_storage_usage (object_id)",
     is_retained_metrics_object: false,
 });
 
@@ -3775,11 +3777,11 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluste
     }
 });
 
-pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "mz_objects",
         schema: MZ_CATALOG_SCHEMA,
-        oid: oid::VIEW_MZ_OBJECTS_OID,
+        oid: oid::MV_MZ_OBJECTS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -3801,7 +3803,8 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("privileges", "The privileges belonging to the object."),
         ]),
         sql:
-        "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
+        "IN CLUSTER mz_catalog_server AS
+SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
@@ -3818,6 +3821,7 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "object",
@@ -3975,7 +3979,7 @@ pub const MZ_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_databases_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_databases (name)",
     is_retained_metrics_object: false,
 };
@@ -3984,7 +3988,7 @@ pub const MZ_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_schemas_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SCHEMAS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_schemas (database_id)",
     is_retained_metrics_object: false,
 };
@@ -3993,7 +3997,7 @@ pub const MZ_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_connections_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CONNECTIONS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_connections (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -4002,7 +4006,7 @@ pub const MZ_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_tables_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_TABLES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_tables (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -4011,7 +4015,7 @@ pub const MZ_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_types_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_TYPES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_types (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -4020,7 +4024,7 @@ pub const MZ_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_objects_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_OBJECTS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_objects (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -4029,7 +4033,7 @@ pub const MZ_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_columns_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_COLUMNS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_columns (name)",
     is_retained_metrics_object: false,
 };
@@ -4038,7 +4042,7 @@ pub const MZ_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_secrets_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SECRETS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_secrets (name)",
     is_retained_metrics_object: false,
 };
@@ -4047,7 +4051,7 @@ pub const MZ_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_views_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_VIEWS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_views (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -4056,7 +4060,7 @@ pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_clusters_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTERS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_clusters (id)",
     is_retained_metrics_object: false,
 };
@@ -4065,7 +4069,7 @@ pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_indexes_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_INDEXES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_indexes (id)",
     is_retained_metrics_object: false,
 };
@@ -4074,7 +4078,7 @@ pub const MZ_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_roles_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_ROLES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_roles (id)",
     is_retained_metrics_object: false,
 };
@@ -4083,7 +4087,7 @@ pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sources_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SOURCES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_sources (id)",
     is_retained_metrics_object: true,
 };
@@ -4092,7 +4096,7 @@ pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sinks_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SINKS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_sinks (id)",
     is_retained_metrics_object: true,
 };
@@ -4101,7 +4105,7 @@ pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_materialized_views_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_MATERIALIZED_VIEWS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_materialized_views (id)",
     is_retained_metrics_object: false,
 };
@@ -4110,7 +4114,7 @@ pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICAS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_cluster_replicas (id)",
     is_retained_metrics_object: true,
 };
@@ -4119,7 +4123,7 @@ pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_sizes_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_cluster_replica_sizes (size)",
     is_retained_metrics_object: true,
 };
@@ -4128,7 +4132,7 @@ pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_kafka_sources_ind",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_catalog.mz_kafka_sources (id)",
     is_retained_metrics_object: true,
 };

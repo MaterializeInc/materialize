@@ -15,7 +15,9 @@ use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql::catalog::NameReference;
 
-use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
+use crate::builtin::{
+    Builtin, BuiltinIndex, BuiltinMaterializedView, BuiltinTable, BuiltinView, MONITOR_SELECT,
+};
 
 use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
@@ -66,10 +68,10 @@ pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
 /// notices, the idea is to evolve it over time as sketched in the design doc[^1].
 ///
 /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20231113_optimizer_notice_catalog.md>
-pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_NOTICES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| BuiltinMaterializedView {
     name: "mz_notices",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_NOTICES_OID,
+    oid: oid::MV_MZ_NOTICES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("notice_type", SqlScalarType::String.nullable(false))
@@ -124,7 +126,8 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
             "The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.",
         ),
     ]),
-    sql: "SELECT
+    sql: "IN CLUSTER mz_catalog_server AS
+SELECT
     n.id,
     n.notice_type,
     n.message,
@@ -139,6 +142,7 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
 FROM
     mz_internal.mz_optimizer_notices n
 ",
+    is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
     ontology: None,
 });
@@ -212,7 +216,7 @@ pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_NOTICES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_notices(id)",
+    sql: "IN CLUSTER mz_catalog_server_frontend ON mz_internal.mz_notices(id)",
     is_retained_metrics_object: false,
 };
 
@@ -222,7 +226,7 @@ pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
 pub(super) fn builtins() -> impl Iterator<Item = Builtin<NameReference>> {
     [
         Builtin::Table(&MZ_OPTIMIZER_NOTICES),
-        Builtin::View(&MZ_NOTICES),
+        Builtin::MaterializedView(&MZ_NOTICES),
         Builtin::View(&MZ_NOTICES_REDACTED),
         Builtin::Index(&MZ_NOTICES_IND),
     ]

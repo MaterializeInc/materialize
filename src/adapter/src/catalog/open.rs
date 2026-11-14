@@ -1602,7 +1602,10 @@ impl BuiltinBootstrapClusterConfigMap {
     ) -> Result<BootstrapBuiltinClusterConfig, mz_catalog::durable::CatalogError> {
         let cluster_config = if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
             &self.system_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
+        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name
+            || cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_FRONTEND_CLUSTER.name
+        {
+            // TODO: give the frontend its own bootstrap size flag.
             &self.catalog_server_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
             &self.probe_cluster

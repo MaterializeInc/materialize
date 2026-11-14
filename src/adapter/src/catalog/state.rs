@@ -2478,6 +2478,19 @@ impl CatalogState {
         Ok(&self.clusters_by_id[id])
     }
 
+    /// The cluster that auto-routed catalog queries run on, named by
+    /// `catalog_server_auto_route_cluster`.
+    ///
+    /// Falls back to `mz_catalog_server` when the named cluster does not
+    /// exist, so a misconfigured value cannot break catalog queries.
+    pub fn catalog_server_route_cluster(&self) -> &Cluster {
+        let name = self.system_config().catalog_server_auto_route_cluster();
+        match self.resolve_cluster(&name) {
+            Ok(cluster) => cluster,
+            Err(_) => self.resolve_builtin_cluster(&mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER),
+        }
+    }
+
     pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
         let id = self
             .clusters_by_name

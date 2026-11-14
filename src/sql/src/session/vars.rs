@@ -65,7 +65,7 @@
 
 use std::borrow::Cow;
 use std::clone::Clone;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
@@ -1294,6 +1294,8 @@ impl SystemVars {
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
             &NETWORK_POLICY,
+            &CATALOG_SERVER_AUTO_ROUTE_CLUSTER,
+            &LOAD_BALANCED_CLUSTERS,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
@@ -2172,6 +2174,22 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    /// Returns the `catalog_server_auto_route_cluster` configuration parameter.
+    pub fn catalog_server_auto_route_cluster(&self) -> String {
+        self.expect_value::<String>(&CATALOG_SERVER_AUTO_ROUTE_CLUSTER)
+            .clone()
+    }
+
+    /// Returns the cluster names in the `load_balanced_clusters` configuration parameter.
+    pub fn load_balanced_clusters(&self) -> BTreeSet<String> {
+        self.expect_value::<String>(&LOAD_BALANCED_CLUSTERS)
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect()
     }
 
     pub fn default_network_policy_name(&self) -> String {
