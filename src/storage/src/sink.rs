@@ -14,6 +14,7 @@ use timely::progress::Antichain;
 
 mod iceberg;
 mod kafka;
+mod postgres;
 
 /// Formats the error reported when a sink's input has been compacted past the
 /// upper the sink last committed, so the sink can never resume. `remedy` tells
