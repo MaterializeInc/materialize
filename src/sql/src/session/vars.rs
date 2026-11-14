@@ -2434,7 +2434,10 @@ impl SystemVars {
     /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
     /// commands).
     pub fn is_compute_config_var(&self, name: &str) -> bool {
-        name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
+        name == MAX_RESULT_SIZE.name()
+            || name == LOAD_BALANCED_CLUSTERS.name()
+            || self.is_dyncfg_var(name)
+            || is_tracing_var(name)
     }
 
     /// Returns whether the named variable is a metrics configuration parameter

@@ -2405,6 +2405,8 @@ impl Coordinator {
             }
         }
 
+        self.sync_load_balanced_clusters();
+
         // Now that the compute instances and their replicas exist, push the
         // replica-local scoped overrides into the controllers so existing
         // replicas observe them at startup. The scoped (per-cluster and

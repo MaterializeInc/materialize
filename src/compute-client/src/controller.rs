@@ -657,6 +657,18 @@ impl ComputeController {
         Ok(())
     }
 
+    /// Sets whether the instance sends each untargeted peek and transient dataflow to a single
+    /// replica instead of to all replicas.
+    pub fn set_instance_load_balanced(
+        &mut self,
+        id: ComputeInstanceId,
+        load_balanced: bool,
+    ) -> Result<(), InstanceMissing> {
+        self.instance(id)?
+            .call(move |i| i.set_load_balanced(load_balanced));
+        Ok(())
+    }
+
     /// Remove a compute instance.
     ///
     /// # Panics
