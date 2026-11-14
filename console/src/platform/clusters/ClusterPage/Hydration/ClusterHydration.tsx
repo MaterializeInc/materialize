@@ -167,7 +167,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     useSelectedReplica(cluster);
   const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
     localStorageKey: "mz-cluster-hydration-time-period",
-    defaultValue: "10080",
+    defaultValue: "1440",
     timePeriodOptions: HYDRATION_TIME_PERIODS,
   });
   const data = useClusterHydrationData({ cluster, timePeriodMinutes });

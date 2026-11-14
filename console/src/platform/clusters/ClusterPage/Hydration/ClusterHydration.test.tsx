@@ -88,7 +88,7 @@ const ENVIRONMENT_WITHOUT_HISTORY = {
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const NOW_MS = Date.now();
-const TIME_PERIOD_MINUTES = 7 * 24 * 60;
+const TIME_PERIOD_MINUTES = 24 * 60;
 const GIB = 2 ** 30;
 
 const buildCluster = (offlineReplicaIds: string[] = []) =>
@@ -1376,8 +1376,8 @@ describe("ClusterHydration", () => {
         {
           replicaId: "u0",
           name: "r1-burst",
-          createdAtMs: NOW_MS - 3 * DAY_MS,
-          droppedAtMs: NOW_MS - 2 * DAY_MS,
+          createdAtMs: NOW_MS - DAY_MS / 2,
+          droppedAtMs: NOW_MS - DAY_MS / 4,
         },
       ],
       search: "?replica=r1-burst",
