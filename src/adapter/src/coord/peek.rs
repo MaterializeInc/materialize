@@ -666,6 +666,67 @@ impl FastPathPlan {
 }
 
 impl crate::coord::Coordinator {
+    fn create_transient_peek_target(
+        &mut self,
+        plan: PeekDataflowPlan,
+        source_arity: usize,
+        compute_instance: ComputeInstanceId,
+    ) -> Result<
+        (
+            GlobalId,
+            mz_storage_types::read_holds::ReadHold,
+            mz_expr::SafeMfpPlan,
+        ),
+        AdapterError,
+    > {
+        let PeekDataflowPlan {
+            desc: dataflow,
+            id: index_id,
+            key: index_key,
+            permutation: index_permutation,
+            thinned_arity: index_thinned_arity,
+        } = plan;
+        // The peek's hold protects only index_id. Multiple exports would leave
+        // other outputs without equivalent protection during teardown.
+        let exports: Vec<GlobalId> = dataflow.export_ids().collect();
+        soft_assert_eq_or_log!(
+            exports.as_slice(),
+            &[index_id],
+            "slow-path peek dataflow must export exactly [index_id]",
+        );
+        if exports.as_slice() != [index_id] {
+            return Err(AdapterError::internal(
+                "peek error",
+                format!("slow-path peek dataflow exports {exports:?}, expected [{index_id}]"),
+            ));
+        }
+
+        let mut mfp = mz_expr::MapFilterProject::new(source_arity);
+        mfp.permute_fn(
+            |c| index_permutation[c],
+            index_key.len() + index_thinned_arity,
+        );
+        let mfp = mfp_to_safe_plan(mfp)?;
+
+        self.controller
+            .compute
+            .create_dataflow(compute_instance, dataflow, None)
+            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
+        // The new collection's implied hold pins since at as_of until we can
+        // acquire the peek's hold. Failed acquisition must drop that collection.
+        match self
+            .controller
+            .compute
+            .acquire_read_hold(compute_instance, index_id)
+        {
+            Ok(read_hold) => Ok((index_id, read_hold, mfp)),
+            Err(error) => {
+                self.drop_compute_collections(vec![(compute_instance, index_id)]);
+                Err(AdapterError::concurrent_dependency_drop_from_collection_update_error(error))
+            }
+        }
+    }
+
     /// Returns a [`PeekClient`] for coordinator-owned queries, which have to
     /// run off the main loop because the client calls back into it.
     ///
@@ -824,65 +885,8 @@ impl crate::coord::Coordinator {
         let source_arity = intermediate_result_type.arity();
         let timestamp = determination.timestamp_context.timestamp_or_default();
 
-        let PeekDataflowPlan {
-            desc: dataflow,
-            // n.b. this index_id identifies a transient index the
-            // caller created, so it is guaranteed to be on
-            // `compute_instance`.
-            id: index_id,
-            key: index_key,
-            permutation: index_permutation,
-            thinned_arity: index_thinned_arity,
-        } = dataflow_plan;
-
-        // The read-hold strategy below acquires a hold for `index_id` only. That
-        // is sufficient today because slow-path peek dataflows have a single
-        // export equal to `index_id`. If we ever ship multi-output dataflows on
-        // this path, the hold acquisition needs to be revisited.
-        let exports: Vec<GlobalId> = dataflow.export_ids().collect();
-        soft_assert_eq_or_log!(
-            exports.as_slice(),
-            &[index_id],
-            "slow-path peek dataflow must export exactly [index_id]",
-        );
-        if exports.as_slice() != [index_id] {
-            return Err(AdapterError::internal(
-                "peek error",
-                format!("slow-path peek dataflow exports {exports:?}, expected [{index_id}]",),
-            ));
-        }
-
-        // Ship the dataflow, then acquire a read hold for the peek target so its
-        // `since` cannot advance past `timestamp` before `compute.peek()` runs: the
-        // implied hold from `create_dataflow` pins the new collection's `since` at
-        // `as_of`, so the subsequent `acquire_read_hold` lands at
-        // `as_of <= timestamp`.
-        self.controller
-            .compute
-            .create_dataflow(compute_instance, dataflow, None)
-            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
-
-        // On failure we must drop the dataflow ourselves, otherwise it leaks.
-        let acquire_result = self
-            .controller
-            .compute
-            .acquire_read_hold(compute_instance, index_id)
-            .map_err(AdapterError::concurrent_dependency_drop_from_collection_update_error);
-        let read_hold = match acquire_result {
-            Ok(hold) => hold,
-            Err(e) => {
-                self.drop_compute_collections(vec![(compute_instance, index_id)]);
-                return Err(e);
-            }
-        };
-
-        // Create an identity MFP operator.
-        let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-        map_filter_project.permute_fn(
-            |c| index_permutation[c],
-            index_key.len() + index_thinned_arity,
-        );
-        let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+        let (index_id, read_hold, map_filter_project) =
+            self.create_transient_peek_target(dataflow_plan, source_arity, compute_instance)?;
 
         // Endpoints for sending and receiving peek responses.
         let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
