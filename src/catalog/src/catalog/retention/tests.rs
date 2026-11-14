@@ -38,6 +38,7 @@ use crate::catalog::{Catalog, DropObjectInfo, Op, TransactionCatchUp, test_suppo
 use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
 use crate::memory::implications::ParsedStateUpdateKind;
 use crate::memory::objects::{CatalogItem, StateDiff};
+use crate::read_protection::publication::PublicationSample;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
@@ -159,6 +160,8 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
         (peer_incarnation, Some("bounds"), false),
         (peer_incarnation, Some("requirements"), false),
         (peer_incarnation, None, true),
+        (writer, Some("derive"), false),
+        (peer_incarnation, Some("derive"), true),
     ] {
         peer.sync_to_current_updates().await.expect("refresh peer");
         let mut tx = peer
@@ -177,7 +180,12 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
                 .expect("advance conflicting grant");
         }
         if structural {
-            tx.upsert_system_config("max_tables", "777".into())
+            let value = if sampled == Some("derive") {
+                "778"
+            } else {
+                "777"
+            };
+            tx.upsert_system_config("max_tables", value.into())
                 .expect("stage structural change");
         }
         let _ = tx.get_and_commit_op_updates();
@@ -185,7 +193,14 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
         tx.commit(ts).await.expect("commit conflicting prefix");
 
         let before = f.catalog.state().client_read_requirements().clone();
-        let ops = if sampled == Some("bounds") {
+        let ops = if sampled == Some("derive") {
+            vec![Op::DeriveReadProtection {
+                sample: PublicationSample {
+                    compute_proposals: BTreeMap::from([(id, Antichain::from_elem(grant))]),
+                    ..Default::default()
+                },
+            }]
+        } else if sampled == Some("bounds") {
             vec![Op::SetReadProtection {
                 requirements: vec![],
                 bounds: vec![CollectionCompactionBound {
@@ -231,6 +246,150 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
                 .get(&(publisher, id)),
             (!structural).then_some(&grant),
         );
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn derived_publication_recomputes_peer_limits_and_own_updates() {
+    for after_candidate in [false, true] {
+        let mut f = Fixture::new().await;
+        let id = f.source("derived_input").await;
+        let mut catch_up = f.catch_up().await;
+        let replica_id = f
+            .catalog
+            .clusters()
+            .flat_map(|cluster| cluster.replicas())
+            .next()
+            .expect("builtin replica")
+            .replica_id;
+        let ts = f.catalog.current_upper().await;
+        let peer_incarnation = f
+            .catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation {
+                    realization: crate::durable::ClientRealization::Replica(replica_id),
+                    expected: None,
+                }],
+            )
+            .await
+            .expect("register peer")
+            .created_client_incarnations[0];
+        let initial = *f.catalog.state().collection_compaction_bounds()[&id]
+            .as_option()
+            .expect("readable source");
+        let peer_hold = initial.step_forward();
+        let own_hold = peer_hold.step_forward();
+        let proposal = own_hold.step_forward();
+        f.transact(vec![Op::GrantClientReadRequirements {
+            incarnation: catch_up.incarnation,
+            requirements: BTreeMap::from([(id, initial)]),
+        }])
+        .await;
+        let mut peer = f.peer().await;
+
+        // Capture progress before the peer acquires a stronger hold, then reuse
+        // it when the peer advances. No controller resampling is necessary.
+        let sample = PublicationSample {
+            frontiers: vec![CollectionFrontiers {
+                id,
+                write_frontier: Antichain::from_elem(proposal.step_forward()),
+                implied_capability: Antichain::from_elem(proposal),
+                read_capabilities: Antichain::from_elem(initial),
+            }],
+            compaction_frontiers: BTreeMap::from([(id, Antichain::from_elem(proposal))]),
+            compute_proposals: BTreeMap::new(),
+        };
+        for advance_peer in [false, true] {
+            let peer_frontier = if advance_peer { proposal } else { peer_hold };
+            let publish = async {
+                peer.sync_to_current_updates().await.expect("refresh peer");
+                let mut tx = peer.transaction().await.expect("open peer publication");
+                if advance_peer {
+                    tx.update_client_read_requirements(
+                        peer_incarnation,
+                        BTreeMap::from([(id, Some(peer_frontier))]),
+                    )
+                    .expect("advance peer hold");
+                } else {
+                    tx.grant_client_read_requirements(
+                        peer_incarnation,
+                        BTreeMap::from([(id, peer_frontier)]),
+                    )
+                    .expect("acquire peer hold");
+                }
+                let _ = tx.get_and_commit_op_updates();
+                let ts = tx.upper();
+                tx.commit(ts).await.expect("commit peer hold");
+            };
+            let mut publish = Some(publish);
+            if !after_candidate {
+                publish.take().expect("unpublished peer").await;
+            }
+            let ops = vec![
+                Op::UpdateClientReadRequirements {
+                    incarnation: catch_up.incarnation,
+                    requirements: BTreeMap::from([(id, Some(own_hold))]),
+                },
+                Op::DeriveReadProtection {
+                    sample: sample.clone(),
+                },
+            ];
+            let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+            f.catalog.before_commit = Some(hook);
+            let ts = f.catalog.current_upper().await;
+            let transaction = async {
+                let result = f
+                    .catalog
+                    .transact(Some(&mut catch_up), None, ts, None, ops)
+                    .await;
+                f.catalog.before_commit = None;
+                result
+            };
+            let interference = async {
+                let mut attempts = 0;
+                while let Some(resume) = candidates.recv().await {
+                    attempts += 1;
+                    assert!(attempts <= 2, "one conflict requires at most one retry");
+                    if let Some(publish) = publish.take() {
+                        publish.await;
+                    }
+                    resume.send(()).expect("resume candidate");
+                }
+                attempts
+            };
+            let (result, attempts) = tokio::join!(transaction, interference);
+            result.expect("derive protection from current peer and proposed own holds");
+            assert_eq!(attempts, if after_candidate { 2 } else { 1 });
+            assert!(catch_up.updates.is_empty());
+
+            // Replaying the first candidate would overcompact on acquisition,
+            // or remain pinned to the old peer hold on advancement. Reopening
+            // also checks the own update and maintained frontier are durable.
+            f = f.reopen().await;
+            let state = f.catalog.state();
+            assert_eq!(
+                state.collection_compaction_bounds()[&id],
+                Antichain::from_elem(if advance_peer { own_hold } else { peer_hold })
+            );
+            assert_eq!(
+                state.client_read_requirements()[&(catch_up.incarnation, id)],
+                own_hold
+            );
+            assert_eq!(
+                state.client_read_requirements()[&(peer_incarnation, id)],
+                peer_frontier
+            );
+            assert_eq!(
+                state.maintained_read_requirements()[&id].frontier,
+                Some(proposal)
+            );
+        }
+        f.catalog.expire().await;
     }
 }
 
