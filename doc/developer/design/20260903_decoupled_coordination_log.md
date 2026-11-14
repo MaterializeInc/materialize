@@ -13,8 +13,16 @@ grant for u37 and input u34 at the cap for 300s. The active adapter and relevant
 replica grants advanced. Candidate publication repeatedly reports catalog races.
 The diagnostic trace contains 24 actual publication attempts: 14 open failures,
 8 commit-stage failures and 2 commits. Oracle allocation is about 1ms, so hoisting
-it alone is insufficient. Await the user's decision on deriving bounds inside
-the transaction from sampled runtime progress and freshly applied catalog state.
+it alone is insufficient. The user approved deriving bounds inside the transaction
+from owner runtime samples and freshly applied catalog state, including proposed
+client updates. The core path is implemented and the catalog, adapter and clusterd
+check passes. Independent review found missing adapter dispatch and idle empty
+commits, now repaired. Test type-checking passes. Retention test builds hit the
+6GiB cap twice, then again with only generated-protobuf debug information disabled.
+No test execution or post-repair runtime result is claimed. The final cached test
+type-check passes, including the fixture's actual Persist advancement. Resume execution on
+scratch after reauthentication, then run the unchanged four-index workload and
+compare transaction stages and latency. Do not raise local resource limits.
 Do not add consensus refreshes or split publication merely to pass the test.
 Keep original workloads and
 bounds. Do not increase retries or timeouts to claim acceptance.
@@ -109,13 +117,16 @@ Cache binaries are in `native-cache-candidate`, verified by
 `cache-build-source-sha256.json` and `native-cache-binaries.json`. The regression
 build is complete. Repaired binaries are in `native-retained-candidate`, with
 `retained-build-source-sha256.json` and `native-retained-binaries.json`.
-All current runs cleaned up. No runtime or build is active. Worker expiry is now
-03:00 UTC November 14. Python-only harness changes have a separate
-source-exception manifest. Compiled Rust remains unchanged.
+Prior runtime runs cleaned up. The old worker lease ended at 03:00 UTC November
+14 and scratch authentication is expired. No local build or test runtime is active.
+Local disk has 35GiB free. The repair remains uncommitted pending executed tests.
+Current patch and compiler/OOM receipts are in `native-only/publication-rederive`
+under the evidence root's parent. Prior Python-only harness changes have
+a separate source-exception manifest. The pinned runtime binaries do not include
+the current publication repair.
 No parser or Persist source changed. Supervision has an
-independent systemd post-stop cleanup, verified with a real SIGKILL. SSO expired, but
-`remote_with_cli_credentials.py` uses the same role's valid CLI credentials only
-in memory, now expiring at 08:19 UTC November 14. No access rules changed. The prior worker
+independent systemd post-stop cleanup, verified with a real SIGKILL. Both SSO and
+the prior CLI credentials expired. No access rules changed. The prior worker
 `i-064fa517ec1d8bbdb` is terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
