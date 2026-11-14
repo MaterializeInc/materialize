@@ -106,10 +106,7 @@ pub fn choose_routes(
 /// The `(relation, column)` pairs that `expr` pins directly: an equality with a
 /// literal in a `Filter` over a `Get`, or a join equivalence that relates a
 /// `Get` input's column to another input.
-fn pinned_columns(
-    expr: &MirRelationExpr,
-    aliases: &BTreeMap<LocalId, GlobalId>,
-) -> Vec<(GlobalId, usize)> {
+fn pinned_columns(expr: &MirRelationExpr, aliases: &Aliases) -> Vec<(GlobalId, usize)> {
     let mut pinned = Vec::new();
     match expr {
         MirRelationExpr::Filter { input, predicates } => {
@@ -240,11 +237,14 @@ fn plan_lookup(
         let aliases = let_aliases(object.plan.as_inner());
         let mut refs = 0;
         object.plan.as_inner().visit_pre(|e| {
-            if matches!(e, MirRelationExpr::Get { .. }) && resolve(e, &aliases) == Some(mi) {
+            if matches!(e, MirRelationExpr::Get { .. }) && read_root(e, &aliases) == Some(mi) {
                 refs += 1;
             }
         });
-        let definitions = aliases.values().filter(|id| **id == mi).count();
+        let definitions = aliases
+            .values()
+            .filter(|value| read_root(value, &aliases) == Some(mi))
+            .count();
         let reads = refs - definitions;
         if refs > 0 {
             if site_object.is_some() {
@@ -466,16 +466,15 @@ fn stored_column_positions(
     expr: &MirRelationExpr,
     mi: GlobalId,
     arity: usize,
-    aliases: &BTreeMap<LocalId, GlobalId>,
+    aliases: &Aliases,
 ) -> Option<Vec<Option<usize>>> {
     match expr {
         MirRelationExpr::Get {
             id: Id::Global(id), ..
         } if *id == mi => Some((0..arity).map(Some).collect()),
-        // `let_aliases` only records bindings whose value keeps the columns.
         MirRelationExpr::Get {
             id: Id::Local(id), ..
-        } if aliases.get(id) == Some(&mi) => Some((0..arity).map(Some).collect()),
+        } => stored_column_positions(aliases.get(id)?, mi, arity, aliases),
         MirRelationExpr::ArrangeBy { input, .. } | MirRelationExpr::Filter { input, .. } => {
             stored_column_positions(input, mi, arity, aliases)
         }
@@ -494,25 +493,49 @@ fn stored_column_positions(
     }
 }
 
-/// Let bindings whose value reads a global collection, by binding.
-fn let_aliases(expr: &MirRelationExpr) -> BTreeMap<LocalId, GlobalId> {
-    let mut aliases = BTreeMap::new();
+/// Let bindings whose value reads a global collection through operators that
+/// keep its rows (see [`read_root`]), with their values.
+type Aliases = BTreeMap<LocalId, MirRelationExpr>;
+
+/// Let bindings whose value reads a global collection, by binding. The
+/// optimizer shares repeated reads through such bindings, and projection
+/// pushdown narrows their values to the columns the query uses.
+fn let_aliases(expr: &MirRelationExpr) -> Aliases {
+    let mut aliases = Aliases::new();
     expr.visit_pre(|e| {
         if let MirRelationExpr::Let { id, value, .. } = e {
-            if let Some(global) = resolve(value, &aliases) {
-                aliases.insert(*id, global);
+            if read_root(value, &aliases).is_some() {
+                aliases.insert(*id, (**value).clone());
             }
         }
     });
     aliases
 }
 
-/// Like [`global_get`], but also looking through let bindings in `aliases`.
-fn resolve(expr: &MirRelationExpr, aliases: &BTreeMap<LocalId, GlobalId>) -> Option<GlobalId> {
+/// The global collection `expr` reads, looking through arrangements, filters,
+/// projections and let bindings.
+fn read_root(expr: &MirRelationExpr, aliases: &Aliases) -> Option<GlobalId> {
+    match expr {
+        MirRelationExpr::Get {
+            id: Id::Global(id), ..
+        } => Some(*id),
+        MirRelationExpr::Get {
+            id: Id::Local(id), ..
+        } => read_root(aliases.get(id)?, aliases),
+        MirRelationExpr::ArrangeBy { input, .. }
+        | MirRelationExpr::Filter { input, .. }
+        | MirRelationExpr::Project { input, .. } => read_root(input, aliases),
+        _ => None,
+    }
+}
+
+/// Like [`global_get`], but also looking through let bindings in `aliases`
+/// whose value keeps the read's column numbering.
+fn resolve(expr: &MirRelationExpr, aliases: &Aliases) -> Option<GlobalId> {
     match expr {
         MirRelationExpr::Get {
             id: Id::Local(id), ..
-        } => aliases.get(id).copied(),
+        } => resolve(aliases.get(id)?, aliases),
         MirRelationExpr::ArrangeBy { input, .. } | MirRelationExpr::Filter { input, .. } => {
             resolve(input, aliases)
         }
