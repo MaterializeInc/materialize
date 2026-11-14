@@ -34,12 +34,36 @@ Local spike, not for merge. Branch `catalog-frontend-spike` off main (ab4e4edba0
 | spike, `mz_catalog_server` (MV maintenance) | 131 | 6.0 s | 47.2 MB |
 | spike, `mz_catalog_server_frontend` (serving) | 115 | 2.0 s | 12.5 MB |
 
+Dataflow counts include 33 per-cluster introspection indexes on every
+cluster. The spike adds dataflows overall (246 across both clusters vs 166):
+each converted view is now an MV dataflow plus an index dataflow, where it
+used to be one index dataflow that computed the view. What moves is where the
+view computation runs, not how much of it there is.
+
 The local catalog is too small to reproduce the 7-minute production
 hydration. The point is the shape: the serving cluster no longer
 recomputes catalog views, so its hydration cost tracks index size, not view
 complexity. Production's heaviest views (recent activity log, wallclock lag
 history, console utilization) need a staging or production-scale run to get
 real numbers.
+
+Scale sweep (fresh environments, user objects = 2:1 tables with 20 columns
+and views, on top of ~1.4k system objects). Replica rehydration, two runs
+each, memory is total arrangement size on the cycled replica:
+
+| user objects | spike frontend | spike catalog_server | main catalog_server |
+|---|---|---|---|
+| 400 | 2.0 / 2.0 s, 3.5 MB | 3.1 s, 10.9 MB | 3.1 / 3.0 s, 13.7 MB |
+| 800 | 4.0 / 3.9 s, 5.0 MB | 2.7 / 2.8 s, 14.9 MB | 5.0 / 5.0 s, 18.7 MB |
+| 1600 | 3.3 / 2.1 s, 7.5 MB | 4.9 / 5.5 s, 23.5 MB | 5.1 / 4.3 s, 29.3 MB |
+| 3200 | 3.4 / 2.1 s, 12.5 MB | 5.9 / 6.0 s, 40.2 MB | 4.7 / 5.6 s, 50.5 MB |
+| 6400 | 3.9 / 2.1 s, 23.0 MB | 9.9 / 11.0 s, 74.7 MB | 7.9 / 7.8 s, 93.7 MB |
+
+Two runs were dropped as measurement bugs, since fixed: 400 spike
+catalog_server run 2 stopped before all statuses reported, and 800 spike
+catalog_server run 1 read memory before introspection caught up.
+"main" is the v26.50 Docker image, so cross-environment timings are
+approximate. Comparisons within the spike are like for like.
 
 Load balancing, 3 frontend replicas:
 
