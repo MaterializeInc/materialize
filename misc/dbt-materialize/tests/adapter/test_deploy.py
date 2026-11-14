@@ -929,6 +929,40 @@ class TestTargetDeploy:
         )
         assert strategy_count == (0,)
 
+    @pytest.mark.parametrize("managed", [False, True])
+    @pytest.mark.parametrize("policy", [None, 'Policy "quoted"'])
+    def test_deploy_init_query_policy(self, project, managed, policy):
+        policy_ident = '"Policy ""quoted"""'
+        project.run_sql(f"DROP QUERY POLICY IF EXISTS {policy_ident}")
+        try:
+            if policy is not None:
+                project.run_sql(
+                    f"CREATE QUERY POLICY {policy_ident} (RULES "
+                    "(r (action = 'reject', metric = 'query_plan_includes', value = 'storage_read')))"
+                )
+            options = "SIZE = 'scale=1,workers=1'" if managed else "REPLICAS = ()"
+            if policy is not None:
+                options += f", QUERY POLICY = {policy_ident}"
+            project.run_sql(f"CREATE CLUSTER prod ({options})")
+            project.run_sql("CREATE SCHEMA prod")
+            project.run_sql("CREATE SCHEMA staging")
+            run_dbt(["run-operation", "deploy_init"])
+            rows = project.run_sql(
+                """
+                SELECT p.name
+                FROM mz_internal.mz_query_policy_attachments a
+                JOIN mz_clusters c ON c.id = a.object_id
+                JOIN mz_internal.mz_query_policies p ON p.id = a.policy_id
+                WHERE a.object_type = 'cluster' AND c.name = 'prod_dbt_deploy'
+                """,
+                fetch="all",
+            )
+            assert rows == ([] if policy is None else [(policy,)])
+        finally:
+            project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+            project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+            project.run_sql(f"DROP QUERY POLICY IF EXISTS {policy_ident}")
+
     def test_dbt_deploy_init_unmanaged_empty(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")

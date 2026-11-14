@@ -162,6 +162,8 @@ impl Catalog {
             roles_by_name: imbl::OrdMap::new(),
             roles_by_id: imbl::OrdMap::new(),
             network_policies_by_id: imbl::OrdMap::new(),
+            query_policies_by_id: imbl::OrdMap::new(),
+            query_policies_by_name: imbl::OrdMap::new(),
             role_auth_by_id: imbl::OrdMap::new(),
             network_policies_by_name: imbl::OrdMap::new(),
             system_configuration: Arc::new(system_configuration),
@@ -301,6 +303,7 @@ impl Catalog {
                 | StateUpdateKind::Cluster(_)
                 | StateUpdateKind::NetworkPolicy(_)
                 | StateUpdateKind::ClusterReplicaSize(_)
+                | StateUpdateKind::QueryPolicy(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
                     kind,
                     ts,
@@ -1056,6 +1059,7 @@ fn add_new_remove_old_builtin_clusters_migration(
                         burst: None,
                     }),
                     workload_class: None,
+                    query_policy: None,
                 },
                 &HashSet::new(),
             )?;

@@ -722,6 +722,40 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_query_policy(
+        &mut self,
+        session: &Session,
+        plan::CreateQueryPolicyPlan { name, mode, rules }: plan::CreateQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateQueryPolicy {
+            name,
+            mode,
+            rules,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedQueryPolicy)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_query_policy(
+        &mut self,
+        session: &Session,
+        plan::AlterQueryPolicyPlan {
+            id,
+            name: _,
+            mode,
+            rules,
+        }: plan::AlterQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterQueryPolicy { id, mode, rules };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(ObjectType::QueryPolicy))
+    }
+
+    #[instrument]
     pub(super) async fn sequence_create_network_policy(
         &mut self,
         session: &Session,
@@ -987,6 +1021,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
+            cascade,
             drop_ids,
             object_type,
             referenced_ids,
@@ -1029,7 +1064,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids, cascade)?;
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
@@ -1186,6 +1221,23 @@ impl Coordinator {
                 }
             }
         }
+        for policy in catalog.get_query_policies() {
+            let id = SystemObjectId::Object(ObjectId::QueryPolicy(policy.id()));
+            if let Some(role_name) = dropped_roles.get(&policy.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                policy.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                &id,
+                &catalog,
+            );
+        }
         privilege_check(
             self.catalog().system_privileges(),
             dropped_roles,
@@ -1290,7 +1342,7 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, plan.drop_ids, plan.cascade)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1489,6 +1541,7 @@ impl Coordinator {
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
+        cascade: bool,
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
@@ -1622,11 +1675,13 @@ impl Coordinator {
                     variant: UpdatePrivilegeVariant::Revoke,
                 },
             ))
-            .chain(iter::once(catalog::Op::DropObjects(
-                ids.into_iter()
+            .chain(iter::once(catalog::Op::DropObjects {
+                objects: ids
+                    .into_iter()
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
-            )))
+                cascade,
+            }))
             .collect();
 
         Ok(DropOps {

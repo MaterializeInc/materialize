@@ -344,6 +344,12 @@ impl PeekClient {
         // remove/add IDs, then `resolved_ids` should be updated to also remove/add those IDs.)
         let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
 
+        // EXPLAIN ANALYZE lowers to a SELECT over introspection, but diagnostics
+        // must remain available when query policies reject ordinary SELECTs.
+        let explain_analyze = matches!(
+            stmt,
+            Statement::ExplainAnalyzeObject(_) | Statement::ExplainAnalyzeCluster(_)
+        );
         let pcx = session.pcx();
         let (plan, sql_impl_ids) =
             mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
@@ -571,6 +577,7 @@ impl PeekClient {
             | Plan::CreateView(_)
             | Plan::CreateMaterializedView(_)
             | Plan::CreateNetworkPolicy(_)
+            | Plan::CreateQueryPolicy(_)
             | Plan::CreateIndex(_)
             | Plan::CreateMetricSink(_)
             | Plan::CreateType(_)
@@ -615,6 +622,7 @@ impl PeekClient {
             | Plan::AlterTableAddColumn(_)
             | Plan::AlterMaterializedViewApplyReplacement(_)
             | Plan::AlterNetworkPolicy(_)
+            | Plan::AlterQueryPolicy(_)
             | Plan::Declare(_)
             | Plan::Fetch(_)
             | Plan::Close(_)
@@ -1553,6 +1561,15 @@ impl PeekClient {
                 // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
+                if !explain_analyze {
+                    crate::query_policy::check_query_policies(
+                        &catalog,
+                        session,
+                        target_cluster_id,
+                        &peek_plan,
+                    )?;
+                }
+
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,
                     session,
@@ -1694,6 +1711,12 @@ impl PeekClient {
                 optimization_finished_at: _optimization_finished_at,
             } => {
                 session.require_coordinator_completion();
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
                         bound: *df_desc.until.as_option().expect("as of set"),
@@ -1739,6 +1762,13 @@ impl PeekClient {
                 source_ids,
             } => {
                 let (df_desc, df_meta) = global_lir_plan.unapply();
+
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
 
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,

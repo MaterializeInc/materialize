@@ -30,12 +30,12 @@ privileges  mz_aclitem  false
 
 # On a fresh server, the mz_system bootstrap grant is present along with the
 # same grant to the default `materialize` user. CREATEROLE + CREATEDB +
-# CREATECLUSTER + CREATENETWORKPOLICY = RBNP.
+# CREATECLUSTER + CREATENETWORKPOLICY + CREATEQUERYPOLICY = RBNPQ.
 query T rowsort
 SELECT privileges::text FROM mz_system_privileges
 ----
-materialize=RBNP/mz_system
-mz_system=RBNP/mz_system
+materialize=RBNPQ/mz_system
+mz_system=RBNPQ/mz_system
 
 # --- OID stability ------------------------------------------------------------
 
@@ -61,8 +61,8 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges ORDER BY 1
 ----
-materialize=RBNP/mz_system
-mz_system=RBNP/mz_system
+materialize=RBNPQ/mz_system
+mz_system=RBNPQ/mz_system
 r_sys=R/mz_system
 
 # --- AclItem round-trip via mz_aclitem_* helpers -----------------------------
@@ -142,8 +142,8 @@ COMPLETE 0
 query T rowsort
 SELECT privileges::text FROM mz_system_privileges
 ----
-materialize=RBNP/mz_system
-mz_system=RBNP/mz_system
+materialize=RBNPQ/mz_system
+mz_system=RBNPQ/mz_system
 
 # --- NOT NULL invariant -------------------------------------------------------
 
