@@ -711,6 +711,10 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "storage_statistics_interval", "2000", ["100", "1000", "10000"]
         ),
+        # Enabled so CI exercises the restart backoff, which production leaves off.
+        VariableSystemParameter(
+            "storage_suspend_and_restart_max_delay", "1min", ["0s", "10s", "1min"]
+        ),
         VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
         ),

@@ -73,7 +73,7 @@
 //! update, is that it might fill out new internal state in the mid-level
 //! clients on the way toward being run.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -97,7 +97,10 @@ use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
+use mz_storage_types::dyncfgs::{
+    STORAGE_SERVER_MAINTENANCE_INTERVAL, STORAGE_SUSPEND_AND_RESTART_DELAY,
+    STORAGE_SUSPEND_AND_RESTART_MAX_DELAY,
+};
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
@@ -113,6 +116,7 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::healthcheck::RestartBackoff;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
     InternalStorageCommand,
@@ -270,6 +274,7 @@ impl StorageState {
             txns_ctx,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
+            consecutive_halts: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
                 timely_worker_index,
@@ -340,6 +345,9 @@ pub struct StorageState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Consecutive halts per source or sink, kept here because every restart re-renders the
+    /// dataflow that counts them.
+    pub consecutive_halts: BTreeMap<GlobalId, Rc<Cell<u32>>>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
 
@@ -414,6 +422,16 @@ impl StorageState {
                 reason: format!("{context}: {e:#}"),
             })
         })
+    }
+
+    /// Returns the restart backoff of the source or sink `id`.
+    pub(crate) fn restart_backoff(&mut self, id: GlobalId) -> RestartBackoff {
+        let config = self.storage_configuration.config_set();
+        RestartBackoff {
+            initial: STORAGE_SUSPEND_AND_RESTART_DELAY.get(config),
+            max: STORAGE_SUSPEND_AND_RESTART_MAX_DELAY.get(config),
+            consecutive_halts: Rc::clone(self.consecutive_halts.entry(id).or_default()),
+        }
     }
 }
 
@@ -877,6 +895,7 @@ impl<'w> Worker<'w> {
 
                     self.storage_state.sink_tokens.remove(id);
                     self.storage_state.sink_write_frontiers.remove(id);
+                    self.storage_state.consecutive_halts.remove(id);
 
                     self.storage_state.aggregated_statistics.deinitialize(*id);
                 }

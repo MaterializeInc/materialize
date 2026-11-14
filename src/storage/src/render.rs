@@ -462,8 +462,7 @@ pub fn build_ingestion_dataflow(
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
-                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                    .get(storage_state.storage_configuration.config_set()),
+                storage_state.restart_backoff(primary_source_id),
             );
             tokens.push(health_token);
 
@@ -509,8 +508,7 @@ pub fn build_export_dataflow(
                 .storage_configuration
                 .parameters
                 .record_namespaced_errors,
-            dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                .get(storage_state.storage_configuration.config_set()),
+            storage_state.restart_backoff(id),
         );
         tokens.push(health_token);
 
