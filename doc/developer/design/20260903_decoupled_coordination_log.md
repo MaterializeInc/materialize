@@ -7,8 +7,8 @@ policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
 Next: run the prepared supervised zippy runner, then the latest compatible-version
-pair. Restarting the retained
-worker through 06:00 UTC has been requested, not approved. The local VM cannot
+pair. Restarting the retained worker through 06:00 UTC has been requested, not
+approved. The local VM cannot
 safely host the full-size runtime budget.
 The core candidates are hash-verified and execute locally with `--version`.
 Ancillary binaries are separately preserved and pass their help commands. Their
@@ -55,9 +55,11 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 - Complete seed42 default-length zippy scenarios and actual backup/restore.
   The combined data-ingest invocation remains unverified despite individual
   scenario passes. PostgreSQL CDC deliberately excludes restore.
-  Missing zippy fixtures include balancerd, ssh-bastion and compatible Persist CLI/jobs.
-- Rebuild and verify the latest compatible-version pair. Adapter-loss coverage also
-  needs compatible Persist CLI/jobs. Do not substitute old candidate artifacts.
+  Local mounted-binary fixtures are prepared and smoke-checked. Full standalone
+  images and the jobs image's broader contents are not verified by those checks.
+- Rebuild and verify the latest compatible-version pair. Adapter-loss coverage
+  still needs to run with the new compatible Persist CLI fixture. Do not
+  substitute old candidate artifacts.
 - Native parallel stress has a repaired one-cycle pass. Earlier timeout,
   two-cycle retirement and bootstrap failures are retained in the evidence.
   Broader current-binary repeat coverage remains incomplete.
