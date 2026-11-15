@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:c69d16acb50ae6ee26adfb0645467b507753c0eb91c389afad87914cd2ecf6de AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
 
-FROM node:22-slim@sha256:18052396bf1d0c6e0a8c58181b5c1457da19409efbd5032a3f4d86974e74d13c
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 # Fetch apt sources over HTTPS only.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

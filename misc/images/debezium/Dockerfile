@@ -25,6 +25,6 @@ RUN apt-get update \
     && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins \
     && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}/debezium-connector-sqlserver-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins
 
-FROM confluentinc/cp-kafka-connect-base:8.3.2@sha256:6ce23d4af58c228b13681fb7affa9cf746d0726f3b2b3d0cdc75e6d61c5e7fd1
+FROM confluentinc/cp-kafka-connect-base:8.3.3@sha256:5b40ff05e94d8940527c4fabc2bc2210f27a6e0f7f67f4b7f93499ebcf322911
 
 COPY --from=fetch /plugins/ /usr/share/java/
