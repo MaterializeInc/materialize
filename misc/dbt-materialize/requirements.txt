@@ -36,7 +36,7 @@ dbt-common==1.39.0
     #   dbt-core
     #   dbt-materialize
     #   dbt-postgres
-dbt-core==1.12.6
+dbt-core==1.12.7
     # via
     #   dbt-materialize
     #   dbt-postgres
