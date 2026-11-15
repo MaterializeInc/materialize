@@ -1441,6 +1441,24 @@ impl Coordinator {
     fn update_compute_config(&mut self) {
         let config_params = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(config_params);
+        self.sync_load_balanced_clusters();
+    }
+
+    /// Applies `load_balanced_clusters` to every compute instance.
+    pub(crate) fn sync_load_balanced_clusters(&mut self) {
+        let names = self.catalog().system_config().load_balanced_clusters();
+        let settings: Vec<_> = self
+            .catalog()
+            .clusters()
+            .map(|c| (c.id, names.contains(&c.name)))
+            .collect();
+        for (id, load_balanced) in settings {
+            // A cluster without a compute instance yet picks this up on creation.
+            let _ = self
+                .controller
+                .compute
+                .set_instance_load_balanced(id, load_balanced);
+        }
     }
 
     fn update_storage_config(&mut self) {

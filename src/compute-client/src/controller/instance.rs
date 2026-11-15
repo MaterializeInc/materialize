@@ -141,6 +141,13 @@ pub(super) struct Instance {
     workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
+    /// Whether untargeted peeks and transient dataflows are each sent to a single replica,
+    /// spreading query load across replicas instead of running every query on all of them.
+    ///
+    /// Maintained (non-transient) dataflows are still installed on every replica.
+    load_balanced: bool,
+    /// Round-robin position for choosing a replica when `load_balanced` is set.
+    load_balance_cursor: usize,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -432,6 +439,43 @@ impl Instance {
         // Failure to send means the `ComputeController` has been dropped and doesn't care about
         // introspection updates anymore.
         let _ = self.introspection_tx.send((type_, updates));
+    }
+
+    pub fn set_load_balanced(&mut self, load_balanced: bool) {
+        self.load_balanced = load_balanced;
+    }
+
+    /// Chooses one replica to serve a read of `ids` at `time`, round-robin.
+    ///
+    /// Prefers replicas whose write frontier for every one of `ids` is already past `time`, so
+    /// the read is served without waiting for a lagging or still-hydrating replica. Falls back
+    /// to any replica hosting all of `ids`, then to any replica.
+    fn choose_replica(&mut self, ids: &[GlobalId], time: &Timestamp) -> Option<ReplicaId> {
+        let hosting: Vec<&ReplicaState> = self
+            .replicas
+            .values()
+            .filter(|r| ids.iter().all(|id| r.collections.contains_key(id)))
+            .collect();
+        let ready: Vec<ReplicaId> = hosting
+            .iter()
+            .filter(|r| {
+                ids.iter()
+                    .all(|id| !r.collections[id].write_frontier.less_equal(time))
+            })
+            .map(|r| r.id)
+            .collect();
+        let candidates = if !ready.is_empty() {
+            ready
+        } else if !hosting.is_empty() {
+            hosting.iter().map(|r| r.id).collect()
+        } else {
+            self.replicas.keys().copied().collect()
+        };
+        if candidates.is_empty() {
+            return None;
+        }
+        self.load_balance_cursor = self.load_balance_cursor.wrapping_add(1);
+        Some(candidates[self.load_balance_cursor % candidates.len()])
     }
 
     /// Returns whether the identified replica exists.
@@ -877,6 +921,8 @@ impl Instance {
             read_only,
             workload_class,
             replicas,
+            load_balanced: _,
+            load_balance_cursor: _,
             collections,
             log_sources: _,
             peeks,
@@ -982,6 +1028,8 @@ impl Instance {
             read_only,
             workload_class: None,
             replicas: Default::default(),
+            load_balanced: false,
+            load_balance_cursor: 0,
             collections,
             log_sources,
             peeks: Default::default(),
@@ -1217,9 +1265,10 @@ impl Instance {
                 }
                 target_replica
             }
-            // Skip Peek as we don't allow replica-targeted indexes.
-            ComputeCommand::Peek(_)
-            | ComputeCommand::Hello { .. }
+            // A targeted peek may read a collection that only its target replica hosts (a
+            // transient dataflow placed by `create_dataflow`), so other replicas must not see it.
+            ComputeCommand::Peek(peek) => self.peeks.get(&peek.uuid).and_then(|p| p.target_replica),
+            ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
@@ -1353,6 +1402,31 @@ impl Instance {
             self.deliver_response(response);
         }
 
+        // A load-balanced peek reads a collection every replica hosts, so it moves to another
+        // replica instead of failing.
+        let to_move: Vec<Uuid> = self
+            .peeks_targeting(id)
+            .filter(|(_, peek)| peek.load_balanced && peek.command.is_some())
+            .map(|(uuid, _)| uuid)
+            .collect();
+        for uuid in to_move {
+            let command = self.peeks[&uuid].command.clone().expect("checked above");
+            let Some(new_target) = self.choose_replica(&[command.target.id()], &command.timestamp)
+            else {
+                continue;
+            };
+            self.peeks.get_mut(&uuid).expect("exists").target_replica = Some(new_target);
+            let dyncfg = &self.dyncfg;
+            if let Some(replica) = self.replicas.get_mut(&new_target) {
+                let cmd = Self::specialize_command_for_replica(
+                    ComputeCommand::Peek(command),
+                    &replica.dyncfg_override,
+                    dyncfg,
+                );
+                let _ = replica.client.send(cmd);
+            }
+        }
+
         // Peeks targeting this replica might not be served anymore (if the replica is dropped).
         // If the replica has failed it might come back and respond to the peek later, but it still
         // seems like a good idea to cancel the peek to inform the caller about the failure. This
@@ -1430,6 +1504,19 @@ impl Instance {
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
+
+        // Transient dataflows (slow-path peeks, subscribes, COPY TO) serve a single query, so a
+        // load-balanced instance runs each on one replica.
+        let mut target_replica = target_replica;
+        if target_replica.is_none()
+            && self.load_balanced
+            && dataflow.export_ids().all(|id| id.is_transient())
+        {
+            if let Some(as_of) = dataflow.as_of.as_ref().and_then(|f| f.as_option()) {
+                let imports: Vec<GlobalId> = dataflow.index_imports.keys().copied().collect();
+                target_replica = self.choose_replica(&imports, as_of);
+            }
+        }
 
         // Validate that the target replica, if specified, exists.
         // A targeted dataflow is only installed on a single replica; if that
@@ -1796,12 +1883,32 @@ impl Instance {
             }
         }
 
+        // A peek on a replica-targeted collection can only be served by that replica. Otherwise
+        // a load-balanced instance sends the peek to a single replica.
+        let mut target_replica = target_replica;
+        let mut load_balanced = false;
+        if target_replica.is_none() && self.load_balanced {
+            target_replica = match self
+                .collection(target_id)
+                .ok()
+                .and_then(|c| c.target_replica)
+            {
+                Some(replica) => Some(replica),
+                None => {
+                    load_balanced = true;
+                    self.choose_replica(&[target_id], &timestamp)
+                }
+            };
+        }
+
         let otel_ctx = OpenTelemetryContext::obtain();
 
         self.peeks.insert(
             uuid,
             PendingPeek {
                 target_replica,
+                load_balanced,
+                command: None,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
@@ -1824,7 +1931,11 @@ impl Instance {
             target: peek_target,
             result_desc,
         };
-        self.send(ComputeCommand::Peek(Box::new(peek)));
+        let peek = Box::new(peek);
+        if load_balanced {
+            self.peeks.get_mut(&uuid).expect("inserted above").command = Some(peek.clone());
+        }
+        self.send(ComputeCommand::Peek(peek));
 
         Ok(())
     }
@@ -3093,6 +3204,11 @@ struct PendingPeek {
     limit: Option<usize>,
     /// The offset into the peek's result.
     offset: usize,
+    /// Whether the controller chose `target_replica` to spread load, in which case the peek is
+    /// sent only to that replica and moved to another one if it fails.
+    load_balanced: bool,
+    /// The peek command, kept for load-balanced peeks so it can be re-sent to another replica.
+    command: Option<Box<Peek>>,
 }
 
 #[derive(Debug, Clone)]

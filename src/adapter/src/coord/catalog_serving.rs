@@ -32,7 +32,7 @@ use crate::catalog::ConnCatalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
+use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_CATALOG_SERVER_FRONTEND_CLUSTER};
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -199,10 +199,8 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        let intros_cluster = catalog
-            .state()
-            .resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
-        tracing::debug!("Running on '{}' cluster", MZ_CATALOG_SERVER_CLUSTER.name);
+        let intros_cluster = catalog.state().catalog_server_route_cluster();
+        tracing::debug!("Running on '{}' cluster", intros_cluster.name);
 
         // If we're running on a different cluster than the active one, notify the user.
         if intros_cluster.name != session.vars().cluster() {
@@ -221,8 +219,12 @@ pub fn check_cluster_restrictions(
     catalog: &impl SessionCatalog,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    // We only impose restrictions if the current cluster is the catalog server cluster.
-    if cluster != MZ_CATALOG_SERVER_CLUSTER.name {
+    // We only impose restrictions on clusters that serve catalog queries.
+    let route_cluster = catalog.system_vars().catalog_server_auto_route_cluster();
+    if cluster != MZ_CATALOG_SERVER_CLUSTER.name
+        && cluster != MZ_CATALOG_SERVER_FRONTEND_CLUSTER.name
+        && cluster != route_cluster
+    {
         return Ok(());
     }
 
@@ -277,7 +279,7 @@ pub fn check_cluster_restrictions(
     if !unallowed_dependents.is_empty() {
         Err(AdapterError::UnallowedOnCluster {
             depends_on: unallowed_dependents,
-            cluster: MZ_CATALOG_SERVER_CLUSTER.name.to_string(),
+            cluster: cluster.to_string(),
         })
     } else {
         Ok(())

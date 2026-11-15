@@ -158,7 +158,7 @@ fn make_builtin_materialized_views(builtin_items: &[Builtin<NameReference>]) -> 
     let values = iter
         .map(|mv| {
             let stmt = mz_sql::parse::parse(&mv.create_sql())
-                .expect("valid sql")
+                .unwrap_or_else(|e| panic!("invalid SQL for builtin MV {}: {e:?}", mv.name))
                 .into_element()
                 .ast;
             let Statement::CreateMaterializedView(stmt) = stmt else {
@@ -313,6 +313,14 @@ fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
             let on_name_str = on_name.0[1].as_str();
             assert_safe_builtin_name(on_schema, "index `on` schema");
             assert_safe_builtin_name(on_name_str, "index `on` object");
+            let cluster_name = match &idx_stmt.in_cluster {
+                Some(mz_sql::ast::RawClusterName::Unresolved(ident)) => ident.as_str().to_string(),
+                other => panic!(
+                    "builtin index {} must name its cluster: {other:?}",
+                    index.name
+                ),
+            };
+            assert_safe_builtin_name(&cluster_name, "index cluster");
             let key_exprs = idx_stmt
                 .key_parts
                 .unwrap_or_else(|| {
@@ -327,7 +335,7 @@ fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
             // them away with `assert_safe_builtin_name`.
             let key_exprs_escaped = escaped_string_literal(&key_exprs);
             format!(
-                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped}, {})",
+                "({}::oid, '{}', '{}', '{}', '{}', {key_exprs_escaped}, {}, '{cluster_name}')",
                 index.oid,
                 index.schema,
                 index.name,
@@ -340,8 +348,8 @@ fn make_builtin_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView
     let object_type = gid_mapping_object_type(CatalogItemType::Index);
     let sql = format!(
         "
-SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object, {object_type} AS object_type
-FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object)"
+SELECT oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object, {object_type} AS object_type, cluster_name
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key_exprs, is_retained_metrics_object, cluster_name)"
     );
 
     BuiltinView {
@@ -360,6 +368,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
                 SqlScalarType::Bool.nullable(false),
             )
             .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("cluster_name", SqlScalarType::String.nullable(false))
             // NOTE: The declared keys must exactly match the keys the
             // optimizer derives from the generated VALUES list
             // (`verify_builtin_descs` enforces this).

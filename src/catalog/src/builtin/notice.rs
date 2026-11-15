@@ -15,7 +15,9 @@ use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql::catalog::NameReference;
 
-use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
+use crate::builtin::{
+    Builtin, BuiltinIndex, BuiltinMaterializedView, BuiltinTable, BuiltinView, MONITOR_SELECT,
+};
 
 use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
@@ -66,65 +68,67 @@ pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
 /// notices, the idea is to evolve it over time as sketched in the design doc[^1].
 ///
 /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20231113_optimizer_notice_catalog.md>
-pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_notices",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_NOTICES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("notice_type", SqlScalarType::String.nullable(false))
-        .with_column("message", SqlScalarType::String.nullable(false))
-        .with_column("hint", SqlScalarType::String.nullable(false))
-        .with_column("action", SqlScalarType::String.nullable(true))
-        .with_column("redacted_message", SqlScalarType::String.nullable(true))
-        .with_column("redacted_hint", SqlScalarType::String.nullable(true))
-        .with_column("redacted_action", SqlScalarType::String.nullable(true))
-        .with_column("action_type", SqlScalarType::String.nullable(true))
-        .with_column("object_id", SqlScalarType::String.nullable(true))
-        .with_column(
-            "created_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for this notice."),
-        ("notice_type", "The notice type."),
-        (
-            "message",
-            "A brief description of the issue highlighted by this notice.",
-        ),
-        (
-            "hint",
-            "A high-level hint that tells the user what can be improved.",
-        ),
-        ("action", "A concrete action that will resolve the notice."),
-        (
-            "redacted_message",
-            "A redacted version of the `message` column. `NULL` if no redaction is needed.",
-        ),
-        (
-            "redacted_hint",
-            "A redacted version of the `hint` column. `NULL` if no redaction is needed.",
-        ),
-        (
-            "redacted_action",
-            "A redacted version of the `action` column. `NULL` if no redaction is needed.",
-        ),
-        (
-            "action_type",
-            "The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).",
-        ),
-        (
-            "object_id",
-            "The ID of the materialized view or index. Corresponds to `mz_objects.id`. For global notices, this column is `NULL`.",
-        ),
-        (
-            "created_at",
-            "The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.",
-        ),
-    ]),
-    sql: "SELECT
+pub static MZ_NOTICES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_notices",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_NOTICES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("notice_type", SqlScalarType::String.nullable(false))
+            .with_column("message", SqlScalarType::String.nullable(false))
+            .with_column("hint", SqlScalarType::String.nullable(false))
+            .with_column("action", SqlScalarType::String.nullable(true))
+            .with_column("redacted_message", SqlScalarType::String.nullable(true))
+            .with_column("redacted_hint", SqlScalarType::String.nullable(true))
+            .with_column("redacted_action", SqlScalarType::String.nullable(true))
+            .with_column("action_type", SqlScalarType::String.nullable(true))
+            .with_column("object_id", SqlScalarType::String.nullable(true))
+            .with_column(
+                "created_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for this notice."),
+            ("notice_type", "The notice type."),
+            (
+                "message",
+                "A brief description of the issue highlighted by this notice.",
+            ),
+            (
+                "hint",
+                "A high-level hint that tells the user what can be improved.",
+            ),
+            ("action", "A concrete action that will resolve the notice."),
+            (
+                "redacted_message",
+                "A redacted version of the `message` column. `NULL` if no redaction is needed.",
+            ),
+            (
+                "redacted_hint",
+                "A redacted version of the `hint` column. `NULL` if no redaction is needed.",
+            ),
+            (
+                "redacted_action",
+                "A redacted version of the `action` column. `NULL` if no redaction is needed.",
+            ),
+            (
+                "action_type",
+                "The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).",
+            ),
+            (
+                "object_id",
+                "The ID of the materialized view or index. Corresponds to `mz_objects.id`. For global notices, this column is `NULL`.",
+            ),
+            (
+                "created_at",
+                "The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+SELECT
     n.id,
     n.notice_type,
     n.message,
@@ -139,8 +143,10 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
 FROM
     mz_internal.mz_optimizer_notices n
 ",
-    access: vec![MONITOR_SELECT],
-    ontology: None,
+        is_retained_metrics_object: false,
+        access: vec![MONITOR_SELECT],
+        ontology: None,
+    }
 });
 
 /// A redacted version of [`MZ_NOTICES`] that is made safe to be viewed by
@@ -212,7 +218,7 @@ pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_NOTICES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_notices(id)",
+    sql: "IN CLUSTER mz_catalog_server_frontend ON mz_internal.mz_notices(id)",
     is_retained_metrics_object: false,
 };
 
@@ -222,7 +228,7 @@ pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
 pub(super) fn builtins() -> impl Iterator<Item = Builtin<NameReference>> {
     [
         Builtin::Table(&MZ_OPTIMIZER_NOTICES),
-        Builtin::View(&MZ_NOTICES),
+        Builtin::MaterializedView(&MZ_NOTICES),
         Builtin::View(&MZ_NOTICES_REDACTED),
         Builtin::Index(&MZ_NOTICES_IND),
     ]

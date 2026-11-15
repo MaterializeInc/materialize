@@ -945,7 +945,12 @@ impl<'a> ActiveComputeState<'a> {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                let trace_bundle = self
+                    .compute_state
+                    .traces
+                    .get(id)
+                    .unwrap_or_else(|| panic!("peek {} on missing index {id}", peek.uuid))
+                    .clone();
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {

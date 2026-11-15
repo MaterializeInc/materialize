@@ -992,7 +992,21 @@ fn add_new_remove_old_builtin_items_migration(
     // using this object and that the upgrade checker does not show any issues.
     //
     // Objects can be removed from this set after one release.
-    let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
+    let delete_exceptions: HashSet<SystemObjectDescription> = [
+        // Converted from builtin views to builtin materialized views. The MV
+        // replaces the view under the same name.
+        SystemObjectDescription {
+            schema_name: "mz_catalog".into(),
+            object_type: CatalogItemType::View,
+            object_name: "mz_objects".into(),
+        },
+        SystemObjectDescription {
+            schema_name: "mz_catalog".into(),
+            object_type: CatalogItemType::View,
+            object_name: "mz_recent_storage_usage".into(),
+        },
+    ]
+    .into();
     // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
     // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
     // handle that scenario correctly.
@@ -1602,7 +1616,10 @@ impl BuiltinBootstrapClusterConfigMap {
     ) -> Result<BootstrapBuiltinClusterConfig, mz_catalog::durable::CatalogError> {
         let cluster_config = if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
             &self.system_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
+        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name
+            || cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_FRONTEND_CLUSTER.name
+        {
+            // TODO: give the frontend its own bootstrap size flag.
             &self.catalog_server_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
             &self.probe_cluster

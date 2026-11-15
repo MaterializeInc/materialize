@@ -654,6 +654,7 @@ impl Coordinator {
                             },
                         )
                         .expect("creating cluster must not fail");
+                    self.sync_load_balanced_clusters();
 
                     if !introspection_source_ids.is_empty() {
                         self.initialize_compute_read_policies(

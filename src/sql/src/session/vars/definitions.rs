@@ -1628,6 +1628,20 @@ pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
     true,
 );
 
+pub static CATALOG_SERVER_AUTO_ROUTE_CLUSTER: VarDefinition = VarDefinition::new_lazy(
+    "catalog_server_auto_route_cluster",
+    lazy_value!(String; || "mz_catalog_server_frontend".to_string()),
+    "The cluster that queries depending only on system catalog objects are automatically routed to (Materialize).",
+    false,
+);
+
+pub static LOAD_BALANCED_CLUSTERS: VarDefinition = VarDefinition::new_lazy(
+    "load_balanced_clusters",
+    lazy_value!(String; || "mz_catalog_server_frontend".to_string()),
+    "Comma-separated cluster names whose replicas each serve a share of peeks, instead of every replica serving every peek (Materialize).",
+    false,
+);
+
 pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
     "force_source_table_syntax",
     value!(bool; false),

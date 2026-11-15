@@ -859,7 +859,9 @@ impl crate::coord::Coordinator {
         // `as_of <= timestamp`.
         self.controller
             .compute
-            .create_dataflow(compute_instance, dataflow, None)
+            // The peek below is sent only to `target_replica`, so the dataflow it reads must be
+            // installed there. Otherwise a load-balanced instance could place it elsewhere.
+            .create_dataflow(compute_instance, dataflow, target_replica)
             .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
 
         // On failure we must drop the dataflow ourselves, otherwise it leaks.

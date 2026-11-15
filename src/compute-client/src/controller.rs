@@ -657,6 +657,18 @@ impl ComputeController {
         Ok(())
     }
 
+    /// Sets whether the instance sends each untargeted peek and transient dataflow to a single
+    /// replica instead of to all replicas.
+    pub fn set_instance_load_balanced(
+        &mut self,
+        id: ComputeInstanceId,
+        load_balanced: bool,
+    ) -> Result<(), InstanceMissing> {
+        self.instance(id)?
+            .call(move |i| i.set_load_balanced(load_balanced));
+        Ok(())
+    }
+
     /// Remove a compute instance.
     ///
     /// # Panics
@@ -898,8 +910,10 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            // A transient index serves a single targeted peek, which is sent only to its target
+            // replica. Maintained indexes must stay on every replica.
             assert!(
-                dataflow.exported_index_ids().next().is_none(),
+                dataflow.exported_index_ids().all(|id| id.is_transient()),
                 "Replica-targeted indexes are not supported"
             );
         }

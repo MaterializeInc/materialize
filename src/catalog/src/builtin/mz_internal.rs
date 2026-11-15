@@ -755,7 +755,7 @@ pub const MZ_CLUSTER_WORKLOAD_CLASSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_workload_classes_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_WORKLOAD_CLASSES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_workload_classes (id)",
     is_retained_metrics_object: false,
 };
@@ -973,7 +973,7 @@ pub const MZ_CLUSTER_RECONFIGURATIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_reconfigurations_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_RECONFIGURATIONS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_reconfigurations (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -1056,7 +1056,7 @@ pub const MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_auto_scaling_strategies_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_auto_scaling_strategies (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -1159,7 +1159,7 @@ pub const MZ_CLUSTER_REPLICA_SIZE_INTERNAL_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_size_internal_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZE_INTERNAL_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_size_internal (size)",
     is_retained_metrics_object: true,
 };
@@ -1209,44 +1209,46 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
     }
 });
 
-pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_cluster_replica_statuses",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_CLUSTER_REPLICA_STATUSES_OID,
-    desc: RelationDesc::builder()
-        .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_column("process_id", SqlScalarType::UInt64.nullable(false))
-        .with_column("status", SqlScalarType::String.nullable(false))
-        .with_column("reason", SqlScalarType::String.nullable(true))
-        .with_column(
-            "updated_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_key(vec![0, 1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "replica_id",
-            "Materialize's unique ID for the cluster replica.",
-        ),
-        (
-            "process_id",
-            "The ID of the process within the cluster replica.",
-        ),
-        (
-            "status",
-            "The status of the cluster replica: `online` or `offline`.",
-        ),
-        (
-            "reason",
-            "If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`.",
-        ),
-        (
-            "updated_at",
-            "The time at which the status was last updated.",
-        ),
-    ]),
-    sql: "
+pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_replica_statuses",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_REPLICA_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("status", SqlScalarType::String.nullable(false))
+            .with_column("reason", SqlScalarType::String.nullable(true))
+            .with_column(
+                "updated_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "Materialize's unique ID for the cluster replica.",
+            ),
+            (
+                "process_id",
+                "The ID of the process within the cluster replica.",
+            ),
+            (
+                "status",
+                "The status of the cluster replica: `online` or `offline`.",
+            ),
+            (
+                "reason",
+                "If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`.",
+            ),
+            (
+                "updated_at",
+                "The time at which the status was last updated.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     DISTINCT ON (replica_id, process_id)
     replica_id,
@@ -1257,29 +1259,31 @@ SELECT
 FROM mz_internal.mz_cluster_replica_status_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 ORDER BY replica_id, process_id, occurred_at DESC",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "replica_status",
-        description: "Current status of each replica",
-        links: &const {
-            [OntologyLink {
-                name: "status_of_replica",
-                target: "replica",
-                properties: LinkProperties::fk_typed(
-                    "replica_id",
-                    "id",
-                    Cardinality::ManyToOne,
-                    mz_repr::SemanticType::ReplicaId,
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("replica_id", SemanticType::ReplicaId),
-                ("updated_at", SemanticType::WallclockTimestamp),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_status",
+            description: "Current status of each replica",
+            links: &const {
+                [OntologyLink {
+                    name: "status_of_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("replica_id", SemanticType::ReplicaId),
+                    ("updated_at", SemanticType::WallclockTimestamp),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -1556,11 +1560,11 @@ pub static MZ_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     ontology: None,
 });
 
-pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "mz_recent_sql_text",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_RECENT_SQL_TEXT_OID,
+        oid: oid::MV_MZ_RECENT_SQL_TEXT_OID,
         // This should always be 1 day more than the interval in
         // `MZ_RECENT_THINNED_ACTIVITY_LOG` , because `prepared_day`
         // is rounded down to the nearest day.  Thus something that actually happened three days ago
@@ -1572,7 +1576,9 @@ pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_key(vec![0, 1, 2])
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
+        sql: "IN CLUSTER mz_catalog_server AS
+SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
+        is_retained_metrics_object: false,
         access: vec![MONITOR_SELECT],
         ontology: Some(Ontology {
             entity_name: "recent_sql_text",
@@ -1606,7 +1612,7 @@ pub static MZ_RECENT_SQL_TEXT_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| Bui
     name: "mz_recent_sql_text_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_RECENT_SQL_TEXT_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_recent_sql_text (sql_hash)",
+    sql: "IN CLUSTER mz_catalog_server_frontend ON mz_internal.mz_recent_sql_text (sql_hash)",
     is_retained_metrics_object: false,
 });
 
@@ -1705,53 +1711,86 @@ AND mpsh.session_id = msh.session_id",
     }
 });
 
-pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
-        name: "mz_recent_activity_log_thinned",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_THINNED_OID,
-        desc: RelationDesc::builder()
-            .with_column("execution_id", SqlScalarType::Uuid.nullable(false))
-            .with_column("sample_rate", SqlScalarType::Float64.nullable(false))
-            .with_column("cluster_id", SqlScalarType::String.nullable(true))
-            .with_column("application_name", SqlScalarType::String.nullable(false))
-            .with_column("cluster_name", SqlScalarType::String.nullable(true))
-            .with_column("database_name", SqlScalarType::String.nullable(false))
-            .with_column("search_path", SqlScalarType::List { element_type: Box::new(SqlScalarType::String), custom_id: None }.nullable(false))
-            .with_column("transaction_isolation", SqlScalarType::String.nullable(false))
-            .with_column("execution_timestamp", SqlScalarType::UInt64.nullable(true))
-            .with_column("transient_index_id", SqlScalarType::String.nullable(true))
-            .with_column("params", SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false))
-            .with_column("mz_version", SqlScalarType::String.nullable(false))
-            .with_column("began_at", SqlScalarType::TimestampTz { precision: None }.nullable(false))
-            .with_column("finished_at", SqlScalarType::TimestampTz { precision: None }.nullable(true))
-            .with_column("finished_status", SqlScalarType::String.nullable(true))
-            .with_column("error_message", SqlScalarType::String.nullable(true))
-            .with_column("result_size", SqlScalarType::Int64.nullable(true))
-            .with_column("rows_returned", SqlScalarType::Int64.nullable(true))
-            .with_column("execution_strategy", SqlScalarType::String.nullable(true))
-            .with_column("transaction_id", SqlScalarType::UInt64.nullable(false))
-            .with_column("prepared_statement_id", SqlScalarType::Uuid.nullable(false))
-            .with_column("sql_hash", SqlScalarType::Bytes.nullable(false))
-            .with_column("prepared_statement_name", SqlScalarType::String.nullable(false))
-            .with_column("session_id", SqlScalarType::Uuid.nullable(false))
-            .with_column("prepared_at", SqlScalarType::TimestampTz { precision: None }.nullable(false))
-            .with_column("statement_type", SqlScalarType::String.nullable(true))
-            .with_column("throttled_count", SqlScalarType::UInt64.nullable(false))
-            .with_column("connected_at", SqlScalarType::TimestampTz { precision: None }.nullable(false))
-            .with_column("initial_application_name", SqlScalarType::String.nullable(false))
-            .with_column("authenticated_user", SqlScalarType::String.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::new(),
-        // We use a temporal window of 2 days rather than 1 day for `mz_session_history`'s `connected_at` since a statement execution at
-        // the edge of the 1 day temporal window could've been executed in a session that was established an hour before the 1 day window.
-        sql:
-        "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
+pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
+            name: "mz_recent_activity_log_thinned",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::MV_MZ_RECENT_ACTIVITY_LOG_THINNED_OID,
+            desc: RelationDesc::builder()
+                .with_column("execution_id", SqlScalarType::Uuid.nullable(false))
+                .with_column("sample_rate", SqlScalarType::Float64.nullable(false))
+                .with_column("cluster_id", SqlScalarType::String.nullable(true))
+                .with_column("application_name", SqlScalarType::String.nullable(false))
+                .with_column("cluster_name", SqlScalarType::String.nullable(true))
+                .with_column("database_name", SqlScalarType::String.nullable(false))
+                .with_column(
+                    "search_path",
+                    SqlScalarType::List {
+                        element_type: Box::new(SqlScalarType::String),
+                        custom_id: None,
+                    }
+                    .nullable(false),
+                )
+                .with_column(
+                    "transaction_isolation",
+                    SqlScalarType::String.nullable(false),
+                )
+                .with_column("execution_timestamp", SqlScalarType::UInt64.nullable(true))
+                .with_column("transient_index_id", SqlScalarType::String.nullable(true))
+                .with_column(
+                    "params",
+                    SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+                )
+                .with_column("mz_version", SqlScalarType::String.nullable(false))
+                .with_column(
+                    "began_at",
+                    SqlScalarType::TimestampTz { precision: None }.nullable(false),
+                )
+                .with_column(
+                    "finished_at",
+                    SqlScalarType::TimestampTz { precision: None }.nullable(true),
+                )
+                .with_column("finished_status", SqlScalarType::String.nullable(true))
+                .with_column("error_message", SqlScalarType::String.nullable(true))
+                .with_column("result_size", SqlScalarType::Int64.nullable(true))
+                .with_column("rows_returned", SqlScalarType::Int64.nullable(true))
+                .with_column("execution_strategy", SqlScalarType::String.nullable(true))
+                .with_column("transaction_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("prepared_statement_id", SqlScalarType::Uuid.nullable(false))
+                .with_column("sql_hash", SqlScalarType::Bytes.nullable(false))
+                .with_column(
+                    "prepared_statement_name",
+                    SqlScalarType::String.nullable(false),
+                )
+                .with_column("session_id", SqlScalarType::Uuid.nullable(false))
+                .with_column(
+                    "prepared_at",
+                    SqlScalarType::TimestampTz { precision: None }.nullable(false),
+                )
+                .with_column("statement_type", SqlScalarType::String.nullable(true))
+                .with_column("throttled_count", SqlScalarType::UInt64.nullable(false))
+                .with_column(
+                    "connected_at",
+                    SqlScalarType::TimestampTz { precision: None }.nullable(false),
+                )
+                .with_column(
+                    "initial_application_name",
+                    SqlScalarType::String.nullable(false),
+                )
+                .with_column("authenticated_user", SqlScalarType::String.nullable(false))
+                .finish(),
+            column_comments: BTreeMap::new(),
+            // We use a temporal window of 2 days rather than 1 day for `mz_session_history`'s `connected_at` since a statement execution at
+            // the edge of the 1 day temporal window could've been executed in a session that was established an hour before the 1 day window.
+            sql: "IN CLUSTER mz_catalog_server AS
+SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
 AND began_at + INTERVAL '1 day' > mz_now() AND connected_at + INTERVAL '2 days' > mz_now()",
-        access: vec![MONITOR_SELECT],
-        ontology: None,
-    }
-});
+            is_retained_metrics_object: false,
+            access: vec![MONITOR_SELECT],
+            ontology: None,
+        }
+    });
 
 pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_recent_activity_log",
@@ -2121,47 +2160,49 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
     }
 });
 
-pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_source_statuses",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column(
-            "last_status_change_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .with_column("status", SqlScalarType::String.nullable(false))
-        .with_column("error", SqlScalarType::String.nullable(true))
-        .with_column("details", SqlScalarType::Jsonb.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
-        ),
-        ("name", "The name of the source."),
-        ("type", "The type of the source."),
-        (
-            "last_status_change_at",
-            "Wall-clock timestamp of the source status change.",
-        ),
-        (
-            "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
-        ),
-        (
-            "error",
-            "If the source is in an error state, the error message.",
-        ),
-        (
-            "details",
-            "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
-        ),
-    ]),
-    sql: "
+pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_source_statuses",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SOURCE_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "last_status_change_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("status", SqlScalarType::String.nullable(false))
+            .with_column("error", SqlScalarType::String.nullable(true))
+            .with_column("details", SqlScalarType::Jsonb.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            ("name", "The name of the source."),
+            ("type", "The type of the source."),
+            (
+                "last_status_change_at",
+                "Wall-clock timestamp of the source status change.",
+            ),
+            (
+                "status",
+                "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
+            ),
+            (
+                "error",
+                "If the source is in an error state, the error message.",
+            ),
+            (
+                "details",
+                "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
     WITH
     -- The status history contains per-replica events and source-global events.
     -- For the latter, replica_id is NULL. We turn these into '<source>', so that
@@ -2326,25 +2367,27 @@ SELECT
     details
 FROM combined
 WHERE id NOT LIKE 's%';",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "source_status",
-        description: "Current source status (running, stalled, etc.)",
-        links: &const {
-            [OntologyLink {
-                name: "status_of_source",
-                target: "source",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("type", SemanticType::SourceType),
-                ("last_status_change_at", SemanticType::WallclockTimestamp),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "source_status",
+            description: "Current source status (running, stalled, etc.)",
+            links: &const {
+                [OntologyLink {
+                    name: "status_of_source",
+                    target: "source",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("type", SemanticType::SourceType),
+                    ("last_status_change_at", SemanticType::WallclockTimestamp),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -2418,47 +2461,49 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     }),
 });
 
-pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_sink_statuses",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SINK_STATUSES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column(
-            "last_status_change_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .with_column("status", SqlScalarType::String.nullable(false))
-        .with_column("error", SqlScalarType::String.nullable(true))
-        .with_column("details", SqlScalarType::Jsonb.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
-        ),
-        ("name", "The name of the sink."),
-        ("type", "The type of the sink."),
-        (
-            "last_status_change_at",
-            "Wall-clock timestamp of the sink status change.",
-        ),
-        (
-            "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
-        ),
-        (
-            "error",
-            "If the sink is in an error state, the error message.",
-        ),
-        (
-            "details",
-            "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
-        ),
-    ]),
-    sql: "
+pub static MZ_SINK_STATUSES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sink_statuses",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SINK_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "last_status_change_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("status", SqlScalarType::String.nullable(false))
+            .with_column("error", SqlScalarType::String.nullable(true))
+            .with_column("details", SqlScalarType::Jsonb.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
+            ),
+            ("name", "The name of the sink."),
+            ("type", "The type of the sink."),
+            (
+                "last_status_change_at",
+                "Wall-clock timestamp of the sink status change.",
+            ),
+            (
+                "status",
+                "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
+            ),
+            (
+                "error",
+                "If the sink is in an error state, the error message.",
+            ),
+            (
+                "details",
+                "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH
 -- The status history contains per-replica events and sink-global events.
 -- For the latter, replica_id is NULL. We turn these into '<sink>', so that
@@ -2547,29 +2592,31 @@ LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
 WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
     mz_sinks.id NOT LIKE 's%'",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "sink_status",
-        description: "Current sink status",
-        links: &const {
-            [OntologyLink {
-                name: "status_of_sink",
-                target: "sink",
-                properties: LinkProperties::fk_typed(
-                    "id",
-                    "id",
-                    Cardinality::OneToOne,
-                    mz_repr::SemanticType::CatalogItemId,
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("last_status_change_at", SemanticType::WallclockTimestamp),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "sink_status",
+            description: "Current sink status",
+            links: &const {
+                [OntologyLink {
+                    name: "status_of_sink",
+                    target: "sink",
+                    properties: LinkProperties::fk_typed(
+                        "id",
+                        "id",
+                        Cardinality::OneToOne,
+                        mz_repr::SemanticType::CatalogItemId,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("last_status_change_at", SemanticType::WallclockTimestamp),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2809,38 +2856,40 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         ontology: None,
     });
 
-pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_cluster_replica_metrics",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_CLUSTER_REPLICA_METRICS_OID,
-    desc: RelationDesc::builder()
-        .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_column("process_id", SqlScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
-        .with_column("swap_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_key(vec![0, 1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("replica_id", "The ID of a cluster replica."),
-        ("process_id", "The ID of a process within the replica."),
-        (
-            "cpu_nano_cores",
-            "Approximate CPU usage, in billionths of a vCPU core.",
-        ),
-        ("memory_bytes", "Approximate RAM usage, in bytes."),
-        ("disk_bytes", "Approximate disk usage, in bytes."),
-        (
-            "heap_bytes",
-            "Approximate heap (RAM + swap) usage, in bytes.",
-        ),
-        ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
-        ("swap_bytes", "Approximate swap usage, in bytes."),
-    ]),
-    sql: "
+pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_cluster_replica_metrics",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_REPLICA_METRICS_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+            .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(true))
+            .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
+            .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
+            .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
+            .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
+            .with_column("swap_bytes", SqlScalarType::UInt64.nullable(true))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("replica_id", "The ID of a cluster replica."),
+            ("process_id", "The ID of a process within the replica."),
+            (
+                "cpu_nano_cores",
+                "Approximate CPU usage, in billionths of a vCPU core.",
+            ),
+            ("memory_bytes", "Approximate RAM usage, in bytes."),
+            ("disk_bytes", "Approximate disk usage, in bytes."),
+            (
+                "heap_bytes",
+                "Approximate heap (RAM + swap) usage, in bytes.",
+            ),
+            ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
+            ("swap_bytes", "Approximate swap usage, in bytes."),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     DISTINCT ON (replica_id, process_id)
     replica_id,
@@ -2854,34 +2903,35 @@ SELECT
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 ORDER BY replica_id, process_id, occurred_at DESC",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "replica_metrics",
-        description: "CPU and memory metrics per replica",
-        links: &const {
-            [OntologyLink {
-                name: "metrics_of_replica",
-                target: "replica",
-                properties: LinkProperties::fk_typed(
-                    "replica_id",
-                    "id",
-                    Cardinality::OneToOne,
-                    mz_repr::SemanticType::CatalogItemId,
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("replica_id", SemanticType::ReplicaId),
-                ("memory_bytes", SemanticType::ByteCount),
-                ("disk_bytes", SemanticType::ByteCount),
-                ("heap_bytes", SemanticType::ByteCount),
-                ("heap_limit", SemanticType::ByteCount),
-                ("swap_bytes", SemanticType::ByteCount),
-            ]
-        },
-    }),
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_metrics",
+            description: "CPU and memory metrics per replica",
+            links: &const {
+                [OntologyLink {
+                    name: "metrics_of_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::OneToOne,
+                        mz_repr::SemanticType::CatalogItemId,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("replica_id", SemanticType::ReplicaId),
+                    ("memory_bytes", SemanticType::ByteCount),
+                    ("disk_bytes", SemanticType::ByteCount),
+                    ("heap_bytes", SemanticType::ByteCount),
+                    ("heap_limit", SemanticType::ByteCount),
+                    ("swap_bytes", SemanticType::ByteCount),
+                ]
+            },
+        }),
+    });
 
 pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_frontiers",
@@ -3078,11 +3128,11 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)",
     }),
 });
 
-pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_wallclock_global_lag_recent_history",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
+        oid: oid::MV_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column("lag", SqlScalarType::Interval.nullable(true))
@@ -3106,14 +3156,15 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> = LazyL
                 "The minute-aligned timestamp of the observation.",
             ),
         ]),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT object_id, lag, occurred_at
 FROM mz_internal.mz_wallclock_global_lag_history
 WHERE occurred_at + '1 day' > mz_now()",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    }
-});
+    });
 
 pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_wallclock_global_lag",
@@ -3853,7 +3904,7 @@ pub const MZ_METRIC_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_metric_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_METRIC_SINKS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_metric_sinks (id)",
     is_retained_metrics_object: false,
 };
@@ -4176,26 +4227,28 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
 /// dependency graph read one maintained arrangement instead of recomputing the
 /// union per request: the object workflow graph, critical-path freshness
 /// analysis, and impact/dependents views.
-pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_object_graph_edges",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_OBJECT_GRAPH_EDGES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column("dependency_id", SqlScalarType::String.nullable(false))
-        .with_key(vec![0, 1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "dependency_id",
-            "The ID of the object it depends on. Corresponds to `mz_objects.id`.",
-        ),
-    ]),
-    sql: "
+pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_object_graph_edges",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_GRAPH_EDGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("dependency_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "dependency_id",
+                "The ID of the object it depends on. Corresponds to `mz_objects.id`.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT md.object_id, md.dependency_id
 FROM mz_internal.mz_materialization_dependencies md
 JOIN mz_catalog.mz_objects po ON po.id = md.dependency_id
@@ -4219,12 +4272,13 @@ UNION
 SELECT t.id, ps.id
 FROM mz_catalog.mz_tables t
 JOIN mz_catalog.mz_sources ps ON ps.id = t.source_id",
-    access: vec![PUBLIC_SELECT],
-    // No ontology entity: these edges are already in the ontology via the
-    // DependsOn links of mz_object_dependencies and
-    // mz_materialization_dependencies. An entity here would duplicate them.
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        // No ontology entity: these edges are already in the ontology via the
+        // DependsOn links of mz_object_dependencies and
+        // mz_materialization_dependencies. An entity here would duplicate them.
+        ontology: None,
+    });
 
 pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_oid_alias",
@@ -4435,37 +4489,39 @@ SELECT id, global_id FROM introspection_source_indexes"
     });
 
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
-pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_object_lifetimes",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(true))
-        .with_column("previous_id", SqlScalarType::String.nullable(true))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("event_type", SqlScalarType::String.nullable(false))
-        .with_column(
-            "occurred_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the object."),
-        ("previous_id", "The object's previous ID, if one exists."),
-        (
-            "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
-        ),
-        (
-            "event_type",
-            "The lifetime event, either `create` or `drop`.",
-        ),
-        (
-            "occurred_at",
-            "Wall-clock timestamp of when the event occurred.",
-        ),
-    ]),
-    sql: "
+pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_object_lifetimes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_LIFETIMES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(true))
+            .with_column("previous_id", SqlScalarType::String.nullable(true))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("event_type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "occurred_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the object."),
+            ("previous_id", "The object's previous ID, if one exists."),
+            (
+                "object_type",
+                "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            ),
+            (
+                "event_type",
+                "The lifetime event, either `create` or `drop`.",
+            ),
+            (
+                "occurred_at",
+                "Wall-clock timestamp of when the event occurred.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
@@ -4477,68 +4533,72 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
         a.occurred_at
     FROM mz_catalog.mz_audit_events a
     WHERE a.event_type = 'create' OR a.event_type = 'drop'",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_lifetime_event",
-        description: "Create or drop lifecycle event for a catalog object",
-        links: &const {
-            [OntologyLink {
-                name: "lifetime_event_of",
-                target: "object",
-                properties: LinkProperties::fk_typed(
-                    "id",
-                    "id",
-                    Cardinality::ManyToOne,
-                    mz_repr::SemanticType::CatalogItemId,
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("object_type", SemanticType::ObjectType),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "object_lifetime_event",
+            description: "Create or drop lifecycle event for a catalog object",
+            links: &const {
+                [OntologyLink {
+                    name: "lifetime_event_of",
+                    target: "object",
+                    properties: LinkProperties::fk_typed(
+                        "id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::CatalogItemId,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("object_type", SemanticType::ObjectType),
+                ]
+            },
+        }),
+    }
 });
 
-pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_object_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(true))
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column(
-            "created_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .with_column(
-            "dropped_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the object."),
-        (
-            "cluster_id",
-            "The object's cluster ID. `NULL` if the object has no associated cluster.",
-        ),
-        (
-            "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
-        ),
-        (
-            "created_at",
-            "Wall-clock timestamp of when the object was created. `NULL` for built in system objects.",
-        ),
-        (
-            "dropped_at",
-            "Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.",
-        ),
-    ]),
-    sql: r#"
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_object_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_HISTORY_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(true))
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "created_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column(
+                "dropped_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the object."),
+            (
+                "cluster_id",
+                "The object's cluster ID. `NULL` if the object has no associated cluster.",
+            ),
+            (
+                "object_type",
+                "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            ),
+            (
+                "created_at",
+                "Wall-clock timestamp of when the object was created. `NULL` for built in system objects.",
+            ),
+            (
+                "dropped_at",
+                "Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.",
+            ),
+        ]),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+
     WITH
         creates AS
         (
@@ -4584,26 +4644,28 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
             WHERE objects.id LIKE 's%'
         )
     SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects)"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_history",
-        description: "Historical record of object creation and drops",
-        links: &const {
-            [OntologyLink {
-                name: "history_of",
-                target: "object",
-                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "object_history",
+            description: "Historical record of object creation and drops",
+            links: &const {
+                [OntologyLink {
+                    name: "history_of",
+                    target: "object",
+                    properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
-pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || BuiltinMaterializedView {
         name: "mz_object_transitive_dependencies",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
+        oid: oid::MV_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column(
@@ -4622,7 +4684,8 @@ pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::
                 "The ID of the (possibly transitively) referenced object. Corresponds to `mz_objects.id`.",
             ),
         ]),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH MUTUALLY RECURSIVE
   reach(object_id text, referenced_object_id text) AS (
     SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
@@ -4630,6 +4693,7 @@ WITH MUTUALLY RECURSIVE
     SELECT x, z FROM reach r1(x, y) JOIN reach r2(y, z) USING(y)
   )
 SELECT object_id, referenced_object_id FROM reach;",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "transitive_dependency",
@@ -4665,30 +4729,32 @@ SELECT object_id, referenced_object_id FROM reach;",
                 ]
             },
         }),
-    }
-});
+    },
+);
 
 /// Peeled version of `PG_NAMESPACE`:
 /// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
 ///   in order to make this view indexable.
 /// - This has the database name as an extra column, so that downstream views can check it against
 ///  `current_database()`.
-pub static PG_NAMESPACE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "pg_namespace_all_databases",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_PG_NAMESPACE_ALL_DATABASES_OID,
-    desc: RelationDesc::builder()
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("nspname", SqlScalarType::String.nullable(false))
-        .with_column("nspowner", SqlScalarType::Oid.nullable(false))
-        .with_column(
-            "nspacl",
-            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
-        )
-        .with_column("database_name", SqlScalarType::String.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static PG_NAMESPACE_ALL_DATABASES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "pg_namespace_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_PG_NAMESPACE_ALL_DATABASES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("nspname", SqlScalarType::String.nullable(false))
+            .with_column("nspowner", SqlScalarType::Oid.nullable(false))
+            .with_column(
+                "nspacl",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
+            )
+            .with_column("database_name", SqlScalarType::String.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     s.oid AS oid,
     s.name AS nspname,
@@ -4698,15 +4764,16 @@ SELECT
 FROM mz_catalog.mz_schemas s
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
 pub const PG_NAMESPACE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_namespace_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_NAMESPACE_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_namespace_all_databases (nspname)",
     is_retained_metrics_object: false,
 };
@@ -4716,11 +4783,11 @@ ON mz_internal.pg_namespace_all_databases (nspname)",
 ///   in order to make this view indexable.
 /// - This has the database name as an extra column, so that downstream views can check it against
 ///  `current_database()`.
-pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "pg_class_all_databases",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_PG_CLASS_ALL_DATABASES_OID,
+        oid: oid::MV_PG_CLASS_ALL_DATABASES_OID,
         desc: RelationDesc::builder()
             .with_column("oid", SqlScalarType::Oid.nullable(false))
             .with_column("relname", SqlScalarType::String.nullable(false))
@@ -4749,7 +4816,8 @@ pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("database_name", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     class_objects.oid,
     class_objects.name AS relname,
@@ -4829,6 +4897,7 @@ FROM (
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -4838,7 +4907,7 @@ pub const PG_CLASS_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_class_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_CLASS_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_class_all_databases (relname)",
     is_retained_metrics_object: false,
 };
@@ -4848,11 +4917,11 @@ ON mz_internal.pg_class_all_databases (relname)",
 ///   in order to make this view indexable.
 /// - This has 2 extra columns for the database names, so that downstream views can check them
 ///   against `current_database()`.
-pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "pg_description_all_databases",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_PG_DESCRIPTION_ALL_DATABASES_OID,
+        oid: oid::MV_PG_DESCRIPTION_ALL_DATABASES_OID,
         desc: RelationDesc::builder()
             .with_column("objoid", SqlScalarType::Oid.nullable(false))
             .with_column("classoid", SqlScalarType::Oid.nullable(true))
@@ -4862,7 +4931,8 @@ pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|
             .with_column("class_database_name", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 (
     -- The classoid of a comment is the oid of the pg_catalog system catalog
     -- that conceptually stores the commented object: pg_class for relations,
@@ -4917,6 +4987,7 @@ pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|
     JOIN
         mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
 )",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -4926,7 +4997,7 @@ pub const PG_DESCRIPTION_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_description_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_DESCRIPTION_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_description_all_databases (objoid, classoid, objsubid, description, oid_database_name, class_database_name)",
     is_retained_metrics_object: false,
 };
@@ -4936,11 +5007,11 @@ ON mz_internal.pg_description_all_databases (objoid, classoid, objsubid, descrip
 ///   in order to make this view indexable.
 /// - This has the database name as an extra column, so that downstream views can check it against
 ///  `current_database()`.
-pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "pg_type_all_databases",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_PG_TYPE_ALL_DATABASES_OID,
+        oid: oid::MV_PG_TYPE_ALL_DATABASES_OID,
         desc: RelationDesc::builder()
             .with_column("oid", SqlScalarType::Oid.nullable(false))
             .with_column("typname", SqlScalarType::String.nullable(false))
@@ -4964,7 +5035,8 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("typsend", SqlScalarType::RegProc.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     mz_types.oid,
     mz_types.name AS typname,
@@ -5048,6 +5120,7 @@ FROM
             AS t ON mz_types.id = t.id
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
     JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -5057,7 +5130,7 @@ pub const PG_TYPE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_type_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_TYPE_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_type_all_databases (oid)",
     is_retained_metrics_object: false,
 };
@@ -5067,11 +5140,11 @@ ON mz_internal.pg_type_all_databases (oid)",
 ///   in order to make this view indexable.
 /// - This has 2 extra columns for the database names, so that downstream views can check them
 ///   against `current_database()`.
-pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "pg_attribute_all_databases",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_PG_ATTRIBUTE_ALL_DATABASES_OID,
+        oid: oid::MV_PG_ATTRIBUTE_ALL_DATABASES_OID,
         desc: RelationDesc::builder()
             .with_column("attrelid", SqlScalarType::Oid.nullable(false))
             .with_column("attname", SqlScalarType::String.nullable(false))
@@ -5090,7 +5163,8 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
             .with_column("pg_type_database_name", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     class_objects.oid as attrelid,
     mz_columns.name as attname,
@@ -5126,6 +5200,7 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id",
         // Since this depends on pg_type, its id must be higher due to initialization
         // ordering.
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -5135,7 +5210,7 @@ pub const PG_ATTRIBUTE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_attribute_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_ATTRIBUTE_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_attribute_all_databases (
     attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
     attgenerated, attisdropped, attcollation, database_name, pg_type_database_name
@@ -5146,19 +5221,21 @@ ON mz_internal.pg_attribute_all_databases (
 /// Peeled version of `PG_ATTRDEF`:
 /// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
 ///   in order to make this view indexable.
-pub static PG_ATTRDEF_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "pg_attrdef_all_databases",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_PG_ATTRDEF_ALL_DATABASES_OID,
-    desc: RelationDesc::builder()
-        .with_column("oid", SqlScalarType::Oid.nullable(true))
-        .with_column("adrelid", SqlScalarType::Oid.nullable(false))
-        .with_column("adnum", SqlScalarType::Int64.nullable(false))
-        .with_column("adbin", SqlScalarType::String.nullable(false))
-        .with_column("adsrc", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static PG_ATTRDEF_ALL_DATABASES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "pg_attrdef_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_PG_ATTRDEF_ALL_DATABASES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(true))
+            .with_column("adrelid", SqlScalarType::Oid.nullable(false))
+            .with_column("adnum", SqlScalarType::Int64.nullable(false))
+            .with_column("adbin", SqlScalarType::String.nullable(false))
+            .with_column("adsrc", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
@@ -5168,15 +5245,16 @@ SELECT
 FROM mz_catalog.mz_columns
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
 WHERE default IS NOT NULL",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
 pub const PG_ATTRDEF_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_attrdef_all_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_ATTRDEF_ALL_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
     is_retained_metrics_object: false,
 };
@@ -5236,7 +5314,7 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
         name: "mz_compute_hydration_times_ind",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::INDEX_MZ_COMPUTE_HYDRATION_TIMES_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server
+        sql: "IN CLUSTER mz_catalog_server_frontend
     ON mz_internal.mz_compute_hydration_times (replica_id)",
         is_retained_metrics_object: true,
     });
@@ -5279,7 +5357,7 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_IND: LazyLock<BuiltinIndex> =
         name: "mz_object_arrangement_sizes_ind",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZES_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server
+        sql: "IN CLUSTER mz_catalog_server_frontend
     ON mz_internal.mz_object_arrangement_sizes (replica_id)",
         is_retained_metrics_object: true,
     });
@@ -5338,7 +5416,7 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND: LazyLock<BuiltinIndex>
         name: "mz_object_arrangement_size_history_object_ind",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server
+        sql: "IN CLUSTER mz_catalog_server_frontend
     ON mz_internal.mz_object_arrangement_size_history (object_id)",
         is_retained_metrics_object: true,
     });
@@ -5348,7 +5426,7 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
         name: "mz_object_arrangement_size_history_ts_ind",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND_OID,
-        sql: "IN CLUSTER mz_catalog_server
+        sql: "IN CLUSTER mz_catalog_server_frontend
     ON mz_internal.mz_object_arrangement_size_history (collection_timestamp)",
         is_retained_metrics_object: true,
     });
@@ -6147,27 +6225,29 @@ FROM hints_resolved_ids AS h",
 
 /// Peeled version of `PG_AUTHID`: Excludes the columns rolcreaterole and rolcreatedb, to make this
 /// view indexable.
-pub static PG_AUTHID_CORE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "pg_authid_core",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_PG_AUTHID_CORE_OID,
-    desc: RelationDesc::builder()
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("rolname", SqlScalarType::String.nullable(false))
-        .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
-        .with_column("rolinherit", SqlScalarType::Bool.nullable(false))
-        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(false))
-        .with_column("rolreplication", SqlScalarType::Bool.nullable(false))
-        .with_column("rolbypassrls", SqlScalarType::Bool.nullable(false))
-        .with_column("rolconnlimit", SqlScalarType::Int32.nullable(false))
-        .with_column("rolpassword", SqlScalarType::String.nullable(true))
-        .with_column(
-            "rolvaliduntil",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: r#"
+pub static PG_AUTHID_CORE: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "pg_authid_core",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_PG_AUTHID_CORE_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("rolname", SqlScalarType::String.nullable(false))
+            .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
+            .with_column("rolinherit", SqlScalarType::Bool.nullable(false))
+            .with_column("rolcanlogin", SqlScalarType::Bool.nullable(false))
+            .with_column("rolreplication", SqlScalarType::Bool.nullable(false))
+            .with_column("rolbypassrls", SqlScalarType::Bool.nullable(false))
+            .with_column("rolconnlimit", SqlScalarType::Int32.nullable(false))
+            .with_column("rolpassword", SqlScalarType::String.nullable(true))
+            .with_column(
+                "rolvaliduntil",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+
 SELECT
     r.oid AS oid,
     r.name AS rolname,
@@ -6184,31 +6264,34 @@ SELECT
     NULL::pg_catalog.timestamptz AS rolvaliduntil
 FROM mz_catalog.mz_roles r
 LEFT JOIN mz_catalog.mz_role_auth a ON r.oid = a.role_oid"#,
-    access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
+        ontology: None,
+    });
 
 pub const PG_AUTHID_CORE_IND: BuiltinIndex = BuiltinIndex {
     name: "pg_authid_core_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_AUTHID_CORE_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.pg_authid_core (rolname)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_all_objects",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_ALL_OBJECTS_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_all_objects",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_ALL_OBJECTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, object_type, comment
         FROM mz_internal.mz_comments
         WHERE object_sub_id IS NULL
@@ -6216,15 +6299,16 @@ pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     SELECT schema_id, name, type, COALESCE(comment, '') AS comment
     FROM mz_catalog.mz_objects AS objs
     LEFT JOIN comments ON objs.id = comments.id AND comments.object_type = objs.type",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_show_clusters",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_CLUSTERS_OID,
+    oid: oid::MV_MZ_SHOW_CLUSTERS_OID,
     desc: RelationDesc::builder()
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("replicas", SqlScalarType::String.nullable(true))
@@ -6243,7 +6327,8 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     // The NULLIF guards an empty diff (not expected in-progress), which
     // otherwise would render a dangling 'reconfiguring'.
     // Neither input needs `mz_now()`, keeping this indexed view non-temporal.
-    sql: "
+    sql: "IN CLUSTER mz_catalog_server AS
+
     WITH clusters AS (
         SELECT
             mc.id,
@@ -6291,22 +6376,25 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     LEFT JOIN reconfigurations recon
         ON clusters.id = recon.cluster_id
     LEFT JOIN mz_internal.mz_cluster_auto_scaling_strategies scaling ON clusters.id = scaling.cluster_id",
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: None,
 }
 });
 
-pub static MZ_SHOW_SECRETS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_secrets",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_SECRETS_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_SECRETS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_secrets",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_SECRETS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'secret' AND object_sub_id IS NULL
@@ -6314,15 +6402,16 @@ pub static MZ_SHOW_SECRETS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     SELECT schema_id, name, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_secrets secrets
     LEFT JOIN comments ON secrets.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_show_columns",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_COLUMNS_OID,
+    oid: oid::MV_MZ_SHOW_COLUMNS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
@@ -6337,7 +6426,8 @@ pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| {
     // but its catalog id is preserved (e.g. a Table → MaterializedView
     // schema migration). Without it, a column would match both the old
     // and new object_type rows and each row would be emitted twice.
-    sql: "
+    sql: "IN CLUSTER mz_catalog_server AS
+
     SELECT columns.id, columns.name, columns.nullable, columns.type, columns.position, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_columns columns
     LEFT JOIN mz_catalog.mz_objects obj ON obj.id = columns.id
@@ -6345,21 +6435,24 @@ pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| {
     ON columns.id = comments.id
        AND columns.position = comments.object_sub_id
        AND comments.object_type = obj.type",
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: None,
 }
 });
 
-pub static MZ_SHOW_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_databases",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_DATABASES_OID,
-    desc: RelationDesc::builder()
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_DATABASES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_DATABASES_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'database' AND object_sub_id IS NULL
@@ -6367,21 +6460,24 @@ pub static MZ_SHOW_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     SELECT name, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_databases databases
     LEFT JOIN comments ON databases.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_SCHEMAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_schemas",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_SCHEMAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_SCHEMAS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_schemas",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_SCHEMAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("database_id", SqlScalarType::String.nullable(true))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'schema' AND object_sub_id IS NULL
@@ -6389,20 +6485,23 @@ pub static MZ_SHOW_SCHEMAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     SELECT database_id, name, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_schemas schemas
     LEFT JOIN comments ON schemas.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_roles",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_ROLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_ROLES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_roles",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_ROLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'role' AND object_sub_id IS NULL
@@ -6412,22 +6511,25 @@ pub static MZ_SHOW_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     LEFT JOIN comments ON roles.id = comments.id
     WHERE roles.id NOT LIKE 's%'
       AND roles.id NOT LIKE 'g%'",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .with_column("source_id", SqlScalarType::String.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_TABLES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .with_column("source_id", SqlScalarType::String.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'table' AND object_sub_id IS NULL
@@ -6435,21 +6537,24 @@ pub static MZ_SHOW_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     SELECT schema_id, name, COALESCE(comment, '') as comment, source_id
     FROM mz_catalog.mz_tables tables
     LEFT JOIN comments ON tables.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_views",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_VIEWS_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_VIEWS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_views",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'view' AND object_sub_id IS NULL
@@ -6457,21 +6562,24 @@ pub static MZ_SHOW_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     SELECT schema_id, name, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_views views
     LEFT JOIN comments ON views.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_types",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_TYPES_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_TYPES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_types",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_TYPES_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'type' AND object_sub_id IS NULL
@@ -6479,22 +6587,25 @@ pub static MZ_SHOW_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     SELECT schema_id, name, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_types types
     LEFT JOIN comments ON types.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_CONNECTIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_connections",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "WITH comments AS (
+pub static MZ_SHOW_CONNECTIONS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_connections",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+WITH comments AS (
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'connection' AND object_sub_id IS NULL
@@ -6502,25 +6613,28 @@ pub static MZ_SHOW_CONNECTIONS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     SELECT schema_id, name, type, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_connections connections
     LEFT JOIN comments ON connections.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_SOURCES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_sources",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(true))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static MZ_SHOW_SOURCES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_sources",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("cluster", SqlScalarType::String.nullable(true))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH comments AS (
     SELECT id, comment
     FROM mz_internal.mz_comments
@@ -6540,25 +6654,28 @@ FROM
             mz_catalog.mz_clusters AS clusters
             ON clusters.id = sources.cluster_id
         LEFT JOIN comments ON sources.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_SINKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_sinks",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static MZ_SHOW_SINKS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_sinks",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("cluster", SqlScalarType::String.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH comments AS (
     SELECT id, comment
     FROM mz_internal.mz_comments
@@ -6578,24 +6695,27 @@ FROM
         mz_catalog.mz_clusters AS clusters
         ON clusters.id = sinks.cluster_id
     LEFT JOIN comments ON sinks.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_materialized_views",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_materialized_views",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_MATERIALIZED_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster", SqlScalarType::String.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH
     comments AS (
         SELECT id, comment
@@ -6613,30 +6733,33 @@ FROM
     mz_catalog.mz_materialized_views AS mviews
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
     LEFT JOIN comments ON mviews.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_INDEXES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_indexes",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("on", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
-        .with_column(
-            "key",
-            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
-        )
-        .with_column("on_id", SqlScalarType::String.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
+pub static MZ_SHOW_INDEXES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("on", SqlScalarType::String.nullable(false))
+            .with_column("cluster", SqlScalarType::String.nullable(false))
+            .with_column(
+                "key",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("on_id", SqlScalarType::String.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH comments AS (
     SELECT id, comment
     FROM mz_internal.mz_comments
@@ -6674,24 +6797,27 @@ FROM
         GROUP BY idxs.id) AS keys
     ON idxs.id = keys.id
     LEFT JOIN comments ON idxs.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
-pub static MZ_SHOW_CLUSTER_REPLICAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_cluster_replicas",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("cluster", SqlScalarType::String.nullable(false))
-        .with_column("replica", SqlScalarType::String.nullable(false))
-        .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_column("size", SqlScalarType::String.nullable(true))
-        .with_column("ready", SqlScalarType::Bool.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: r#"SELECT
+pub static MZ_SHOW_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_show_cluster_replicas",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SHOW_CLUSTER_REPLICAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster", SqlScalarType::String.nullable(false))
+            .with_column("replica", SqlScalarType::String.nullable(false))
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::String.nullable(true))
+            .with_column("ready", SqlScalarType::Bool.nullable(false))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.id as replica_id,
@@ -6716,9 +6842,10 @@ FROM
             ON mz_catalog.mz_cluster_replicas.id = comments.id
             AND comments.object_type = 'cluster-replica'
 ORDER BY 1, 2"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 
 /// Lightweight data product discovery for MCP (Model Context Protocol).
 ///
@@ -7644,55 +7771,57 @@ GROUP BY policy.name, comments.comment;",
     ontology: None,
 });
 
-pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_cluster_replica_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
-    desc: RelationDesc::builder()
-        .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_column("size", SqlScalarType::String.nullable(true))
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_column("cluster_name", SqlScalarType::String.nullable(true))
-        .with_column("replica_name", SqlScalarType::String.nullable(true))
-        .with_column(
-            "created_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_column(
-            "dropped_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .with_column(
-            "credits_per_hour",
-            SqlScalarType::Numeric { max_scale: None }.nullable(true),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("replica_id", "The ID of a cluster replica."),
-        (
-            "size",
-            "The size of the cluster replica. Corresponds to `mz_cluster_replica_sizes.size`.",
-        ),
-        (
-            "cluster_id",
-            "The ID of the cluster associated with the replica.",
-        ),
-        (
-            "cluster_name",
-            "The name of the cluster associated with the replica.",
-        ),
-        ("replica_name", "The name of the replica."),
-        ("created_at", "The time at which the replica was created."),
-        (
-            "dropped_at",
-            "The time at which the replica was dropped, or `NULL` if it still exists.",
-        ),
-        (
-            "credits_per_hour",
-            "The number of compute credits consumed per hour. Corresponds to `mz_cluster_replica_sizes.credits_per_hour`.",
-        ),
-    ]),
-    sql: r#"
+pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_replica_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_REPLICA_HISTORY_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(true))
+            .with_column("size", SqlScalarType::String.nullable(true))
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column("cluster_name", SqlScalarType::String.nullable(true))
+            .with_column("replica_name", SqlScalarType::String.nullable(true))
+            .with_column(
+                "created_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column(
+                "dropped_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column(
+                "credits_per_hour",
+                SqlScalarType::Numeric { max_scale: None }.nullable(true),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("replica_id", "The ID of a cluster replica."),
+            (
+                "size",
+                "The size of the cluster replica. Corresponds to `mz_cluster_replica_sizes.size`.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster associated with the replica.",
+            ),
+            (
+                "cluster_name",
+                "The name of the cluster associated with the replica.",
+            ),
+            ("replica_name", "The name of the replica."),
+            ("created_at", "The time at which the replica was created."),
+            (
+                "dropped_at",
+                "The time at which the replica was dropped, or `NULL` if it still exists.",
+            ),
+            (
+                "credits_per_hour",
+                "The number of compute credits consumed per hour. Corresponds to `mz_cluster_replica_sizes.credits_per_hour`.",
+            ),
+        ]),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+
         WITH
             creates AS
             (
@@ -7732,41 +7861,45 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                 LEFT JOIN
                     mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "replica_history",
-        description: "Historical record of replica creation/drops",
-        links: &const { [] },
-        column_semantic_types: &[],
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_history",
+            description: "Historical record of replica creation/drops",
+            links: &const { [] },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
-pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_cluster_replica_name_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
-    desc: RelationDesc::builder()
-        .with_column(
-            "occurred_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(true),
-        )
-        .with_column("id", SqlScalarType::String.nullable(true))
-        .with_column("previous_name", SqlScalarType::String.nullable(true))
-        .with_column("new_name", SqlScalarType::String.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "occurred_at",
-            "The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.",
-        ),
-        ("id", "The ID of the cluster replica."),
-        (
-            "previous_name",
-            "The previous name of the cluster replica. `NULL` if there was no previous name.",
-        ),
-        ("new_name", "The new name of the cluster replica."),
-    ]),
-    sql: r#"WITH user_replica_alter_history AS (
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || BuiltinMaterializedView {
+        name: "mz_cluster_replica_name_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
+        desc: RelationDesc::builder()
+            .with_column(
+                "occurred_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(true),
+            )
+            .with_column("id", SqlScalarType::String.nullable(true))
+            .with_column("previous_name", SqlScalarType::String.nullable(true))
+            .with_column("new_name", SqlScalarType::String.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "occurred_at",
+                "The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.",
+            ),
+            ("id", "The ID of the cluster replica."),
+            (
+                "previous_name",
+                "The previous name of the cluster replica. `NULL` if there was no previous name.",
+            ),
+            ("new_name", "The new name of the cluster replica."),
+        ]),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+WITH user_replica_alter_history AS (
   SELECT occurred_at,
     audit_events.details->>'replica_id' AS id,
     audit_events.details->>'old_name' AS previous_name,
@@ -7804,33 +7937,37 @@ FROM user_replica_create_history
 UNION ALL
 SELECT *
 FROM system_replicas"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "replica_name_history",
-        description: "Historical replica names",
-        links: &const { [] },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_name_history",
+            description: "Historical replica names",
+            links: &const { [] },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    },
+);
 
-pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_hydration_statuses",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_HYDRATION_STATUSES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_column("hydrated", SqlScalarType::Bool.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_internal.mz_subscriptions`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`.",
-        ),
-        ("replica_id", "The ID of a cluster replica."),
-        ("hydrated", "Whether the object is hydrated on the replica."),
-    ]),
-    sql: r#"WITH
+pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_hydration_statuses",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_HYDRATION_STATUSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("replica_id", SqlScalarType::String.nullable(true))
+            .with_column("hydrated", SqlScalarType::Bool.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "object_id",
+                "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_internal.mz_subscriptions`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`.",
+            ),
+            ("replica_id", "The ID of a cluster replica."),
+            ("hydrated", "Whether the object is hydrated on the replica."),
+        ]),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+WITH
 -- Joining against the linearizable catalog tables ensures that this view
 -- always contains the set of installed objects, even when it depends
 -- on introspection relations that may received delayed updates.
@@ -7895,43 +8032,45 @@ UNION ALL
 SELECT * FROM sources
 UNION ALL
 SELECT * FROM sinks"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "hydration_status",
-        description: "Overall hydration status per object",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "hydration_of",
-                    target: "object",
-                    properties: LinkProperties::fk_typed(
-                        "object_id",
-                        "id",
-                        Cardinality::OneToOne,
-                        mz_repr::SemanticType::CatalogItemId,
-                    ),
-                },
-                OntologyLink {
-                    name: "hydration_on_replica",
-                    target: "replica",
-                    properties: LinkProperties::fk("replica_id", "id", Cardinality::ManyToOne),
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::CatalogItemId),
-                ("replica_id", SemanticType::ReplicaId),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "hydration_status",
+            description: "Overall hydration status per object",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "hydration_of",
+                        target: "object",
+                        properties: LinkProperties::fk_typed(
+                            "object_id",
+                            "id",
+                            Cardinality::OneToOne,
+                            mz_repr::SemanticType::CatalogItemId,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "hydration_on_replica",
+                        target: "replica",
+                        properties: LinkProperties::fk("replica_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("object_id", SemanticType::CatalogItemId),
+                    ("replica_id", SemanticType::ReplicaId),
+                ]
+            },
+        }),
+    }
 });
 
 pub const MZ_HYDRATION_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_hydration_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_HYDRATION_STATUSES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_hydration_statuses (object_id, replica_id)",
     is_retained_metrics_object: false,
 };
@@ -8571,16 +8710,21 @@ CROSS JOIN LATERAL (
  * This view (and its `_3h`/`_24h` siblings) is kept in sync with
  * MaterializeInc/console/src/api/materialize/cluster/replicaUtilizationHistory.ts
  */
-pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_console_cluster_utilization_overview",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
+        oid: oid::MV_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
         desc: console_cluster_utilization_overview_desc(),
         column_comments: BTreeMap::new(),
         sql: Box::leak(
-            console_cluster_utilization_overview_sql("1 HOUR", "14 DAYS", 60).into_boxed_str(),
+            format!(
+                "IN CLUSTER mz_catalog_server AS\n{}",
+                console_cluster_utilization_overview_sql("1 HOUR", "14 DAYS", 60)
+            )
+            .into_boxed_str(),
         ),
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -8591,14 +8735,21 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> =
  * exposes raw per-(replica, sample) metrics and the Console bins client-side.
  * See `console_cluster_utilization_unbinned_3h_sql` for details.
  */
-pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_console_cluster_utilization_overview_3h",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_OID,
+        oid: oid::MV_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_OID,
         desc: console_cluster_utilization_unbinned_3h_desc(),
         column_comments: BTreeMap::new(),
-        sql: Box::leak(console_cluster_utilization_unbinned_3h_sql("3 HOURS").into_boxed_str()),
+        sql: Box::leak(
+            format!(
+                "IN CLUSTER mz_catalog_server AS\n{}",
+                console_cluster_utilization_unbinned_3h_sql("3 HOURS")
+            )
+            .into_boxed_str(),
+        ),
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -8608,16 +8759,21 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H: LazyLock<BuiltinView> =
  * Console's "Last 6 hours" / "Last 24 hours" cluster utilization graphs. See
  * `console_cluster_utilization_overview_sql` for details.
  */
-pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_console_cluster_utilization_overview_24h",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_OID,
+        oid: oid::MV_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_OID,
         desc: console_cluster_utilization_overview_desc(),
         column_comments: BTreeMap::new(),
         sql: Box::leak(
-            console_cluster_utilization_overview_sql("5 MINUTES", "24 HOURS", 5).into_boxed_str(),
+            format!(
+                "IN CLUSTER mz_catalog_server AS\n{}",
+                console_cluster_utilization_overview_sql("5 MINUTES", "24 HOURS", 5)
+            )
+            .into_boxed_str(),
         ),
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -8642,31 +8798,33 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
  * process, but someone turning on a new use case that happens to have the same
  * name as a previous but logically distinct use case.
  */
-pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_cluster_deployment_lineage",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_CLUSTER_DEPLOYMENT_LINEAGE_OID,
-    desc: RelationDesc::builder()
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_column(
-            "current_deployment_cluster_id",
-            SqlScalarType::String.nullable(false),
-        )
-        .with_column("cluster_name", SqlScalarType::String.nullable(false))
-        .with_key(vec![0, 1, 2])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "cluster_id",
-            "The ID of the cluster. Corresponds to `mz_clusters.id` (though the cluster may no longer exist).",
-        ),
-        (
-            "current_deployment_cluster_id",
-            "The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist).",
-        ),
-        ("cluster_name", "The name of the cluster"),
-    ]),
-    sql: r#"WITH MUTUALLY RECURSIVE cluster_events (
+pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_deployment_lineage",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_DEPLOYMENT_LINEAGE_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column(
+                "current_deployment_cluster_id",
+                SqlScalarType::String.nullable(false),
+            )
+            .with_column("cluster_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0, 1, 2])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id` (though the cluster may no longer exist).",
+            ),
+            (
+                "current_deployment_cluster_id",
+                "The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist).",
+            ),
+            ("cluster_name", "The name of the cluster"),
+        ]),
+        sql: r#"IN CLUSTER mz_catalog_server AS
+WITH MUTUALLY RECURSIVE cluster_events (
   cluster_id text,
   cluster_name text,
   event_type text,
@@ -8746,37 +8904,39 @@ dropped_clusters (
 )
 SELECT *
 FROM mz_cluster_deployment_lineage"#,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "cluster_deployment",
-        description: "Cluster deployment lineage information",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "deployment_of",
-                    target: "cluster",
-                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "current_deployment",
-                    target: "cluster",
-                    properties: LinkProperties::fk(
-                        "current_deployment_cluster_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                    ),
-                },
-            ]
-        },
-        column_semantic_types: &[],
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_deployment",
+            description: "Cluster deployment lineage information",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "deployment_of",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "current_deployment",
+                        target: "cluster",
+                        properties: LinkProperties::fk(
+                            "current_deployment_cluster_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                ]
+            },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_DATABASES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_databases (name)",
     is_retained_metrics_object: false,
 };
@@ -8785,7 +8945,7 @@ pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SCHEMAS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_schemas (database_id)",
     is_retained_metrics_object: false,
 };
@@ -8794,7 +8954,7 @@ pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CONNECTIONS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_connections (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8803,7 +8963,7 @@ pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TABLES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_tables (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8812,7 +8972,7 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SOURCES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_sources (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8821,7 +8981,7 @@ pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_VIEWS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_views (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8830,7 +8990,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_materialized_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_MATERIALIZED_VIEWS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8839,7 +8999,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SINKS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_sinks (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8848,7 +9008,7 @@ pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TYPES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_types (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8857,7 +9017,7 @@ pub const MZ_SHOW_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_roles_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ROLES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_roles (name)",
     is_retained_metrics_object: false,
 };
@@ -8866,7 +9026,7 @@ pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ALL_OBJECTS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_all_objects (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8875,7 +9035,7 @@ pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_indexes_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_INDEXES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_indexes (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8884,7 +9044,7 @@ pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_COLUMNS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_columns (id)",
     is_retained_metrics_object: false,
 };
@@ -8893,7 +9053,7 @@ pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CLUSTERS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_clusters (name)",
     is_retained_metrics_object: false,
 };
@@ -8902,7 +9062,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CLUSTER_REPLICAS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_cluster_replicas (cluster)",
     is_retained_metrics_object: false,
 };
@@ -8911,7 +9071,7 @@ pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SECRETS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_show_secrets (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -8920,7 +9080,7 @@ pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND: BuiltinIndex = BuiltinInd
     name: "mz_console_cluster_utilization_overview_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_console_cluster_utilization_overview (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -8929,7 +9089,7 @@ pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_IND: BuiltinIndex = Builtin
     name: "mz_console_cluster_utilization_overview_3h_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_console_cluster_utilization_overview_3h (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -8938,7 +9098,7 @@ pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_IND: BuiltinIndex = Builti
     name: "mz_console_cluster_utilization_overview_24h_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_console_cluster_utilization_overview_24h (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -8947,7 +9107,7 @@ pub const MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_deployment_lineage_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_deployment_lineage (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -8956,7 +9116,7 @@ pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATUSES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_source_statuses (id)",
     is_retained_metrics_object: false,
 };
@@ -8965,7 +9125,7 @@ pub const MZ_SINK_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SINK_STATUSES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_sink_statuses (id)",
     is_retained_metrics_object: false,
 };
@@ -8974,7 +9134,7 @@ pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATUS_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_source_status_history (source_id)",
     is_retained_metrics_object: false,
 };
@@ -8983,7 +9143,7 @@ pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SINK_STATUS_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
@@ -9001,11 +9161,11 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // retain history. This is because retaining its history causes
 // MZ_SOURCE_STATISTICS_WITH_HISTORY_IND to hold all records/updates, which causes CPU and latency
 // of querying it to spike.
-pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_source_statistics_with_history",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_SOURCE_STATISTICS_WITH_HISTORY_OID,
+        oid: oid::MV_MZ_SOURCE_STATISTICS_WITH_HISTORY_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("replica_id", SqlScalarType::String.nullable(true))
@@ -9033,7 +9193,8 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
             .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "
+        sql: "IN CLUSTER mz_catalog_server AS
+
 WITH
     -- For each subsource, statistics are reported as its parent source
     subsource_to_parent AS
@@ -9097,6 +9258,7 @@ SELECT
 FROM mz_internal.mz_source_statistics_raw
     JOIN report_paths USING (id)
 GROUP BY report_paths.report_id, replica_id",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
@@ -9105,18 +9267,18 @@ pub const MZ_SOURCE_STATISTICS_WITH_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_with_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATISTICS_WITH_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_source_statistics_with_history (id, replica_id)",
     is_retained_metrics_object: true,
 };
 
 // The non historical version of MZ_SOURCE_STATISTICS_WITH_HISTORY.
 // Used to query MZ_SOURCE_STATISTICS at the current time.
-pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "mz_source_statistics",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
+        oid: oid::MV_MZ_SOURCE_STATISTICS_OID,
         // We need to add a redundant where clause for a new dataflow to be created.
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
@@ -9202,7 +9364,9 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 "The offset of the the data that Materialize has durably ingested. See below to learn what constitutes an offset.",
             ),
         ]),
-        sql: "SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
+        sql: "IN CLUSTER mz_catalog_server AS
+SELECT * FROM mz_internal.mz_source_statistics_with_history WHERE length(id) > 0",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "source_statistics",
@@ -9236,51 +9400,53 @@ pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATISTICS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_source_statistics (id, replica_id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_sink_statistics",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_column("messages_staged", SqlScalarType::UInt64.nullable(false))
-        .with_column("messages_committed", SqlScalarType::UInt64.nullable(false))
-        .with_column("bytes_staged", SqlScalarType::UInt64.nullable(false))
-        .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
-        .with_key(vec![0, 1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
-        ),
-        (
-            "replica_id",
-            "The ID of a replica running the sink. Corresponds to `mz_catalog.mz_cluster_replicas.id`.",
-        ),
-        (
-            "messages_staged",
-            "The number of messages staged but possibly not committed to the sink.",
-        ),
-        (
-            "messages_committed",
-            "The number of messages committed to the sink.",
-        ),
-        (
-            "bytes_staged",
-            "The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.",
-        ),
-        (
-            "bytes_committed",
-            "The number of bytes committed to the sink. This counts both keys and values, if applicable.",
-        ),
-    ]),
-    sql: "
+pub static MZ_SINK_STATISTICS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sink_statistics",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SINK_STATISTICS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("replica_id", SqlScalarType::String.nullable(true))
+            .with_column("messages_staged", SqlScalarType::UInt64.nullable(false))
+            .with_column("messages_committed", SqlScalarType::UInt64.nullable(false))
+            .with_column("bytes_staged", SqlScalarType::UInt64.nullable(false))
+            .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
+            ),
+            (
+                "replica_id",
+                "The ID of a replica running the sink. Corresponds to `mz_catalog.mz_cluster_replicas.id`.",
+            ),
+            (
+                "messages_staged",
+                "The number of messages staged but possibly not committed to the sink.",
+            ),
+            (
+                "messages_committed",
+                "The number of messages committed to the sink.",
+            ),
+            (
+                "bytes_staged",
+                "The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.",
+            ),
+            (
+                "bytes_committed",
+                "The number of bytes committed to the sink. This counts both keys and values, if applicable.",
+            ),
+        ]),
+        sql: "IN CLUSTER mz_catalog_server AS
+
 SELECT
     id,
     replica_id,
@@ -9290,35 +9456,37 @@ SELECT
     SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id, replica_id",
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "sink_statistics",
-        description: "Aggregated sink export statistics",
-        links: &const {
-            [OntologyLink {
-                name: "statistics_of_sink",
-                target: "sink",
-                properties: LinkProperties::measures("id", "id", "export_statistics"),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("replica_id", SemanticType::ReplicaId),
-                ("messages_staged", SemanticType::RecordCount),
-                ("messages_committed", SemanticType::RecordCount),
-                ("bytes_staged", SemanticType::ByteCount),
-                ("bytes_committed", SemanticType::ByteCount),
-            ]
-        },
-    }),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "sink_statistics",
+            description: "Aggregated sink export statistics",
+            links: &const {
+                [OntologyLink {
+                    name: "statistics_of_sink",
+                    target: "sink",
+                    properties: LinkProperties::measures("id", "id", "export_statistics"),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("replica_id", SemanticType::ReplicaId),
+                    ("messages_staged", SemanticType::RecordCount),
+                    ("messages_committed", SemanticType::RecordCount),
+                    ("bytes_staged", SemanticType::ByteCount),
+                    ("bytes_committed", SemanticType::ByteCount),
+                ]
+            },
+        }),
+    }
 });
 
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SINK_STATISTICS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_sink_statistics (id, replica_id)",
     is_retained_metrics_object: true,
 };
@@ -9327,7 +9495,7 @@ pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_STATUSES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_statuses (replica_id)",
     is_retained_metrics_object: false,
 };
@@ -9336,7 +9504,7 @@ pub const MZ_CLUSTER_REPLICA_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_STATUS_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_status_history (replica_id)",
     is_retained_metrics_object: false,
 };
@@ -9345,7 +9513,7 @@ pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: false,
 };
@@ -9354,7 +9522,7 @@ pub const MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_metrics_history (replica_id)",
     is_retained_metrics_object: false,
 };
@@ -9363,7 +9531,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_history (dropped_at)",
     is_retained_metrics_object: true,
 };
@@ -9372,7 +9540,7 @@ pub const MZ_CLUSTER_REPLICA_NAME_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_name_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_NAME_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_cluster_replica_name_history (id)",
     is_retained_metrics_object: false,
 };
@@ -9381,7 +9549,7 @@ pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_LIFETIMES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
@@ -9390,7 +9558,7 @@ pub const MZ_OBJECT_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_object_history (id)",
     is_retained_metrics_object: false,
 };
@@ -9399,7 +9567,7 @@ pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_DEPENDENCIES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_object_dependencies (object_id)",
     is_retained_metrics_object: true,
 };
@@ -9408,7 +9576,7 @@ pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_compute_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_COMPUTE_DEPENDENCIES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_compute_dependencies (dependency_id)",
     is_retained_metrics_object: false,
 };
@@ -9417,7 +9585,7 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_transitive_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
     is_retained_metrics_object: false,
 };
@@ -9426,7 +9594,7 @@ pub const MZ_OBJECT_GRAPH_EDGES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_graph_edges_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_GRAPH_EDGES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_object_graph_edges (object_id)",
     is_retained_metrics_object: false,
 };
@@ -9435,7 +9603,7 @@ pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_frontiers_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_FRONTIERS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
 };
@@ -9444,7 +9612,7 @@ pub const MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND: BuiltinIndex = BuiltinInde
     name: "mz_wallclock_global_lag_recent_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_wallclock_global_lag_recent_history (object_id)",
     is_retained_metrics_object: false,
 };
@@ -9453,7 +9621,7 @@ pub const MZ_RECENT_ACTIVITY_LOG_THINNED_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_recent_activity_log_thinned_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_RECENT_ACTIVITY_LOG_THINNED_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 -- sql_hash because we plan to join
 -- this against mz_internal.mz_sql_text
 ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
@@ -9464,7 +9632,7 @@ pub const MZ_WEBHOOK_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_webhook_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_WEBHOOK_SOURCES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_webhook_sources (id)",
     is_retained_metrics_object: true,
 };
@@ -9473,7 +9641,7 @@ pub const MZ_COMMENTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_comments_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_COMMENTS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
+    sql: "IN CLUSTER mz_catalog_server_frontend
 ON mz_internal.mz_comments (id)",
     is_retained_metrics_object: true,
 };
