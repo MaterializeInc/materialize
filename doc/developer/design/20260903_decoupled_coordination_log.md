@@ -54,10 +54,16 @@ review found no safety defect. Changed-input replacement, version preservation,
 reconstruction parity and protection tests pass, as do affected type-checks and
 the scratch debug build.
 
-Next: analyze the dependency-reuse measurement running under the original limits
-(`aj-native-parallel-8417584f`). Do not claim reduced starvation
-from a single pass. Measurement commit `4b94781a` and transaction repair
-`e112e930` remain local and unpushed.
+Dependency reuse (`d9655598`) reduced MV-input validation to about 4ms, but the
+four-index run failed its post-unpause permission deadline. Logical traversal
+still took 16–17ms. Its item lookups clone entire catalog entries unnecessarily.
+A scoped working-copy change uses the existing borrowed lookup for item inspection,
+leaving version-sensitive descriptor lookups unchanged. Affected type-checks pass.
+
+Next: collect the unchanged dependency-reuse repeat (`aj-native-parallel-bce92da6`),
+then run the prepared borrowed-lookup build and measurement under the original
+limits. Do not claim reduced starvation from a single pass. Implementation and
+measurement commits remain local and unpushed.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -153,7 +159,7 @@ are pinned there as `native-publication-marks-candidate`, verified by
 `publication-marks-source-transfer.json`. The completed original-cap measurement
 used `native-publication-work-candidate`, verified by
 `work-publication-build-source-sha256.json` and
-`native-publication-work-binaries.json`. The dependency-reuse measurement is
+`native-publication-work-binaries.json`. The dependency-reuse repeat is
 running with `native-publication-deps-candidate`. Its source and binary manifests
 are in `deps-publication-build-evidence.tar.gz`.
 Local disk has about 40GiB free. Worker disk has about 240GiB free.
@@ -205,6 +211,11 @@ Essential pointers, relative to the evidence root:
   `publication-work-findings.md`.
   Dependency-reuse candidate: `deps-publication-source-updates.json`,
   `deps-publication-build-evidence.tar.gz` and `index-four-deps-launch.json`.
+  Runtime failure and analysis: `index-four-deps-evidence.tar.gz`,
+  `publication-deps-findings.md`, `publication-deps-phases.json` and
+  `publication-deps-cpu.json`. Repeat: `index-four-deps-repeat-launch.json`.
+  Prepared borrowed-lookup verification: `install_borrow_publication_candidate.py`
+  and `guard_borrow_publication_build.py`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
