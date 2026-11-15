@@ -1064,11 +1064,11 @@ class Scenario:
         self.rng = rng
         self.num_objects = num_objects
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         raise NotImplementedError
 
     def print(self) -> None:
-        print(self._impl(1))
+        print(self._repetition(0))
 
     def run_fragment(self, text: str, tries: int = 1) -> None:
         if not text:
@@ -1084,8 +1084,17 @@ class Scenario:
                     raise
                 print(f"Failed to run fragment, retrying ({i+1}/{tries})")
 
-    def run(self, num_executions: int) -> None:
-        self.run_fragment(self._impl(num_executions))
+    def run(self, num_executions: int, end_time: float) -> int:
+        """Run up to `num_executions` repetitions, stopping once `end_time` has
+        passed, and return how many ran."""
+        for i in range(num_executions):
+            if time.time() >= end_time:
+                return i
+            # One testdrive invocation per repetition, so that the deadline can
+            # stop a scenario midway. Slow seeds were observed at ~70s per
+            # repetition, so 50 repetitions overran a 60 minute CI step.
+            self.run_fragment(self._repetition(i))
+        return num_executions
 
 
 class Concurrent(Scenario):
@@ -1103,8 +1112,10 @@ class Concurrent(Scenario):
     def print(self) -> None:
         pass  # TODO: print
 
-    def run(self, num_executions: int) -> None:
+    def run(self, num_executions: int, end_time: float) -> int:
         for i in range(num_executions):
+            if time.time() >= end_time:
+                return i
             # Clean up old state
             self.c.down(destroy_volumes=True)
             self.c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
@@ -1136,6 +1147,7 @@ class Concurrent(Scenario):
                 thread.join()
 
             self.run_fragment(self.objs[0].destroy())
+        return num_executions
 
 
 class Subsequent(Scenario):
@@ -1150,18 +1162,17 @@ class Subsequent(Scenario):
             self.objs.append(rng.choice(objects)(f"o_{i}", self.objs[0], rng))
             self.manipulators.append(self.rng.randrange(100))
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         result = ""
-        for i in range(num_executions):
-            if i == 0:
-                for obj in self.objs:
-                    result += obj.prepare() + "\n"
-            result += self.objs[0].create() + "\n"
-            for obj, manipulator in zip(self.objs[1:], self.manipulators):
-                result += obj.create() + "\n"
-                result += obj.manipulate(manipulator) + "\n"
-                result += obj.destroy() + "\n"
-            result += self.objs[0].destroy() + "\n"
+        if i == 0:
+            for obj in self.objs:
+                result += obj.prepare() + "\n"
+        result += self.objs[0].create() + "\n"
+        for obj, manipulator in zip(self.objs[1:], self.manipulators):
+            result += obj.create() + "\n"
+            result += obj.manipulate(manipulator) + "\n"
+            result += obj.destroy() + "\n"
+        result += self.objs[0].destroy() + "\n"
         return result
 
 
@@ -1181,18 +1192,17 @@ class SubsequentChain(Scenario):
             )
             self.manipulators.append(self.rng.randrange(100))
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         result = ""
-        for i in range(num_executions):
-            if i == 0:
-                for obj in self.objs:
-                    result += obj.prepare() + "\n"
+        if i == 0:
             for obj in self.objs:
-                result += obj.create() + "\n"
-            for obj, manipulator in zip(self.objs[1:], self.manipulators):
-                result += obj.manipulate(manipulator) + "\n"
-            for obj in reversed(self.objs):
-                result += obj.destroy() + "\n"
+                result += obj.prepare() + "\n"
+        for obj in self.objs:
+            result += obj.create() + "\n"
+        for obj, manipulator in zip(self.objs[1:], self.manipulators):
+            result += obj.manipulate(manipulator) + "\n"
+        for obj in reversed(self.objs):
+            result += obj.destroy() + "\n"
         return result
 
 
@@ -1277,20 +1287,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     setup(c)
 
     seed = args.seed
-    # Longest observed scenario runtime so far; used to decide whether a new
-    # scenario can safely start within the remaining budget. The whole scenario
-    # runs as a single testdrive invocation and cannot be interrupted mid-flight,
-    # so starting one without enough budget would overrun the CI wall-clock.
-    max_scenario_duration = 0.0
-
     while time.time() < end_time:
-        remaining = end_time - time.time()
-        if max_scenario_duration > 0 and remaining < max_scenario_duration:
-            print(
-                f"--- Remaining budget {remaining:.0f}s < longest observed scenario {max_scenario_duration:.0f}s, stopping early"
-            )
-            break
-
         rng = random.Random(seed)
 
         if args.scenario == "subsequent":
@@ -1305,12 +1302,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"--- Scenario to run (--seed={seed})")
         scenario.print()
 
-        print(f"--- Running scenario {args.repetitions} times")
+        print(f"--- Running scenario up to {args.repetitions} times")
         start = time.time()
-        scenario.run(args.repetitions)
-        duration = time.time() - start
-        max_scenario_duration = max(max_scenario_duration, duration)
-        print(f"--- Scenario finished in {duration:.0f}s")
+        repetitions = scenario.run(args.repetitions, end_time)
+        print(
+            f"--- Scenario ran {repetitions}/{args.repetitions} times in {time.time() - start:.0f}s"
+        )
 
         seed = rng.randrange(1000000)
 
