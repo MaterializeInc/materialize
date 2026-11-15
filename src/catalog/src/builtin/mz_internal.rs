@@ -5106,10 +5106,7 @@ pub const PG_ATTRIBUTE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_ATTRIBUTE_ALL_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.pg_attribute_all_databases (
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
-    attgenerated, attisdropped, attcollation, database_name, pg_type_database_name
-)",
+ON mz_internal.pg_attribute_all_databases (attrelid)",
     is_retained_metrics_object: false,
 };
 

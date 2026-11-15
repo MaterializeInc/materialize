@@ -3597,7 +3597,7 @@ query T multiline
 EXPLAIN INDEX "mz_internal"."pg_attribute_all_databases_ind";
 ----
 mz_internal.pg_attribute_all_databases_ind:
-  →Arrange (#0{attrelid}..=#5{atttypmod}, #7{attnotnull}..=#14{pg_type_database_name})
+  →Arrange (#0{attrelid})
     →Stream mz_internal.pg_attribute_all_databases
 
 mz_internal.pg_attribute_all_databases:
@@ -5078,7 +5078,7 @@ mz_catalog.mz_index_columns:
           Project: #3, #0, #1, #4, #2
           Map: null
         →Arrange (#0{name})
-          →Constant (108 rows)
+          →Constant (95 rows)
         →Arrange (#1{name})
           →Fused with Child Map/Filter/Project
             Project: #4, #3
@@ -8811,7 +8811,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_index_columns";
 ----
 Explained Query (fast path):
-  →Constant (191 rows)
+  →Constant (178 rows)
 
 Target cluster: mz_catalog_server
 
@@ -14093,7 +14093,6 @@ EXPLAIN SELECT * FROM "mz_internal"."pg_attribute_all_databases";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #0..=#5, #14, #6..=#13
     →Indexed mz_internal.pg_attribute_all_databases (using mz_internal.pg_attribute_all_databases_ind)
 
 Used Indexes:
@@ -17785,8 +17784,8 @@ EXPLAIN SELECT * FROM "pg_catalog"."pg_attribute";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #0..=#5, #14, #6..=#11
-    Filter: ((#12{database_name}) IS NULL OR (#12{database_name} = "materialize")) AND ((#13{pg_type_database_name}) IS NULL OR (#13{pg_type_database_name} = "materialize"))
+    Project: #0..=#12
+    Filter: ((#13{database_name}) IS NULL OR (#13{database_name} = "materialize")) AND ((#14{pg_type_database_name}) IS NULL OR (#14{pg_type_database_name} = "materialize"))
       →Indexed mz_internal.pg_attribute_all_databases (using mz_internal.pg_attribute_all_databases_ind)
 
 Used Indexes:
