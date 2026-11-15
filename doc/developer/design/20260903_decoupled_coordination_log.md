@@ -6,9 +6,9 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: finish and hash-verify local preservation of the pinned native binaries
-before worker expiry. Then cover randomized zippy/restore and the latest
-compatible-version pair. Those need additional artifacts and runtime verification.
+Next: prepare the missing zippy/restore artifacts and latest compatible-version
+pair, then verify those paths. The current candidate binaries are preserved locally,
+hash-verified against build receipts, and execute locally with `--version`.
 Do not reduce workloads, assertions, cadence or retry limits to obtain passes.
 
 ## Current outcome
@@ -73,8 +73,9 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 Evidence root: `/home/ubuntu/.local/share/aj/m3-evidence/native-only/`.
 Current investigation directory: `upsert-oom-investigation/` below that root,
 mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). Its recorded expiry is
-2026-11-15 23:00 UTC. An extension to 06:00 UTC was requested, not yet approved.
-Preserve current candidate binaries locally before expiry if approval does not arrive.
+2026-11-15 23:00 UTC. An extension to 06:00 UTC was requested, not approved or made.
+Do not assume the worker remains available. All test containers and owned runtime
+and profiler processes were absent at the final check. Binary preservation is complete.
 Credentials were restored without access-rule changes.
 Use `remote_with_cli_credentials.py` in the investigation directory.
 
@@ -83,11 +84,18 @@ Keep heavy work sequential and off the local VM. Runtime aggregate limits are
 use one job, 32 GiB and four CPUs. Preserve 30 GiB disk and 2 GiB available RAM.
 Do not overlap builds and runtimes. Cleanup is supervised, including after SIGKILL.
 Commits remain local and unpushed. Preserve pinned binaries and source manifests.
+Local cache cleanup reclaimed about 5 GiB from unused test executables and
+incremental caches, without deleting source, library artifacts or debug sidecars.
+The local VM has substantially less RAM than the worker. Do not reuse its 32-GiB
+build limit locally.
 
 Essential pointers in `upsert-oom-investigation/`:
 - Current binaries: `native-publication-projection-candidate/` and
   `native-publication-projection-binaries.json`. Build/check receipts:
   `projection-publication-build-evidence.tar.gz`.
+  Local preservation: `native-projection-local-preservation.json`.
+  Teardown and cache cleanup: `worker-final-runtime-check.log`,
+  `local-build-cache-cleanup.json`.
 - Four-index verification: `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
 - Ingestion passes: `data-ingest-0dt-evidence.tar.gz`,
   `data-ingest-delete-0dt-evidence.tar.gz`, `data-ingest-normal-evidence.tar.gz`,
