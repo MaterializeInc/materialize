@@ -6,64 +6,31 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Finish publication-starvation verification before the remaining harnesses. Owners
-submit runtime samples and proposed client changes together. Each transaction
-attempt derives protection against its current catalog candidate. Frontier-only
-batches apply late bounds incrementally and derive consolidated final effects and
-change marks. Other batches retain full reprojection. Independent findings are
-resolved, and affected type-checks, retention tests and change-mark tests pass.
+Publication starvation remains the immediate blocker. Combined publications derive
+protection against the current transaction, apply late frontier bounds incrementally,
+and preserve consolidated effects and change marks. Direct versioned expression
+dependencies now travel with definitions, and protection traversal borrows entries
+instead of cloning them. Targeted checks pass. No validation, version-sensitive
+lookup, publication owner or durable format changed.
 
-The corrected four-index run still failed its release deadline. Its exact repeat
-passed. In the failed trace, incremental projection ran for both adapters and both
-catalog-server replicas. Adapter final application fell to roughly 8–12ms, but
-candidate construction still took 165–202ms and lost most commits. This is not a
-resolved starvation bug or green acceptance.
+The unchanged four-index workload still fails and passes on exact repeats.
+Borrowed lookups reduced matching logical traversals from about 19ms to 2ms and
+MV-input validation to about 1ms, but preliminary application remains expensive.
+In the failing capture the old adapter committed 0/252 attempts, with a 137ms
+candidate and 61ms preliminary application. These are wall timings, not CPU
+attribution. The same-update-count timing spread and quota pressure remain material.
 
-The profiled run passed, but both deployments saturated their four-CPU limits:
-3.92/3.73 average cores, with throttling in 85%/62% of quota periods. Most CPU
-samples could not be unwound, so the profile does not establish function-level
-attribution. The timing evidence still shows expensive candidate construction.
+Next: analyze the measurement-only projection run (`aj-native-parallel-774b27c6`)
+at the original limits. Targeted checks and the debug build pass. Counters separate
+state/update copies, consolidation, ordering, typed application and cleanup. Do
+not choose another behavioral optimization before inspecting these measurements.
+Existing application keeps catalog maps structurally shared. Full final reprojection
+was absent from the matched adapter attempts. Empty upper progress already rebases.
 
-The user approved one six-CPU-per-deployment diagnostic with a twelve-CPU
-aggregate cap, then restoration of the original four/eight caps. Memory, workload,
-cadence, assertions and retry limits remain unchanged. Passing alone is not
-acceptance. Compare per-publisher candidate timings, CPU/throttling and commit
-success rates, and obtain usable CPU attribution or narrower stage measurements
-before another behavioral change.
-
-The six-CPU diagnostic failed the unchanged post-DROP permission deadline.
-Its old/new adapter candidate medians with late constraints were 125/77ms,
-but only 0/261 and 30/345 traced derived attempts committed, respectively.
-Catalog-server replicas committed 80/328 and 66/365. More CPU did not resolve
-starvation. All containers are removed and the aggregate cap is restored to eight
-CPUs. Restoration also passed an independent supervisor-SIGKILL check.
-
-The narrower original-cap measurement passed, without resolving intermittency.
-Dependency discovery is expensive: plan discovery takes 24–27ms at the median,
-including 18–19ms in logical walks. Each publisher also revalidates 50 maintained
-requirements in about 11ms. Reduction takes 1–3ms and upper observations less
-than 1ms. Preliminary application remains substantial and is not decomposed.
-These are wall timings, not CPU attribution. Full evidence and limitations are in
-`publication-work-findings.md` below.
-
-The candidate retains each View/MV expression's direct versioned dependencies
-alongside the expression. Construction and replacement keep them paired. Current
-catalog traversal, name-resolution references and all protection validation remain
-unchanged. There is no candidate, bound or transitive-dependency cache. Independent
-review found no safety defect. Changed-input replacement, version preservation,
-reconstruction parity and protection tests pass, as do affected type-checks and
-the scratch debug build.
-
-Dependency reuse (`d9655598`) reduced MV-input validation to about 4ms, but the
-four-index run failed its post-unpause permission deadline. Logical traversal
-still took 16–17ms. Its item lookups clone entire catalog entries unnecessarily.
-A scoped working-copy change uses the existing borrowed lookup for item inspection,
-leaving version-sensitive descriptor lookups unchanged. Affected type-checks pass.
-
-Next: collect the unchanged dependency-reuse repeat (`aj-native-parallel-bce92da6`),
-then run the prepared borrowed-lookup build and measurement under the original
-limits. Do not claim reduced starvation from a single pass. Implementation and
-measurement commits remain local and unpushed.
+The approved six-CPU diagnostic also failed. Original four/eight-CPU caps are
+restored, and post-stop restoration passed a supervisor-SIGKILL check. A passing
+repeat is not resolved starvation or green acceptance. Commits remain local and
+unpushed. Detailed comparisons and limitations are linked below.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -79,41 +46,27 @@ See `upsert-oom-investigation/findings.md` under the evidence root below.
 
 ## Verified outcome
 
-Native startup reuses validated Local expressions without cache maintenance or a
-second plan-store open. In the debug frontier fixture, new-replica startup falls
-from 31–33s to roughly 5s and the complete test passes twice. Metadata-only
-identity recovery has red/green catalog coverage and retained-storage safety
-coverage. The current native stress run completes one promotion/retirement cycle
-and final checks without a captured bootstrap panic. The full one-index protection
-workflow also passes, including concurrent DROP, paused caps and release. Its
-slowest committed-permission observation took 23s. These passes do not explain
-the earlier intermittent failures or establish a steady-state resource saving.
-The complete source-failpoint lifecycle also passes. Its final status query
-returns `running` in 1.84s after promotion and retirement, rather than the earlier
-673s. The index and source workflows used PostgreSQL metadata and shared-file
-blobs. Their original private runner receipts incorrectly label blobs as Minio,
-corrected in `retained-workflow-backend-correction.json` alongside the evidence.
-
 Controllerd owns processes, replica followers own maintained execution, and
 adapters retain policy, transactions, protection and transient queries. Native
-startup is mandatory. Temporary objects carry execution ownership while retaining
-session visibility. Subscription identities remain execution-qualified through
-observations, logging and dependencies. Bounded independent audits found no
-reachable legacy alternative in the inspected startup and command-ingress paths.
+startup is mandatory. Temporary objects retain execution ownership and session
+visibility. Subscription identities remain execution-qualified through observations,
+logging and dependencies. Bounded audits found no reachable legacy alternative in
+the inspected startup and command-ingress paths. Obsolete replay-history work and
+its diagnostics are removed. No overall memory saving is established.
 
-Replay-history cloning, compaction and both obsolete gauges are removed. Affected
-all-target/library checks, current-binary metrics and HTTP-proxy workflows pass.
-The accepted command-size expectation passes the complete compute-client library suite.
-The repaired upsert load-test runs its unchanged original scenarios successfully.
-No performance or memory saving from cleanup has been measured.
+Earlier debug passes cover expression-cache reuse, metadata recovery, retained
+storage, native stress, one-index permission/release, source lifecycle/status,
+metrics and HTTP proxy behavior. They do not explain preceding intermittent
+failures or establish latest-binary acceptance. Evidence includes backend-label
+corrections where original runner receipts named the wrong blob store.
 
-The current local `bin/controllerd` walkthrough and full `0dt ddl` workflow pass
-with 26.46/26.47 package versions sharing implementation and plan encoding. They
-cover concurrent SQL/DDL/table writers around promotion, warmed execution,
-protection, explicit retirement, rejected retired writers, sink authority and
-singleton CDC handover. Earlier checks cover both Timely topologies and surviving
-subscriptions. This is compatible-prototype coverage using mounted binaries,
-not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
+The recorded controllerd walkthrough and complete `0dt ddl` pass use 26.46/26.47
+package versions sharing implementation and plan encoding. They cover full writers,
+warmed execution, promotion, protection, explicit retirement and singleton CDC/sink
+authority. Earlier checks cover both Timely topologies and surviving subscriptions.
+This is compatible-prototype coverage with mounted binaries, not arbitrary-release,
+builtin-migration or rebuilt-image CI coverage. Remaining current-binary harnesses
+and explicit deferrals follow.
 
 ## Live gaps and approved deferrals
 
@@ -159,9 +112,9 @@ are pinned there as `native-publication-marks-candidate`, verified by
 `publication-marks-source-transfer.json`. The completed original-cap measurement
 used `native-publication-work-candidate`, verified by
 `work-publication-build-source-sha256.json` and
-`native-publication-work-binaries.json`. The dependency-reuse repeat is
-running with `native-publication-deps-candidate`. Its source and binary manifests
-are in `deps-publication-build-evidence.tar.gz`.
+`native-publication-work-binaries.json`. The projection measurement is running
+with `native-publication-projection-candidate`, verified by
+`projection-publication-build-evidence.tar.gz`.
 Local disk has about 40GiB free. Worker disk has about 240GiB free.
 
 No Persist source changed. Runtime supervision has independent systemd post-stop
@@ -214,8 +167,12 @@ Essential pointers, relative to the evidence root:
   Runtime failure and analysis: `index-four-deps-evidence.tar.gz`,
   `publication-deps-findings.md`, `publication-deps-phases.json` and
   `publication-deps-cpu.json`. Repeat: `index-four-deps-repeat-launch.json`.
-  Prepared borrowed-lookup verification: `install_borrow_publication_candidate.py`
-  and `guard_borrow_publication_build.py`.
+  Borrowed-lookup build: `borrow-publication-build-evidence.tar.gz`.
+  Runtime failure/repeat: `index-four-borrow{,-repeat}-evidence.tar.gz`,
+  `publication-borrow{,-repeat}-matched.json` and
+  `publication-borrow{,-repeat}-cpu.json`.
+  Projection measurement: `projection-publication-build-evidence.tar.gz` and
+  `index-four-projection-launch.json`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.

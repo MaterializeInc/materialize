@@ -79,7 +79,7 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::{StorageCollections, prepare_collection_state};
 use mz_storage_types::sources::envelope::SourceEnvelope;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, trace};
+use tracing::{Instrument, debug, info, trace};
 use uuid::Uuid;
 
 use crate::catalog::CatalogError;
@@ -1566,20 +1566,37 @@ impl Catalog {
             if !op_updates.is_empty() {
                 let started = Instant::now();
                 let update_count = op_updates.len();
+                let cached_expr_count = cached_exprs.len();
+                let prepared_mv_count = prepared_mvs.len();
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
                 let mut local_expr_cache = LocalExpressionCache::for_transaction(
                     cached_exprs.clone(),
                     Arc::clone(&prepared_mvs),
                 );
-                let outputs = preliminary_state
-                    .to_mut()
-                    .apply_updates(op_updates.clone(), &mut local_expr_cache)
+                let cache_elapsed = started.elapsed();
+                let clone_started = Instant::now();
+                let cloned_state = matches!(preliminary_state, Cow::Borrowed(_));
+                let preliminary = preliminary_state.to_mut();
+                let state_clone_elapsed = clone_started.elapsed();
+                let clone_started = Instant::now();
+                let apply_updates = op_updates.clone();
+                let updates_clone_elapsed = clone_started.elapsed();
+                let apply_started = Instant::now();
+                let outputs = preliminary
+                    .apply_updates(apply_updates, &mut local_expr_cache)
+                    .instrument(tracing::debug_span!(
+                        target: "mz_adapter::frontend_read_then_write",
+                        "catalog_preliminary_projection"
+                    ))
                     .await;
+                let apply_elapsed = apply_started.elapsed();
                 preliminary_apply_count += 1;
                 preliminary_outputs = (preliminary_apply_count == 1).then_some(outputs);
                 debug!(target: "mz_adapter::frontend_read_then_write",
                     phase = "candidate_preliminary_apply", update_count,
+                    cached_expr_count, prepared_mv_count, cloned_state,
+                    ?cache_elapsed, ?state_clone_elapsed, ?updates_clone_elapsed, ?apply_elapsed,
                     elapsed = ?started.elapsed(), "catalog candidate section complete");
             }
             updates.append(&mut op_updates);

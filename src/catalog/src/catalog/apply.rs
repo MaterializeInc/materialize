@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::SYSTEM_CONN_ID;
 use crate::builtin::{
@@ -112,6 +113,8 @@ impl CatalogState {
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
         Vec<ParsedStateUpdate>,
     ) {
+        let application_started = Instant::now();
+        let input_count = updates.len();
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut catalog_updates = Vec::with_capacity(updates.len());
 
@@ -119,7 +122,11 @@ impl CatalogState {
         // updates _requires_ that the given updates are consolidated. There
         // must be at most one addition and/or one retraction per timestamp for
         // a given item, as identified by that item's ID type.
+        let consolidation_started = Instant::now();
         let mut updates = Self::consolidate_updates(updates);
+        let consolidation_elapsed = consolidation_started.elapsed();
+        let consolidated_count = updates.len();
+        let ordering_started = Instant::now();
 
         // Consolidation sorts by value before timestamp. A subscriber can receive
         // several transactions touching the same item, so restore timestamp order
@@ -136,14 +143,29 @@ impl CatalogState {
             let updates = sort_updates(updates.collect());
             groups.push(updates);
         }
+        let ordering_elapsed = ordering_started.elapsed();
+        let group_count = groups.len();
+        let mut mutation_elapsed = Duration::ZERO;
+        let mut cleanup_elapsed = Duration::ZERO;
+        let mut maintained_updates = 0usize;
+        let mut maintained_inputs = 0usize;
+        let mut client_updates = 0usize;
+        let mut bound_updates = 0usize;
 
         for updates in groups {
+            let mutation_started = Instant::now();
             let mut apply_state = ApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
             let mut retention_candidates = BTreeSet::new();
             let mut temporary_owners = BTreeSet::new();
             for update in &updates {
                 match &update.kind {
+                    StateUpdateKind::MaintainedReadRequirement(requirement) => {
+                        maintained_updates += 1;
+                        maintained_inputs += requirement.inputs.len();
+                    }
+                    StateUpdateKind::ClientReadRequirement(_) => client_updates += 1,
+                    StateUpdateKind::CollectionCompactionBound(_) => bound_updates += 1,
                     StateUpdateKind::ClientIncarnation(incarnation) => {
                         temporary_owners.insert(incarnation.id);
                     }
@@ -221,6 +243,8 @@ impl CatalogState {
                 .await;
             builtin_table_updates.extend(builtin_table_update);
             catalog_updates.extend(catalog_update);
+            mutation_elapsed += mutation_started.elapsed();
+            let cleanup_started = Instant::now();
 
             // Clean up plans and optimizer notices for items that
             // were retracted but not replaced (i.e., truly dropped).
@@ -259,7 +283,14 @@ impl CatalogState {
                     }
                 }
             }
+            cleanup_elapsed += cleanup_started.elapsed();
         }
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            input_count, consolidated_count, group_count,
+            maintained_updates, maintained_inputs, client_updates, bound_updates,
+            builtin_count = builtin_table_updates.len(), effect_count = catalog_updates.len(),
+            ?consolidation_elapsed, ?ordering_elapsed, ?mutation_elapsed, ?cleanup_elapsed,
+            elapsed = ?application_started.elapsed(), "catalog application sections complete");
 
         (builtin_table_updates, catalog_updates)
     }
