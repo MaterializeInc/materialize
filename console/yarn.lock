@@ -1826,7 +1826,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mswjs/interceptors@npm:^0.45.6, @mswjs/interceptors@npm:^0.45.7":
+"@mswjs/interceptors@npm:^0.45.11, @mswjs/interceptors@npm:^0.45.7":
   version: 0.45.12
   resolution: "@mswjs/interceptors@npm:0.45.12"
   dependencies:
@@ -9681,12 +9681,12 @@ __metadata:
   linkType: hard
 
 "msw@npm:^3.0.2":
-  version: 3.0.4
-  resolution: "msw@npm:3.0.4"
+  version: 3.0.5
+  resolution: "msw@npm:3.0.5"
   dependencies:
     "@inquirer/confirm": "npm:^6.0.11"
     "@msw/url": "npm:^0.1.2"
-    "@mswjs/interceptors": "npm:^0.45.6"
+    "@mswjs/interceptors": "npm:^0.45.11"
     cookie: "npm:^2.0.1"
     headers-polyfill: "npm:^5.0.1"
     is-node-process: "npm:^1.2.0"
@@ -9709,7 +9709,7 @@ __metadata:
       optional: true
   bin:
     msw: cli/index.js
-  checksum: 10c0/59fa0db0620184156d41382c9865444d79b537c45c159ad72a09002c4f085ce122e287d3306fb3d9dba7d54da36752f29f5bd227a8eca23303648d67ad99739d
+  checksum: 10c0/fefeecb68af18dcf0041d4c58cfad9407e803842fb9c33e0d3da9445ecb01321d8bd59ee517a7b3db71801f2434d43ba79488b459a4aaccad63d5443a6e6501c
   languageName: node
   linkType: hard
 
