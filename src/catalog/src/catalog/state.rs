@@ -688,11 +688,17 @@ impl CatalogState {
     ) -> BTreeSet<GlobalId> {
         let mut pending: Vec<_> = ids.into_iter().collect();
         let mut inputs = BTreeSet::new();
+        // Only item definitions are needed, not versioned descriptors. Borrow
+        // entries rather than cloning their SQL and dependency sets on each visit.
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
             }
-            match self.get_entry_by_global_id(&id).item() {
+            match self
+                .try_get_entry_by_global_id(&id)
+                .expect("catalog collection exists")
+                .item()
+            {
                 CatalogItem::View(view) => {
                     // Name resolution retains references eliminated by planning.
                     // Its IDs also include non-relations such as functions.
@@ -700,7 +706,11 @@ impl CatalogState {
                     pending.extend(
                         view.resolved_ids
                             .collections()
-                            .filter(|id| self.get_entry_by_global_id(id).is_relation())
+                            .filter(|id| {
+                                self.try_get_entry_by_global_id(id)
+                                    .expect("catalog collection exists")
+                                    .is_relation()
+                            })
                             .copied(),
                     );
                     pending.extend(view.raw_dependencies.iter().copied());

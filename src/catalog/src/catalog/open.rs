@@ -1216,7 +1216,12 @@ impl Catalog {
                             .collections()
                             .copied()
                             .chain(mv.raw_dependencies.iter().copied())
-                            .filter(|id| state.get_entry_by_global_id(id).is_relation()),
+                            .filter(|id| {
+                                state
+                                    .try_get_entry_by_global_id(id)
+                                    .expect("catalog collection exists")
+                                    .is_relation()
+                            }),
                     );
                     txn.set_maintained_read_requirement(
                         mv.global_id_writes(),

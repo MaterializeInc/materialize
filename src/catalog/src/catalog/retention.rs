@@ -51,14 +51,18 @@ impl CatalogState {
             .into_iter()
             .filter_map(|id| {
                 let old = self.collection_compaction_bounds().get(&id)?;
-                let entry = self.get_entry_by_global_id(&id);
+                let entry = self
+                    .try_get_entry_by_global_id(&id)
+                    .expect("catalog collection exists");
                 let CatalogItem::Index(index) = entry.item() else {
                     unreachable!("selected an index");
                 };
                 let inputs = self.logical_collection_inputs([index.on]);
                 if inputs.iter().any(|input| {
                     matches!(
-                        self.get_entry_by_global_id(input).item(),
+                        self.try_get_entry_by_global_id(input)
+                            .expect("catalog collection exists")
+                            .item(),
                         CatalogItem::Log(_)
                     )
                 }) {
@@ -164,7 +168,10 @@ pub(super) fn admit_index_bounds(
                             .iter()
                             .any(|id| {
                                 matches!(
-                                    state.get_entry_by_global_id(id).item(),
+                                    state
+                                        .try_get_entry_by_global_id(id)
+                                        .expect("catalog collection exists")
+                                        .item(),
                                     CatalogItem::Log(_)
                                 )
                             })
@@ -247,7 +254,9 @@ pub(super) async fn constrain_index_retention(
     let mut skipped_logs = 0usize;
     let mut requirements = Vec::new();
     for id in indexes {
-        let entry = candidate.get_entry_by_global_id(&id);
+        let entry = candidate
+            .try_get_entry_by_global_id(&id)
+            .expect("catalog collection exists");
         let CatalogItem::Index(index) = entry.item() else {
             unreachable!("selected an index");
         };
@@ -257,7 +266,10 @@ pub(super) async fn constrain_index_retention(
         input_incidences += inputs.len();
         if inputs.iter().any(|input| {
             matches!(
-                candidate.get_entry_by_global_id(input).item(),
+                candidate
+                    .try_get_entry_by_global_id(input)
+                    .expect("catalog collection exists")
+                    .item(),
                 CatalogItem::Log(_)
             )
         }) {
@@ -286,7 +298,7 @@ pub(super) async fn constrain_index_retention(
                 })?;
             floor.join_assign(&since);
             let transactional = matches!(
-                candidate.get_entry_by_global_id(input).item(),
+                candidate.try_get_entry_by_global_id(input).expect("catalog collection exists").item(),
                 CatalogItem::Table(table)
                     if matches!(table.data_source, TableDataSource::TableWrites { .. })
             );
@@ -496,7 +508,13 @@ pub(super) fn constrain_plan_inputs(
             if let CatalogItem::Index(index) = entry.item()
                 && tx.proposed_compaction_bound(input).is_none()
                 && logical_inputs(index.on).iter().any(|id| {
-                    matches!(state.get_entry_by_global_id(id).item(), CatalogItem::Log(_))
+                    matches!(
+                        state
+                            .try_get_entry_by_global_id(id)
+                            .expect("catalog collection exists")
+                            .item(),
+                        CatalogItem::Log(_)
+                    )
                 })
             {
                 continue;
@@ -525,7 +543,11 @@ pub(super) fn constrain_plan_inputs(
         passes += 1;
         let mut changed = false;
         for (owner, inputs) in &requirements {
-            let frontier = match state.get_entry_by_global_id(owner).item() {
+            let frontier = match state
+                .try_get_entry_by_global_id(owner)
+                .expect("catalog collection exists")
+                .item()
+            {
                 CatalogItem::Index(_) => bounds[owner].clone(),
                 _ => state.maintained_read_requirements()[owner]
                     .frontier
