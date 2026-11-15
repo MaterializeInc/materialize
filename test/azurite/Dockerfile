@@ -10,6 +10,18 @@
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
 FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
 
+# TODO: Switch back to released version after https://github.com/Azure/Azurite/pull/2780 is in a release
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS azurite-build
+
+ADD https://github.com/Azure/Azurite/archive/9b08276a0b4c912e8d84d6e0a27a29f33ff950b3.tar.gz /azurite-src.tar.gz
+
+RUN mkdir /azurite \
+    && tar -xzf /azurite-src.tar.gz -C /azurite --strip-components=1 \
+    && cd /azurite \
+    && npm ci \
+    && npm pack --ignore-scripts \
+    && mv azurite-*.tgz /azurite.tgz
+
 FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 # Fetch apt sources over HTTPS only.
@@ -22,4 +34,5 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g azurite@3.37.0
+COPY --from=azurite-build /azurite.tgz /tmp/azurite.tgz
+RUN npm install -g /tmp/azurite.tgz && rm /tmp/azurite.tgz
