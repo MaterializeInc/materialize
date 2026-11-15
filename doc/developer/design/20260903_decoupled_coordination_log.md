@@ -6,9 +6,13 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: prepare the missing zippy/restore artifacts and latest compatible-version
-pair, then verify those paths. The current candidate binaries are preserved locally,
-hash-verified against build receipts, and execute locally with `--version`.
+Next: assemble the zippy fixtures around the preserved native binaries and newly
+built Persist CLI/balancerd, then run zippy/restore and the latest compatible-version
+pair. The core candidates are hash-verified and execute locally with `--version`.
+Ancillary binaries are separately preserved and pass their help commands. Their
+build passed with one job, two CPUs and 6 GiB, without changing Cargo.lock.
+No local build remains active. Do not replace pinned candidates with incidental
+build outputs.
 Do not reduce workloads, assertions, cadence or retry limits to obtain passes.
 
 ## Current outcome
@@ -74,8 +78,9 @@ Evidence root: `/home/ubuntu/.local/share/aj/m3-evidence/native-only/`.
 Current investigation directory: `upsert-oom-investigation/` below that root,
 mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). Its recorded expiry is
 2026-11-15 23:00 UTC. An extension to 06:00 UTC was requested, not approved or made.
-Do not assume the worker remains available. All test containers and owned runtime
-and profiler processes were absent at the final check. Binary preservation is complete.
+The instance is stopped, with its disk retained. See `worker-stop-result.json`
+and `worker-final-state.txt`. All owned test runtimes were cleaned up before
+shutdown. Binary preservation is complete.
 Credentials were restored without access-rule changes.
 Use `remote_with_cli_credentials.py` in the investigation directory.
 
@@ -94,6 +99,10 @@ Essential pointers in `upsert-oom-investigation/`:
   `native-publication-projection-binaries.json`. Build/check receipts:
   `projection-publication-build-evidence.tar.gz`.
   Local preservation: `native-projection-local-preservation.json`.
+  Ancillary binaries: `native-ancillary-preservation.json` and
+  `local-ancillary-only-{build-result.json,driver.log}`. The first build hit its
+  deadline rebuilding unnecessary clusterd/RocksDB. The exact retry was stopped,
+  then the ancillary-only build passed with unchanged resource guards.
   Teardown and cache cleanup: `worker-final-runtime-check.log`,
   `local-build-cache-cleanup.json`.
 - Four-index verification: `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
@@ -108,6 +117,9 @@ Essential pointers in `upsert-oom-investigation/`:
 - Upsert/native-baseline evidence and independent review: `findings.md` and
   `comparison-review.md`. Native stress repair: `parallel-retirement-policy-evidence.tar.gz`.
 - Zippy prerequisites and restore contract: `zippy-acceptance-audit.md`.
+  The standalone storaged native bootstrap is present. A private wrapper must
+  retain the current binary mount through its inner service override. KafkaSources
+  uses managed storage, while PostgresCdc exercises standalone storaged.
 - Earlier receipts, failed runs and detailed pointers are preserved in
   `handoff-before-ingest-verification.md`. Do not treat historical passes as
   acceptance of the latest binary.
