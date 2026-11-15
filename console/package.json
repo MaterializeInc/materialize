@@ -199,7 +199,7 @@
     "@codemirror/view": "^6.43.13",
     "@types/react@*": "^18.3.12",
     "diff": "^9.0.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "glob": "^14.0.0",
     "ip-address": "^10.4.0",
     "js-cookie": "^3.0.7",
@@ -213,9 +213,9 @@
   ],
   "volta": {
     "node": "26.13.1",
-    "yarn": "4.14.1"
+    "yarn": "4.18.1"
   },
-  "packageManager": "yarn@4.14.1",
+  "packageManager": "yarn@4.18.1",
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
       "eslint --fix --max-warnings 0"
