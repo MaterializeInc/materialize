@@ -1395,6 +1395,9 @@ pub struct View {
     pub global_id: GlobalId,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Direct collection dependencies of `raw_expr`, preserving collection versions.
+    /// Must equal `raw_expr.depends_on()` and be replaced together with it.
+    pub raw_dependencies: BTreeSet<GlobalId>,
     /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
     pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
@@ -1423,6 +1426,10 @@ pub struct MaterializedView {
     pub collections: BTreeMap<RelationVersion, GlobalId>,
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Direct collection dependencies of `raw_expr`, preserving collection versions.
+    /// Must equal `raw_expr.depends_on()`, excluding lifecycle-only dependencies,
+    /// and be replaced together with the expression.
+    pub raw_dependencies: BTreeSet<GlobalId>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
     pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
@@ -1574,6 +1581,7 @@ impl MaterializedView {
             create_sql,
             collections,
             raw_expr: replacement.raw_expr,
+            raw_dependencies: replacement.raw_dependencies,
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,

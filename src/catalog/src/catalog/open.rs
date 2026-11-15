@@ -49,7 +49,6 @@ use mz_auth::hash::scram256_hash;
 use mz_cluster_client::CatalogPosition;
 use mz_controller_types::ClusterId;
 use mz_controller_types::clusters::ReplicaLogging;
-use mz_expr::CollectionPlan;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{SYSTEM_TIME, to_datetime};
@@ -1216,7 +1215,7 @@ impl Catalog {
                         mv.query_ids
                             .collections()
                             .copied()
-                            .chain(mv.raw_expr.depends_on())
+                            .chain(mv.raw_dependencies.iter().copied())
                             .filter(|id| state.get_entry_by_global_id(id).is_relation()),
                     );
                     txn.set_maintained_read_requirement(

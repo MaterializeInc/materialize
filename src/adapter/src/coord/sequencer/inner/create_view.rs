@@ -415,6 +415,7 @@ impl Coordinator {
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
                     global_id,
+                    raw_dependencies: raw_expr.depends_on(),
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(typ, column_names.clone()),
                     locally_optimized_expr: optimized_expr.into(),

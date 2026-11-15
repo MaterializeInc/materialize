@@ -46,12 +46,18 @@ than 1ms. Preliminary application remains substantial and is not decomposed.
 These are wall timings, not CPU attribution. Full evidence and limitations are in
 `publication-work-findings.md` below.
 
-Next: examine reuse of validated logical inputs when structural dependencies are
-unchanged, and shared dependency discovery within a candidate. Establish the
-invalidation boundary before choosing an optimization. Preserve safety validation
-and return structural, policy, binding and ownership changes to their existing
-validation paths. No further behavioral change is selected. Measurement commit
-`4b94781a` and transaction repair `e112e930` remain local and unpushed.
+The candidate retains each View/MV expression's direct versioned dependencies
+alongside the expression. Construction and replacement keep them paired. Current
+catalog traversal, name-resolution references and all protection validation remain
+unchanged. There is no candidate, bound or transitive-dependency cache. Independent
+review found no safety defect. Changed-input replacement, version preservation,
+reconstruction parity and protection tests pass, as do affected type-checks and
+the scratch debug build.
+
+Next: analyze the dependency-reuse measurement running under the original limits
+(`aj-native-parallel-8417584f`). Do not claim reduced starvation
+from a single pass. Measurement commit `4b94781a` and transaction repair
+`e112e930` remain local and unpushed.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -147,7 +153,9 @@ are pinned there as `native-publication-marks-candidate`, verified by
 `publication-marks-source-transfer.json`. The completed original-cap measurement
 used `native-publication-work-candidate`, verified by
 `work-publication-build-source-sha256.json` and
-`native-publication-work-binaries.json`. No test runtime or build is active.
+`native-publication-work-binaries.json`. The dependency-reuse measurement is
+running with `native-publication-deps-candidate`. Its source and binary manifests
+are in `deps-publication-build-evidence.tar.gz`.
 Local disk has about 40GiB free. Worker disk has about 240GiB free.
 
 No Persist source changed. Runtime supervision has independent systemd post-stop
@@ -195,6 +203,8 @@ Essential pointers, relative to the evidence root:
   `work-publication-source-updates.json`. Completed measurement:
   `index-four-work-evidence.tar.gz`, `publication-work-phases.json` and
   `publication-work-findings.md`.
+  Dependency-reuse candidate: `deps-publication-source-updates.json`,
+  `deps-publication-build-evidence.tar.gz` and `index-four-deps-launch.json`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.

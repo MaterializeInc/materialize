@@ -48,7 +48,6 @@ use mz_audit_log::{
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller_types::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::CollectionPlan;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
@@ -4855,7 +4854,7 @@ fn materialized_view_recovery_inputs(
         mv.query_ids
             .collections()
             .copied()
-            .chain(mv.raw_expr.depends_on())
+            .chain(mv.raw_dependencies.iter().copied())
             .filter(|id| state.get_entry_by_global_id(id).is_relation()),
     )
 }
@@ -6002,9 +6001,10 @@ mod tests {
             // even though the relation schema does not change.
             for (name, sql) in [
                 ("t", format!("CREATE TABLE {prefix}.t (a int, b int)")),
+                ("other", format!("CREATE TABLE {prefix}.other (a int, b int)")),
                 ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT a, b FROM {prefix}.t AS OF {birth}")),
                 ("mv_downstream", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
-                ("rp", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 10 AS a, b FROM {prefix}.t AS OF {birth}")),
+                ("rp", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 10 AS a, b FROM {prefix}.other AS OF {birth}")),
                 ("mv_downstream_new", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream_new IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
                 ("rp2", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp2 FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 100 AS a, b FROM {prefix}.t AS OF {birth}")),
             ] {
@@ -6045,6 +6045,14 @@ mod tests {
                         ).await.expect("apply upstream replacement");
                         state = next_state;
                         snapshot = Some(next_snapshot);
+                        let CatalogItem::MaterializedView(replacement) = state.get_entry(&id).item() else {
+                            panic!("expected replacement MV");
+                        };
+                        let expected = BTreeSet::from([ids[if name == "rp" { "other" } else { "t" }].1]);
+                        assert_eq!(replacement.raw_dependencies, expected,
+                            "replacement takes the new query's inputs, not the target's dependencies");
+                        assert_eq!(replacement.raw_dependencies, replacement.raw_expr.depends_on());
+                        assert_eq!(super::materialized_view_recovery_inputs(&state, replacement), expected);
                     }
                     _ => {}
                 }
@@ -6057,6 +6065,7 @@ mod tests {
                         panic!("expected downstream MV");
                     };
                     assert_eq!(mv.raw_expr.depends_on(), inputs, "{name}: downstream reads stay pinned");
+                    assert_eq!(mv.raw_dependencies, inputs, "{name}: retained dependencies preserve collection versions");
                     let requirement = &state.maintained_read_requirements()[&consumer_gid];
                     assert_eq!(requirement.inputs, inputs, "{name}: downstream protection stays pinned");
 

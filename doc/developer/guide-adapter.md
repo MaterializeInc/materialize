@@ -186,6 +186,14 @@ pending-publication barrier through the definitive combined outcome. Precomputed
 proposals still require their original prefix. Acquisition only adds
 or strengthens grants and must not postpone the maintenance deadline.
 
+View and MV entries retain their raw expression's direct collection dependencies,
+including collection versions. Rebuild or transfer these IDs with the expression.
+They avoid repeated HIR walks, not current-catalog dependency traversal or
+protection validation. Keep name-resolution references eliminated during planning
+and query reads introduced during planning. Item-level dependencies cannot replace
+these IDs because they lose collection versions and may include lifecycle-only
+replacement targets.
+
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,
 timestamp, selected plan and protection commit together. A metadata conflict

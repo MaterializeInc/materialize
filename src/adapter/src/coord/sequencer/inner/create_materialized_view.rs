@@ -911,6 +911,7 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
+                    raw_dependencies: raw_expr.depends_on(),
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,

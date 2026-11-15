@@ -703,7 +703,7 @@ impl CatalogState {
                             .filter(|id| self.get_entry_by_global_id(id).is_relation())
                             .copied(),
                     );
-                    pending.extend(view.raw_expr.depends_on());
+                    pending.extend(view.raw_dependencies.iter().copied());
                 }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
@@ -1861,10 +1861,10 @@ impl CatalogState {
                 };
 
                 // Resolve all item dependencies from the HIR expression.
-                let dependencies: BTreeSet<_> = raw_expr
-                    .depends_on()
-                    .into_iter()
-                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                let raw_dependencies = raw_expr.depends_on();
+                let dependencies: BTreeSet<_> = raw_dependencies
+                    .iter()
+                    .map(|gid| self.get_entry_by_global_id(gid).id())
                     .collect();
 
                 let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
@@ -1872,6 +1872,7 @@ impl CatalogState {
                     create_sql: view.create_sql,
                     global_id,
                     raw_expr,
+                    raw_dependencies,
                     desc: RelationDesc::new(typ, view.column_names),
                     locally_optimized_expr: optimized_expr,
                     conn_id: None,
@@ -1949,6 +1950,7 @@ impl CatalogState {
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     collections,
+                    raw_dependencies: raw_expr.depends_on(),
                     raw_expr,
                     locally_optimized_expr: optimized_expr,
                     desc,
@@ -4689,12 +4691,23 @@ mod tests {
                 ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
                 ("typed", "CREATE VIEW materialize.public.typed AS SELECT pg_catalog.pg_typeof((SELECT a FROM materialize.public.v))"),
                 ("implicit", "CREATE VIEW materialize.public.implicit AS SELECT pg_catalog.pg_get_userbyid(1::oid)"),
+                ("nested", "CREATE VIEW materialize.public.nested AS SELECT (SELECT count(*) FROM materialize.public.t) FROM materialize.public.v WHERE EXISTS (SELECT 1 FROM materialize.public.t)"),
+                ("empty", "CREATE VIEW materialize.public.empty AS SELECT 1 AS a"),
             ] {
                 ids.push(create_collection_input_item(&mut catalog, name, sql).await);
             }
-            let [table, view, typed, implicit] = ids[..] else {
+            let [table, view, typed, implicit, nested, empty] = ids[..] else {
                 unreachable!()
             };
+            for id in &ids[1..] {
+                let entry = catalog.state.get_entry_by_global_id(id);
+                let CatalogItem::View(view) = entry.item() else {
+                    panic!("expected view")
+                };
+                assert_eq!(view.raw_dependencies, view.raw_expr.depends_on());
+            }
+            assert_eq!(catalog.state.logical_collection_inputs([nested]), BTreeSet::from([table]));
+            assert!(catalog.state.logical_collection_inputs([empty]).is_empty());
 
             // pg_typeof discards its argument during planning, so the read of `v`
             // survives only in name resolution.
