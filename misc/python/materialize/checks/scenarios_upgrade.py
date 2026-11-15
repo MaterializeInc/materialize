@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
@@ -836,14 +837,19 @@ class SelfManagedRandomUpgradePath(Scenario):
 
         return generate_random_upgrade_path(versions, self.rng)
 
+    @cached_property
+    def upgrade_path(self) -> list[MzVersion]:
+        return self._generate_random_upgrade_path(self.self_managed_versions)
+
     def base_version(self) -> MzVersion:
-        return self.self_managed_versions[0]
+        # Checks gate on base_version(), so it must be the version Initialize
+        # runs on, which the random path can place well after the oldest
+        # supported one.
+        return self.upgrade_path[0]
 
     def actions(self) -> list[Action]:
 
-        versions = self._generate_random_upgrade_path(self.self_managed_versions) + [
-            None
-        ]
+        versions = self.upgrade_path + [None]
 
         mz_services = create_mz_service_upgrade_info_list(
             versions,
