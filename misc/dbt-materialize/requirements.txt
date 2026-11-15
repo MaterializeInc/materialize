@@ -18,7 +18,7 @@ certifi==2026.10.23
     # via requests
 charset-normalizer==3.5.2
     # via requests
-click==8.5.0
+click==8.5.1
     # via dbt-core
 colorama==0.4.6
     # via dbt-common
@@ -62,7 +62,7 @@ freezegun==1.5.5
     # via dbt-tests-adapter
 idna==3.20
     # via requests
-importlib-metadata==8.9.0
+importlib-metadata==10.2.0
     # via metricflow
 iniconfig==2.3.1
     # via pytest
@@ -82,6 +82,8 @@ jsonschema==4.26.0
     #   metricflow
 jsonschema-specifications==2025.9.1
     # via jsonschema
+lazy-importer==0.1.0
+    # via importlib-metadata
 leather==0.4.1
     # via agate
 markupsafe==3.0.4
@@ -125,11 +127,11 @@ protobuf==6.33.6
     #   dbt-protos
 psycopg2-binary==2.9.13
     # via dbt-postgres
-pydantic==2.14.2
+pydantic==2.14.3
     # via
     #   dbt-core
     #   metricflow
-pydantic-core==2.50.2
+pydantic-core==2.50.4
     # via pydantic
 pygments==2.21.0
     # via pytest
@@ -179,7 +181,7 @@ six==1.17.0
     # via python-dateutil
 snowplow-tracker==1.1.0
     # via dbt-core
-sqlglot==30.29.0
+sqlglot==30.31.0
     # via metricflow
 sqlparse==0.6.1
     # via dbt-core
