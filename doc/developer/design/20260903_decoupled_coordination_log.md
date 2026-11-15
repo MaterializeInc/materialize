@@ -38,12 +38,20 @@ Catalog-server replicas committed 80/328 and 66/365. More CPU did not resolve
 starvation. All containers are removed and the aggregate cap is restored to eight
 CPUs. Restoration also passed an independent supervisor-SIGKILL check.
 
-Next: analyze the narrower phase measurement running at the original resource
-limits (`aj-native-parallel-dd86651a`). Measurement-only counters separate
-logical-input discovery, upper observations, constraint propagation and staging.
-Affected type-checks, targeted tests and the scratch debug build pass.
-No further behavioral optimization is selected. Transaction repair `e112e930`
-remains local and unpushed.
+The narrower original-cap measurement passed, without resolving intermittency.
+Dependency discovery is expensive: plan discovery takes 24–27ms at the median,
+including 18–19ms in logical walks. Each publisher also revalidates 50 maintained
+requirements in about 11ms. Reduction takes 1–3ms and upper observations less
+than 1ms. Preliminary application remains substantial and is not decomposed.
+These are wall timings, not CPU attribution. Full evidence and limitations are in
+`publication-work-findings.md` below.
+
+Next: examine reuse of validated logical inputs when structural dependencies are
+unchanged, and shared dependency discovery within a candidate. Establish the
+invalidation boundary before choosing an optimization. Preserve safety validation
+and return structural, policy, binding and ownership changes to their existing
+validation paths. No further behavioral change is selected. Measurement commit
+`4b94781a` and transaction repair `e112e930` remain local and unpushed.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -136,10 +144,11 @@ Helpers and receipts are in `upsert-oom-investigation/`. Comparison debug binari
 are pinned there as `native-publication-marks-candidate`, verified by
 `marks-publication-build-source-sha256.json` and
 `native-publication-marks-binaries.json`. The eight-file transfer is recorded in
-`publication-marks-source-transfer.json`. The original-cap measurement is running
-with `native-publication-work-candidate`, verified by
+`publication-marks-source-transfer.json`. The completed original-cap measurement
+used `native-publication-work-candidate`, verified by
 `work-publication-build-source-sha256.json` and
-`native-publication-work-binaries.json`. Local disk has about 40GiB free.
+`native-publication-work-binaries.json`. No test runtime or build is active.
+Local disk has about 40GiB free. Worker disk has about 240GiB free.
 
 No Persist source changed. Runtime supervision has independent systemd post-stop
 cleanup, verified with a real SIGKILL. CLI authentication is restored. No access
@@ -183,8 +192,9 @@ Essential pointers, relative to the evidence root:
   lifetimes, not the original profile's shorter window.
   Per-publisher comparison: `six-cpu-publication-comparison.{md,json}`.
   Measurement build: `work-publication-build-evidence.tar.gz` and
-  `work-publication-source-updates.json`. Running measurement:
-  `index-four-work-launch.json` and `index-four-work-driver.log`.
+  `work-publication-source-updates.json`. Completed measurement:
+  `index-four-work-evidence.tar.gz`, `publication-work-phases.json` and
+  `publication-work-findings.md`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
