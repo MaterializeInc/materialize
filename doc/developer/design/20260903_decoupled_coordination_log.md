@@ -6,8 +6,8 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: wire the prepared fixtures into the supervised zippy runner, then run
-zippy/restore and the latest compatible-version pair. Restarting the retained
+Next: run the prepared supervised zippy runner, then the latest compatible-version
+pair. Restarting the retained
 worker through 06:00 UTC has been requested, not approved. The local VM cannot
 safely host the full-size runtime budget.
 The core candidates are hash-verified and execute locally with `--version`.
@@ -123,6 +123,11 @@ Essential pointers in `upsert-oom-investigation/`:
   checks are reproducible with `check_zippy_fixture_render.py`. These are fixture
   checks, not zippy/restore acceptance or standalone-image CI. The repository's
   SSH fixture parent is available locally (`zippy-ssh-image-pull.log`).
+  Runner: `native_zippy.py`, with `NATIVE_ZIPPY_SCENARIO=KafkaSources` or
+  `PostgresCdc`. Both configurations passed `check_native_zippy.py` locally.
+  Review dispositions: `zippy-runner-review-resolution.json`. A workflow pass
+  still requires crash-log review before acceptance. The inherited 1800s outer
+  guard may abort a long case, which is incomplete evidence, not a workflow bug.
   The standalone storaged native bootstrap is present. A private wrapper must
   retain the current binary mount through its inner service override. KafkaSources
   uses managed storage, while PostgresCdc exercises standalone storaged.
