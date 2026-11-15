@@ -21,8 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.50.1
-*Released to Materialize Cloud: 2026-11-19* <br>
-*Released to Materialize Self-Managed: 2026-11-20* <br>
+*Released to Materialize Self-Managed: 2026-11-15* <br>
 
 ### Bug Fixes {#v26.50.1-bug-fixes}
 - Fixed a dataflow retaining memory proportional to the largest batch it consolidated until the dataflow was dropped, a regression introduced in v26.50.0 that affected consolidation during rendering, including the final consolidation of top-K results.
