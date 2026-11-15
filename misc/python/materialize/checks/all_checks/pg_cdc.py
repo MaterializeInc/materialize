@@ -14,7 +14,6 @@ from typing import Any
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import sanitizer_enabled
 
 
 class PgCdcBase:
@@ -281,14 +280,13 @@ class PgCdcNoWait(PgCdcBase, Check):
 @externally_idempotent(False)
 class PgCdcMzNow(Check):
     # A row sits in the temporal filter's view for WINDOW_SECS after its
-    # timestamp, and the assertions below only count rows younger than
-    # SLACK_SECS. Retrying recovers from neither deadline: a row that takes
-    # longer than WINDOW_SECS to arrive never enters the view at all, and one
-    # that ages past SLACK_SECS stops counting towards the assertion. A
-    # sanitized binary ingests slowly enough to hit both.
-    WINDOW_SECS = 600 if sanitizer_enabled() else 60
-    # SLACK_SECS sits just above WINDOW_SECS rather than scaling with it: the
-    # "no rows older than SLACK_SECS" assertion is what proves the filter
+    # timestamp. A row dated `NOW()` that takes longer than WINDOW_SECS to
+    # arrive never enters the view, and no retry recovers it. A slow host or a
+    # sanitized binary lags that much, so validate() dates its rows LEAD_SECS
+    # ahead and asserts on those.
+    WINDOW_SECS = 60
+    LEAD_SECS = 3600
+    # The "no rows older than SLACK_SECS" assertion is what proves the filter
     # retracts, and it only proves it for rows that should already have left the
     # view. The margin absorbs the lag between `mz_now()` and wall clock, which
     # decides how long after WINDOW_SECS a row is actually retracted.
@@ -367,18 +365,17 @@ class PgCdcMzNow(Check):
                 13
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A4');
-                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B4');
-                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C4');
-                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D4');
-                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW() + INTERVAL '{self.LEAD_SECS} seconds', 'A4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW() + INTERVAL '{self.LEAD_SECS} seconds', 'B4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW() + INTERVAL '{self.LEAD_SECS} seconds', 'C4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW() + INTERVAL '{self.LEAD_SECS} seconds', 'D4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW() + INTERVAL '{self.LEAD_SECS} seconds', 'E4');
                 DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
-                UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
+                UPDATE postgres_mz_now_table SET f1 = NOW() + INTERVAL '{self.LEAD_SECS} seconds' WHERE f2 = 'E1'
 
-                # Expect some rows newer than SLACK_SECS in view
-                > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
-                true
+                # Expect the rows dated ahead (A4 to E4, E1) in view
+                > SELECT COUNT(*) FROM postgres_mz_now_view WHERE f1 > NOW();
+                6
 
                 # Expect no rows older than SLACK_SECS in view
                 > SELECT COUNT(*) FROM postgres_mz_now_view
