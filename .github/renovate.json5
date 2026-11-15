@@ -57,7 +57,7 @@
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
     },
     {
