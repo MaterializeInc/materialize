@@ -31,13 +31,19 @@ acceptance. Compare per-publisher candidate timings, CPU/throttling and commit
 success rates, and obtain usable CPU attribution or narrower stage measurements
 before another behavioral change.
 
-Runtime is blocked by expired scratch SSO. The old worker's lease has also expired
-and its state cannot yet be queried. The local fallback has only 9.3GiB available
-and older binaries, insufficient for this unchanged fixture. The diagnostic runner
-and independent post-stop restoration helper are prepared and mock-checked. After
-authentication, verify the worker/artifacts, test restoration under supervisor
-termination, then launch `index-four-six-cpu-launch.json`. No CPU limits have been
-changed. Transaction repair `e112e930` remains local and unpushed.
+The six-CPU diagnostic failed the unchanged post-DROP permission deadline.
+Its old/new adapter candidate medians with late constraints were 125/77ms,
+but only 0/261 and 30/345 traced derived attempts committed, respectively.
+Catalog-server replicas committed 80/328 and 66/365. More CPU did not resolve
+starvation. All containers are removed and the aggregate cap is restored to eight
+CPUs. Restoration also passed an independent supervisor-SIGKILL check.
+
+Next: analyze the narrower phase measurement running at the original resource
+limits (`aj-native-parallel-dd86651a`). Measurement-only counters separate
+logical-input discovery, upper observations, constraint propagation and staging.
+Affected type-checks, targeted tests and the scratch debug build pass.
+No further behavioral optimization is selected. Transaction repair `e112e930`
+remains local and unpushed.
 
 Keep the original workloads, bounds and resource caps. Do not increase publication
 cadence, retries or timeouts, split publication, or add consensus refreshes merely
@@ -125,17 +131,19 @@ not arbitrary-release, builtin-migration or rebuilt-image CI coverage.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/`.
 
-Prior worker `i-0b3699392b71bd7d2` had a lease ending at 22:30 UTC November 14.
-Its current state is unknown until scratch authentication is restored.
-Helpers and receipts are in `upsert-oom-investigation/`. Current debug binaries
+Worker `i-0b3699392b71bd7d2` is accessible. Its lease ends at 23:00 UTC November 15.
+Helpers and receipts are in `upsert-oom-investigation/`. Comparison debug binaries
 are pinned there as `native-publication-marks-candidate`, verified by
 `marks-publication-build-source-sha256.json` and
 `native-publication-marks-binaries.json`. The eight-file transfer is recorded in
-`publication-marks-source-transfer.json`. No worker or local runtime is active.
-Local disk has about 41GiB free after removing disposable incremental caches.
+`publication-marks-source-transfer.json`. The original-cap measurement is running
+with `native-publication-work-candidate`, verified by
+`work-publication-build-source-sha256.json` and
+`native-publication-work-binaries.json`. Local disk has about 40GiB free.
 
 No Persist source changed. Runtime supervision has independent systemd post-stop
-cleanup, verified with a real SIGKILL. CLI authentication failed with an expired SSO token on November 15. No access rules changed. Prior worker `i-064fa517ec1d8bbdb` is
+cleanup, verified with a real SIGKILL. CLI authentication is restored. No access
+rules changed. Prior worker `i-064fa517ec1d8bbdb` is
 terminated and its old helper is not reusable.
 
 Keep heavy work sequential and off the local VM. Worker aggregate limits are
@@ -169,8 +177,14 @@ Essential pointers, relative to the evidence root:
   `index-four-limiting-grants.json`.
   Transaction-stage trace: `index-four-trace-evidence.tar.gz`,
   `index-four-trace-analysis.json` and `index-four-trace-findings.md`.
-  Prepared diagnostic: `native_index_four_six_cpu.py`, `diagnostic_cpu_caps.py`,
-  `index-four-six-cpu-launch.json`, and `six-cpu-preparation-checks.json`.
+  Six-CPU diagnostic: `index-four-six-cpu-evidence.tar.gz`,
+  `publication-six-cpu-findings.json`, `publication-six-cpu-all-processes.txt`,
+  and `six-cpu-restoration-sigkill.log`. Its CPU counters cover full deployment
+  lifetimes, not the original profile's shorter window.
+  Per-publisher comparison: `six-cpu-publication-comparison.{md,json}`.
+  Measurement build: `work-publication-build-evidence.tar.gz` and
+  `work-publication-source-updates.json`. Running measurement:
+  `index-four-work-launch.json` and `index-four-work-driver.log`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.

@@ -10,6 +10,7 @@
 //! Index admission and retained-plan protection at the catalog compaction boundary.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -221,6 +222,7 @@ pub(super) async fn constrain_index_retention(
     if !candidate.catalog_read_protection_enabled() {
         return Ok(());
     }
+    let discovery_started = Instant::now();
     let advancing: BTreeSet<_> = changed
         .iter()
         .copied()
@@ -239,13 +241,20 @@ pub(super) async fn constrain_index_retention(
         })
         .collect();
     let indexes = affected_indexes(candidate, &advancing);
+    let index_count = indexes.len();
+    let mut logical_elapsed = Duration::ZERO;
+    let mut input_incidences = 0usize;
+    let mut skipped_logs = 0usize;
     let mut requirements = Vec::new();
     for id in indexes {
         let entry = candidate.get_entry_by_global_id(&id);
         let CatalogItem::Index(index) = entry.item() else {
             unreachable!("selected an index");
         };
+        let logical_started = Instant::now();
         let inputs = candidate.logical_collection_inputs([index.on]);
+        logical_elapsed += logical_started.elapsed();
+        input_incidences += inputs.len();
         if inputs.iter().any(|input| {
             matches!(
                 candidate.get_entry_by_global_id(input).item(),
@@ -254,6 +263,7 @@ pub(super) async fn constrain_index_retention(
         }) {
             // A log-dependent index has replica-local history. Persisted catalog
             // tables are not logs and retain the normal object-owned protection.
+            skipped_logs += 1;
             continue;
         }
         let policy = candidate.index_read_policy(id).expect("selected an index");
@@ -304,6 +314,13 @@ pub(super) async fn constrain_index_retention(
         .iter()
         .flat_map(|r| r.shards.iter().copied())
         .collect();
+    let shard_count = shards.len();
+    let requirement_count = requirements.len();
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_retention_discovery", changed_count = changed.len(),
+        advancing_count = advancing.len(), index_count, input_incidences, skipped_logs,
+        shard_count, requirement_count, ?logical_elapsed,
+        elapsed = ?discovery_started.elapsed(), "catalog candidate section complete");
     // A finite durable upper justifies the candidate policy even after an
     // unobserved closure, as with controller policy changes on cached frontiers.
     // Observed empty uppers contribute nothing to the meet. They grant no new
@@ -314,7 +331,8 @@ pub(super) async fn constrain_index_retention(
     // require cold acquisition, but must never be omitted from this complete set.
     // Failed observations abort publication, retaining permission and allowing
     // the publisher to retry the complete candidate against a fresh prefix.
-    let uppers: BTreeMap<_, _> = stream::iter(shards)
+    let observation_started = Instant::now();
+    let uppers: Result<BTreeMap<_, _>, CatalogError> = stream::iter(shards)
         .map(|shard| async move {
             let upper = persist
                 .observed_upper::<SourceData, (), Timestamp, StorageDiff>(
@@ -330,7 +348,15 @@ pub(super) async fn constrain_index_retention(
         })
         .buffer_unordered(32)
         .try_collect()
-        .await?;
+        .await;
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_retention_observations", shard_count,
+        outcome = if uppers.is_ok() { "ok" } else { "error" },
+        elapsed = ?observation_started.elapsed(), "catalog candidate section complete");
+    let uppers = uppers?;
+    let staging_started = Instant::now();
+    let mut setter_elapsed = Duration::ZERO;
+    let mut setter_calls = 0usize;
     for IndexRetention {
         id,
         shards,
@@ -364,9 +390,16 @@ pub(super) async fn constrain_index_retention(
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 ?id, proposed = ?current, constrained = ?bound,
                 "index retention constrained publication");
+            let setter_started = Instant::now();
+            setter_calls += 1;
             tx.set_collection_compaction_bound(id, bound.into_option())?;
+            setter_elapsed += setter_started.elapsed();
         }
     }
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_retention_staging", requirement_count, setter_calls,
+        ?setter_elapsed, elapsed = ?staging_started.elapsed(),
+        "catalog candidate section complete");
     Ok(())
 }
 
@@ -382,6 +415,18 @@ pub(super) fn constrain_plan_inputs(
     if !state.catalog_read_protection_enabled() {
         return Ok(());
     }
+    let discovery_started = Instant::now();
+    let mut logical_calls = 0usize;
+    let mut logical_leaves = 0usize;
+    let mut logical_elapsed = Duration::ZERO;
+    let mut logical_inputs = |id| {
+        let started = Instant::now();
+        let inputs = state.logical_collection_inputs([id]);
+        logical_elapsed += started.elapsed();
+        logical_calls += 1;
+        logical_leaves += inputs.len();
+        inputs
+    };
     let changed: BTreeSet<_> = tx
         .changed_compaction_bounds()
         .chain(tx.changed_maintained_read_requirements())
@@ -393,6 +438,9 @@ pub(super) fn constrain_plan_inputs(
     for input in &changed {
         owners.extend(state.written_plan_importers(*input).map(|(owner, _)| owner));
     }
+    let owner_count = owners.len();
+    let mut selected_plan_count = 0usize;
+    let mut selected_import_count = 0usize;
     let mut bounds: BTreeMap<_, _> = tx
         .changed_compaction_bounds()
         .filter_map(|id| tx.proposed_compaction_bound(id).map(|bound| (id, bound)))
@@ -409,7 +457,7 @@ pub(super) fn constrain_plan_inputs(
                 };
                 bound.extend(state.client_read_frontier(owner));
                 bounds.insert(owner, bound);
-                state.logical_collection_inputs([index.on])
+                logical_inputs(index.on)
             }
             CatalogItem::MaterializedView(_) => {
                 let Some(requirement) = state.maintained_read_requirements().get(&owner) else {
@@ -426,6 +474,8 @@ pub(super) fn constrain_plan_inputs(
             _ => continue,
         };
         for (_, plan) in state.written_plans_for_owner(owner) {
+            selected_plan_count += 1;
+            selected_import_count += plan.imports.len();
             inputs.extend(plan.imports.iter().copied().filter(|input| {
                 !matches!(entry.item(), CatalogItem::MaterializedView(_))
                     || !state.maintained_read_requirements()[&owner]
@@ -445,12 +495,9 @@ pub(super) fn constrain_plan_inputs(
             }
             if let CatalogItem::Index(index) = entry.item()
                 && tx.proposed_compaction_bound(input).is_none()
-                && state
-                    .logical_collection_inputs([index.on])
-                    .iter()
-                    .any(|id| {
-                        matches!(state.get_entry_by_global_id(id).item(), CatalogItem::Log(_))
-                    })
+                && logical_inputs(index.on).iter().any(|id| {
+                    matches!(state.get_entry_by_global_id(id).item(), CatalogItem::Log(_))
+                })
             {
                 continue;
             }
@@ -462,9 +509,20 @@ pub(super) fn constrain_plan_inputs(
         }
         requirements.insert(owner, governed);
     }
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_plan_discovery", changed_count = changed.len(), owner_count,
+        selected_plan_count, selected_import_count, logical_calls, logical_leaves,
+        ?logical_elapsed, governed_edges = requirements.values().map(BTreeSet::len).sum::<usize>(),
+        bound_count = bounds.len(), elapsed = ?discovery_started.elapsed(),
+        "catalog candidate section complete");
     // Reducing an importer's proposal can constrain its imports in turn. The
     // iteration only meets a finite set of proposed and required frontiers.
+    let reduction_started = Instant::now();
+    let mut passes = 0usize;
+    let mut edge_visits = 0usize;
+    let mut reductions = 0usize;
     loop {
+        passes += 1;
         let mut changed = false;
         for (owner, inputs) in &requirements {
             let frontier = match state.get_entry_by_global_id(owner).item() {
@@ -475,9 +533,11 @@ pub(super) fn constrain_plan_inputs(
                     .collect(),
             };
             for input in inputs {
+                edge_visits += 1;
                 let bound = bounds.get_mut(input).expect("governed input has a bound");
                 if !PartialOrder::less_equal(bound, &frontier) {
                     bound.meet_assign(&frontier);
+                    reductions += 1;
                     changed = true;
                 }
             }
@@ -486,6 +546,12 @@ pub(super) fn constrain_plan_inputs(
             break;
         }
     }
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_plan_reduction", passes, edge_visits, reductions,
+        elapsed = ?reduction_started.elapsed(), "catalog candidate section complete");
+    let staging_started = Instant::now();
+    let bound_count = bounds.len();
+    let mut setter_calls = 0usize;
     for (id, bound) in bounds {
         let floor = base
             .collection_compaction_bounds()
@@ -501,9 +567,13 @@ pub(super) fn constrain_plan_inputs(
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 ?id, proposed = ?tx.proposed_compaction_bound(id), constrained = ?bound,
                 "plan inputs constrained publication");
+            setter_calls += 1;
             tx.set_collection_compaction_bound(id, bound.into_option())?;
         }
     }
+    tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+        phase = "candidate_plan_staging", bound_count, setter_calls,
+        elapsed = ?staging_started.elapsed(), "catalog candidate section complete");
     Ok(())
 }
 

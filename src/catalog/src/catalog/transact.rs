@@ -1807,6 +1807,10 @@ impl Catalog {
         // Validate the final requirement, including a creator's optional frontier
         // selection. Dropped owners need no protection. Publications may advance
         // recovery, but may not change the logical inputs that define it.
+        let requirement_validation_started = Instant::now();
+        let updated_requirement_count = updated_requirements.len();
+        let mut logical_calls = 0usize;
+        let mut logical_leaves = 0usize;
         for id in updated_requirements {
             let Some(entry) = preliminary_state.try_get_entry_by_global_id(&id) else {
                 continue;
@@ -1826,7 +1830,10 @@ impl Catalog {
                 }
                 continue;
             }
-            if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
+            let logical_inputs = materialized_view_recovery_inputs(&preliminary_state, mv);
+            logical_calls += 1;
+            logical_leaves += logical_inputs.len();
+            if requirement.inputs != logical_inputs {
                 return Err(CatalogError::internal(
                     "materialized view read protection",
                     format!("incomplete logical inputs for {id}"),
@@ -1836,6 +1843,11 @@ impl Catalog {
                 validate_materialized_view_birth(mv, requirement.frontier)?;
             }
         }
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate_requirement_inputs", updated_requirement_count,
+            logical_calls, logical_leaves, committing = matches!(mode, TransactInnerMode::Commit),
+            elapsed = ?requirement_validation_started.elapsed(),
+            "catalog candidate section complete");
 
         tx.finalize_index_compaction_bounds();
         let retention_started = Instant::now();
