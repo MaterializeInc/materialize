@@ -28,10 +28,15 @@ only the diagnostic target reduced measured inner application residence from 4.5
 to 0.66s with similar call counts. Batches are not perfectly matched. Whole-deployment
 CPU remains high. This neither dismisses original failures nor resolves starvation.
 
-Next: finish unprofiled normal-INFO run `aj-native-parallel-c410a6cf`, then repeat
-at original limits. Do not redesign catalog maps based on the instrumented timings
-or expand into a general tracing fix without scope agreement. Keep the same
-workload, assertions, cadence and caps. No product tracing change has been made.
+Two unprofiled normal-INFO runs passed the unchanged four-index case at original
+limits. They establish targeted progress coverage, not resolved intermittency or
+broad acceptance. Do not redesign catalog maps based on the instrumented timings
+or expand into a general tracing fix without scope agreement.
+
+Next: inspect native data-ingest upgrade run `aj-native-parallel-4cd156ea`.
+It runs `SingleSensorUpdating0dtDeploy` with seed42, default 400s duration and
+replica sizes, PostgreSQL/MinIO, and the pinned debug candidate. Remaining workloads
+are still pending. Keep assertions, cadence and caps unchanged.
 Existing application keeps catalog maps structurally shared. Full final reprojection
 was absent from the matched adapter attempts. Empty upper progress already rebases.
 
@@ -96,8 +101,8 @@ and explicit deferrals follow.
   do not identify the retaining queue. Periodic jemalloc gauges are not exact
   simultaneous accounting. Do not raise limits or shrink workloads to hide this.
 - Data-ingest, randomized zippy/restore and bumped-version platform acceptance
-  remain incomplete. Parallel stress and one-index publication now have current
-  passes, but the current four-index case fails and earlier intermittent failures remain unexplained. The source
+  remain incomplete. Parallel stress, one-index publication and unprofiled four-index
+  publication have current passes. Earlier intermittent failures remain unresolved. The source
   status latency repeat passes. Adapter-loss needs a Persist CLI/jobs artifact.
 - Positive native builtin-schema migrations, pre-native conversion and current-native
   Kubernetes/operator/Terraform integration are unsupported within M3. Keep guards
@@ -189,6 +194,10 @@ Essential pointers, relative to the evidence root:
   `publication-tracing-control.json`, `publication-leaf-v2-evidence.tar.gz`, and
   `publication-info-evidence.tar.gz`. Isolated reproduction:
   `tracing-filter-control-results.log` and `tracing-filter-control/`.
+  Unprofiled original-limit verification:
+  `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
+  Prepared ingest upgrade case: `data-ingest-0dt-launch.json` and
+  `native_data_ingest_0dt.py`. This is one default-duration workload, not the suite.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
