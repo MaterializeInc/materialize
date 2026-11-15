@@ -6,10 +6,9 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: run the prepared supervised zippy runner, then the latest compatible-version
-pair. Restarting the retained worker through 06:00 UTC has been requested, not
-approved. The local VM cannot
-safely host the full-size runtime budget.
+KafkaSources is running on the worker as `aj-native-parallel-81e1a8b8`.
+Next: inspect its outcome and logs, run PostgresCdc, then verify the latest
+compatible-version pair. Do not restart a live run after an observation timeout.
 The core candidates are hash-verified and execute locally with `--version`.
 Ancillary binaries are separately preserved and pass their help commands. Their
 build passed with one job, two CPUs and 6 GiB, without changing Cargo.lock.
@@ -80,11 +79,11 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 
 Evidence root: `/home/ubuntu/.local/share/aj/m3-evidence/native-only/`.
 Current investigation directory: `upsert-oom-investigation/` below that root,
-mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). Its recorded expiry is
-2026-11-15 23:00 UTC. An extension to 06:00 UTC was requested, not approved or made.
-The instance is stopped, with its disk retained. See `worker-stop-result.json`
-and `worker-final-state.txt`. All owned test runtimes were cleaned up before
-shutdown. Binary preservation is complete.
+mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). The user approved
+restarting it. Since the proposed 06:00 deadline had passed, the new bounded window
+ends at 2026-11-16 15:30 UTC. Both expiry tags and `aj-worker-deadline.timer` are
+set. Aggregate resource limits were restored after reboot and verified.
+See `worker-resume-{preflight,limits}.log`. Binary preservation is complete.
 Credentials were restored without access-rule changes.
 Use `remote_with_cli_credentials.py` in the investigation directory.
 
@@ -127,6 +126,8 @@ Essential pointers in `upsert-oom-investigation/`:
   SSH fixture parent is available locally (`zippy-ssh-image-pull.log`).
   Runner: `native_zippy.py`, with `NATIVE_ZIPPY_SCENARIO=KafkaSources` or
   `PostgresCdc`. Both configurations passed `check_native_zippy.py` locally.
+  Live run: `zippy-kafka-{launch.json,driver.log,progress.log}` and worker project
+  `aj-native-parallel-81e1a8b8`. Worker fixture checks passed before launch.
   Review dispositions: `zippy-runner-review-resolution.json`. A workflow pass
   still requires crash-log review before acceptance. The inherited 1800s outer
   guard may abort a long case, which is incomplete evidence, not a workflow bug.
