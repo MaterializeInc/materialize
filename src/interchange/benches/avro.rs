@@ -9,8 +9,8 @@
 use std::hint::black_box;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
-use criterion::{Criterion, Throughput};
 use mz_avro::types::Value as AvroValue;
+use mz_bench_util::{Criterion, Throughput};
 use mz_interchange::avro::{Decoder, WriterSchemaProvider, parse_schema};
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;

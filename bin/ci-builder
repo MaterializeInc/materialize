@@ -423,6 +423,12 @@ case "$cmd" in
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
             )
 
+            # Docker's default seccomp profile only allows perf_event_open,
+            # which counting instructions in benches needs, with CAP_PERFMON.
+            if is_truthy "${CI_BUILDER_PERF_EVENTS:-0}"; then
+                args+=(--cap-add=PERFMON)
+            fi
+
             if [[ $secrets == "true" ]]; then
                 # Allow Docker-in-Docker by mounting the Docker socket in the
                 # container. Host networking allows us to see ports created by

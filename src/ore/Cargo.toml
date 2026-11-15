@@ -98,6 +98,7 @@ anyhow.workspace = true
 criterion.workspace = true
 lz4_flex.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true

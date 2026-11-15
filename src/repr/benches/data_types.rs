@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use dec::Context;
 use mz_alloc_default as _;
+use mz_bench_util::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 

@@ -50,6 +50,7 @@
 /src/audit-log                      @MaterializeInc/adapter
 /src/avro                           @MaterializeInc/cluster
 /src/avro-derive                    @MaterializeInc/cluster
+/src/bench-util                     @MaterializeInc/testing
 /src/build-id                       @teskje
 /src/build-info                     @MaterializeInc/testing @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter

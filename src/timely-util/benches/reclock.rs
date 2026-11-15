@@ -10,11 +10,11 @@
 use mz_alloc_default as _;
 use std::sync::mpsc::Receiver;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use differential_dataflow::{
     ExchangeData,
     input::{Input, InputSession},
 };
+use mz_bench_util::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use mz_ore::Overflowing;
 use mz_timely_util::capture::PusherCapture;

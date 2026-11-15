@@ -11,7 +11,7 @@ use mz_alloc_default as _;
 use std::hint::black_box;
 
 use chrono::DateTime;
-use criterion::{Criterion, criterion_group, criterion_main};
+use mz_bench_util::{Criterion, criterion_group, criterion_main};
 use mz_expr::ColumnOrder;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RowArena};

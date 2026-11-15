@@ -9,7 +9,7 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput};
+use mz_bench_util::{Criterion, Throughput};
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_ore::cast::CastFrom;
 use prost::Message;
