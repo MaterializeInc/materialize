@@ -6,10 +6,9 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: inspect delete-heavy ingest upgrade run `aj-native-parallel-6d903002`.
-It uses `DeleteDataAtEndOfDay0dtDeploys`, seed42, default 400s duration and replica
-sizes, PostgreSQL/MinIO, and pinned debug binaries. Then cover remaining ingestion
-workloads, randomized zippy/restore, and the latest compatible-version pair.
+Next: finish and hash-verify local preservation of the pinned native binaries
+before worker expiry. Then cover randomized zippy/restore and the latest
+compatible-version pair. Those need additional artifacts and runtime verification.
 Do not reduce workloads, assertions, cadence or retry limits to obtain passes.
 
 ## Current outcome
@@ -35,9 +34,11 @@ An isolated reproduction confirms rejected spans can still acquire registry IDs.
 Do not redesign catalog maps based on the instrumented timings or expand into a
 tracing fix without scope agreement. Whole-deployment CPU remains high.
 
-The default-duration single-sensor ingestion upgrade case passed final data
-comparison after repeated promotions and explicit retirements. This is same-build
-native coverage with mounted binaries, not the full ingestion suite or green CI.
+Every declared ingestion workload passed at its default duration, including
+promotions, explicit retirements and forced restarts. Captured logs have no panic
+signatures. This is seed42, same-build native coverage with mounted binaries across
+four separate runs, not the full ingestion suite in one invocation or green CI.
+Original assertions, replica sizes and resource limits were retained.
 Earlier lifecycle/DDL coverage used distinct 26.46/26.47 package versions sharing
 implementation and plan encoding. It is not latest-binary, arbitrary-release or
 builtin-migration coverage. Earlier checks also cover both Timely topologies,
@@ -45,8 +46,9 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 
 ## Live gaps and approved deferrals
 
-- Complete remaining data-ingest workloads, seed42 default-length zippy scenarios
-  and actual backup/restore. PostgreSQL CDC deliberately excludes restore.
+- Complete seed42 default-length zippy scenarios and actual backup/restore.
+  The combined data-ingest invocation remains unverified despite individual
+  scenario passes. PostgreSQL CDC deliberately excludes restore.
   Missing zippy fixtures include balancerd, ssh-bastion and compatible Persist CLI/jobs.
 - Rebuild and verify the latest compatible-version pair. Adapter-loss coverage also
   needs compatible Persist CLI/jobs. Do not substitute old candidate artifacts.
@@ -71,7 +73,9 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 Evidence root: `/home/ubuntu/.local/share/aj/m3-evidence/native-only/`.
 Current investigation directory: `upsert-oom-investigation/` below that root,
 mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). Its recorded expiry is
-2026-11-15 23:00 UTC. Credentials were restored without access-rule changes.
+2026-11-15 23:00 UTC. An extension to 06:00 UTC was requested, not yet approved.
+Preserve current candidate binaries locally before expiry if approval does not arrive.
+Credentials were restored without access-rule changes.
 Use `remote_with_cli_credentials.py` in the investigation directory.
 
 Keep heavy work sequential and off the local VM. Runtime aggregate limits are
@@ -85,8 +89,10 @@ Essential pointers in `upsert-oom-investigation/`:
   `native-publication-projection-binaries.json`. Build/check receipts:
   `projection-publication-build-evidence.tar.gz`.
 - Four-index verification: `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
-- Ingestion upgrade pass: `data-ingest-0dt-evidence.tar.gz`. Active delete-heavy
-  case: `data-ingest-delete-0dt-launch.json`, `native_data_ingest_delete_0dt.py`.
+- Ingestion passes: `data-ingest-0dt-evidence.tar.gz`,
+  `data-ingest-delete-0dt-evidence.tar.gz`, `data-ingest-normal-evidence.tar.gz`,
+  and `data-ingest-disruptions-evidence.tar.gz`. Coverage against current workload
+  declarations: `data-ingest-native-coverage.json`.
 - Observer-cost evidence: `publication-tracing-findings.md`,
   `publication-tracing-control.json`, `publication-leaf-v2-evidence.tar.gz`,
   `publication-info-evidence.tar.gz`, and `tracing-filter-control/`.
