@@ -6,9 +6,11 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Next: assemble the zippy fixtures around the preserved native binaries and newly
-built Persist CLI/balancerd, then run zippy/restore and the latest compatible-version
-pair. The core candidates are hash-verified and execute locally with `--version`.
+Next: wire the prepared fixtures into the supervised zippy runner, then run
+zippy/restore and the latest compatible-version pair. Restarting the retained
+worker through 06:00 UTC has been requested, not approved. The local VM cannot
+safely host the full-size runtime budget.
+The core candidates are hash-verified and execute locally with `--version`.
 Ancillary binaries are separately preserved and pass their help commands. Their
 build passed with one job, two CPUs and 6 GiB, without changing Cargo.lock.
 No local build remains active. Do not replace pinned candidates with incidental
@@ -100,9 +102,7 @@ Essential pointers in `upsert-oom-investigation/`:
   `projection-publication-build-evidence.tar.gz`.
   Local preservation: `native-projection-local-preservation.json`.
   Ancillary binaries: `native-ancillary-preservation.json` and
-  `local-ancillary-only-{build-result.json,driver.log}`. The first build hit its
-  deadline rebuilding unnecessary clusterd/RocksDB. The exact retry was stopped,
-  then the ancillary-only build passed with unchanged resource guards.
+  `local-ancillary-only-{build-result.json,driver.log}`.
   Teardown and cache cleanup: `worker-final-runtime-check.log`,
   `local-build-cache-cleanup.json`.
 - Four-index verification: `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
@@ -117,6 +117,12 @@ Essential pointers in `upsert-oom-investigation/`:
 - Upsert/native-baseline evidence and independent review: `findings.md` and
   `comparison-review.md`. Native stress repair: `parallel-retirement-policy-evidence.tar.gz`.
 - Zippy prerequisites and restore contract: `zippy-acceptance-audit.md`.
+  Prepared fixtures: `zippy_fixture_mounts.py`, `native-zippy-fixtures/` and
+  `zippy-fixture-smoke-result.json`. Both ancillary binaries run in the exact
+  base image, including idle-container Persist CLI execution. Nested-override
+  checks are reproducible with `check_zippy_fixture_render.py`. These are fixture
+  checks, not zippy/restore acceptance or standalone-image CI. The repository's
+  SSH fixture parent is available locally (`zippy-ssh-image-pull.log`).
   The standalone storaged native bootstrap is present. A private wrapper must
   retain the current binary mount through its inner service override. KafkaSources
   uses managed storage, while PostgresCdc exercises standalone storaged.
