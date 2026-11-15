@@ -857,9 +857,11 @@ impl crate::coord::Coordinator {
         // implied hold from `create_dataflow` pins the new collection's `since` at
         // `as_of`, so the subsequent `acquire_read_hold` lands at
         // `as_of <= timestamp`.
+        // The peek is only answered by `target_replica`, so the dataflow it reads is only needed
+        // there. Installing it on every replica runs the query once per replica.
         self.controller
             .compute
-            .create_dataflow(compute_instance, dataflow, None)
+            .create_dataflow(compute_instance, dataflow, target_replica)
             .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
 
         // On failure we must drop the dataflow ourselves, otherwise it leaks.

@@ -876,12 +876,14 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only sink exports are allowed to have a `target_replica`: materialized views, subscribes,
-    /// and metric sinks. A user's `CREATE METRIC SINK` runs untargeted, so every replica renders it
-    /// into its own registry. The coordinator's curated metric sinks are installed per replica and
-    /// do target one, so each replica's series are attributable to it.
+    /// Only sink exports and transient indexes are allowed to have a `target_replica`. Sinks are
+    /// materialized views, subscribes, and metric sinks. A user's `CREATE METRIC SINK` runs
+    /// untargeted, so every replica renders it into its own registry. The coordinator's curated
+    /// metric sinks are installed per replica and do target one, so each replica's series are
+    /// attributable to it. A transient index backs a single slow-path peek, which is sent only to
+    /// its target replica.
     ///
-    /// Panics if called with a dataflow description that has index exports
+    /// Panics if called with a dataflow description that has non-transient index exports
     /// when `target_replica` is set.
     pub fn create_dataflow(
         &mut self,
@@ -898,8 +900,10 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            // A maintained index must exist on every replica, or peeks routed to the other
+            // replicas would find it missing.
             assert!(
-                dataflow.exported_index_ids().next().is_none(),
+                dataflow.exported_index_ids().all(|id| id.is_transient()),
                 "Replica-targeted indexes are not supported"
             );
         }

@@ -1217,9 +1217,9 @@ impl Instance {
                 }
                 target_replica
             }
-            // Skip Peek as we don't allow replica-targeted indexes.
-            ComputeCommand::Peek(_)
-            | ComputeCommand::Hello { .. }
+            // A targeted peek may read a transient index that only its target replica hosts.
+            ComputeCommand::Peek(peek) => self.peeks.get(&peek.uuid).and_then(|p| p.target_replica),
+            ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
