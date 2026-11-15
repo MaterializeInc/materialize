@@ -20,10 +20,16 @@ In the failing capture the old adapter committed 0/252 attempts, with a 137ms
 candidate and 61ms preliminary application. These are wall timings, not CPU
 attribution. The same-update-count timing spread and quota pressure remain material.
 
-Next: analyze the measurement-only projection run (`aj-native-parallel-774b27c6`)
-at the original limits. Targeted checks and the debug build pass. Counters separate
-state/update copies, consolidation, ordering, typed application and cleanup. Do
-not choose another behavioral optimization before inspecting these measurements.
+Projection counters rule out state copying and sorting as the main cost. External
+CPU tracing attributes about 86% of measured application residence to typed update
+application. Retained large preliminary applications consume about 24ms on CPU,
+with additional scheduling delay. These are bounded diagnostic observations, not
+loss-free accounting or precise userspace CPU. Async batch assembly is not the
+evidenced bottleneck. Both latest diagnostic runs passed, but publication conflicts
+remain frequent. No runtime is left running.
+
+Next: distinguish costs inside typed application, including possible debug-filter
+overhead, before another behavioral optimization. Keep the same workload and caps.
 Existing application keeps catalog maps structurally shared. Full final reprojection
 was absent from the matched adapter attempts. Empty upper progress already rebases.
 
@@ -172,7 +178,11 @@ Essential pointers, relative to the evidence root:
   `publication-borrow{,-repeat}-matched.json` and
   `publication-borrow{,-repeat}-cpu.json`.
   Projection measurement: `projection-publication-build-evidence.tar.gz` and
-  `index-four-projection-launch.json`.
+  `index-four-projection-evidence.tar.gz`. Analysis:
+  `publication-projection-findings.md` and `publication-projection-phases.json`.
+  External CPU attribution: `publication-bpf-findings.md`,
+  `publication-bpf-evidence.tar.gz`, `publication-bpf-correlated.json`, and
+  `index-four-bpf-evidence.tar.gz`. This run is diagnostic-only, not acceptance.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
