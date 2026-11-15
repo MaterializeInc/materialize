@@ -6,7 +6,8 @@ Finish native-only ownership, execution and harness cleanup. Preserve adapter
 policy, validated transactions, durable read protection, compatible full writers
 and explicit retirement. Keep Persist and the 60s publication default unchanged.
 
-Publication starvation remains the immediate blocker. Combined publications derive
+Publication progress at original limits remains the immediate verification blocker.
+Combined publications derive
 protection against the current transaction, apply late frontier bounds incrementally,
 and preserve consolidated effects and change marks. Direct versioned expression
 dependencies now travel with definitions, and protection traversal borrows entries
@@ -20,16 +21,17 @@ In the failing capture the old adapter committed 0/252 attempts, with a 137ms
 candidate and 61ms preliminary application. These are wall timings, not CPU
 attribution. The same-update-count timing spread and quota pressure remain material.
 
-Projection counters rule out state copying and sorting as the main cost. External
-CPU tracing attributes about 86% of measured application residence to typed update
-application. Retained large preliminary applications consume about 24ms on CPU,
-with additional scheduling delay. These are bounded diagnostic observations, not
-loss-free accounting or precise userspace CPU. Async batch assembly is not the
-evidenced bottleneck. Both latest diagnostic runs passed, but publication conflicts
-remain frequent. No runtime is left running.
+The targeted DEBUG diagnostics substantially inflate typed application. A calibrated
+leaf profile points to tracing bookkeeping. An isolated reproduction confirms that
+the layer stack allocates catalog spans rejected by the output filter. Removing
+only the diagnostic target reduced measured inner application residence from 4.54s
+to 0.66s with similar call counts. Batches are not perfectly matched. Whole-deployment
+CPU remains high. This neither dismisses original failures nor resolves starvation.
 
-Next: distinguish costs inside typed application, including possible debug-filter
-overhead, before another behavioral optimization. Keep the same workload and caps.
+Next: finish unprofiled normal-INFO run `aj-native-parallel-c410a6cf`, then repeat
+at original limits. Do not redesign catalog maps based on the instrumented timings
+or expand into a general tracing fix without scope agreement. Keep the same
+workload, assertions, cadence and caps. No product tracing change has been made.
 Existing application keeps catalog maps structurally shared. Full final reprojection
 was absent from the matched adapter attempts. Empty upper progress already rebases.
 
@@ -183,6 +185,10 @@ Essential pointers, relative to the evidence root:
   External CPU attribution: `publication-bpf-findings.md`,
   `publication-bpf-evidence.tar.gz`, `publication-bpf-correlated.json`, and
   `index-four-bpf-evidence.tar.gz`. This run is diagnostic-only, not acceptance.
+  Calibrated tracing attribution and INFO control: `publication-tracing-findings.md`,
+  `publication-tracing-control.json`, `publication-leaf-v2-evidence.tar.gz`, and
+  `publication-info-evidence.tar.gz`. Isolated reproduction:
+  `tracing-filter-control-results.log` and `tracing-filter-control/`.
   CPU/quota findings: `publication-cpu-findings.json`,
   `publication-cpu-evidence.tar.gz` and `index-four-marks-profile-evidence.tar.gz`.
   Corrected build: `marks-publication-build-evidence.tar.gz`.
