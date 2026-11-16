@@ -4,7 +4,7 @@ description: "How to read the Self-Managed Materialize monitoring stack from a b
 menu:
   main:
     parent: "monitor-sm"
-    weight: 2
+    weight: 4
     identifier: "o11y-tools-sm"
 ---
 
@@ -46,9 +46,11 @@ Pick a tool by what you are doing:
   [`gcx`](#use-gcx-from-the-command-line).
 
 To query Thanos, Loki, or Alertmanager directly, for example while Grafana is
-down, see [Backend APIs
+down, see [Connect existing
+tooling](/observability/self-managed/storage/#connect-existing-tooling) for the
+stores' addresses, and [Backend APIs
 ⧉](https://materializeinc.github.io/materialize-monitoring/o11y-tools/backend-apis/)
-in the monitoring stack's documentation.
+in the monitoring stack's documentation for example queries.
 
 {{< warning >}}
 Every tool on this page reads all of the telemetry the stack holds. A Grafana
@@ -71,8 +73,8 @@ The following names also come up often:
 - **Dashboard UIDs** start with `mz-mon-`. For example, `mz-mon-env-top` is
   the **Materialize Environment Overview** dashboard.
 
-- **Folder UIDs** are `materialize` for the Materialize dashboards and `infra`
-  for the cluster dashboards.
+- **Folder UIDs** are `mzmon-materialize` for the Materialize dashboards and
+  `mzmon-infra` for the cluster dashboards.
 
 - **The environment label**, `materialize_cloud_organization_name`, scopes
   Materialize metrics to one environment. Self-Managed deployments carry it
@@ -292,6 +294,9 @@ gcx --context mzmon metrics query 'up{namespace="materialize-environment"}' --si
 gcx --context mzmon logs query '{namespace="materialize-environment", app="environmentd"} |= "error"' --since 1h
 gcx --context mzmon dashboards get mz-mon-env-top -o yaml
 ```
+
+Replace `materialize-environment` with the namespace your Materialize
+environment runs in.
 
 Add `--share-link` to a query to print it as a Grafana Explore URL that you can
 send to someone working in a browser.
