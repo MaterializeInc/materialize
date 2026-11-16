@@ -73,8 +73,11 @@ that both sources can answer:
 ![Timelines of the read and write frontiers of two sources, healthy and with source A stalled](/images/serve-results/source-stall-frontiers.svg)
 
 The isolation level adds its own constraint. Under **strict serializable** (the
-default), a query must read at the current time, so any query that reads stalled
-data blocks. Under **serializable**, a query can read at an earlier timestamp,
+default), a query must read at a timestamp at least as late as any result
+Materialize has already served. That timestamp keeps advancing during a stall,
+so any query that reads stalled data blocks. For a guarantee that a query sees
+everything available upstream, see [real-time
+recency](/serve-results/isolation-level/#real-time-recency). Under **serializable**, a query can read at an earlier timestamp,
 so a query whose inputs all stalled together serves results as of the stall.
 
 Blocked queries wait. They do not error, and they complete once the source
