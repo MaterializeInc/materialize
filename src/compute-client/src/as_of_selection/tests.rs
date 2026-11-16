@@ -32,6 +32,7 @@ use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
+use proptest::prelude::*;
 
 use super::*;
 
@@ -574,6 +575,22 @@ testcase!(stuck_input_with_readable_data, {
     current_time: 100,
 });
 
+// `u2` is an empty MV whose storage input `s2` has no readable data, so it can't hydrate. Its
+// shard is readable from 10, so it must resume at 10 and hold its compute input `u1` there. This
+// drag is a hard constraint, unlike the soft one `stuck_input_without_readable_data` covers.
+testcase!(blocked_mv_drags_compute_input, {
+    storage: {
+        "s1": (0, 100),
+        "s2": (10, 10),
+        "u2": (10, 10),
+    },
+    dataflows: [
+        "u1" <- ["s1"]       => 10,
+        "u2" <- ["s2", "u1"] => 10,
+    ],
+    current_time: 100,
+});
+
 // Regression test for database-issues#9273.
 testcase!(github_9273, {
     storage: {
@@ -591,3 +608,286 @@ testcase!(github_9273, {
         "u2": ReadPolicy::lag_writes_by(1.into(), 1.into()),
     },
 });
+
+/// Largest timestamp used by generated instances.
+const MAX_TS: u64 = 20;
+
+/// The kind of a generated dataflow's single export.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportKind {
+    Index,
+    Mv,
+    MetricSink,
+}
+
+/// A dataflow in a generated instance, exporting a single collection named `id`.
+#[derive(Clone, Debug)]
+struct ArbDataflow {
+    id: String,
+    kind: ExportKind,
+    inputs: Vec<String>,
+    read_policy_lag: Option<u64>,
+}
+
+/// A generated as-of selection input.
+#[derive(Clone, Debug)]
+struct Instance {
+    /// `(read, write)` frontiers of the storage collections, including MV shards.
+    storage: BTreeMap<String, (u64, u64)>,
+    /// Dataflows in dependency order.
+    dataflows: Vec<ArbDataflow>,
+    current_time: u64,
+}
+
+impl Instance {
+    /// Returns the storage collections `inputs` read, directly or through indexes.
+    fn transitive_storage_inputs<'a>(&'a self, inputs: &'a [String]) -> BTreeSet<&'a str> {
+        let mut result = BTreeSet::new();
+        let mut todo: Vec<&str> = inputs.iter().map(|s| s.as_str()).collect();
+        while let Some(id) = todo.pop() {
+            if self.storage.contains_key(id) {
+                result.insert(id);
+            } else {
+                let index = self.dataflows.iter().find(|d| d.id == id).expect("known");
+                todo.extend(index.inputs.iter().map(|s| s.as_str()));
+            }
+        }
+        result
+    }
+
+    /// Returns the largest read frontier and the least write frontier of the storage collections
+    /// `inputs` read, or `(0, MAX_TS)` if there are none.
+    fn input_frontier_bounds(&self, inputs: &[String]) -> (u64, u64) {
+        let mut max_since = 0;
+        let mut min_upper = MAX_TS;
+        for id in self.transitive_storage_inputs(inputs) {
+            let (since, upper) = self.storage[id];
+            max_since = max_since.max(since);
+            min_upper = min_upper.min(upper);
+        }
+        (max_since, min_upper)
+    }
+
+    /// Runs as-of selection on all dataflows except `skip` and returns the selected as-ofs.
+    fn run(&self, skip: Option<&str>) -> BTreeMap<String, Antichain<Timestamp>> {
+        let storage_ids: BTreeSet<&str> = self.storage.keys().map(|s| s.as_str()).collect();
+        let metric_sink_ids: BTreeSet<&str> = self
+            .dataflows
+            .iter()
+            .filter(|d| d.kind == ExportKind::MetricSink)
+            .map(|d| d.id.as_str())
+            .collect();
+        let storage_frontiers = StorageFrontiers(
+            self.storage
+                .iter()
+                .map(|(id, (read, write))| {
+                    (
+                        id.parse().unwrap(),
+                        (ts_to_frontier(*read), ts_to_frontier(*write)),
+                    )
+                })
+                .collect(),
+        );
+        let exports: Vec<_> = self
+            .dataflows
+            .iter()
+            .filter(|d| Some(d.id.as_str()) != skip)
+            .collect();
+        let mut dataflows: Vec<_> = exports
+            .iter()
+            .map(|d| {
+                let inputs: Vec<&str> = d.inputs.iter().map(|s| s.as_str()).collect();
+                dataflow(&d.id, &inputs, &storage_ids, &metric_sink_ids)
+            })
+            .collect();
+        let read_policies = exports
+            .iter()
+            .filter_map(|d| {
+                let lag = d.read_policy_lag?;
+                let policy = ReadPolicy::lag_writes_by(lag.into(), 1.into());
+                Some((d.id.parse().unwrap(), policy))
+            })
+            .collect();
+
+        super::run(
+            &mut dataflows,
+            &read_policies,
+            &storage_frontiers,
+            self.current_time.into(),
+            false,
+            &BTreeSet::new(),
+        );
+
+        dataflows
+            .into_iter()
+            .map(|df| {
+                let id = df.export_ids().into_element().to_string();
+                (id, df.as_of.unwrap())
+            })
+            .collect()
+    }
+}
+
+/// Generates instances that resemble states reachable before a restart.
+///
+/// Sources `s*` get arbitrary `since <= upper`. Dataflows `u*` are generated in dependency order
+/// and read a random subset of the sources and earlier dataflows. An earlier index is a compute
+/// input, an earlier MV a storage input. Nothing reads a metric sink. MV shard frontiers are derived from the frontiers of the
+/// MV's transitive storage inputs, encoding what the compute controller maintains:
+///
+/// * The MV's read holds keep each transitive storage input's since at or below the time the MV
+///   can resume from, which is `upper - 1` for a non-empty MV and `since` for an empty one.
+/// * A non-empty MV's upper is at most the least upper of its transitive storage inputs, because
+///   the MV can't have written times its inputs haven't.
+/// * An MV whose inputs don't permit a non-empty shard is empty, with `since == upper` at or
+///   beyond the largest since of its transitive storage inputs, as chosen when it was created.
+///
+/// These make every instance feasible: assigning each dataflow the largest since of its
+/// transitive storage inputs satisfies all hard constraints.
+fn arb_instance() -> impl Strategy<Value = Instance> {
+    let source = (0..=MAX_TS, 0..=MAX_TS);
+    let kind = proptest::sample::select(vec![
+        ExportKind::Index,
+        ExportKind::Mv,
+        ExportKind::MetricSink,
+    ]);
+    let dataflow = (
+        kind,
+        any::<u8>(),
+        0..=MAX_TS,
+        0..=MAX_TS,
+        any::<bool>(),
+        proptest::option::of(0..5u64),
+    );
+    (
+        proptest::collection::vec(source, 1..=3),
+        proptest::collection::vec(dataflow, 1..=5),
+        0..=MAX_TS,
+    )
+        .prop_map(|(sources, dataflows, current_time)| {
+            let mut inst = Instance {
+                storage: BTreeMap::new(),
+                dataflows: Vec::new(),
+                current_time,
+            };
+            let mut candidates = Vec::new();
+            for (i, (a, b)) in sources.into_iter().enumerate() {
+                let id = format!("s{}", i + 1);
+                inst.storage.insert(id.clone(), (a.min(b), a.max(b)));
+                candidates.push(id);
+            }
+            for (i, (kind, input_mask, a, b, empty, lag)) in dataflows.into_iter().enumerate() {
+                let id = format!("u{}", i + 1);
+                let inputs: Vec<String> = candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| (input_mask >> j) & 1 == 1)
+                    .map(|(_, c)| c.clone())
+                    .collect();
+                if kind == ExportKind::Mv {
+                    let (max_since, min_upper) = inst.input_frontier_bounds(&inputs);
+                    let frontiers = if !empty && max_since < min_upper {
+                        let upper = b.clamp(max_since + 1, min_upper);
+                        (a.min(upper - 1), upper)
+                    } else {
+                        let t = a.max(max_since);
+                        (t, t)
+                    };
+                    inst.storage.insert(id.clone(), frontiers);
+                }
+                inst.dataflows.push(ArbDataflow {
+                    id: id.clone(),
+                    kind,
+                    inputs,
+                    read_policy_lag: if kind == ExportKind::Index { lag } else { None },
+                });
+                if kind != ExportKind::MetricSink {
+                    candidates.push(id);
+                }
+            }
+            inst
+        })
+}
+
+/// As-of selection satisfies all hard constraints on feasible instances.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn proptest_as_of_selection_safety() {
+    proptest!(|(inst in arb_instance())| {
+        let as_ofs = inst.run(None);
+        for d in &inst.dataflows {
+            let as_of = &as_ofs[&d.id];
+            for input in &d.inputs {
+                match inst.storage.get(input) {
+                    Some((since, _)) => prop_assert!(
+                        PartialOrder::less_equal(&ts_to_frontier(*since), as_of),
+                        "{} as-of {as_of:?} below since {since} of storage input {input}",
+                        d.id,
+                    ),
+                    None => prop_assert!(
+                        PartialOrder::less_equal(&as_ofs[input], as_of),
+                        "{} as-of {as_of:?} below as-of {:?} of compute input {input}",
+                        d.id,
+                        as_ofs[input],
+                    ),
+                }
+            }
+            if d.kind == ExportKind::Mv {
+                let (read, write) = inst.storage[&d.id];
+                let max_as_of = if write <= read { read } else { write - 1 };
+                prop_assert!(
+                    PartialOrder::less_equal(as_of, &ts_to_frontier(max_as_of)),
+                    "{} as-of {as_of:?} skips times of its shard ({read}, {write})",
+                    d.id,
+                );
+            }
+        }
+    });
+}
+
+/// Every dataflow that reads a storage collection gets a non-empty as-of, so it gets installed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn proptest_as_of_selection_liveness() {
+    proptest!(|(inst in arb_instance())| {
+        let as_ofs = inst.run(None);
+        for d in &inst.dataflows {
+            if !inst.transitive_storage_inputs(&d.inputs).is_empty() {
+                prop_assert!(!as_ofs[&d.id].is_empty(), "{} has an empty as-of", d.id);
+            }
+        }
+    });
+}
+
+/// Removing a blocked index or metric sink without a read policy and without dependents doesn't
+/// change the as-ofs of the other dataflows.
+///
+/// A dataflow is blocked when no time is both readable and complete in all its transitive storage
+/// inputs, so it can't hydrate at any as-of. Such a dataflow must not drag the as-ofs of its
+/// compute inputs back to its own (CPU-336). A blocked MV can, see
+/// `blocked_mv_drags_compute_input`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn proptest_as_of_selection_no_drag_from_blocked() {
+    proptest!(|(inst in arb_instance())| {
+        let as_ofs = inst.run(None);
+        for d in &inst.dataflows {
+            let (max_since, min_upper) = inst.input_frontier_bounds(&d.inputs);
+            let has_storage_inputs = !inst.transitive_storage_inputs(&d.inputs).is_empty();
+            let blocked = has_storage_inputs && min_upper <= max_since;
+            let has_dependents = inst.dataflows.iter().any(|o| o.inputs.contains(&d.id));
+            let is_mv = d.kind == ExportKind::Mv;
+            if is_mv || !blocked || d.read_policy_lag.is_some() || has_dependents {
+                continue;
+            }
+            for (id, as_of) in inst.run(Some(&d.id)) {
+                prop_assert!(
+                    as_of == as_ofs[&id],
+                    "removing blocked {} changed the as-of of {id} from {:?} to {as_of:?}",
+                    d.id,
+                    as_ofs[&id],
+                );
+            }
+        }
+    });
+}
