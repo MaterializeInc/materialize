@@ -172,6 +172,22 @@ A general upsert input-memory bound is separate work, not evidence for any of
 these catalog changes. See `upsert-oom-investigation/findings.md` in the handoff's
 evidence root for the matched runs and interpretation limits.
 
+### Protection publication conflict-rate scaling
+
+The four-index `index-read-protection` fixture runs 18 publishers at a 1s
+publication interval. That is 60 times the default cadence. The shared catalog
+serializes commits, so overlapping publication attempts can repeatedly invalidate
+a slower publisher's prefix even while peers make progress. Bounded retries
+preserve correctness but do not guarantee fair progress under this contention.
+
+Keep the 1s variant as a stress test, not an M3 acceptance gate. Do not optimize
+candidate cost further for that regime or increase its retry limits. The 60s
+variant still needs a current-binary run and per-publisher commit-rate report.
+Distinguish attempted, rejected and successful publications, and report success
+gaps as well as aggregate throughput. The cadence alone does not establish an
+observed CAS rate or a capacity threshold. Targeted DEBUG timings also include
+the separately identified tracing bookkeeping overhead.
+
 ### Catalog/cache ownership in non-execution processes
 
 Native followers and controllerd reconstruct full SQL catalogs and retain
