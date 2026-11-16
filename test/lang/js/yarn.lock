@@ -1357,9 +1357,9 @@
     type-detect "4.0.8"
 
 "@sinonjs/fake-timers@^15.4.0":
-  version "15.4.0"
-  resolved "https://registry.yarnpkg.com/@sinonjs/fake-timers/-/fake-timers-15.4.0.tgz#5d40c151a9e66075fe4520bec40bccfe54931962"
-  integrity sha512-DsG+8/LscQIQg68J6Ef3dv10u6nVyetYn923s3/sus5eaGfTo1of5WMZSLf0UJc9KDuKPilPH0UDJCjvNbDNCA==
+  version "15.5.0"
+  resolved "https://registry.yarnpkg.com/@sinonjs/fake-timers/-/fake-timers-15.5.0.tgz#440954c5dbd95a3e71c16562c3cddedbed2d5d93"
+  integrity sha512-i7HpIYIsUmdSTQbtBjs2b3VqMgDsVDWfzVPV3MuUrXVqJNZmzFB8YJeM9SPms2bGg5zg7HvKH31sPS1WoLLRFg==
   dependencies:
     "@sinonjs/commons" "^3.0.1"
 
