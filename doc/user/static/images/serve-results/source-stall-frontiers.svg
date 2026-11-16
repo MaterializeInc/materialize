@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400" font-family="Inter, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#555"/>
+    </marker>
+  </defs>
+  <rect width="760" height="400" fill="#ffffff"/>
+
+  <!-- Panel 1: both sources healthy -->
+  <text x="20" y="30" font-size="15" font-weight="600" fill="#1a1a1a">Both sources healthy: the query serves</text>
+  <rect x="260" y="48" width="300" height="120" fill="#e3f4ea"/>
+  <text x="130" y="85" fill="#1a1a1a">Source A</text>
+  <rect x="200" y="70" width="360" height="24" rx="4" fill="#7f56d9"/>
+  <text x="130" y="135" fill="#1a1a1a">Source B</text>
+  <rect x="260" y="120" width="340" height="24" rx="4" fill="#3b82f6"/>
+  <text x="200" y="64" text-anchor="middle" fill="#555" font-size="11">read</text>
+  <text x="560" y="64" text-anchor="middle" fill="#555" font-size="11">write</text>
+  <text x="260" y="114" text-anchor="middle" fill="#555" font-size="11">read</text>
+  <text x="600" y="114" text-anchor="middle" fill="#555" font-size="11">write</text>
+  <line x1="540" y1="48" x2="540" y2="168" stroke="#15803d" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="410" y="162" text-anchor="middle" fill="#15803d" font-size="12">timestamps both sources can answer</text>
+  <text x="545" y="182" fill="#15803d" font-size="12">query timestamp</text>
+
+  <!-- Panel 2: source A stalled -->
+  <text x="20" y="225" font-size="15" font-weight="600" fill="#1a1a1a">Source A stalled: the query blocks</text>
+  <rect x="380" y="258" width="60" height="82" fill="#fde8e8"/>
+  <text x="130" y="275" fill="#1a1a1a">Source A</text>
+  <rect x="200" y="260" width="180" height="24" rx="4" fill="#7f56d9"/>
+  <text x="130" y="325" fill="#1a1a1a">Source B</text>
+  <rect x="440" y="310" width="280" height="24" rx="4" fill="#3b82f6"/>
+  <text x="200" y="254" text-anchor="middle" fill="#555" font-size="11">read</text>
+  <text x="380" y="254" text-anchor="middle" fill="#b42318" font-size="11">write (frozen)</text>
+  <text x="440" y="304" text-anchor="middle" fill="#555" font-size="11">read</text>
+  <text x="720" y="304" text-anchor="middle" fill="#555" font-size="11">write</text>
+  <text x="410" y="362" text-anchor="middle" fill="#b42318" font-size="12">no common timestamp</text>
+
+  <!-- Time axis -->
+  <line x1="130" y1="385" x2="740" y2="385" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="130" y="378" fill="#555" font-size="12">time</text>
+</svg>
