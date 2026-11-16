@@ -400,9 +400,9 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.2/linux/$AR
     && rm -rf inspector-sbomgen.zip inspector-sbomgen-1.8.2
 
 RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
-    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
-    && if [ $arch_zizmor = x86_64 ]; then echo 'e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a zizmor.tar.gz' | sha256sum --check; fi \
-    && if [ $arch_zizmor = aarch64 ]; then echo '7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540 zizmor.tar.gz' | sha256sum --check; fi \
+    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
+    && if [ $arch_zizmor = x86_64 ]; then echo 'bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b zizmor.tar.gz' | sha256sum --check; fi \
+    && if [ $arch_zizmor = aarch64 ]; then echo 'cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0 zizmor.tar.gz' | sha256sum --check; fi \
     && tar xvf zizmor.tar.gz \
     && mv zizmor /usr/local/bin \
     && rm zizmor.tar.gz
