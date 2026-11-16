@@ -871,6 +871,7 @@ impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
             swap_enabled: self.swap_enabled,
             disabled: self.disabled,
             selectors: self.selectors.clone(),
+            allowed_workloads: self.allowed_workloads.clone(),
         }
     }
 
@@ -890,6 +891,7 @@ impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
             swap_enabled: proto.swap_enabled,
             disabled: proto.disabled,
             selectors: proto.selectors,
+            allowed_workloads: proto.allowed_workloads,
         })
     }
 }

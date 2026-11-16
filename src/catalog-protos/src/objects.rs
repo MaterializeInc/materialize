@@ -485,6 +485,9 @@ pub struct ClusterReplicaSizeValue {
     pub disabled: bool,
     /// Additional node selectors.
     pub selectors: std::collections::BTreeMap<String, String>,
+    /// The workload classes that clusters of this size may run, by name, or
+    /// `None` if the size allows every class.
+    pub allowed_workloads: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

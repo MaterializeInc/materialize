@@ -1490,9 +1490,12 @@ impl CatalogState {
             // mz_cluster_replicas is a MaterializedView backed by
             // mz_internal.mz_catalog_raw.
             StateUpdateKind::ClusterReplica(_) => Vec::new(),
-            StateUpdateKind::ClusterReplicaSize(size) => {
-                Self::pack_replica_size_update(&size.name, &size.allocation, diff)
-            }
+            StateUpdateKind::ClusterReplicaSize(size) => Self::pack_replica_size_update(
+                &size.name,
+                &size.allocation,
+                &self.replica_sizes_family_workloads,
+                diff,
+            ),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
                 // items collection and so get handled through the normal

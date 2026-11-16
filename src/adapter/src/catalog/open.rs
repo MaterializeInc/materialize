@@ -191,6 +191,9 @@ impl Catalog {
             // Populated from the durable catalog, which `sync_builtin_cluster_replica_sizes`
             // reconciles with `config.cluster_replica_sizes`.
             cluster_replica_sizes: ClusterReplicaSizeMap(BTreeMap::new()),
+            // The coordinator repacks the size rows under the current value
+            // once it boots.
+            replica_sizes_family_workloads: Default::default(),
             availability_zones: config.availability_zones,
             egress_addresses: config.egress_addresses,
             aws_principal_context: config.aws_principal_context,

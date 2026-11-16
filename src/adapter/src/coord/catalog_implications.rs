@@ -228,6 +228,17 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
+    /// Repacks `mz_cluster_replica_sizes` if `cluster_family_allowed_workloads`
+    /// differs from the value its rows were packed with.
+    fn repack_replica_sizes_if_family_workloads_changed(&mut self) {
+        let updates = self
+            .catalog_mut()
+            .repack_replica_sizes_if_family_workloads_changed();
+        if !updates.is_empty() {
+            let _notify = self.builtin_table_update().defer(updates);
+        }
+    }
+
     async fn apply_catalog_implications_inner(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
@@ -245,6 +256,7 @@ impl Coordinator {
         // idempotent reads, so we fire them once, up front.
         if system_config_changed {
             self.catalog().system_config().notify_all_callbacks();
+            self.repack_replica_sizes_if_family_workloads_changed();
         }
 
         let mut tables_to_drop = BTreeSet::new();

@@ -25,14 +25,17 @@ use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
     SubscribePlan,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 
 use crate::AdapterError;
-use crate::catalog::ConnCatalog;
+use crate::catalog::{CatalogState, ConnCatalog};
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
+use mz_controller::clusters::WorkloadClass;
+use mz_controller_types::ClusterId;
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -177,27 +180,11 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
-    // These dependencies are just existing dataflows that are referenced in the plan.
-    let mut depends_on = depends_on
-        .into_iter()
-        .map(|gid| catalog.resolve_item_id(&gid))
-        .peekable();
-    let has_dependencies = depends_on.peek().is_some();
-
-    // Make sure we only depend on the system catalog, and nothing we depend on is a
-    // per-replica object, that requires being run a specific replica.
-    let valid_dependencies = depends_on.all(|id| {
-        let entry = catalog.state().get_entry(&id);
-        let schema = entry.name().qualifiers.schema_spec;
-
-        let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.state().introspection_dependencies(id).is_empty();
-
-        system_only && non_replica
-    });
-
-    if (has_dependencies && valid_dependencies)
-        || (!has_dependencies && !could_run_expensive_function)
+    // Only queries over the system catalog can move, and not those that read
+    // per-replica introspection data, which only the active cluster has.
+    let dependencies = SystemDependencies::of(catalog.state(), depends_on);
+    if (dependencies.any && dependencies.only_system && !dependencies.replica_introspection)
+        || (!dependencies.any && !could_run_expensive_function)
     {
         let intros_cluster = catalog
             .state()
@@ -282,4 +269,192 @@ pub fn check_cluster_restrictions(
     } else {
         Ok(())
     }
+}
+
+/// How the objects a statement depends on relate to the system catalog.
+struct SystemDependencies {
+    /// Whether the statement depends on any object.
+    any: bool,
+    /// Whether every dependency is in a system schema.
+    only_system: bool,
+    /// Whether any dependency reads per-replica introspection data, which only
+    /// the replicas of the target cluster have.
+    replica_introspection: bool,
+}
+
+impl SystemDependencies {
+    fn of(state: &CatalogState, depends_on: impl IntoIterator<Item = GlobalId>) -> Self {
+        let mut dependencies = SystemDependencies {
+            any: false,
+            only_system: true,
+            replica_introspection: false,
+        };
+        for gid in depends_on {
+            dependencies.any = true;
+            // Running work can outlive a dependency dropped concurrently. A
+            // missing dependency counts as a user object, the most restricted.
+            let Some(entry) = state.try_get_entry_by_global_id(&gid) else {
+                dependencies.only_system = false;
+                continue;
+            };
+            let schema = entry.name().qualifiers.schema_spec;
+            dependencies.only_system &= state.is_system_schema_specifier(schema);
+            dependencies.replica_introspection |=
+                !state.introspection_dependencies(entry.id()).is_empty();
+        }
+        dependencies
+    }
+
+    /// Whether a query with these dependencies only inspects the replicas of
+    /// its target cluster.
+    fn only_replica_introspection(&self) -> bool {
+        self.only_system && self.replica_introspection
+    }
+}
+
+/// The workload class of a one-off query that depends on `depends_on`.
+pub fn peek_workload(
+    state: &CatalogState,
+    depends_on: impl IntoIterator<Item = GlobalId>,
+) -> WorkloadClass {
+    if SystemDependencies::of(state, depends_on).only_replica_introspection() {
+        WorkloadClass::ComputeIntrospection
+    } else {
+        WorkloadClass::ComputeInteractive
+    }
+}
+
+/// The workload class of a subscribe that depends on `depends_on`.
+pub fn subscribe_workload(
+    state: &CatalogState,
+    depends_on: impl IntoIterator<Item = GlobalId>,
+) -> WorkloadClass {
+    if SystemDependencies::of(state, depends_on).only_replica_introspection() {
+        WorkloadClass::ComputeIntrospection
+    } else {
+        WorkloadClass::ComputeMaintained
+    }
+}
+
+/// The workload class of the work `plan` runs on its target cluster, with a
+/// description of it for errors, or `None` if it runs no work there.
+///
+/// NOTE: The match is exhaustive so that a new plan kind cannot run on a
+/// restricted cluster without being classified.
+pub fn plan_workload(state: &CatalogState, plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
+    match plan {
+        Plan::Select(plan) => Some((
+            peek_workload(state, plan.source.depends_on()),
+            "run SELECT",
+        )),
+        Plan::ShowColumns(_) => Some((WorkloadClass::ComputeInteractive, "run SELECT")),
+        Plan::CopyTo(_) => Some((WorkloadClass::ComputeInteractive, "run COPY TO")),
+        Plan::ReadThenWrite(_) => Some((WorkloadClass::ComputeInteractive, "run UPDATE or DELETE")),
+        // NOTE: Whether an INSERT reads on the cluster is only known after
+        // optimization, since even a VALUES list is not constant before it, so
+        // every INSERT counts as interactive compute.
+        Plan::Insert(_) => Some((WorkloadClass::ComputeInteractive, "run INSERT")),
+        Plan::Subscribe(plan) => Some((
+            subscribe_workload(state, plan.from.depends_on()),
+            "run SUBSCRIBE",
+        )),
+        Plan::CopyFrom(_) => Some((WorkloadClass::Ingest, "run COPY FROM")),
+        // Objects created by these plans are checked when the catalog
+        // transaction creates them.
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateNetworkPolicy(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
+        | Plan::CreateType(_)
+        | Plan::Comment(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainPushdown(_)
+        | Plan::ExplainTimestamp(_)
+        | Plan::ExplainSinkSchema(_)
+        | Plan::AlterCluster(_)
+        | Plan::AlterClusterSwap(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterSetCluster(_)
+        | Plan::AlterConnection(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSchemaRename(_)
+        | Plan::AlterSchemaSwap(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::AlterTableAddColumn(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
+        | Plan::AlterNetworkPolicy(_)
+        | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
+        // A cursor's query is checked when FETCH runs it.
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => None,
+    }
+}
+
+/// Fails if the replica sizes of the cluster `plan` targets do not allow the
+/// work it runs there.
+pub fn check_cluster_workload_restrictions(
+    catalog: &CatalogState,
+    cluster_id: ClusterId,
+    session: &Session,
+    plan: &Plan,
+) -> Result<(), AdapterError> {
+    let Some((class, action)) = plan_workload(catalog, plan) else {
+        return Ok(());
+    };
+    catalog.ensure_cluster_allows_workload(
+        catalog.get_cluster(cluster_id),
+        class,
+        Some(session.user()),
+        || action.to_string(),
+    )
 }

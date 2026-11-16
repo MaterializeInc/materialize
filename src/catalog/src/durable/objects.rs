@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_audit_log::VersionedEvent;
-use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
+use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging, WorkloadClass};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
@@ -356,6 +356,7 @@ impl DurableType for ClusterReplicaSize {
             swap_enabled,
             disabled,
             selectors,
+            allowed_workloads,
         } = self.allocation;
         (
             ClusterReplicaSizeKey { id: self.id },
@@ -374,6 +375,8 @@ impl DurableType for ClusterReplicaSize {
                 swap_enabled,
                 disabled,
                 selectors,
+                allowed_workloads: allowed_workloads
+                    .map(|classes| classes.iter().map(|c| c.as_str().to_string()).collect()),
             },
         )
     }
@@ -402,6 +405,17 @@ impl DurableType for ClusterReplicaSize {
                 swap_enabled: value.swap_enabled,
                 disabled: value.disabled,
                 selectors: value.selectors,
+                allowed_workloads: value.allowed_workloads.map(|names| {
+                    names
+                        .iter()
+                        .map(|name| {
+                            WorkloadClass::ALL
+                                .into_iter()
+                                .find(|class| class.as_str() == name)
+                                .expect("allowed_workloads holds known workload classes")
+                        })
+                        .collect()
+                }),
             },
         }
     }
@@ -1913,6 +1927,7 @@ pub struct ClusterReplicaSizeValue {
     pub(crate) swap_enabled: bool,
     pub(crate) disabled: bool,
     pub(crate) selectors: BTreeMap<String, String>,
+    pub(crate) allowed_workloads: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
