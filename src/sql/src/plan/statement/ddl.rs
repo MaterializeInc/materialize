@@ -2952,22 +2952,41 @@ pub fn plan_create_materialized_view(
             // example `numeric` to `numeric(10, 1)` or `varchar(10)` to `varchar(5)`,
             // plan as the identity (see `typeconv::get_cast`) and would leave values
             // that violate the declared modifier.
-            let cast_types = qcx.relation_type(&expr).column_types;
-            for (column, (cast, target)) in cast_types
-                .iter()
-                .zip_eq(declared.typ().column_types.iter())
-                .enumerate()
-            {
-                if cast.scalar_type != target.scalar_type {
-                    // Humanized types omit some modifiers, e.g. the scale of `numeric`, so
-                    // both types can print the same.
-                    sql_bail!(
-                        "column {} is of type {} but expression is of type {} with different type modifiers",
-                        declared.get_name(column).quoted(),
-                        qcx.humanize_sql_scalar_type(&target.scalar_type, false),
-                        qcx.humanize_sql_scalar_type(&source_types[column].scalar_type, false),
-                    );
-                }
+            let modifier_mismatch = |expr: &HirRelationExpr| {
+                qcx.relation_type(expr)
+                    .column_types
+                    .iter()
+                    .zip_eq(declared.typ().column_types.iter())
+                    .position(|(cast, target)| cast.scalar_type != target.scalar_type)
+            };
+            // Re-planning persisted SQL (pcx is None) must not fail, because a planning
+            // error at catalog load panics. An upgrade can change a modifier the query
+            // infers, so re-planning casts the remaining mismatches with assignment
+            // casts, whose failures are runtime errors in the materialized view.
+            if scx.pcx.is_none() && modifier_mismatch(&expr).is_some() {
+                let target_types = declared.typ().column_types.iter().map(|c| &c.scalar_type);
+                expr = query::cast_relation(&qcx, CastContext::Assignment, expr, target_types)
+                    .map_err(|e| {
+                        sql_err!(
+                            "column {} is of type {} but expression is of type {}",
+                            declared.get_name(e.column).quoted(),
+                            qcx.humanize_sql_scalar_type(&e.target_type, false),
+                            qcx.humanize_sql_scalar_type(&e.source_type, false),
+                        )
+                    })?;
+            }
+            if let Some(column) = modifier_mismatch(&expr) {
+                // Humanized types omit some modifiers, e.g. the scale of `numeric`, so
+                // both types can print the same.
+                sql_bail!(
+                    "column {} is of type {} but expression is of type {} with different type modifiers",
+                    declared.get_name(column).quoted(),
+                    qcx.humanize_sql_scalar_type(
+                        &declared.typ().column_types[column].scalar_type,
+                        false
+                    ),
+                    qcx.humanize_sql_scalar_type(&source_types[column].scalar_type, false),
+                );
             }
             desc = declared.clone();
             declared_desc = Some(declared);
