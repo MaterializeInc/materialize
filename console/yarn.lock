@@ -3005,9 +3005,9 @@ __metadata:
   linkType: hard
 
 "@stripe/stripe-js@npm:^10.2.1":
-  version: 10.2.1
-  resolution: "@stripe/stripe-js@npm:10.2.1"
-  checksum: 10c0/a5e70d093fe17e1668d3f985d95dd6e03e5fd99a1e3f950d8135d94b45036aebc71079e6849c4fd2daf76eade22336b4e7ecac22b9e13a6f57b6d06fafe3eb35
+  version: 10.3.0
+  resolution: "@stripe/stripe-js@npm:10.3.0"
+  checksum: 10c0/a271d0374c5aae246a4df637456a20d1cb6e7cd73538fcc4358ed8dfb92bbea4f2a354435b18268dc9cc4da82de7fd7e4a555a6a7d72d4b668c46ed219731a7e
   languageName: node
   linkType: hard
 
@@ -5495,10 +5495,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"compute-scroll-into-view@npm:^3.0.2, compute-scroll-into-view@npm:^3.1.1":
+"compute-scroll-into-view@npm:^3.1.1":
   version: 3.1.1
   resolution: "compute-scroll-into-view@npm:3.1.1"
   checksum: 10c0/59761ed62304a9599b52ad75d0d6fbf0669ee2ab7dd472fdb0ad9da36628414c014dea7b5810046560180ad30ffec52a953d19297f66a1d4f3aa0999b9d2521d
+  languageName: node
+  linkType: hard
+
+"compute-scroll-into-view@npm:^3.2.2":
+  version: 3.2.2
+  resolution: "compute-scroll-into-view@npm:3.2.2"
+  checksum: 10c0/aca1ea9b4e180bdd6b54545d3dc45617055be27b1f89e844979ead64a7c1e8e1fc9abf16adad8c8076c0cf7899c17f4176b92ff96617b1f98d9e6245f1a17586
   languageName: node
   linkType: hard
 
@@ -7426,11 +7433,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"framer-motion@npm:14.12.0":
-  version: 14.12.0
-  resolution: "framer-motion@npm:14.12.0"
+"framer-motion@npm:14.13.0":
+  version: 14.13.0
+  resolution: "framer-motion@npm:14.13.0"
   dependencies:
-    motion-dom: "npm:14.12.0"
+    motion-dom: "npm:14.13.0"
     motion-utils: "npm:14.7.0"
     tslib: "npm:^2.4.0"
   peerDependencies:
@@ -7444,7 +7451,7 @@ __metadata:
       optional: true
     remix:
       optional: true
-  checksum: 10c0/ee971f8000721c29404331e47ca01ecb3a800d15f111604c13f4f54e1dd9f973f5a00ec6fbcb438ca36b1eb92566a346dd9e633af7f817bef852553364abf9c4
+  checksum: 10c0/16206b6084477ac4dc7f9d6c364838e70ff0d3bd7fb295b27e3f4452d2cd46c277ae8688e8917fd5bbd4be4f8826e1a8d3888cacfb99f57caa47c794f0276270
   languageName: node
   linkType: hard
 
@@ -7623,13 +7630,13 @@ __metadata:
   linkType: hard
 
 "glob@npm:^14.0.0":
-  version: 14.0.5
-  resolution: "glob@npm:14.0.5"
+  version: 14.0.6
+  resolution: "glob@npm:14.0.6"
   dependencies:
     minimatch: "npm:^11.0.5"
     minipass: "npm:^7.1.3"
     path-scurry: "npm:^3.0.0"
-  checksum: 10c0/42a3400ab2e6877ee0353496dcb2b60eaa6b02e7b7733264557f285372ad692611c3cbb363b856f38d9a6401f8ed56daa960143ba26083a58e8cb95d6c617363
+  checksum: 10c0/5b8621a6a363abc630de0a542f0f8d0a919a0a5e154626b5fdf1e97425e8709783b0b27cc1eb9d65a5ce097db84e904fe50f8f1dc8c0579c49583c0ac30f8ac7
   languageName: node
   linkType: hard
 
@@ -9636,12 +9643,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"motion-dom@npm:14.12.0":
-  version: 14.12.0
-  resolution: "motion-dom@npm:14.12.0"
+"motion-dom@npm:14.13.0":
+  version: 14.13.0
+  resolution: "motion-dom@npm:14.13.0"
   dependencies:
     motion-utils: "npm:14.7.0"
-  checksum: 10c0/f1266899afe5e1fb87d273db2236ffac7fa7915b7fe0e31bd8dc284d3e9127d4fa201a610568afa7ef4f4e5f073ce239a5ef0b20490fc8dbfa6e4edb19b6f145
+  checksum: 10c0/63f1ff713ce47d7abb76ca2899d59f4b679a7a2319b1c38862081d37216d6efc41e324f78fbc7166f8d07a10ed65b6ae442c5165979e5143ec2829eddc4d50fa
   languageName: node
   linkType: hard
 
@@ -9653,10 +9660,10 @@ __metadata:
   linkType: hard
 
 "motion@npm:^14.9.0":
-  version: 14.12.0
-  resolution: "motion@npm:14.12.0"
+  version: 14.13.0
+  resolution: "motion@npm:14.13.0"
   dependencies:
-    framer-motion: "npm:14.12.0"
+    framer-motion: "npm:14.13.0"
     tslib: "npm:^2.4.0"
   peerDependencies:
     react: ^18.0.0 || ^19.0.0
@@ -9669,7 +9676,7 @@ __metadata:
       optional: true
     remix:
       optional: true
-  checksum: 10c0/98780277cbaed1803375039e0dae4ebdf06ae5d3392aae4f19b6b5a308fcaae75d6e36fd040da62469e9459980d453d8e7274e3ffbc7c462042de9ad45263834
+  checksum: 10c0/57ecc76a1fcc4f187276ffef410163028d97dd5bc6a38bf6a53d02229978e328d050f51b22486d18c609bd3b2b15b375f5d9aa0fe0065d750d978f6435496577
   languageName: node
   linkType: hard
 
@@ -11380,11 +11387,11 @@ __metadata:
   linkType: hard
 
 "scroll-into-view-if-needed@npm:^3.1.0":
-  version: 3.2.0
-  resolution: "scroll-into-view-if-needed@npm:3.2.0"
+  version: 3.2.1
+  resolution: "scroll-into-view-if-needed@npm:3.2.1"
   dependencies:
-    compute-scroll-into-view: "npm:^3.0.2"
-  checksum: 10c0/c12fb61c1e25b93ed210f36e477b043b24720efb6cdf0db14bde1ed77dac6733b84fd58e49899e2bec4ab240b1c7620d7b36a6d99b40e4e705957ebc0b5fbcc8
+    compute-scroll-into-view: "npm:^3.2.2"
+  checksum: 10c0/f655ec5b948a9cac6531f3a2ecf488ddd643da6e79aab82d33835631ad2cfd84dcaa54b9819f5f46e63015d09cea3e3b48fc1325d566eaa1574ff45a46215013
   languageName: node
   linkType: hard
 
