@@ -58,10 +58,11 @@ def main() -> None:
     ):
         for client in (owner, peer):
             client.execute("SET statement_timeout = '30s'")
-        versions = [
-            client.execute("SELECT mz_version()").fetchone()[0]
-            for client in (owner, peer)
-        ]
+        versions = []
+        for client in (owner, peer):
+            row = client.execute("SELECT mz_version()").fetchone()
+            assert row is not None
+            versions.append(row[0])
         # Reuse the same peer connection throughout. A restarted process cannot
         # satisfy this check by accepting a replacement SQL session.
         for creator, observer in ((owner, peer), (peer, owner)):

@@ -699,8 +699,11 @@ def main():
                 # Cover both bounded recovery polls and their in-flight operations.
                 # This is session-local and does not affect other benchmark clients.
                 retained.execute(
-                    "SET idle_in_transaction_session_timeout = "
-                    f"'{3 * args.timeout + 10 * args.operation_timeout}s'"
+                    sql.SQL("SET idle_in_transaction_session_timeout = {}").format(
+                        sql.Literal(
+                            f"{3 * args.timeout + 10 * args.operation_timeout}s"
+                        )
+                    )
                 )
                 with retained.transaction():
                     before_rows = public_rows(retained)
@@ -709,10 +712,12 @@ def main():
                         before_rows,
                     )
                     process = catalog_process()
+                    assert process is not None
                     birth = process.create_time()
                     fd = os.pidfd_open(process.pid)
                     try:
                         verified = catalog_process()
+                        assert verified is not None
                         assert (
                             verified.pid == process.pid
                             and verified.create_time() == birth
@@ -789,13 +794,13 @@ def main():
             try:
                 with connect(survivor, args.operation_timeout, args.cluster) as cleanup:
                     for kind, name in (
-                        ("MATERIALIZED VIEW", "output"),
-                        ("INDEX", "input_idx"),
-                        ("TABLE", "input"),
+                        (sql.SQL("MATERIALIZED VIEW"), "output"),
+                        (sql.SQL("INDEX"), "input_idx"),
+                        (sql.SQL("TABLE"), "input"),
                     ):
                         cleanup.execute(
                             sql.SQL("DROP {} IF EXISTS {}").format(
-                                sql.SQL(kind), sql.Identifier(schema, name)
+                                kind, sql.Identifier(schema, name)
                             )
                         )
                     cleanup.execute(

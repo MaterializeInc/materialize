@@ -61,8 +61,8 @@ class LifecycleTest(unittest.TestCase):
                 events.append("materialized")
             if "clusterd" not in services:
                 return
-            self.assertIsNotNone(replica)
-            self.assertIsNotNone(current_identity)
+            assert replica is not None
+            assert current_identity is not None
             cluster, identity = current_identity
             self.assertIn(f"--catalog-cluster-id={cluster}", replica.config["command"])
             self.assertIn(f"--catalog-replica-id={identity}", replica.config["command"])

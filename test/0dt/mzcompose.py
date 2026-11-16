@@ -1512,7 +1512,9 @@ def workflow_subscribe_execution_identity(c: Composition) -> None:
                 ):
                     until(
                         lambda: observer.execute(
-                            f"SELECT count(*) FROM {relation} WHERE {column} = %s",
+                            SQL("SELECT count(*) FROM {} WHERE {} = %s").format(
+                                Identifier(*relation.split(".")), Identifier(column)
+                            ),
                             (sid,),
                         ).fetchone()
                         == (0,),
@@ -1527,7 +1529,9 @@ def workflow_subscribe_execution_identity(c: Composition) -> None:
                 ):
                     until(
                         lambda: system.execute(
-                            f"SELECT count(*) FROM {relation} WHERE {column} = %s",
+                            SQL("SELECT count(*) FROM {} WHERE {} = %s").format(
+                                Identifier(*relation.split(".")), Identifier(column)
+                            ),
                             (sid,),
                         ).fetchone()
                         == (0,),

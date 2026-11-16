@@ -18,13 +18,14 @@ from materialize.ui import UIError
 
 
 def test_deployment_wait_does_not_swallow_interrupt():
-    c = SimpleNamespace(
+    c = Mock(
+        spec=Composition,
         exec=Mock(
             side_effect=[
                 KeyboardInterrupt(),
                 SimpleNamespace(stdout='{"status":"ReadyToPromote"}'),
             ]
-        )
+        ),
     )
     with pytest.raises(KeyboardInterrupt):
         Composition.await_mz_deployment_status(
@@ -34,13 +35,14 @@ def test_deployment_wait_does_not_swallow_interrupt():
 
 
 def test_deployment_wait_still_retries_probe_failure():
-    c = SimpleNamespace(
+    c = Mock(
+        spec=Composition,
         exec=Mock(
             side_effect=[
                 UIError("probe failed"),
                 SimpleNamespace(stdout='{"status":"ReadyToPromote"}'),
             ]
-        )
+        ),
     )
     Composition.await_mz_deployment_status(
         c, DeploymentStatus.READY_TO_PROMOTE, timeout=1, sleep_time=None

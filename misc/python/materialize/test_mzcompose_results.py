@@ -77,6 +77,7 @@ def test_native_promotion_does_not_retire_or_kill(composition, monkeypatch):
 def test_native_deployment_overrides_keep_the_external_relay(image):
     path = MZ_ROOT / "test/0dt/mzcompose.py"
     spec = importlib.util.spec_from_file_location("native_deployment_workflow", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     service = module.native_mz(
@@ -99,6 +100,7 @@ def test_upsert_failure_joins_workers_before_returning(monkeypatch, failure):
     spec = importlib.util.spec_from_file_location(
         "native_upsert_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     started = threading.Event()
@@ -196,6 +198,7 @@ def test_cdc_reader_wait_requires_stable_convergence(monkeypatch, expected_host)
     spec = importlib.util.spec_from_file_location(
         "native_reader_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     now = 0.0
@@ -234,6 +237,7 @@ def test_cdc_reader_wait_rejects_sustained_old_ownership(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "native_reader_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     now = 0.0
@@ -301,6 +305,7 @@ def test_native_basic_checks_retired_writer_before_cleanup(monkeypatch, outcome)
     spec = importlib.util.spec_from_file_location(
         "native_basic_workflow", MZ_ROOT / "test/0dt/mzcompose.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "setup", Mock())
@@ -379,7 +384,9 @@ def test_native_retirement_retries_only_explicit_contention(
     failure = CommandFailureCausedUIError(
         "HTTP 409", cmd=["curl"], stdout=json.dumps({"error": message})
     )
-    replies = [failure] * (3 if outcome == "exhausted" else 1)
+    replies: list[CommandFailureCausedUIError | SimpleNamespace] = [failure] * (
+        3 if outcome == "exhausted" else 1
+    )
     if outcome == "retry_then_success":
         replies.append(
             SimpleNamespace(stdout='{"retired":7,"environment_id":"expected"}')
@@ -433,7 +440,9 @@ def test_skips_are_visible_and_supported_cases_still_run(
     )
     report = ET.parse(path)
     cases = {case.attrib["name"]: case for case in report.findall(".//testcase")}
-    assert cases["pre-native"].find("skipped").attrib["message"] == reason
+    skipped = cases["pre-native"].find("skipped")
+    assert skipped is not None
+    assert skipped.attrib["message"] == reason
     assert not report.findall(".//error")
     assert not c.test_results["pre-native"].is_successful()
     assert c.test_results["supported"].is_successful()
@@ -458,7 +467,9 @@ def test_skip_does_not_hide_failure(composition, monkeypatch, tmp_path):
     report = ET.parse(tmp_path / "junit_mzcompose.xml")
     assert len(report.findall(".//skipped")) == 1
     assert len(report.findall(".//error")) == 1
-    assert "real failure" in report.find(".//error").attrib["message"]
+    error = report.find(".//error")
+    assert error is not None
+    assert "real failure" in error.attrib["message"]
 
 
 def test_skip_reporting_is_redacted_and_aggregated(
@@ -507,6 +518,7 @@ def test_cleanup_does_not_overwrite_reports(composition, monkeypatch, tmp_path):
 def legacy_upgrade():
     path = MZ_ROOT / "test/legacy-upgrade/mzcompose.py"
     spec = importlib.util.spec_from_file_location("legacy_upgrade_workflow", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -618,9 +630,10 @@ def test_current_source_native_lifecycle(legacy_upgrade, retirement_fails):
 
 def test_data_ingest_retirement_tracks_generations_across_service_reuse():
     from materialize.data_ingest import transaction_def
+    from materialize.data_ingest.workload import Workload
 
     c = MagicMock(spec=Composition)
-    workload = SimpleNamespace(deploy_generation=0, mz_service="materialized")
+    workload = Workload(azurite=False)
     deploy = transaction_def.ZeroDowntimeDeploy(c, 1, workload, azurite=False)
     expected = []
     for generation in range(3):
@@ -682,7 +695,7 @@ def test_zippy_storage_topology_keeps_source_actions_eligible(external):
             return [StoragedStart]
 
         def actions_with_weight(self):
-            actions = {NeedsStorage: 1}
+            actions: dict[type[Action], int] = {NeedsStorage: 1}
             if not external:
                 actions[Mz0dtDeploy] = 0
             return actions
@@ -824,7 +837,9 @@ def test_zippy_native_replica_override_spans_execution_and_restores(
     c = Composition(repo, "zippy", resolve_image_specs=False)
     scope = c.workflows["default"].__globals__
     before = copy.deepcopy(c.compose["services"])
-    for operation in ("up", "rm", "sql", "enable_minio_versioning", "pull_if_variable"):
+    rm = Mock()
+    monkeypatch.setattr(c, "rm", rm)
+    for operation in ("up", "sql", "enable_minio_versioning", "pull_if_variable"):
         monkeypatch.setattr(c, operation, Mock())
     monkeypatch.setattr(c, "sql_query", Mock(return_value=[("u10", "u20")]))
     monkeypatch.setitem(scope, "setup_default_ssh_test_connection", Mock())
@@ -833,7 +848,7 @@ def test_zippy_native_replica_override_spans_execution_and_restores(
     monkeypatch.setitem(scope, "native_catalog_options", options)
 
     def run(composition):
-        c.rm.assert_called_once_with("materialized")
+        rm.assert_called_once_with("materialized")
         command = composition.compose["services"]["storaged"]["command"]
         if scenario == "PostgresCdc":
             assert "--catalog-cluster-id=u10" in command
@@ -867,11 +882,13 @@ def test_parallel_deploy_retires_captured_generation_before_cleanup(
     from random import Random
 
     from materialize.parallel_workload import action
+    from materialize.parallel_workload.executor import Executor
 
     sleep = Mock()
     monkeypatch.setattr(action.time, "sleep", sleep)
     c = MagicMock(spec=Composition)
     deploy = action.ZeroDowntimeDeployAction(Random(0), c, False, False)
+    # Deployment only updates this state. Composition I/O is mocked separately.
     executor = SimpleNamespace(db=SimpleNamespace(retiring_generations=frozenset()))
     for generation in range(3):
         c.reset_mock()
@@ -889,10 +906,10 @@ def test_parallel_deploy_retires_captured_generation_before_cleanup(
         ) or pytest.fail("promotion alone must not authorize retirement errors")
         if retirement_fails and generation == 2:
             with pytest.raises(UIError, match="retirement failed"):
-                deploy.run(executor)
+                deploy.run(cast(Executor, executor))
             c.kill_fenced_mz.assert_not_called()
         else:
-            assert deploy.run(executor)
+            assert deploy.run(cast(Executor, executor))
             c.kill_fenced_mz.assert_called_once_with(previous)
         expected = [
             call.await_mz_deployment_status(
@@ -964,6 +981,7 @@ def test_parallel_launch_keeps_shared_relay_only_for_coexistence(monkeypatch, sc
 def platform_checks(composition, monkeypatch):
     path = MZ_ROOT / "test/platform-checks/mzcompose.py"
     spec = importlib.util.spec_from_file_location("platform_checks_workflow", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(
@@ -1188,7 +1206,9 @@ def test_platform_default_continues_after_skip_and_keeps_native_failures(
         case for case in report.findall(".//testcase") if case.find("error") is not None
     ]
     assert [case.attrib["name"] for case in failures] == ["DNativeFailure/check.td:23"]
-    assert "native SQL assertion failed" in failures[0].find("error").text
+    error = failures[0].find("error")
+    assert error is not None and error.text is not None
+    assert "native SQL assertion failed" in error.text
     assert composition.test_results["AUnsupported"].skipped_reason
     assert composition.test_results["BNative"].is_successful()
     assert composition.test_results["CNativeForced"].skipped_reason
@@ -1284,6 +1304,7 @@ def test_incident_1007_reports_unsupported_before_services(
 ):
     path = MZ_ROOT / "test/catalog-migration/incident-1007/mzcompose.py"
     spec = importlib.util.spec_from_file_location("incident_1007_workflow", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     composition.workflows = {
@@ -1317,9 +1338,10 @@ def test_incident_1007_reports_unsupported_before_services(
         if workflow == "default"
         else {f"workflow-{workflow}"}
     )
-    assert all(
-        "pre-native" in case.find("skipped").attrib["message"] for case in skipped
-    )
+    for case in skipped:
+        skip = case.find("skipped")
+        assert skip is not None
+        assert "pre-native" in skip.attrib["message"]
     assert not report.findall(".//error")
     for operation in ("up", "down", "override"):
         getattr(composition, operation).assert_not_called()
@@ -1340,6 +1362,7 @@ def test_pre_native_preflight_triggers_are_explicitly_skipped():
 def test_pg_cdc_mixed_upgrade_stops_before_certificate_setup(mode):
     path = MZ_ROOT / "test/pg-cdc-old-syntax/mzcompose.py"
     spec = importlib.util.spec_from_file_location("pg_cdc_old_syntax_workflow", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     c = Mock(spec=Composition)

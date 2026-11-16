@@ -29,6 +29,7 @@ def launchers():
         spec = importlib.util.spec_from_file_location(
             name, MZ_ROOT / "test" / name / "mzcompose.py"
         )
+        assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         modules[name] = module
@@ -227,6 +228,7 @@ def test_cloudtest_deferrals_precede_application_creation(monkeypatch, request):
         spec = importlib.util.spec_from_file_location(
             f"cloudtest_{filename}", MZ_ROOT / "test/cloudtest" / filename
         )
+        assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         application = Mock(side_effect=AssertionError("must not provision Kubernetes"))

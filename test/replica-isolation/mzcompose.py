@@ -19,7 +19,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any
+from typing import Any, LiteralString
 
 from psycopg import AsyncConnection, sql
 
@@ -70,7 +70,7 @@ class CompactionCheck:
     def query(
         self,
         c: Composition,
-        query: str | sql.Composed,
+        query: LiteralString | sql.Composed,
         params: tuple = (),
         *,
         system: bool = False,
@@ -135,12 +135,15 @@ class CompactionCheck:
         # rows and completed frontiers must not masquerade as live progress.
         rows = self.query(
             c,
-            f"""SELECT object_id,
-                   bool_and({frontier}_known AND {frontier}_frontier IS NOT NULL),
-                   min({frontier}_frontier)
+            sql.SQL("""SELECT object_id,
+                   bool_and({known} AND {frontier} IS NOT NULL),
+                   min({frontier})
                FROM mz_internal.mz_current_replica_frontiers
                WHERE replica_id = %s AND object_id = ANY(%s::text[])
-               GROUP BY object_id""",
+               GROUP BY object_id""").format(
+                known=sql.Identifier(f"{frontier}_known"),
+                frontier=sql.Identifier(f"{frontier}_frontier"),
+            ),
             (self.replica_id, list(self.ids.values())),
         )
         for object_id, known, value in rows:
@@ -162,7 +165,7 @@ class CompactionCheck:
                 }
             return False
         return all(
-            self.observed[key] is not None and self.observed[key] > value
+            (observed := self.observed[key]) is not None and observed > value
             for key, value in self.baseline.items()
         )
 
@@ -269,6 +272,10 @@ def populate(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM source1
             """),
     )
+
+
+def drop_replica(c: Composition, _stack: ExitStack, _unified: bool) -> None:
+    c.testdrive("> DROP CLUSTER REPLICA cluster1.replica1")
 
 
 def restart_replica(c: Composition) -> None:
@@ -441,9 +448,7 @@ disruptions = [
     ),
     Disruption(
         name="drop-replica",
-        disruption=lambda c, _stack, _unified: c.testdrive(
-            "> DROP CLUSTER REPLICA cluster1.replica1"
-        ),
+        disruption=drop_replica,
         compaction_checks=CompactionCheck.all_checks("cluster1.replica2"),
     ),
     Disruption(

@@ -9,11 +9,13 @@
 
 import random
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.action import Action
+from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
 
@@ -25,7 +27,8 @@ def ignored_errors(scenario, complexity):
             scenario=scenario, complexity=complexity, retiring_generations=frozenset()
         ),
     )
-    return Action(random.Random(0), None).errors_to_ignore(executor)
+    # Only executor state is read here, with no SQL or connection access.
+    return Action(random.Random(0), None).errors_to_ignore(cast(Executor, executor))
 
 
 @pytest.mark.parametrize("complexity", [Complexity.Read, Complexity.DML])
@@ -78,7 +81,8 @@ def test_retirement_rejection_requires_explicit_target(scenario, requested):
             scenario=scenario, complexity=Complexity.DML, retiring_generations=requested
         ),
     )
-    worker.exe = executor
+    # Rejected.run raises before I/O, so the worker only needs this mutable state.
+    worker.exe = cast(Executor, executor)
     if scenario == Scenario.ZeroDowntimeDeploy and 3 in requested:
         worker.run_action(action)
         assert executor.reconnect_next

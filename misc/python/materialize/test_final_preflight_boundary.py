@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+from collections import OrderedDict
 from contextlib import nullcontext
 from subprocess import CompletedProcess
 from unittest.mock import Mock
@@ -26,7 +27,7 @@ def hook(monkeypatch):
     c = Composition.__new__(Composition)
     c.compose = {"services": {"materialized": {"image": OLD}}}
     c._preflight_native_images = {NATIVE}
-    c.test_results = {}
+    c.test_results = OrderedDict()
     for method in (
         "kill",
         "up",

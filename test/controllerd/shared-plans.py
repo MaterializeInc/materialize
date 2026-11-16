@@ -58,7 +58,11 @@ def main() -> None:
         connect(args.new_controller, args.new_adapter) as new,
     ):
         clients = (old, new)
-        versions = [c.execute("SELECT mz_version()").fetchone()[0] for c in clients]
+        versions = []
+        for client in (old, new):
+            row = client.execute("SELECT mz_version()").fetchone()
+            assert row is not None
+            versions.append(row[0])
         assert versions[0] != versions[1], versions
         for client in clients:
             client.execute("SET cluster = quickstart")
@@ -77,11 +81,13 @@ def main() -> None:
                 )
                 for observer, client in enumerate(clients):
                     started = time.monotonic()
-                    plan = client.execute(
+                    row = client.execute(
                         sql.SQL("EXPLAIN PHYSICAL PLAN FOR SELECT * FROM {}").format(
                             table
                         )
-                    ).fetchone()[0]
+                    ).fetchone()
+                    assert row is not None
+                    plan = row[0]
                     assert index_name in plan, plan
                     assert sorted(
                         client.execute(
