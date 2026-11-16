@@ -23,7 +23,8 @@ use mz_repr::explain::{
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, StableRow, UNKNOWN_COLUMN_NAME,
+    ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, SqlScalarType, StableRow,
+    UNKNOWN_COLUMN_NAME,
 };
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -220,12 +221,36 @@ fn fmt_schema(
             format!(
                 "{} {}{}",
                 ident(name),
-                humanizer.humanize_sql_scalar_type(&typ.scalar_type, false),
+                fmt_column_type(&typ.scalar_type, humanizer),
                 if typ.nullable { "" } else { " NOT NULL" },
             )
         })
         .collect();
     writeln!(f, "  {}", columns.join(",\n  "))
+}
+
+/// Renders `typ` as a SQL type that plans back to `typ`.
+///
+/// Humanized names omit the `numeric` scale and the `timestamp` precision, so
+/// those are rendered from their `pgrepr` type. Modifiers inside types that
+/// cannot spell them, like arrays, ranges and anonymous records, are lost.
+fn fmt_column_type(typ: &SqlScalarType, humanizer: &dyn ExprHumanizer) -> String {
+    match typ {
+        SqlScalarType::List {
+            element_type,
+            custom_id: None,
+        } => format!("{} list", fmt_column_type(element_type, humanizer)),
+        SqlScalarType::Map {
+            value_type,
+            custom_id: None,
+        } => format!("map[text=>{}]", fmt_column_type(value_type, humanizer)),
+        SqlScalarType::Numeric { max_scale: Some(_) }
+        | SqlScalarType::Timestamp { precision: Some(_) }
+        | SqlScalarType::TimestampTz { precision: Some(_) } => {
+            mz_pgrepr::Type::from(typ).to_string()
+        }
+        _ => humanizer.humanize_sql_scalar_type(typ, false),
+    }
 }
 
 impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing, M>
