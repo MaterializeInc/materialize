@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Deploys are fast, do them quickly
-priority: 30
+priority: 80
 
 steps:
   - id: deploy_mz-debug-linux-x86_64
