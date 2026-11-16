@@ -66,6 +66,8 @@ function input(
     columns: new Map(),
     comments: new Map(),
     dataProducts: new Set(),
+    viewJoins: new Map(),
+    indexKeys: new Map(),
     ...overrides,
   };
 }

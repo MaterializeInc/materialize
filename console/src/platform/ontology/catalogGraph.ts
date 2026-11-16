@@ -175,6 +175,7 @@ export function buildCatalogGraph({
         stringProperty(link.properties, "via"),
       note: linkNote(link.properties),
       declaredIn: null,
+      inferredFrom: [],
       issues: [],
     });
   }

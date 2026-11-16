@@ -18,18 +18,22 @@ import {
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 import { CATALOG_SERVER_CLUSTER } from "~/api/materialize/executeSql";
 import {
+  buildIndexKeysQuery,
   buildOntologyRowsQuery,
   buildOntologyTablesQuery,
   buildRelationDetailsQuery,
   buildRelationVitalsQuery,
+  buildViewDefinitionsQuery,
   CATALOG_ONTOLOGY_MIN_VERSION,
   fetchCatalogOntology,
   fetchDataProductNames,
+  IndexKeyRow,
   ONTOLOGY_ROWS_UPSERT_KEY,
   OntologyRowsRow,
   OntologyTableRow,
   RelationDetailRow,
   RelationVitalsRow,
+  ViewDefinitionRow,
 } from "~/api/materialize/ontology/ontology";
 import { createScopedSubscribeCollections } from "~/api/materialize/subscribeCollection";
 import { useScopedSubscribeCollection } from "~/api/materialize/useScopedSubscribeCollection";
@@ -48,7 +52,10 @@ import {
   groupName,
   parseQualifiedName,
 } from "./dataProductGraph";
+import { IndexKey } from "./indexFit";
 import { OntologyColumn, OntologyGraph } from "./model";
+import { resolveOntologyTable } from "./ontologyTableChoice";
+import { extractViewJoins, ViewJoins } from "./viewJoins";
 
 /** The first version with `mz_internal.mz_mcp_data_products`. */
 const DATA_PRODUCTS_MIN_VERSION = "26.24.0";
@@ -140,6 +147,25 @@ const relationVitalsCollections =
     getKey: (row) => row.id,
   });
 
+const viewDefinitionsCollections =
+  createScopedSubscribeCollections<ViewDefinitionRow>({
+    id: "ontology-view-definitions",
+    getKey: (row) => row.id,
+  });
+
+const indexKeysCollections = createScopedSubscribeCollections<IndexKeyRow>({
+  id: "ontology-index-keys",
+  getKey: (row) => `${row.indexId}|${row.position}`,
+});
+
+const VIEW_DEFINITIONS_SUBSCRIBE = buildSubscribeQuery(
+  buildViewDefinitionsQuery(),
+  { upsertKey: "id" },
+);
+const INDEX_KEYS_SUBSCRIBE = buildSubscribeQuery(buildIndexKeysQuery(), {
+  upsertKey: ["indexId", "position"],
+});
+
 const ONTOLOGY_TABLES_SUBSCRIBE = buildSubscribeQuery(
   buildOntologyTablesQuery(),
   { upsertKey: "id" },
@@ -155,8 +181,11 @@ function useStableIds(ids: string[]) {
 
 const NO_ROWS: OntologyRowsRow[] = [];
 
-/** Ontology tables in the environment, with their rows, kept live. */
-function useOntologyTables() {
+/**
+ * Relations shaped like an ontology table, and the rows of the one chosen,
+ * kept live.
+ */
+function useOntologyTables(chosenId: string | null) {
   const tables = useScopedSubscribeCollection(
     ontologyTablesCollections,
     COLLECTION_KEY,
@@ -175,25 +204,23 @@ function useOntologyTables() {
     [tableRows],
   );
 
-  // Ontology tables are user objects, which `mz_catalog_server` cannot read.
-  // An index pins where reading them is cheap, and once one cluster is chosen
-  // the unindexed tables are read there too, from storage.
-  const readCluster =
-    sortedTables.find((table) => table.indexClusterName)?.indexClusterName ??
-    null;
-  const tablesKey = sortedTables
-    .map((t) => `${t.id}:${t.databaseName}.${t.schemaName}.${t.name}`)
-    .join(",");
+  const chosen = sortedTables.find((table) => table.id === chosenId) ?? null;
+  // Ontology tables are user objects, which `mz_catalog_server` cannot read,
+  // so the rows are read where the table's index is.
+  const readCluster = chosen?.indexClusterName ?? null;
+  const chosenKey = chosen
+    ? `${chosen.id}:${chosen.databaseName}.${chosen.schemaName}.${chosen.name}`
+    : null;
   const rowsSubscribe = React.useMemo(() => {
-    if (!readCluster) return undefined;
-    const query = buildOntologyRowsQuery(sortedTables);
+    if (!chosen || !readCluster) return undefined;
+    const query = buildOntologyRowsQuery([chosen]);
     return query
       ? buildSubscribeQuery(query, { upsertKey: ONTOLOGY_ROWS_UPSERT_KEY })
       : undefined;
-    // `sortedTables` is keyed by `tablesKey`, so a new array with the same
-    // tables does not restart the subscribe.
+    // `chosen` is keyed by `chosenKey`, so a new row object for the same
+    // table does not restart the subscribe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tablesKey, readCluster]);
+  }, [chosenKey, readCluster]);
   const rowsSession = React.useMemo(
     () => (readCluster ? { clusterName: readCluster } : undefined),
     [readCluster],
@@ -214,6 +241,7 @@ function useOntologyTables() {
 
   return {
     tables: sortedTables,
+    chosen,
     rows: (rowsSubscribe && rowData) || NO_ROWS,
     readCluster,
     tablesReady: tables.status.snapshotComplete,
@@ -266,6 +294,77 @@ function useRelationDetails(relationIds: string[]) {
     }
     return { columns, comments, ready: !subscribe || status.snapshotComplete };
   }, [data, status.snapshotComplete, subscribe]);
+}
+
+// Extraction is pure in the definition, and definitions rarely change, so a
+// view is scanned again only when its definition does.
+const viewJoinsCache = new Map<string, ViewJoins>();
+
+function viewJoinsOf(createSql: string) {
+  let joins = viewJoinsCache.get(createSql);
+  if (!joins) {
+    joins = extractViewJoins(createSql);
+    viewJoinsCache.set(createSql, joins);
+  }
+  return joins;
+}
+
+/**
+ * What the environment's own definitions say about joins: the joins in each
+ * view, and the keys of each relation's indexes. Both are kept live.
+ */
+function useJoinEvidence() {
+  const views = useScopedSubscribeCollection(
+    viewDefinitionsCollections,
+    COLLECTION_KEY,
+    VIEW_DEFINITIONS_SUBSCRIBE,
+    CATALOG_SESSION,
+  );
+  const { data: viewRows } = useLiveQuery(
+    (q) =>
+      views.collection
+        ? q.from({ view: views.collection.collection })
+        : undefined,
+    [views.collection],
+  );
+  const keys = useScopedSubscribeCollection(
+    indexKeysCollections,
+    COLLECTION_KEY,
+    INDEX_KEYS_SUBSCRIBE,
+    CATALOG_SESSION,
+  );
+  const { data: keyRows } = useLiveQuery(
+    (q) =>
+      keys.collection ? q.from({ key: keys.collection.collection }) : undefined,
+    [keys.collection],
+  );
+
+  const viewJoins = React.useMemo(() => {
+    const map = new Map<string, ViewJoins>();
+    for (const row of viewRows ?? []) {
+      map.set(row.id, viewJoinsOf(row.createSql));
+    }
+    return map;
+  }, [viewRows]);
+  const indexKeys = React.useMemo(() => {
+    const byIndex = new Map<string, IndexKeyRow[]>();
+    for (const row of keyRows ?? []) {
+      byIndex.set(row.indexId, [...(byIndex.get(row.indexId) ?? []), row]);
+    }
+    const map = new Map<string, IndexKey[]>();
+    for (const parts of byIndex.values()) {
+      const key = parts
+        .sort((a, b) => a.position - b.position)
+        .map((part) => part.columnName);
+      map.set(parts[0].id, [...(map.get(parts[0].id) ?? []), key]);
+    }
+    return map;
+  }, [keyRows]);
+  return {
+    viewJoins,
+    indexKeys,
+    ready: views.status.snapshotComplete && keys.status.snapshotComplete,
+  };
 }
 
 export interface RelationVitals {
@@ -329,21 +428,23 @@ function useDataProductNames() {
 const NO_LINEAGE: { childId: string; parentId: string }[] = [];
 
 /**
- * The data products ontology: user relations, the joins declared in ontology
- * tables, and lineage. Columns and comments are loaded for the relations in
- * `groups` (all groups when null) and for every relation an ontology table
- * names, which validating the joins needs.
+ * The data products ontology: user relations, the joins inferred from the
+ * environment's definitions or declared in the ontology table named by
+ * `ontologyTableName`, and lineage. Columns and comments are loaded for the
+ * relations in `groups` (all groups when null) and for every relation the
+ * ontology table names, which validating the joins needs.
  */
 export function useDataProductOntologyGraph(
   groups: ReadonlySet<string> | null,
+  ontologyTableName: string,
 ) {
   const objects = useAllObjectsLive();
   const lineageAvailable = useWorkflowGraphEdgesAvailable();
   const { data: lineageRows } = useLiveQuery((q) =>
     q.from({ edge: workflowGraphEdgesCollection.collection }),
   );
-  const ontology = useOntologyTables();
   const dataProducts = useDataProductNames();
+  const evidence = useJoinEvidence();
 
   const relations: CatalogRelation[] = React.useMemo(
     () =>
@@ -353,6 +454,15 @@ export function useDataProductOntologyGraph(
           ENTITY_OBJECT_TYPES.has(object.objectType),
       ),
     [objects.data],
+  );
+  const chosenRelation = React.useMemo(
+    () => resolveOntologyTable(ontologyTableName, relations),
+    [ontologyTableName, relations],
+  );
+  const ontology = useOntologyTables(chosenRelation?.id ?? null);
+  const declaringTables = React.useMemo(
+    () => (ontology.chosen ? [ontology.chosen] : []),
+    [ontology.chosen],
   );
 
   const referencedNames = React.useMemo(() => {
@@ -381,23 +491,32 @@ export function useDataProductOntologyGraph(
     () =>
       buildDataProductGraph({
         relations,
-        ontologyTables: ontology.tables,
+        ontologyTables: declaringTables,
         ontologyRows: ontology.rows,
         lineage: lineageAvailable ? (lineageRows ?? NO_LINEAGE) : NO_LINEAGE,
         columns: details.columns,
         comments: details.comments,
         dataProducts,
+        viewJoins: evidence.viewJoins,
+        indexKeys: evidence.indexKeys,
       }),
     [
       relations,
-      ontology.tables,
+      declaringTables,
       ontology.rows,
       lineageAvailable,
       lineageRows,
       details.columns,
       details.comments,
       dataProducts,
+      evidence.viewJoins,
+      evidence.indexKeys,
     ],
+  );
+
+  const ontologyShapeIds = React.useMemo(
+    () => new Set(ontology.tables.map((table) => table.id)),
+    [ontology.tables],
   );
 
   const allGroups = React.useMemo(
@@ -408,11 +527,17 @@ export function useDataProductOntologyGraph(
   return {
     graph,
     allGroups,
-    ontologyTables: ontology.tables,
+    relations,
+    /** Ids of relations shaped like an ontology table. */
+    ontologyShapeIds,
+    /** The relation the chosen name resolves to, if any. */
+    chosenRelation,
+    /** The chosen relation, when it is shaped like an ontology table. */
+    ontologyTable: ontology.chosen,
     readCluster: ontology.readCluster,
     isLoading:
       !objects.snapshotComplete || !ontology.tablesReady || !ontology.rowsReady,
-    detailsReady: details.ready,
+    detailsReady: details.ready && evidence.ready,
     isError: objects.isError || Boolean(ontology.tablesError),
     rowsError: ontology.rowsError,
   };

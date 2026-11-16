@@ -73,6 +73,8 @@ const GRAPH = buildDataProductGraph({
   ]),
   comments: new Map([["u1", "Every order placed."]]),
   dataProducts: new Set(['"materialize"."shop"."orders"']),
+  viewJoins: new Map(),
+  indexKeys: new Map(),
 });
 
 const renderExplorer = (initialEntry = "/") =>

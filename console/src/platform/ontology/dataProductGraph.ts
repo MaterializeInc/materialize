@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { IndexKey, tooWideIndexIssues } from "./indexFit";
+import { compareWithDeclared, inferJoinEdges } from "./inferredJoins";
 import {
+  INFERRED_JOIN_EDGE_KIND,
   JOIN_EDGE_KIND,
   LINEAGE_EDGE_KIND,
   OntologyColumn,
@@ -16,6 +19,7 @@ import {
   OntologyIssue,
   OntologyNode,
 } from "./model";
+import { ViewJoins } from "./viewJoins";
 
 /** Object types the data products lens draws as entities. */
 export const ENTITY_OBJECT_TYPES = new Set([
@@ -67,6 +71,10 @@ export interface DataProductGraphInput {
   comments: Map<string, string>;
   /** Fully qualified, quoted names listed by `mz_mcp_data_products`. */
   dataProducts: Set<string>;
+  /** Joins read out of each view's definition, by the view's object id. */
+  viewJoins: Map<string, ViewJoins>;
+  /** The keys of each relation's indexes, by object id. */
+  indexKeys: Map<string, IndexKey[]>;
 }
 
 export function quoteIdent(ident: string) {
@@ -86,6 +94,11 @@ export function qualifiedName(relation: {
 
 const SIMPLE_IDENTIFIER = /^[a-z_][a-z0-9_$]*$/;
 
+/** An identifier for reading, quoted only when it needs to be. */
+export function displayIdent(ident: string) {
+  return SIMPLE_IDENTIFIER.test(ident) ? ident : quoteIdent(ident);
+}
+
 /** A qualified name for reading, quoting only the parts that need it. */
 export function displayName(relation: {
   databaseName: string | null;
@@ -94,7 +107,7 @@ export function displayName(relation: {
 }) {
   return [relation.databaseName, relation.schemaName, relation.name]
     .filter((part): part is string => part !== null)
-    .map((part) => (SIMPLE_IDENTIFIER.test(part) ? part : quoteIdent(part)))
+    .map(displayIdent)
     .join(".");
 }
 
@@ -278,7 +291,8 @@ function unresolvedNode(
 
 /**
  * Assembles the data products ontology: user relations as entities, the joins
- * curated in ontology tables, and lineage between the relations. Every
+ * curated in ontology tables, the joins inferred beside them (see
+ * `inferredJoins`), and lineage between the relations. Every
  * ontology row is checked against the catalog, and the problems are reported
  * on the edge and in `issues` rather than dropped, since an unresolvable row
  * is exactly what an agent reading the table would trip over.
@@ -399,6 +413,7 @@ export function buildDataProductGraph(
       via: null,
       note: null,
       declaredIn,
+      inferredFrom: [],
       issues: edgeIssues,
     });
     issues.push(...edgeIssues);
@@ -420,14 +435,38 @@ export function buildDataProductGraph(
       via: null,
       note: null,
       declaredIn: null,
+      inferredFrom: [],
       issues: [],
     });
   }
 
+  const inferred = inferJoinEdges({
+    nodes,
+    viewJoins: input.viewJoins,
+    indexKeys: input.indexKeys,
+  });
+  issues.push(
+    ...compareWithDeclared(
+      edges.filter((edge) => edge.kind === JOIN_EDGE_KIND),
+      inferred,
+      nodes,
+    ),
+  );
+  edges.push(...inferred);
+
+  for (const issue of tooWideIndexIssues(edges, nodes, input.indexKeys)) {
+    edges.find((edge) => edge.id === issue.edgeId)?.issues.push(issue);
+    issues.push(issue);
+  }
+
   // Key columns are the referenced side of joins: the docs pattern pairs
   // foreign key columns with the referenced table's primary or unique key.
+  // An inferred join counts only once its direction is settled.
   for (const edge of edges) {
-    if (edge.kind !== JOIN_EDGE_KIND) continue;
+    const isKeyed =
+      edge.kind === JOIN_EDGE_KIND ||
+      (edge.kind === INFERRED_JOIN_EDGE_KIND && edge.cardinality !== null);
+    if (!isKeyed) continue;
     const target = nodes.get(edge.target);
     if (!target || target.isUnresolved) continue;
     for (const column of edge.targetColumns) {

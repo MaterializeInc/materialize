@@ -248,6 +248,48 @@ FROM mz_internal.mz_comments cm
 WHERE cm.id IN (${idList}) AND cm.object_sub_id IS NULL`;
 }
 
+export interface ViewDefinitionRow {
+  id: string;
+  createSql: string;
+}
+
+/**
+ * Definitions of every user view and materialized view. A view may join
+ * relations outside the schemas on screen, so none are filtered out.
+ */
+export function buildViewDefinitionsQuery(): RawBuilder<ViewDefinitionRow> {
+  return sql<ViewDefinitionRow>`
+SELECT id, create_sql AS "createSql"
+FROM mz_catalog.mz_views WHERE id LIKE 'u%'
+UNION ALL
+SELECT id, create_sql AS "createSql"
+FROM mz_catalog.mz_materialized_views WHERE id LIKE 'u%'`;
+}
+
+export interface IndexKeyRow {
+  indexId: string;
+  /** The indexed relation. */
+  id: string;
+  position: number;
+  /** Null for a key expression. */
+  columnName: string | null;
+}
+
+/** The key of every index on a user relation, one row per key part. */
+export function buildIndexKeysQuery(): RawBuilder<IndexKeyRow> {
+  return sql<IndexKeyRow>`
+SELECT
+  i.id AS "indexId",
+  i.on_id AS id,
+  ic.index_position::int4 AS position,
+  c.name AS "columnName"
+FROM mz_catalog.mz_indexes i
+JOIN mz_catalog.mz_index_columns ic ON ic.index_id = i.id
+LEFT JOIN mz_catalog.mz_columns c
+  ON c.id = i.on_id AND c.position = ic.on_position
+WHERE i.on_id LIKE 'u%'`;
+}
+
 export interface RelationVitalsRow {
   id: string;
   /** Milliseconds since the epoch, null for a relation nothing maintains. */

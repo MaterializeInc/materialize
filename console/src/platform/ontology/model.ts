@@ -17,15 +17,18 @@
 
 /** Join relationships curated in an ontology table. */
 export const JOIN_EDGE_KIND = "join";
+/** A join some view or materialized view already makes. */
+export const INFERRED_JOIN_EDGE_KIND = "inferred_join";
 /** A derived object reading from another, from `mz_object_graph_edges`. */
 export const LINEAGE_EDGE_KIND = "lineage";
 
 /**
- * Relationship kinds. `join` and `lineage` come from the data products lens,
- * the rest are the `kind` values of `mz_internal.mz_ontology_link_types`.
+ * Relationship kinds. The join kinds and `lineage` come from the data products
+ * lens, the rest are the `kind` values of `mz_internal.mz_ontology_link_types`.
  */
 export type OntologyEdgeKind =
   | typeof JOIN_EDGE_KIND
+  | typeof INFERRED_JOIN_EDGE_KIND
   | typeof LINEAGE_EDGE_KIND
   | "foreign_key"
   | "maps_to"
@@ -81,8 +84,16 @@ export interface OntologyEdge {
   /** A mapping relation that bridges the two sides' id domains. */
   via: string | null;
   note: string | null;
-  /** The ontology table that declares a join, fully qualified. */
+  /**
+   * The ontology table that declares a join, fully qualified. Set on an
+   * inferred join too, when a declared one matches it.
+   */
   declaredIn: string | null;
+  /**
+   * Views and materialized views whose definitions imply this relationship.
+   * On a declared join, those confirming it.
+   */
+  inferredFrom: string[];
   issues: OntologyIssue[];
 }
 

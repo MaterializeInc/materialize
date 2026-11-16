@@ -41,7 +41,7 @@ import { keyColumns } from "./keyColumns";
 import { layoutGraph, LayoutMode } from "./layout";
 import { OntologyEdgeKind, OntologyGraph, OntologyNode } from "./model";
 import { OntologyCanvas, Selection } from "./OntologyCanvas";
-import { OntologySidePanel } from "./OntologySidePanel";
+import { OntologySidePanel, OntologySidePanelProps } from "./OntologySidePanel";
 import { edgeKindStyle, groupColor, SIDE_PANEL_WIDTH } from "./style";
 
 const NEIGHBORHOOD_DEPTH = 1;
@@ -53,6 +53,11 @@ export interface OverviewContext {
   drawn: { nodes: number; edges: number; isolated: number };
   select: (selection: Selection) => void;
   setHighlighted: (ids: ReadonlySet<string> | null) => void;
+}
+
+export interface ToolbarControls {
+  /** Draws a relationship kind the user may have hidden. */
+  showEdgeKind: (kind: OntologyEdgeKind) => void;
 }
 
 export interface OntologyExplorerProps {
@@ -70,6 +75,9 @@ export interface OntologyExplorerProps {
   /** Whether the graph is fed by live SUBSCRIBEs, shown as a badge. */
   isLive: boolean;
   suggestComments: boolean;
+  declareSql?: OntologySidePanelProps["declareSql"];
+  /** Toolbar controls of the lens, drawn after the relationship toggles. */
+  renderToolbar?: (controls: ToolbarControls) => React.ReactNode;
   /** Ids present in the first complete snapshot are not announced as new. */
   isReady: boolean;
 }
@@ -160,6 +168,8 @@ export const OntologyExplorer = ({
   previewCluster,
   isLive,
   suggestComments,
+  declareSql,
+  renderToolbar,
   isReady,
 }: OntologyExplorerProps) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -190,6 +200,19 @@ export const OntologyExplorer = ({
     React.useState<ReadonlySet<string> | null>(null);
   const svgRef = React.useRef<SVGSVGElement>(null);
 
+  const toolbarControls: ToolbarControls = React.useMemo(
+    () => ({
+      showEdgeKind: (kind) =>
+        setHiddenEdgeKinds((prev) => {
+          if (!prev.has(kind)) return prev;
+          const next = new Set(prev);
+          next.delete(kind);
+          return next;
+        }),
+    }),
+    [],
+  );
+
   const filters: GraphFilters = React.useMemo(
     () => ({
       groups,
@@ -210,7 +233,7 @@ export const OntologyExplorer = ({
     () =>
       [
         filtered.nodes.map((node) => `${node.id}@${node.group}`).join(","),
-        filtered.edges.map((edge) => edge.id).join(","),
+        filtered.layoutEdges.map((edge) => edge.id).join(","),
       ].join("#"),
     [filtered],
   );
@@ -241,7 +264,7 @@ export const OntologyExplorer = ({
   );
   const layout = React.useMemo(
     () =>
-      layoutGraph(filtered.nodes, filtered.edges, {
+      layoutGraph(filtered.nodes, filtered.layoutEdges, {
         mode: layoutMode,
         showEdgeLabels,
         keyColumns: keyColumnsByNode,
@@ -428,7 +451,7 @@ export const OntologyExplorer = ({
                   <Box
                     width="14px"
                     height="0"
-                    borderTop={`2px ${style.dash ? "dashed" : "solid"} ${style.color}`}
+                    borderTop={`2px ${style.borderStyle} ${style.color}`}
                   />
                 }
               >
@@ -440,6 +463,7 @@ export const OntologyExplorer = ({
             );
           })}
         </HStack>
+        {renderToolbar?.(toolbarControls)}
         <HStack spacing={2}>
           <Switch
             id="ontology-isolated"
@@ -604,8 +628,10 @@ export const OntologyExplorer = ({
             getFreshness={getFreshness}
             previewCluster={previewCluster}
             suggestComments={suggestComments}
+            declareSql={declareSql}
             overview={renderOverview({
-              graph: filtered,
+              // Counts cover every relationship, drawn or hidden.
+              graph: { ...filtered, edges: filtered.layoutEdges },
               drawn: {
                 nodes: filtered.nodes.length,
                 edges: filtered.edges.length,

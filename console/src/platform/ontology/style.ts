@@ -18,19 +18,42 @@ export interface EdgeKindStyle {
   description: string;
   color: string;
   dash: string | undefined;
+  /** The dash pattern as a CSS border style, for legends. */
+  borderStyle: "solid" | "dashed" | "dotted";
 }
 
 export function edgeKindStyle(
   kind: OntologyEdgeKind,
   colors: ThemeColors,
 ): EdgeKindStyle {
+  const style = kindStyle(kind, colors);
+  const borderStyle = !style.dash
+    ? "solid"
+    : parseFloat(style.dash) <= 2
+      ? "dotted"
+      : "dashed";
+  return { ...style, borderStyle };
+}
+
+// The join kinds share a color, and their line says how sure the join is.
+function kindStyle(
+  kind: OntologyEdgeKind,
+  colors: ThemeColors,
+): Omit<EdgeKindStyle, "borderStyle"> {
   switch (kind) {
     case "join":
       return {
-        label: "Join",
-        description: "Declared in an ontology table",
+        label: "Declared join",
+        description: "Listed in an ontology table",
         color: colors.accent.purple,
         dash: undefined,
+      };
+    case "inferred_join":
+      return {
+        label: "Inferred join",
+        description: "A view or materialized view joins on these columns",
+        color: colors.accent.purple,
+        dash: "7 4",
       };
     case "lineage":
       return {

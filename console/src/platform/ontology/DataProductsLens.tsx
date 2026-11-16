@@ -9,8 +9,12 @@
 
 import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
+import { useSearchParams } from "react-router-dom";
 
-import { OntologyTableRow } from "~/api/materialize/ontology/ontology";
+import {
+  ONTOLOGY_TABLE_COLUMNS,
+  OntologyTableRow,
+} from "~/api/materialize/ontology/ontology";
 import { CodeBlock } from "~/components/copyableComponents";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -19,10 +23,29 @@ import { useNow } from "~/hooks/useNow";
 import docUrls from "~/mz-doc-urls.json";
 import { MaterializeTheme } from "~/theme";
 
-import { displayName, groupName } from "./dataProductGraph";
+import {
+  CatalogRelation,
+  displayName,
+  groupName,
+  parseQualifiedName,
+  qualifiedName,
+} from "./dataProductGraph";
+import { buildDeclareSql, OntologyTableHome } from "./declareSql";
 import { freshnessOf } from "./freshness";
-import { OntologyGraph, OntologyNode } from "./model";
-import { OntologyExplorer, OverviewContext } from "./OntologyExplorer";
+import {
+  INFERRED_JOIN_EDGE_KIND,
+  JOIN_EDGE_KIND,
+  OntologyEdge,
+  OntologyGraph,
+  OntologyNode,
+} from "./model";
+import {
+  OntologyExplorer,
+  OverviewContext,
+  ToolbarControls,
+} from "./OntologyExplorer";
+import { DEFAULT_ONTOLOGY_TABLE } from "./ontologyTableChoice";
+import { OntologyTablePicker } from "./OntologyTablePicker";
 import { Figure, IssueList } from "./overviewComponents";
 import { useDataProductOntologyGraph, useRelationVitals } from "./queries";
 
@@ -34,20 +57,38 @@ import { useDataProductOntologyGraph, useRelationVitals } from "./queries";
 const MAX_DEFAULT_ENTITIES = 150;
 const FRESHNESS_TICK_MS = 1_000;
 
-const EXAMPLE_ONTOLOGY_TABLE = `CREATE TABLE ontology (
-    table_name         text   NOT NULL,
-    columns            text[] NOT NULL,
-    referenced_table   text   NOT NULL,
-    referenced_columns text[] NOT NULL
-);
-CREATE DEFAULT INDEX ON ontology;
+const ONTOLOGY_PARAM = "ontology";
+const DEFAULT_SCHEMA = "public";
 
-INSERT INTO ontology VALUES
-  ('orders', ARRAY['customer_id'], 'customers', ARRAY['id']);`;
+function createOntologyTableSql(name: string) {
+  return `CREATE TABLE ${name} (
+${ONTOLOGY_TABLE_COLUMNS.map(([column, type]) => `    ${column.padEnd(18)} ${type} NOT NULL`).join(",\n")}
+);
+CREATE DEFAULT INDEX ON ${name};`;
+}
+
+/**
+ * Where declared joins go for a typed name with no table behind it: the
+ * named schema, or public, in the named database, or else `databaseName`.
+ */
+function homeFor(
+  name: string,
+  databaseName: string | null,
+): OntologyTableHome | null {
+  const parts = parseQualifiedName(name);
+  if (!parts) return null;
+  const [item, schema, database] = [...parts].reverse();
+  return {
+    databaseName: database ?? databaseName,
+    schemaName: schema ?? DEFAULT_SCHEMA,
+    name: item,
+    exists: false,
+  };
+}
 
 /**
  * Groups to open on: every group for a small environment, otherwise the
- * groups holding the ontology tables and the relations they connect.
+ * groups holding the ontology table and the relations joins connect.
  */
 function defaultGroups(
   graph: OntologyGraph,
@@ -58,7 +99,9 @@ function defaultGroups(
   const groups = new Set(ontologyTables.map(groupName));
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
   for (const edge of graph.edges) {
-    if (edge.kind !== "join") continue;
+    if (edge.kind !== JOIN_EDGE_KIND && edge.kind !== INFERRED_JOIN_EDGE_KIND) {
+      continue;
+    }
     for (const id of [edge.source, edge.target]) {
       const node = nodesById.get(id);
       if (node) groups.add(node.group);
@@ -92,13 +135,30 @@ export const DataProductsLens = () => {
     null,
   );
   const queryGroups = useGroupsFromKey(queryGroupsKey);
-  const ontology = useDataProductOntologyGraph(queryGroups);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ontologyName =
+    searchParams.get(ONTOLOGY_PARAM) ?? DEFAULT_ONTOLOGY_TABLE;
+  const setOntologyName = React.useCallback(
+    (name: string) =>
+      setSearchParams(
+        (params) => {
+          const next = new URLSearchParams(params);
+          if (name === DEFAULT_ONTOLOGY_TABLE) next.delete(ONTOLOGY_PARAM);
+          else next.set(ONTOLOGY_PARAM, name);
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
+  const ontology = useDataProductOntologyGraph(queryGroups, ontologyName);
+  const ontologyTable = ontology.ontologyTable;
   const groupsKey = groupsToKey(
     chosenGroups !== undefined
       ? chosenGroups
       : defaultGroups(
           ontology.graph,
-          ontology.ontologyTables,
+          ontologyTable ? [ontologyTable] : [],
           ontology.allGroups,
         ),
   );
@@ -130,16 +190,57 @@ export const DataProductsLens = () => {
     [readCluster],
   );
 
+  const chosenRelation = ontology.chosenRelation;
+  const declareSql = React.useCallback(
+    (edge: OntologyEdge, source: OntologyNode, target: OntologyNode) => {
+      // A relation by that name without the ontology columns takes no rows.
+      if (chosenRelation && !ontologyTable) return null;
+      const home: OntologyTableHome | null = ontologyTable
+        ? { ...ontologyTable, exists: true }
+        : homeFor(ontologyName, source.databaseName);
+      return home ? buildDeclareSql(edge, source, target, home) : null;
+    },
+    [chosenRelation, ontologyTable, ontologyName],
+  );
+
+  const renderToolbar = React.useCallback(
+    ({ showEdgeKind }: ToolbarControls) => (
+      <OntologyTablePicker
+        value={ontologyName}
+        onChange={(name) => {
+          setOntologyName(name);
+          showEdgeKind(JOIN_EDGE_KIND);
+        }}
+        relations={ontology.relations}
+        shapeIds={ontology.ontologyShapeIds}
+      />
+    ),
+    [
+      ontologyName,
+      setOntologyName,
+      ontology.relations,
+      ontology.ontologyShapeIds,
+    ],
+  );
+
   const renderOverview = React.useCallback(
     (context: OverviewContext) => (
       <DataProductsOverview
         context={context}
-        ontologyTables={ontology.ontologyTables}
+        ontologyName={ontologyName}
+        chosenRelation={chosenRelation}
+        ontologyTable={ontologyTable}
         readCluster={readCluster}
         rowsError={ontology.rowsError?.message}
       />
     ),
-    [ontology.ontologyTables, readCluster, ontology.rowsError],
+    [
+      ontologyName,
+      chosenRelation,
+      ontologyTable,
+      readCluster,
+      ontology.rowsError,
+    ],
   );
 
   // Only the first load waits. Later, a new ontology table restarts the rows
@@ -160,12 +261,17 @@ export const DataProductsLens = () => {
       groups={groups}
       onGroupsChange={setChosenGroups}
       defaultShowEdgeLabels
+      // Inferred joins need nothing from the user, so they are the default
+      // reading, and declared joins an overlay to check against them.
+      defaultHiddenEdgeKinds={[JOIN_EDGE_KIND]}
+      renderToolbar={renderToolbar}
       renderOverview={renderOverview}
       // Until the first snapshot every relation would read as unmaintained.
       getFreshness={isLive ? getFreshness : undefined}
       previewCluster={previewCluster}
       isLive={isLive}
       suggestComments
+      declareSql={declareSql}
       isReady={hasLoaded && ontology.detailsReady}
     />
   );
@@ -186,21 +292,100 @@ const OverviewSection = ({
   );
 };
 
-const DataProductsOverview = ({
-  context,
-  ontologyTables,
-  readCluster,
-  rowsError,
-}: {
-  context: OverviewContext;
-  ontologyTables: OntologyTableRow[];
+interface OntologyTableState {
+  /** The name in the picker. */
+  ontologyName: string;
+  /** The relation the name resolves to, if any. */
+  chosenRelation: CatalogRelation | null;
+  /** The chosen relation, when it has the ontology table's columns. */
+  ontologyTable: OntologyTableRow | null;
   readCluster: string | null;
   rowsError: string | undefined;
-}) => {
+}
+
+/** Where declared joins come from, and why there are none when there are none. */
+const OntologyTableStatus = ({
+  ontologyName,
+  chosenRelation,
+  ontologyTable,
+  readCluster,
+  rowsError,
+}: OntologyTableState) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const joinCount = context.graph.edges.filter(
-    (edge) => edge.kind === "join",
-  ).length;
+  const docsLink = (
+    <TextLink
+      href={docUrls["/docs/transform-data/patterns/ontology/"]}
+      isExternal
+      textStyle="text-small"
+    >
+      Use an ontology table
+    </TextLink>
+  );
+  if (!chosenRelation) {
+    return (
+      <VStack align="stretch" spacing={3}>
+        <Text textStyle="text-small" color={colors.foreground.secondary}>
+          There is no {ontologyName}, so every join here is inferred. An
+          ontology table declares joins, so agents and people can rely on them.
+          Pick another table above, select an inferred join to declare it, or
+          create the table:
+        </Text>
+        <CodeBlock
+          title="Ontology table"
+          contents={createOntologyTableSql(ontologyName)}
+          lineNumbers={false}
+        />
+        {docsLink}
+      </VStack>
+    );
+  }
+  if (!ontologyTable) {
+    return (
+      <VStack align="stretch" spacing={2}>
+        <Text textStyle="text-small" color={colors.accent.red}>
+          {displayName(chosenRelation)} is not an ontology table. It needs these
+          columns:{" "}
+          {ONTOLOGY_TABLE_COLUMNS.map(
+            ([column, type]) => `${column} ${type}`,
+          ).join(", ")}
+          .
+        </Text>
+        {docsLink}
+      </VStack>
+    );
+  }
+  return (
+    <VStack align="stretch" spacing={1}>
+      <HStack justify="space-between">
+        <Text textStyle="text-small" fontFamily="mono">
+          {displayName(ontologyTable)}
+        </Text>
+        <Text textStyle="text-small" color={colors.foreground.secondary}>
+          {readCluster ? `indexed on ${readCluster}` : "not indexed"}
+        </Text>
+      </HStack>
+      {!readCluster && (
+        <Text textStyle="text-small" color={colors.accent.red}>
+          The table is not indexed, so its rows cannot be kept live. Run CREATE
+          DEFAULT INDEX ON {qualifiedName(ontologyTable)}.
+        </Text>
+      )}
+      {rowsError && (
+        <Text textStyle="text-small" color={colors.accent.red}>
+          {rowsError}
+        </Text>
+      )}
+    </VStack>
+  );
+};
+
+const DataProductsOverview = ({
+  context,
+  ...ontologyTableState
+}: OntologyTableState & { context: OverviewContext }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const countOf = (kind: OntologyEdge["kind"]) =>
+    context.graph.edges.filter((edge) => edge.kind === kind).length;
   const dataProductCount = context.graph.nodes.filter(
     (node) => node.isDataProduct,
   ).length;
@@ -214,15 +399,17 @@ const DataProductsOverview = ({
         <Text textStyle="heading-sm">Your data, as a live ontology</Text>
         <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
           Entities are the tables, views and materialized views in this
-          environment. Joins come from your ontology tables and lineage from
-          each view&apos;s definition. Everything here is kept current with
+          environment. Joins are declared in your ontology tables or inferred
+          from the joins your views already make. Lineage comes from each
+          view&apos;s definition. Everything here is kept current with
           SUBSCRIBE, so new objects, new relationships and freshness appear as
           they change.
         </Text>
       </VStack>
 
-      <HStack spacing={6}>
-        <Figure value={joinCount} label="Joins" />
+      <HStack spacing={6} rowGap={3} flexWrap="wrap">
+        <Figure value={countOf(JOIN_EDGE_KIND)} label="Declared joins" />
+        <Figure value={countOf(INFERRED_JOIN_EDGE_KIND)} label="Inferred" />
         <Figure value={dataProductCount} label="MCP data products" />
         <Figure
           value={context.graph.issues.length}
@@ -233,63 +420,15 @@ const DataProductsOverview = ({
         />
       </HStack>
 
-      <OverviewSection title="Ontology tables">
-        {ontologyTables.length === 0 ? (
-          <VStack align="stretch" spacing={3}>
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              No ontology table yet. An ontology table lists the joins between
-              your relations, so agents and people can write correct joins. Any
-              relation with these four columns is read as one:
-            </Text>
-            <CodeBlock
-              title="Ontology table"
-              contents={EXAMPLE_ONTOLOGY_TABLE}
-              lineNumbers={false}
-            />
-            <TextLink
-              href={docUrls["/docs/transform-data/patterns/ontology/"]}
-              isExternal
-              textStyle="text-small"
-            >
-              Use an ontology table
-            </TextLink>
-          </VStack>
-        ) : (
-          <VStack align="stretch" spacing={1}>
-            {ontologyTables.map((table) => (
-              <HStack key={table.id} justify="space-between">
-                <Text textStyle="text-small" fontFamily="mono">
-                  {displayName(table)}
-                </Text>
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
-                >
-                  {table.indexClusterName
-                    ? `indexed on ${table.indexClusterName}`
-                    : "not indexed"}
-                </Text>
-              </HStack>
-            ))}
-            {!readCluster && (
-              <Text textStyle="text-small" color={colors.accent.red}>
-                No ontology table is indexed, so its rows cannot be kept live.
-                Run CREATE DEFAULT INDEX ON the table.
-              </Text>
-            )}
-            {rowsError && (
-              <Text textStyle="text-small" color={colors.accent.red}>
-                {rowsError}
-              </Text>
-            )}
-          </VStack>
-        )}
+      <OverviewSection title="Ontology table">
+        <OntologyTableStatus {...ontologyTableState} />
       </OverviewSection>
 
       {context.graph.issues.length > 0 && (
         <OverviewSection title="Issues">
           <Text textStyle="text-small" color={colors.foreground.secondary}>
-            Rows an agent would trip over. Select one to see the relationship.
+            Joins an agent would trip over, or that cost more than they need to.
+            Select one to see the relationship.
           </Text>
           {context.graph.issues.map((issue, i) => (
             <Box

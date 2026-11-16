@@ -56,6 +56,7 @@ const edge = (
   via: null,
   note: null,
   declaredIn: null,
+  inferredFrom: [],
   issues: [],
 });
 
@@ -173,14 +174,16 @@ describe("filterGraph", () => {
     expect(filtered.issues).toEqual([]);
   });
 
-  it("hides edge kinds and, on request, the entities they isolate", () => {
+  it("hides edge kinds without moving or dropping entities", () => {
     const filtered = filterGraph(graph, {
       ...all,
       hiddenEdgeKinds: new Set(["lineage"]),
       showIsolated: false,
     });
-    expect(filtered.nodes.map((n) => n.id)).toEqual(["a", "b"]);
-    expect(filtered.isolatedCount).toBe(2);
+    expect(filtered.edges.map((e) => e.id)).toEqual(["join|a|b"]);
+    expect(filtered.layoutEdges).toHaveLength(2);
+    expect(filtered.nodes.map((n) => n.id)).toEqual(["a", "b", "c"]);
+    expect(filtered.isolatedCount).toBe(1);
   });
 
   it("focuses on a neighborhood across groups", () => {

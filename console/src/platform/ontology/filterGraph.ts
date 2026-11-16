@@ -12,6 +12,10 @@ import { OntologyEdge, OntologyEdgeKind, OntologyGraph } from "./model";
 export interface GraphFilters {
   /** Groups to draw. Null draws every group. */
   groups: ReadonlySet<string> | null;
+  /**
+   * Relationship kinds not to draw. They still shape the layout and decide
+   * which entities are isolated, so toggling a kind moves no card.
+   */
   hiddenEdgeKinds: ReadonlySet<OntologyEdgeKind>;
   showIsolated: boolean;
   /**
@@ -22,7 +26,9 @@ export interface GraphFilters {
 }
 
 export interface FilteredGraph extends OntologyGraph {
-  /** Entities in the drawn groups that no drawn relationship touches. */
+  /** Relationships between drawn entities, of every kind, to lay out on. */
+  layoutEdges: OntologyEdge[];
+  /** Entities in the drawn groups that no relationship touches. */
   isolatedCount: number;
 }
 
@@ -31,14 +37,15 @@ export function filterGraph(
   graph: OntologyGraph,
   filters: GraphFilters,
 ): FilteredGraph {
-  const edges = graph.edges.filter(
-    (edge) => !filters.hiddenEdgeKinds.has(edge.kind),
-  );
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
 
   let included: Set<string>;
   if (filters.focus && nodeIds.has(filters.focus.nodeId)) {
-    included = neighborhood(edges, filters.focus.nodeId, filters.focus.depth);
+    included = neighborhood(
+      graph.edges,
+      filters.focus.nodeId,
+      filters.focus.depth,
+    );
   } else {
     included = new Set(
       graph.nodes
@@ -47,11 +54,11 @@ export function filterGraph(
     );
   }
 
-  const drawnEdges = edges.filter(
+  const layoutEdges = graph.edges.filter(
     (edge) => included.has(edge.source) && included.has(edge.target),
   );
   const connected = new Set<string>();
-  for (const edge of drawnEdges) {
+  for (const edge of layoutEdges) {
     connected.add(edge.source);
     connected.add(edge.target);
   }
@@ -70,7 +77,10 @@ export function filterGraph(
     return !edge || (drawnIds.has(edge.source) && drawnIds.has(edge.target));
   });
 
-  return { nodes, edges: drawnEdges, issues, isolatedCount };
+  const edges = layoutEdges.filter(
+    (edge) => !filters.hiddenEdgeKinds.has(edge.kind),
+  );
+  return { nodes, edges, layoutEdges, issues, isolatedCount };
 }
 
 /** Node ids reachable from `start` within `depth` hops, ignoring direction. */

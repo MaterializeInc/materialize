@@ -46,7 +46,12 @@ import { MaterializeTheme } from "~/theme";
 import { Freshness, freshnessColor, freshnessText } from "./freshness";
 import { buildJoinSql } from "./joinSql";
 import { LivePreview } from "./LivePreview";
-import { edgeLabel, OntologyEdge, OntologyNode } from "./model";
+import {
+  edgeLabel,
+  INFERRED_JOIN_EDGE_KIND,
+  OntologyEdge,
+  OntologyNode,
+} from "./model";
 import { Selection } from "./OntologyCanvas";
 import { IssueList } from "./overviewComponents";
 import { edgeKindStyle, nodeKindLabel, SIDE_PANEL_WIDTH } from "./style";
@@ -66,6 +71,12 @@ export interface OntologySidePanelProps {
   previewCluster: (node: OntologyNode) => string | null;
   /** Suggests `COMMENT ON` for undocumented user relations. */
   suggestComments: boolean;
+  /** SQL that declares an inferred join, null when it cannot. */
+  declareSql?: (
+    edge: OntologyEdge,
+    source: OntologyNode,
+    target: OntologyNode,
+  ) => string | null;
 }
 
 export const OntologySidePanel = ({
@@ -79,6 +90,7 @@ export const OntologySidePanel = ({
   getFreshness,
   previewCluster,
   suggestComments,
+  declareSql,
 }: OntologySidePanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const node =
@@ -120,6 +132,7 @@ export const OntologySidePanel = ({
           source={nodesById.get(edge.source)}
           target={nodesById.get(edge.target)}
           onSelect={onSelect}
+          declareSql={declareSql}
         />
       ) : (
         <Box p={5}>{overview}</Box>
@@ -490,16 +503,26 @@ const EdgeDetails = ({
   source,
   target,
   onSelect,
+  declareSql,
 }: {
   edge: OntologyEdge;
   source: OntologyNode | undefined;
   target: OntologyNode | undefined;
   onSelect: (selection: Selection) => void;
+  declareSql: OntologySidePanelProps["declareSql"];
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const openInShell = useOpenInShell();
   const style = edgeKindStyle(edge.kind, colors);
   const joinSql = source && target ? buildJoinSql(edge, source, target) : null;
+  const declare =
+    edge.kind === INFERRED_JOIN_EDGE_KIND &&
+    !edge.declaredIn &&
+    source &&
+    target &&
+    declareSql
+      ? declareSql(edge, source, target)
+      : null;
   const hasErrors = edge.issues.some((issue) => issue.severity === "error");
 
   return (
@@ -574,6 +597,17 @@ const EdgeDetails = ({
           {edge.declaredIn && (
             <DetailRow label="Declared in" value={edge.declaredIn} mono />
           )}
+          {edge.inferredFrom.length > 0 && (
+            <DetailRow
+              label={
+                edge.kind === INFERRED_JOIN_EDGE_KIND
+                  ? "Inferred from"
+                  : "Confirmed by"
+              }
+              value={edge.inferredFrom.join(", ")}
+              mono
+            />
+          )}
           {edge.note && <DetailRow label="Note" value={edge.note} />}
         </VStack>
         {joinSql && (
@@ -589,6 +623,24 @@ const EdgeDetails = ({
               onClick={() => openInShell(joinSql)}
             >
               Open in SQL Shell
+            </Button>
+          </VStack>
+        )}
+        {declare && (
+          <VStack align="stretch" spacing={2}>
+            <Text textStyle="text-small" color={colors.foreground.secondary}>
+              No ontology table declares this join. Declaring it confirms it for
+              agents and people reading the ontology.
+            </Text>
+            <CodeBlock title="Declare" contents={declare} lineNumbers={false} />
+            <Button
+              size="sm"
+              variant="secondary"
+              alignSelf="start"
+              leftIcon={<TerminalIcon />}
+              onClick={() => openInShell(declare)}
+            >
+              Declare in SQL Shell
             </Button>
           </VStack>
         )}
