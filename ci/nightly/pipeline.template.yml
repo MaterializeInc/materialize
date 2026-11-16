@@ -302,6 +302,8 @@ steps:
         depends_on: []
         timeout_in_minutes: 240
         parallelism: 9
+        env:
+          CI_BUILDER_PERF_EVENTS: 1
         inputs:
           - Cargo.lock
           - Cargo.toml

@@ -63,6 +63,7 @@ allocation-counter = { workspace = true, optional = true }
 [dev-dependencies]
 criterion.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 proptest.workspace = true
 rand.workspace = true
 tempfile.workspace = true

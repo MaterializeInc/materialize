@@ -34,8 +34,10 @@
 use mz_alloc_default as _;
 use std::mem::size_of;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
+use mz_bench_util::{
+    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+};
 use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_repr::{Datum, Row};
 use mz_timely_util::columnar::Column;

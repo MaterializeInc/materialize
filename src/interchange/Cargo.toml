@@ -41,8 +41,8 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-criterion.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 prost.workspace = true
 tokio.workspace = true
 

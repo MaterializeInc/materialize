@@ -21,8 +21,8 @@
 
 use columnar::bytes::indexed;
 use columnar::{Borrow, Columnar, Index, Len, Push};
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_alloc_default as _;
+use mz_bench_util::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_ore::cast::CastFrom;
 use mz_timely_util::columnar::Column;
 use std::hint::black_box;

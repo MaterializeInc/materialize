@@ -685,6 +685,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # embeds the result, so without a fixed value the two checkouts always
     # differ, which also defeats the skip. The dummy build info uses all zeros.
     env["MZ_DEV_BUILD_SHA"] = "0" * 40
+    env.setdefault("MZ_BENCH_MEASUREMENT", "instructions")
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same

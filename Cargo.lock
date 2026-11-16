@@ -2382,6 +2382,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
+ "csv",
  "itertools 0.13.0",
  "num-traits",
  "oorandom",
@@ -6566,6 +6567,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-bench-util"
+version = "0.0.0"
+dependencies = [
+ "criterion",
+ "libc",
+]
+
+[[package]]
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
@@ -6916,6 +6925,7 @@ dependencies = [
  "itertools 0.15.0",
  "lgalloc",
  "mz-alloc-default",
+ "mz-bench-util",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
@@ -7359,7 +7369,6 @@ dependencies = [
  "chrono-tz",
  "columnation",
  "crc32fast",
- "criterion",
  "csv",
  "datadriven",
  "dec",
@@ -7376,6 +7385,7 @@ dependencies = [
  "md-5",
  "murmur2",
  "mz-alloc-default",
+ "mz-bench-util",
  "mz-build-tools",
  "mz-catalog-decode",
  "mz-expr",
@@ -7543,13 +7553,13 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "criterion",
  "differential-dataflow",
  "itertools 0.15.0",
  "maplit",
  "mz-alloc-default",
  "mz-avro",
  "mz-aws-glue-schema-registry",
+ "mz-bench-util",
  "mz-build-tools",
  "mz-ccsr",
  "mz-ore",
@@ -7916,6 +7926,7 @@ dependencies = [
  "libc",
  "lz4_flex 0.14.0",
  "mz-alloc-default",
+ "mz-bench-util",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
@@ -8383,7 +8394,6 @@ dependencies = [
  "columnar",
  "columnation",
  "compact_bytes",
- "criterion",
  "dec",
  "differential-dataflow",
  "enum-kinds",
@@ -8391,6 +8401,7 @@ dependencies = [
  "insta",
  "itertools 0.15.0",
  "mz-alloc-default",
+ "mz-bench-util",
  "mz-build-tools",
  "mz-ore",
  "mz-persist",
@@ -9053,7 +9064,6 @@ dependencies = [
  "bytes",
  "chrono",
  "columnation",
- "criterion",
  "csv-core",
  "dec",
  "derivative",
@@ -9070,6 +9080,7 @@ dependencies = [
  "mz-alloc-default",
  "mz-aws-glue-schema-registry",
  "mz-aws-util",
+ "mz-bench-util",
  "mz-build-tools",
  "mz-ccsr",
  "mz-cloud-resources",
@@ -9235,6 +9246,7 @@ dependencies = [
  "itertools 0.15.0",
  "lz4_flex 0.14.0",
  "mz-alloc-default",
+ "mz-bench-util",
  "mz-ore",
  "num-traits",
  "proptest",

@@ -10,7 +10,7 @@
 use mz_alloc_default as _;
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use mz_bench_util::{Criterion, criterion_group, criterion_main};
 use mz_expr::like_pattern;
 
 // Ozymandias, by Percy Bysshe Shelley

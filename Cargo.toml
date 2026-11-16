@@ -14,6 +14,7 @@ members = [
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
+    "src/bench-util",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
@@ -147,6 +148,7 @@ default-members = [
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
+    "src/bench-util",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
@@ -339,7 +341,7 @@ console-subscriber = "0.5.0"
 core_affinity = "0.8.3"
 crc32c = "0.6.8"
 crc32fast = "1.5.0"
-criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.2", features = ["async_tokio", "csv_output", "html_reports"] }
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
 crossterm = { version = "0.29.0", default-features = false }
