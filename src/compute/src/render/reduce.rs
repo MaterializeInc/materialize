@@ -266,16 +266,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     mfp_after,
                     fused_unnest_list,
                 );
-                // Without validation, `errs` still carries the errors of a fallible `mfp_after`.
-                // The ok path drops rows whose `mfp_after` errors, so discarding `errs` would
-                // silently lose them.
-                match errs {
-                    Some(errs) => errors.push(errs),
-                    None => assert!(
-                        !validating,
-                        "validation should have occurred as it was requested"
-                    ),
-                }
+                errors.extend(errs);
                 output
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
@@ -474,6 +465,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Build the dataflow to compute a single basic aggregation.
     ///
     /// This method also applies distinctness if required.
+    ///
+    /// The returned errors are the validation errors, if `validating`, and the errors of
+    /// `mfp_after`, if it can error. They are `None` only when there are neither.
     fn build_basic_aggregate<'s>(
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
