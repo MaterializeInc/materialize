@@ -336,6 +336,7 @@ allow = [
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "bzip2-1.0.6",
     "ICU",
     "ISC",
     "MIT",

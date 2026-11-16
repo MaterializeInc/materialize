@@ -98,7 +98,7 @@
       // NOTE: Renovate forces the `vulnerabilityAlerts` object onto security
       // updates, so setting `enabled` in it would override this rule.
       "matchManagers": ["cargo"],
-      "matchPackageNames": ["postgres", "tokio-postgres", "postgres-protocol", "postgres-replication", "postgres-types", "postgres-openssl", "chrono-tz", "serde-value", "rdkafka", "rdkafka-sys", "mysql_async", "tiberius", "async-compression", "iceberg", "iceberg-catalog-rest", "iceberg-storage-opendal"],
+      "matchPackageNames": ["postgres", "tokio-postgres", "postgres-protocol", "postgres-replication", "postgres-types", "postgres-openssl", "chrono-tz", "serde-value", "rdkafka", "rdkafka-sys", "mysql_async", "tiberius", "iceberg", "iceberg-catalog-rest", "iceberg-storage-opendal"],
       "enabled": false
     },
     {
