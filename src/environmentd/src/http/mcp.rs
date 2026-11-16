@@ -40,8 +40,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
-    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
-    ENABLE_MCP_UNIFIED, MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_UNIFIED,
+    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -89,8 +89,8 @@ impl ProtocolVersion {
     /// Any copy naming 2026-07-28 selects it. Serving 2025-11-25 there would
     /// skip the header check while a proxy that reads that copy trusts
     /// `Mcp-Name`. `McpHeaders::check` then refuses the repetition.
-    fn select(values: &[HeaderValue], v2026_07_28_enabled: bool) -> Self {
-        if v2026_07_28_enabled && asks_for_2026_07_28(values) {
+    fn select(values: &[HeaderValue]) -> Self {
+        if asks_for_2026_07_28(values) {
             Self::V2026_07_28
         } else {
             Self::V2025_11_25
@@ -167,8 +167,7 @@ fn check_modern_request(headers: &McpHeaders, raw: &RawRequest) -> Result<(), Mc
 }
 
 /// Whether any `MCP-Protocol-Version` copy names 2026-07-28, also inside a
-/// comma-joined list. Whether it is served on it also depends on the flag
-/// (see [`ProtocolVersion::select`]).
+/// comma-joined list.
 fn asks_for_2026_07_28<'a>(values: impl IntoIterator<Item = &'a HeaderValue>) -> bool {
     // Bytes, since a copy with a non-ASCII byte elsewhere still names it.
     let modern = ProtocolVersion::V2026_07_28.as_str().as_bytes();
@@ -1037,13 +1036,14 @@ async fn handle_mcp_request(
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
 ) -> impl IntoResponse {
+    let protocol = ProtocolVersion::select(&mcp_headers.protocol_version);
     // Only a 2026-07-28 request gets a JSON-RPC answer for a body that is not
     // JSON or not a request. Every other request gets axum's rejection.
     let request =
         match request {
             Err(
                 rejection @ (JsonRejection::JsonDataError(_) | JsonRejection::JsonSyntaxError(_)),
-            ) if asks_for_2026_07_28(&mcp_headers.protocol_version) => Err(rejection),
+            ) if protocol.is_modern() => Err(rejection),
             Err(rejection) => return rejection.into_response(),
             Ok(request) => Ok(request),
         };
@@ -1067,26 +1067,12 @@ async fn handle_mcp_request(
     {
         Ok(catalog) => catalog,
         Err(_elapsed) => {
-            // The flag is unknown, so the 2026-07-28 path cannot be picked.
-            if let Err(rejection) = request {
-                return rejection.into_response();
-            }
             warn!(endpoint = %endpoint_type, "MCP catalog snapshot timed out");
             record_request(McpCallStatus::Timeout);
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
     let dyncfgs = catalog.system_config().dyncfgs();
-    let protocol = ProtocolVersion::select(
-        &mcp_headers.protocol_version,
-        ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
-    );
-    // With the flag off, reject parse failures before the endpoint check, as on
-    // 2025-11-25.
-    let request = match request {
-        Err(rejection) if !protocol.is_modern() => return rejection.into_response(),
-        request => request,
-    };
     let enabled = match endpoint_type {
         McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
@@ -3080,33 +3066,24 @@ mod tests {
     #[mz_ore::test]
     fn test_protocol_version_select() {
         use ProtocolVersion::*;
-        for (header, enabled, want) in [
-            (&[][..], true, V2025_11_25),
-            (&["2025-11-25"], true, V2025_11_25),
-            (&["2025-06-18"], true, V2025_11_25),
-            (&["2026-07-28"], true, V2026_07_28),
-            (&["2026-07-28"], false, V2025_11_25),
-            (&["not-a-version"], true, V2025_11_25),
-            (&["2026-07-28X"], true, V2025_11_25),
-            (&["2025-11-25", "2026-07-28"], true, V2026_07_28),
-            (&["2025-11-25, 2026-07-28"], true, V2026_07_28),
-            (&["2025-11-25", "2026-07-28"], false, V2025_11_25),
+        for (header, want) in [
+            (&[][..], V2025_11_25),
+            (&["2025-11-25"], V2025_11_25),
+            (&["2025-06-18"], V2025_11_25),
+            (&["2026-07-28"], V2026_07_28),
+            (&["not-a-version"], V2025_11_25),
+            (&["2026-07-28X"], V2025_11_25),
+            (&["2025-11-25", "2026-07-28"], V2026_07_28),
+            (&["2025-11-25, 2026-07-28"], V2026_07_28),
         ] {
             let values: Vec<_> = header.iter().map(|v| HeaderValue::from_static(v)).collect();
-            assert_eq!(
-                ProtocolVersion::select(&values, enabled),
-                want,
-                "for {header:?} with the flag {enabled}"
-            );
+            assert_eq!(ProtocolVersion::select(&values), want, "for {header:?}");
         }
         let non_ascii = HeaderValue::from_bytes(b"2026-07-28\xff").expect("valid header bytes");
-        assert_eq!(ProtocolVersion::select(&[non_ascii], true), V2025_11_25);
+        assert_eq!(ProtocolVersion::select(&[non_ascii]), V2025_11_25);
         let non_ascii_list =
             HeaderValue::from_bytes(b"\xff, 2026-07-28").expect("valid header bytes");
-        assert_eq!(
-            ProtocolVersion::select(&[non_ascii_list], true),
-            V2026_07_28
-        );
+        assert_eq!(ProtocolVersion::select(&[non_ascii_list]), V2026_07_28);
     }
 
     fn json_headers() -> HeaderMap {

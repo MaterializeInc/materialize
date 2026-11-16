@@ -1400,15 +1400,6 @@
       "dyncfg": true
     },
     {
-      "name": "enable_mcp_protocol_2026_07_28",
-      "typeName": "boolean",
-      "default": "on",
-      "description": "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
-      "scope": "environment",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "enable_mcp_unified",
       "typeName": "boolean",
       "default": "off",

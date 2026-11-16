@@ -73,15 +73,6 @@ curl -X POST http://localhost:6876/api/mcp/developer \
   }'
 ```
 
-To serve every request as 2025-11-25, turn off
-`enable_mcp_protocol_2026_07_28`. In Cloud, contact
-[Materialize support](https://materialize.com/support/). In Self-Managed, set
-it to `false` in your
-[system parameters configuration file](/self-managed-deployments/configuration-system-parameters/).
-See [Agent endpoint
-configuration](/developer-tools/mcp-server/mcp-agent-config/) and [Developer
-endpoint configuration](/developer-tools/mcp-server/mcp-developer-config/).
-
 ## See also
 
 - [Use an ontology table](/transform-data/patterns/ontology/) to curate join
