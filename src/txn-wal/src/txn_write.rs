@@ -181,7 +181,8 @@ where
 
                         // Form batches for any Row data.
                         if !updates.writes.is_empty() {
-                            let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
+                            let mut batch =
+                                data_write.rewritable_builder(Antichain::from_elem(T::minimum()));
                             for (k, v, d) in updates.writes.iter() {
                                 batch.add(k, v, &commit_ts, d).await.expect("valid usage");
                             }
