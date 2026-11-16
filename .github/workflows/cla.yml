@@ -55,7 +55,6 @@ jobs:
           || contains(github.event.comment.body, 'hereby sign the CLA')))
     runs-on: ubuntu-latest
     permissions:
-      checks: write # Reports the cla-assistant check on the PR head commit.
       contents: read
       pull-requests: write # Creates and updates the CLA comment on the PR.
     steps:
@@ -68,10 +67,24 @@ jobs:
           owner: MaterializeInc
           repositories: cla
           permission-contents: write
+      # Posting the cla-assistant check as this app lets the main branch ruleset
+      # require it from a source that PR workflows cannot post as. A check run
+      # posted with GITHUB_TOKEN comes from GitHub Actions, like the check runs
+      # of any workflow a PR adds.
+      - name: Create check run token
+        id: checks-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CLA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLA_APP_PRIVATE_KEY }}
+          owner: MaterializeInc
+          repositories: materialize
+          permission-checks: write
       - name: Check CLA signatures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           CLA_TOKEN: ${{ steps.cla-token.outputs.token }}
+          CHECKS_TOKEN: ${{ steps.checks-token.outputs.token }}
         with:
           script: |
             const SIGN_PHRASE =
@@ -98,6 +111,7 @@ jobs:
 
             const { owner, repo } = context.repo;
             const claRepo = getOctokit(process.env.CLA_TOKEN);
+            const checks = getOctokit(process.env.CHECKS_TOKEN);
             const normalize = text => (text ?? '').trim().toLowerCase();
 
             let pullRequests;
@@ -148,7 +162,7 @@ jobs:
                 : unsignedMessage(unsigned, unknown);
               core.info(`PR #${pr.number}: ${allSigned ? 'signed' : 'not signed'}`);
 
-              await github.rest.checks.create({
+              await checks.rest.checks.create({
                 owner,
                 repo,
                 name: CHECK_NAME,
