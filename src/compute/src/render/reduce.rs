@@ -266,8 +266,15 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     mfp_after,
                     fused_unnest_list,
                 );
-                if validating {
-                    errors.push(errs.expect("validation should have occurred as it was requested"));
+                // Without validation, `errs` still carries the errors of a fallible `mfp_after`.
+                // The ok path drops rows whose `mfp_after` errors, so discarding `errs` would
+                // silently lose them.
+                match errs {
+                    Some(errs) => errors.push(errs),
+                    None => assert!(
+                        !validating,
+                        "validation should have occurred as it was requested"
+                    ),
                 }
                 output
             }
