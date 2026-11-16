@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -26,6 +28,17 @@ PACKAGE_PATHS: dict[str, Literal["setup.py", "pyproject.toml"]] = {
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        "pypi.py", description="build PyPI packages that are not yet released"
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("pypi-dist"),
+        help="Where to collect the distributions to publish",
+    )
+    args = parser.parse_args()
+
     for path_str, build_type in PACKAGE_PATHS.items():
         path = Path(path_str)
 
@@ -44,8 +57,8 @@ def main() -> None:
             print(f"{name} {version} already released, continuing...")
             continue
 
-        print(f"Releasing {name} {version}")
-        upload_to_pypi(path)
+        print(f"Staging {name} {version} for release")
+        stage_dists(path, args.out_dir)
 
 
 def get_metadata_from_setup_py(path: Path) -> tuple[str, str]:
@@ -86,16 +99,10 @@ def build_package_pyproject(path: Path) -> None:
     spawn.runv([sys.executable, "-m", "build"], cwd=path)
 
 
-def upload_to_pypi(path: Path) -> None:
-    dist_files = list((path / "dist").iterdir())
-    spawn.runv(
-        ["twine", "upload", "--verbose", *dist_files],
-        env={
-            **os.environ,
-            "TWINE_USERNAME": "__token__",
-            "TWINE_PASSWORD": os.environ["PYPI_TOKEN"],
-        },
-    )
+def stage_dists(path: Path, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for dist_file in (path / "dist").iterdir():
+        shutil.copy(dist_file, out_dir)
 
 
 def get_released_versions(name: str) -> set[str]:

@@ -1,0 +1,132 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Publish the npm and PyPI packages through trusted publishing (OIDC).
+#
+# `build` runs the repository's build code with no credentials and stages
+# whatever is not yet on the registries. The publish jobs run in the `release`
+# environment, hold `id-token: write`, and only run npm or the PyPI publish
+# action against the staged artifacts.
+
+name: Publish packages
+
+on:
+  push:
+    branches:
+      - main
+      - "v*.*"
+    tags:
+      - "v*.*"
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build packages
+    if: github.repository == 'MaterializeInc/materialize'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      npm: ${{ steps.staged.outputs.npm }}
+      pypi: ${{ steps.staged.outputs.pypi }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build npm packages
+        env:
+          BUILD_ID: ${{ github.run_id }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -- --build-id "$BUILD_ID"
+          if [ "$REF_TYPE" = tag ]; then
+            set -- "$@" --git-tag "$REF_NAME"
+          fi
+          bin/ci-builder run stable --no-secrets bin/pyactivate -m ci.deploy.npm "$@"
+      - name: Build PyPI packages
+        run: bin/ci-builder run stable --no-secrets bin/pyactivate -m ci.deploy.pypi
+      - name: Check staged packages
+        id: staged
+        run: |
+          if [ -s npm-dist/plan.txt ]; then
+            echo "npm=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$(ls -A pypi-dist 2>/dev/null)" ]; then
+            echo "pypi=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.staged.outputs.npm == 'true'
+        with:
+          name: npm-dist
+          path: npm-dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.staged.outputs.pypi == 'true'
+        with:
+          name: pypi-dist
+          path: pypi-dist/
+          if-no-files-found: error
+
+  publish-npm:
+    name: Publish to npm
+    needs: build
+    if: needs.build.outputs.npm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      id-token: write # trusted publishing to the registry
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-dist
+          path: npm-dist
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      # Trusted publishing for `npm dist-tag` needs npm 11.21.0 or later, newer
+      # than the npm bundled with Node 26. Drop this once Node ships it.
+      - name: Install npm
+        run: npm install --global npm@11.21.1 # zizmor: ignore[adhoc-packages]
+      - name: Publish
+        working-directory: npm-dist
+        run: |
+          set -eu
+          while read -r tarball tag spec extra_tag; do
+            npm publish "./$tarball" --access public --provenance --tag "$tag"
+            if [ -n "$extra_tag" ]; then
+              npm dist-tag add "$spec" "$extra_tag"
+            fi
+          done < plan.txt
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: needs.build.outputs.pypi == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      id-token: write # trusted publishing to the registry
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist
+          path: pypi-dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: pypi-dist/
