@@ -59,6 +59,11 @@ surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavio
 - Rebuild and verify the latest compatible-version pair. Adapter-loss coverage
   still needs to run with the new compatible Persist CLI fixture. Do not
   substitute old candidate artifacts.
+  `build_current_version_pair.py` is prepared and passed its non-building
+  provenance check. All 3124 build-input hashes match the pinned candidate,
+  without exceptions. Its build mode requires the existing 32-GiB/four-CPU
+  worker build limits and no running containers. Do not use the historical
+  `native-compatible-current/build-pair.py` unchanged.
 - Native parallel stress has a repaired one-cycle pass. Earlier timeout,
   two-cycle retirement and bootstrap failures are retained in the evidence.
   Broader current-binary repeat coverage remains incomplete.
