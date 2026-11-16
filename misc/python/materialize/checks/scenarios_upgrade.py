@@ -677,6 +677,19 @@ def print_upgrade_path(versions: list[MzVersion | None]):
     )
 
 
+def get_self_managed_linear_upgrade_versions() -> list[MzVersion]:
+    """Select at most 30 released versions, retaining the oldest and newest."""
+    versions = keep_latest_patch_per_minor(get_compatible_upgrade_from_versions())
+    # The initial version needs no upgrade, leaving room for the upgrade to current.
+    max_versions = 30
+    if len(versions) <= max_versions:
+        return versions
+    return [
+        versions[i * (len(versions) - 1) // (max_versions - 1)]
+        for i in range(max_versions)
+    ]
+
+
 class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
     """
     Upgrade from the oldest Self-Managed version in the supported window to the current version.
@@ -691,11 +704,7 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        # Thin to one version per minor so the linear path stays within the
-        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
-        self.self_managed_versions = keep_latest_patch_per_minor(
-            get_compatible_upgrade_from_versions()
-        )
+        self.self_managed_versions = get_self_managed_linear_upgrade_versions()
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
@@ -752,11 +761,7 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        # Thin to one version per minor so the linear path stays within the
-        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
-        self.self_managed_versions = keep_latest_patch_per_minor(
-            get_compatible_upgrade_from_versions()
-        )
+        self.self_managed_versions = get_self_managed_linear_upgrade_versions()
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
