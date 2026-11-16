@@ -28,7 +28,6 @@ they suit, what access they need, and how much they ask of you:
 | **Audience** | Everyone who reads dashboards | Anyone who works with an AI agent | Scripts, and agents that run shell commands |
 | **Grafana access** | Browser login | Service account token | Service account token |
 | **Ease of use** | Highest: nothing to install | High after setup, but check its answers | Moderate: PromQL and LogQL |
-| **Stability** | Stable | Fast-moving: tools change in minor releases | Stable within a major version |
 
 All three reach the data through Grafana. None of them needs Kubernetes access
 unless you can't reach Grafana's address directly, for example because its load
@@ -142,14 +141,6 @@ The Grafana MCP server reads the monitoring stack. To let an agent read
 Materialize's own system catalog instead, see [MCP Server for
 developer](/developer-tools/mcp-server/mcp-developer/). An agent can use both.
 
-{{< note >}}
-The Materialize dashboards use Grafana's v2 dashboard schema, which
-`mcp-grafana` reads and writes natively from version 0.16.0. Use a 2.x release,
-which fixes several v2 bugs. An older version converts each dashboard to the v1
-schema before the agent sees it, and drops the panel queries in v2-only
-layouts.
-{{< /note >}}
-
 ### Set up the server
 
 1. [Create a service account token](#create-a-service-account-token).
@@ -186,10 +177,17 @@ Replace the following:
   agent's configuration, set `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` to the path
   of a file that holds it instead.
 
+{{< note >}}
 `mcp-grafana` reports anonymous usage statistics to Grafana Labs by default:
 which tools ran and how the server is configured. The reports never include
 queries, log lines, credentials, or your Grafana's address. To turn them off,
 add `--usage-stats=disabled` to `args`.
+{{< /note >}}
+
+{{< note >}}
+Be sure to use a latest release of `mcp-grafana`.
+MCP servers continuously receive updates and improvements, so using the latest release ensures you have the newest features and bug fixes.
+{{< /note >}}
 
 ### Keep the agent read-only
 
@@ -255,8 +253,8 @@ An agent reads the same data you do, and can misread it in the same ways:
 - **Ask for a link,** so you can see the panel the agent read.
 - **Confirm a label before building on it.** A query that filters on a label
   the series does not carry returns nothing, which looks healthy.
-- **Don't read quiet as healthy.** Only a default set of the bundled alert rules
-  is installed, so no firing alerts does not mean nothing is wrong.
+- **Don't read quiet as healthy.** The stack installs only some of the bundled alert rules by default,
+  so the absence of firing alerts doesn't mean everything is healthy.
 
 ## Use gcx from the command line
 
@@ -298,15 +296,19 @@ gcx --context mzmon dashboards get mz-mon-env-top -o yaml
 Replace `materialize-environment` with the namespace your Materialize
 environment runs in.
 
+{{< tip >}}
 Add `--share-link` to a query to print it as a Grafana Explore URL that you can
 send to someone working in a browser.
+{{< /tip >}}
 
+{{< note >}}
 `gcx` switches to JSON output when an AI agent such as Claude Code or Cursor
 runs it. It also bundles agent skills that teach an agent its commands:
 
 ```bash
 gcx agent skills install setup-gcx debug-with-grafana manage-dashboards
 ```
+{{< /note >}}
 
 ## See also
 
