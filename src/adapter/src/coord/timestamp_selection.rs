@@ -126,8 +126,7 @@ impl TimestampContext {
         match self {
             Self::TimelineTimestamp { chosen_ts, .. } => chosen_ts.clone(),
             // Anything without a timestamp is given the maximum possible timestamp to indicate
-            // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
-            // static views.
+            // that they have been closed up until the end of time.
             Self::NoTimestamp => Timestamp::maximum(),
         }
     }
@@ -715,9 +714,9 @@ impl TimestampDetermination {
 
     /// The timestamp at which a `SUBSCRIBE` reading this determination starts.
     ///
-    /// A read without a timestamp is valid at every time, so it takes the
-    /// largest time the constraints allow: the `AS OF` of the query if it
-    /// gave one, and [`Timestamp::MAX`] otherwise.
+    /// A read without a timestamp is valid at every time, so it starts at the
+    /// query's exact `AS OF` if it gave one, and at [`Timestamp::MAX`]
+    /// otherwise, including for `AS OF AT LEAST`.
     pub fn subscribe_as_of(&self) -> Timestamp {
         match &self.timestamp_context {
             TimestampContext::TimelineTimestamp { chosen_ts, .. } => *chosen_ts,
