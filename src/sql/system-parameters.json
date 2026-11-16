@@ -2868,8 +2868,8 @@
     {
       "name": "persist_blob_http_pool",
       "typeName": "string",
-      "default": "off",
-      "description": "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+      "default": "gcs",
+      "description": "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'gcs'.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true

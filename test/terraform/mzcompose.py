@@ -1526,9 +1526,9 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
-            # Persist data lives in GCS, and gcp-temporary/main.tf defaults
-            # `persist_blob_http_pool` to 'gcs', which uses the pool only if
-            # `S3Blob` recognizes the endpoint as GCS.
+            # Persist data lives in GCS, and `persist_blob_http_pool` defaults
+            # to 'gcs', which uses the pool only if `S3Blob` recognizes the
+            # endpoint as GCS.
             pool_requests = state.environmentd_metric(
                 "mz_persist_s3_http_pool_requests"
             )
