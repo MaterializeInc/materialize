@@ -66,7 +66,7 @@ use crate::notice::ExecutionTimeKind;
 use crate::statement_logging::PreparedStatementLoggingInfo;
 use mz_catalog::durable::Snapshot;
 
-const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
+pub(crate) const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
 /// A session holds per-connection state.
 #[derive(Derivative)]

@@ -297,7 +297,7 @@ impl Client {
         // handle termination.
         // Build the PeekClient with controller handles returned from startup.
         let StartupResponse {
-            peek_registry,
+            connection_peeks,
             role_id,
             write_notify,
             session_defaults,
@@ -314,9 +314,9 @@ impl Client {
             frontend_cancel_rx,
         } = response;
 
-        let mut peek_client = PeekClient::new(
+        let peek_client = PeekClient::new(
             CoordinatorClient::Session(self.clone()),
-            peek_registry,
+            connection_peeks,
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -327,9 +327,6 @@ impl Client {
             group_commit_notifier,
             read_only,
         );
-        // Keep the partition alive before any execution awaits. Cancellation
-        // and termination must observe the same partition as the first query.
-        peek_client.connection_peeks(session.conn_id());
 
         let mut client = SessionClient {
             inner: Some(self.clone()),
@@ -1498,8 +1495,7 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        let conn_id = self.session().conn_id().clone();
-        let connection = self.peek_client.connection_peeks(&conn_id);
+        let connection = Arc::clone(self.peek_client.connection_peeks());
         let mut cancellation = self.frontend_cancel_rx.clone();
         let cancel_safety = PeekCancelSafety::new();
         let session = self.session.as_mut().expect("SessionClient invariant");

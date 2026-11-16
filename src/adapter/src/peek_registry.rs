@@ -25,7 +25,7 @@ use crate::coord::peek::DroppedDependency;
 /// Ordinary registration and completion touch only their connection partition.
 #[derive(Debug, Default)]
 pub(crate) struct PeekRegistry {
-    connections: Mutex<BTreeMap<ConnectionId, Weak<ConnectionPeeks>>>,
+    connections: Mutex<BTreeMap<ConnectionId, Arc<ConnectionPeeks>>>,
 }
 
 #[derive(Debug, Default)]
@@ -54,17 +54,16 @@ pub(crate) enum RegisterError {
 }
 
 impl PeekRegistry {
+    /// Returns the connection's partition, creating it if needed. It stays
+    /// indexed until [`Self::close_connection`].
     pub(crate) fn connection(&self, id: ConnectionId) -> Arc<ConnectionPeeks> {
-        let mut connections = self
-            .connections
-            .lock()
-            .expect("peek registry lock poisoned");
-        if let Some(connection) = connections.get(&id).and_then(Weak::upgrade) {
-            return connection;
-        }
-        let connection = Arc::new(ConnectionPeeks::default());
-        connections.insert(id, Arc::downgrade(&connection));
-        connection
+        Arc::clone(
+            self.connections
+                .lock()
+                .expect("peek registry lock poisoned")
+                .entry(id)
+                .or_default(),
+        )
     }
 
     /// Cancels the connection's peeks and rejects its later registrations.
@@ -74,8 +73,7 @@ impl PeekRegistry {
             .connections
             .lock()
             .expect("peek registry lock poisoned")
-            .remove(id)
-            .and_then(|connection| connection.upgrade());
+            .remove(id);
         connection.map_or(0, |connection| connection.cancel_all(true))
     }
 
@@ -86,7 +84,7 @@ impl PeekRegistry {
             .lock()
             .expect("peek registry lock poisoned")
             .get(id)
-            .and_then(Weak::upgrade);
+            .cloned();
         connection.map_or(0, |connection| connection.cancel_all(false))
     }
 
@@ -103,7 +101,7 @@ impl PeekRegistry {
             .lock()
             .expect("peek registry lock poisoned")
             .values()
-            .filter_map(Weak::upgrade)
+            .cloned()
             .collect();
         for connection in connections {
             connection.invalidate(relations, clusters);

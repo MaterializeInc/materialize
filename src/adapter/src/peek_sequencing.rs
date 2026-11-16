@@ -92,9 +92,7 @@ impl PeekClient {
         logging: &mut ExecutionLogging,
         cancel_safety: &PeekCancelSafety,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        let cancellation_epoch = self
-            .connection_peeks(session.conn_id())
-            .cancellation_epoch();
+        let cancellation_epoch = self.connection_peeks().cancellation_epoch();
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -273,9 +271,7 @@ impl PeekClient {
         session.start_transaction_single_stmt(mz_ore::now::to_datetime((catalog.config().now)()));
 
         let mut logging = ExecutionLogging::adopt(None, self);
-        let cancellation_epoch = self
-            .connection_peeks(session.conn_id())
-            .cancellation_epoch();
+        let cancellation_epoch = self.connection_peeks().cancellation_epoch();
         let cancel_safety = PeekCancelSafety::new();
         let response = self
             .try_peek_inner(
@@ -1650,7 +1646,6 @@ impl PeekClient {
 
                         let peek = self
                             .register_peek(
-                                session.conn_id(),
                                 target_cluster_id,
                                 source_ids,
                                 Arc::clone(&catalog),

@@ -551,7 +551,7 @@ pub struct SuperuserAttribute(pub Option<bool>);
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
-    pub(crate) peek_registry: Arc<crate::peek_registry::PeekRegistry>,
+    pub(crate) connection_peeks: Arc<crate::peek_registry::ConnectionPeeks>,
     /// Cancellation notifications for session-owned completion waits.
     pub frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
     /// RoleId for the user.

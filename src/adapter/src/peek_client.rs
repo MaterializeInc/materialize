@@ -14,7 +14,6 @@ use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
 use itertools::Itertools;
-use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_client::controller::instance_client::InstanceClient;
@@ -72,8 +71,8 @@ pub type StorageCollectionsHandle =
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug, Clone)]
 pub struct PeekClient {
-    peek_registry: Arc<crate::peek_registry::PeekRegistry>,
-    connection_peeks: BTreeMap<ConnectionId, Arc<crate::peek_registry::ConnectionPeeks>>,
+    /// The peek partition of the connection this client serves.
+    connection_peeks: Arc<ConnectionPeeks>,
     coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
     /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
@@ -158,17 +157,12 @@ impl CoordinatorClient {
 }
 
 impl PeekClient {
-    pub(crate) fn connection_peeks(&mut self, id: &ConnectionId) -> Arc<ConnectionPeeks> {
-        Arc::clone(
-            self.connection_peeks
-                .entry(id.clone())
-                .or_insert_with(|| self.peek_registry.connection(id.clone())),
-        )
+    pub(crate) fn connection_peeks(&self) -> &Arc<ConnectionPeeks> {
+        &self.connection_peeks
     }
 
     pub(crate) async fn register_peek(
         &mut self,
-        conn_id: &ConnectionId,
         cluster_id: ComputeInstanceId,
         depends_on: BTreeSet<GlobalId>,
         mut catalog: Arc<Catalog>,
@@ -176,7 +170,7 @@ impl PeekClient {
         logging: &mut ExecutionLogging,
         is_fast_path: bool,
     ) -> Result<PeekHandle, AdapterError> {
-        let connection = self.connection_peeks(conn_id);
+        let connection = Arc::clone(&self.connection_peeks);
         let uuid = Uuid::new_v4();
         let retired = Arc::clone(&connection);
         let logging = logging.guard.take();
@@ -270,7 +264,7 @@ impl PeekClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         coordinator_client: CoordinatorClient,
-        peek_registry: Arc<crate::peek_registry::PeekRegistry>,
+        connection_peeks: Arc<ConnectionPeeks>,
         catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
@@ -282,8 +276,7 @@ impl PeekClient {
         read_only: bool,
     ) -> Self {
         Self {
-            peek_registry,
-            connection_peeks: BTreeMap::new(),
+            connection_peeks,
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
             compute_instances: Default::default(), // lazily populated
@@ -661,7 +654,6 @@ impl PeekClient {
         }
         let peek = self
             .register_peek(
-                &conn_id,
                 compute_instance,
                 depends_on,
                 catalog,

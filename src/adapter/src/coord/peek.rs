@@ -723,7 +723,8 @@ impl crate::coord::Coordinator {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
             },
-            Arc::clone(&self.peek_registry),
+            self.peek_registry
+                .connection(crate::session::DUMMY_CONNECTION_ID),
             catalog,
             Arc::clone(&self.controller.storage_collections),
             Arc::clone(&self.transient_id_gen),

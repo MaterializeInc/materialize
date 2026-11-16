@@ -909,7 +909,7 @@ impl Coordinator {
                     .create_frontend(build_info_human_version);
 
                 let resp = Ok(StartupResponse {
-                    peek_registry: Arc::clone(&self.peek_registry),
+                    connection_peeks: self.peek_registry.connection(conn_id.clone()),
                     frontend_cancel_rx,
                     role_id,
                     write_notify: notify,
