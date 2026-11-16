@@ -17,7 +17,10 @@ Then, in order:
    default and report per-publisher commit rates.
 3. Rebuild the 26.46/26.47 pair from the current source and rerun lifecycle,
    DDL and adapter-loss coverage against it.
-4. Push the bookmark and get a broad CI run on the current head.
+4. Harden the conditional-write retry sites and reduce startup latency, as
+   the prompt describes. The survey with sites and phase timings is
+   `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md`.
+5. Push the bookmark and get a broad CI run on the current head.
 
 ## Current state
 

@@ -93,6 +93,21 @@ existing backends rather than building a general background
 job framework or rewriting all introspection. The abandoned async catalog-owner
 refactor remains outside scope.
 
+Peer writes to the catalog, oracle and table WAL are ordinary in M3, not a sign
+of an unexpected writer. A conditional write must converge under them. Prepare
+before allocating its timestamp, keep prepared work across retries, back off,
+and return to the owning event loop instead of retrying inline without bound.
+Ordinary contention must not halt a process or fail startup. Fix the surveyed
+sites at their existing boundaries without a general retry framework, and keep
+the ordering guarantees each conditional write provides.
+
+Startup and restart latency is an M3 outcome. Measure adapter restart, whole
+environment restart and promotion to serving on the default debug build, then
+remove waste: work over all objects where a few are needed, repeated catalog
+open cost across processes, and fixed sleeps on the restart path. Report
+before and after timings per phase. Do not skip validation or recovery to get
+there.
+
 Scope and working rules
 
 Mechanisms and factoring within the design's contracts are yours to choose.
