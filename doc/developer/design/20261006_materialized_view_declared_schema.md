@@ -114,6 +114,8 @@ The cast is planned into the HIR expression with the existing `query::cast_relat
 A column that cannot be implicitly cast is a planning error naming the column and both types, and the user writes the cast in the query.
 Implicit casts widen, so the narrowing casts that fail at runtime, `int8` to `int2` or `float8` to `numeric`, and the rounding cast from `numeric` to `numeric(p, s)` all have to be written in the query.
 Implicit casts between types that differ only in modifiers, such as `varchar(10)` to `varchar(5)`, do not change values, so planning also requires the cast query's types to equal the declared types, and a mismatch in modifiers needs an explicit cast.
+Re-planning persisted SQL casts a remaining modifier mismatch with an assignment cast instead, because an upgrade can change a modifier the query infers and a planning error at catalog load panics.
+`numeric` values are then rounded to the declared scale, and strings longer than the declared length error at runtime.
 Two implicit casts can still fail or lose precision: `text` to `varchar(n)` or `char(n)` errors on values longer than `n`, and `int8` or `numeric` to `float8` rounds.
 A cast that fails at runtime produces an error in the materialized view, like any other evaluation error.
 Assignment casts, which `INSERT INTO t SELECT ...` applies, would accept the narrowing casts silently.
@@ -189,8 +191,9 @@ Changing a declared type is a schema change, which replacements do not support (
 The replacement's `create_sql` then states its schema.
 Re-planning it on boot does not depend on the target, custom types in the definitions are recorded as dependencies, and `MaterializedView::apply_replacement` keeps taking the column list from the replacement's statement.
 
-Requiring the query's types to match the target's exactly, without casts, would also keep widening casts out of a drop-in replacement.
-It needs to know at planning time whether the definitions were inherited, which the stored statement cannot say, and checking exact types when re-planning would make an upgrade that changes a query's inferred type fail on boot.
+Requiring the query's types to match the target's before casting would also keep widening casts out of a drop-in replacement.
+It needs to know at planning time whether the definitions were inherited, which the stored statement cannot say.
+The exact-type check in [Types](#types) runs after the implicit cast, so it catches modifier mismatches but lets widening casts through.
 
 A replacement with a bare-name list for a target with a declared schema is rejected, because renaming conflicts with inheriting the names.
 
@@ -351,10 +354,10 @@ The assertion inspects the asserted datums of each row the sink writes, which th
 
 ## Interaction with pinned LIR
 
-[Pinned LIR](./20260826_pinned_lir.md) stores a materialized view's plan instead of re-optimizing it on boot.
-A declared schema gives the pinned plan a fixed output contract: names, types and nullability no longer change when the optimizer does, so a pinned plan stays type-compatible with the catalog desc across versions.
-Keys are less settled: this design re-checks declared keys against the running version's analysis of the query, while a pinned plan was produced by an older version.
-Whether a pinned plan should also pin the keys confirmed when it was planned, and how a changed input key invalidates them, belongs to the pinned LIR design.
+[Pinned LIR](./20260826_pinned_lir.md) stores a materialized view's plan instead of re-optimizing it on boot, and is planned to pin the plan's keys with it.
+The two designs are orthogonal.
+A declared schema is a user-facing contract on a materialized view's output, while pinning is internal to how the system runs the view.
+A pinned plan was produced against the declared schema, so its output types are expected to match it.
 
 ## Open questions
 
@@ -362,11 +365,10 @@ Whether a pinned plan should also pin the keys confirmed when it was planned, an
   The prototype allows them, see [Replacements](#replacements).
 * Should a `NOT NULL` violation error the materialized view, or route the row to a dead-letter queue?
   An error blocks reads at the affected times. A dead-letter queue keeps the materialized view readable, but drops data silently unless someone watches the queue.
+  A dead-letter queue would also be a new mechanism with the data and error consistency problems described in [error handling](./20240609_error_handling.md).
   The prototype errors.
 * How should the catalog expose whether a schema is declared?
   It is useful to us for adoption and to users for tracking a migration to declared schemas.
   An `mz_internal` relation fits while the feature is behind a flag, and a column of `mz_materialized_views` once it is stable.
   The prototype does not expose it.
-* Should a dropped key say why it was dropped?
-  Recording at creation how a key was derived (only structural steps, through which uniqueness-preserving functions, from which input keys) would let a later version tell an analysis gap apart from a changed function or a missing input key.
 * Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
