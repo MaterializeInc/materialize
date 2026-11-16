@@ -2859,19 +2859,19 @@ class Metrics:
 
 def workflow_test_pool_file_backend(c: Composition) -> None:
     """
-    Test that a replica with a scratch directory runs the buffer pool on the
-    file store. A store that fails to open falls back to swap without failing
-    any query, so only the backend metrics show it.
+    Test that a replica told to spill to files runs the buffer pool on the
+    file store in its scratch directory.
     """
 
-    with c.override(Clusterd(name="clusterd1", workers=1)):
+    with c.override(
+        Clusterd(name="clusterd1", workers=1, options=["--spill-backend=file"])
+    ):
         c.up("materialized", "clusterd1")
 
         c.sql(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
             ALTER SYSTEM SET enable_compute_correction_v2_spill = true;
-            ALTER SYSTEM SET enable_column_paged_batcher_file_extents = true;
             """,
             port=6877,
             user="mz_system",
@@ -2909,8 +2909,6 @@ def workflow_test_pool_file_backend(c: Composition) -> None:
         active = [k for k, v in backends.items() if v == 1]
         assert len(active) == 1, f"no single active pool backend: {backends}"
         assert 'backend="file_' in active[0], f"pool runs on {active[0]}"
-        fallback = metrics.get_value("mz_column_pool_backend_fallback")
-        assert fallback == 0, f"file store fell back to swap: {fallback}"
         capacity = metrics.get_value("mz_column_pool_extent_file_capacity_bytes")
         assert capacity > 0, f"file store has no capacity: {capacity}"
 

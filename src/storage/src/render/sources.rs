@@ -33,6 +33,7 @@ use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
+use mz_timely_util::pool_config::SpillBackend;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
@@ -346,13 +347,15 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    // The chunked v2 stash spills only to swap, through the
-                    // buffer pool. On a replica that cannot swap, v1 keeps its
-                    // state in RocksDB on the scratch disk where one exists,
-                    // and v2's footprint without swap has not been measured.
+                    // The chunked v2 stash spills through the buffer pool. A
+                    // replica told to use no spill backend has nowhere to
+                    // spill, so it keeps v1, which holds its state in RocksDB
+                    // on the scratch disk where one exists. The backend is a
+                    // provisioning-time argument, identical on every worker,
+                    // which keeps every worker on the same operator graph.
                     let use_upsert_v2 = dyncfgs::ENABLE_UPSERT_V2
                         .get(storage_state.storage_configuration.config_set())
-                        && storage_state.instance_context.swap_available;
+                        && storage_state.instance_context.spill_backend != SpillBackend::None;
                     let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
                     {
                         // Resolved here, at operator construction, so the

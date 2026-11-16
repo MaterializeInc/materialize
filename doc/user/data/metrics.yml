@@ -782,10 +782,6 @@ metrics:
   - backend
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
-- name: mz_column_pool_backend_fallback
-  help: "1 if the buffer pool was configured for the file store and installed on swap instead, else 0. Covers installation only: a store that later disables writes on an I/O error reports through mz_column_pool_extent_file_write_errors_total."
-  source: src/timely-util/src/pool_config/metrics.rs
-  visibility: internal
 - name: mz_column_pool_direct_extent_inserts_total
   help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs

@@ -86,6 +86,18 @@ pub const ENABLE_UNIFIED_CLUSTER: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the controller tells replicas with a scratch disk to spill the
+/// buffer pool's extents to files there. Read when a replica is provisioned,
+/// like [`ENABLE_UNIFIED_CLUSTER`].
+pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
+    "enable_column_paged_batcher_file_extents",
+    false,
+    "Use the scratch directory as the buffer pool's extent store for replica sizes with a \
+     scratch disk. Read when a replica is provisioned, so a change takes effect on the \
+     replica's next provisioning.",
+    ParameterScope::Replica,
+);
+
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
@@ -105,5 +117,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_UNIFIED_CLUSTER)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }

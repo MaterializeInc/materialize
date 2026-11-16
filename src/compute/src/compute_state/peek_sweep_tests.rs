@@ -17,6 +17,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{IntoRowIterator, RowIterator, RowRef};
 use mz_secrets::InMemorySecretsController;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::pool_config::SpillBackend;
 use timely::WorkerConfig;
 use timely::communication::Allocator;
 use tokio::sync::mpsc;
@@ -98,7 +99,7 @@ impl Harness {
         let context = ComputeInstanceContext {
             scratch_directory: None,
             worker_core_affinity: false,
-            swap_available: true,
+            spill_backend: SpillBackend::Swap,
             connection_context: ConnectionContext::for_tests(Arc::new(
                 InMemorySecretsController::new(),
             )),

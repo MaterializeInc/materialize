@@ -102,6 +102,7 @@ use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::pool_config::SpillBackend;
 use mz_txn_wal::operator::TxnsContext;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
@@ -427,8 +428,8 @@ pub struct StorageInstanceContext {
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
-    /// Whether the replica can swap.
-    pub swap_available: bool,
+    /// Where the buffer pool spills compressed extents.
+    pub spill_backend: SpillBackend,
 }
 
 impl StorageInstanceContext {
@@ -436,12 +437,12 @@ impl StorageInstanceContext {
     pub fn new(
         scratch_directory: Option<PathBuf>,
         cluster_memory_limit: Option<usize>,
-        swap_available: bool,
+        spill_backend: SpillBackend,
     ) -> Self {
         Self {
             scratch_directory,
             cluster_memory_limit,
-            swap_available,
+            spill_backend,
         }
     }
 
