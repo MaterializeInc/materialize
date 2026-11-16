@@ -21,9 +21,6 @@ The approaches on this page keep only hot data in an
 | [Freeze results for cold data](#freeze-results-for-cold-data) | A Materialize table | Materialize, precomputed | A scheduled job |
 | [Archive cold data to Iceberg](#archive-cold-data-to-iceberg) | Apache Iceberg | Another query engine | Query routing |
 
-If you don't need cold data at all, use a [temporal
-filter](/transform-data/patterns/temporal-filters/) on its own.
-
 The examples on this page use the following `events` table, which stands in
 for a source or table that contains your full history:
 
@@ -38,19 +35,74 @@ CREATE TABLE events (
 
 ## Index only hot data
 
-Use a [temporal filter](/transform-data/patterns/temporal-filters/) to define
-the hot window, and index only that view. Query cold data directly from the
+Index a relation that holds only recent rows. Query cold data directly from the
 underlying source or table, which Materialize keeps in object storage.
 
+You can bound the hot window with a fixed cutoff or with a temporal filter:
+
+| Hot window | Memory holds | On hydration, reads | Upkeep |
+|------------|--------------|---------------------|--------|
+| [Fixed cutoff](#use-a-fixed-cutoff) | Hot rows | Data after the cutoff, using [filter pushdown](/transform-data/patterns/partition-by/#filter-pushdown) | Advance the cutoff on a schedule |
+| [Temporal filter](#use-a-temporal-filter) | Hot rows, plus a pending retraction for each hot row | Your full history | None |
+
+### Use a fixed cutoff
+
+Filter on a literal timestamp, so Materialize doesn't track when each row
+leaves the window. Use a materialized view, so you can advance the cutoff
+without dropping the index:
+
 ```mzsql
--- Hot: the last 30 days, kept in memory and updated as data arrives.
-CREATE VIEW events_hot AS
+CREATE MATERIALIZED VIEW events_hot AS
 SELECT *
 FROM events
-WHERE mz_now() <= event_ts + INTERVAL '30 days';
+WHERE event_ts >= TIMESTAMPTZ '2026-10-01';
 
 CREATE INDEX events_hot_user_id_idx ON events_hot (user_id);
 ```
+
+To advance the cutoff, for example monthly, [replace the materialized
+view](/transform-data/updating-materialized-views/replace-materialized-view/).
+Wait for the replacement to hydrate before you apply it:
+
+```mzsql
+CREATE REPLACEMENT MATERIALIZED VIEW events_hot_next FOR events_hot AS
+SELECT *
+FROM events
+WHERE event_ts >= TIMESTAMPTZ '2026-11-01';
+
+ALTER MATERIALIZED VIEW events_hot APPLY REPLACEMENT events_hot_next;
+```
+
+The window grows until you advance the cutoff, so size the cluster for the
+largest window. If queries need an exact window, filter on it at query time,
+for example `WHERE event_ts >= now() - INTERVAL '30 days'`.
+
+### Use a temporal filter
+
+A [temporal filter](/transform-data/patterns/temporal-filters/) moves the window
+forward automatically:
+
+```mzsql
+CREATE VIEW events_hot AS
+SELECT *
+FROM events
+WHERE event_ts >= TIMESTAMPTZ '2026-10-01'
+  AND mz_now() <= event_ts + INTERVAL '30 days';
+
+CREATE INDEX events_hot_user_id_idx ON events_hot (user_id);
+```
+
+Materialize holds a future retraction for every row in the window until the row
+expires, so the index uses more memory than a fixed cutoff over the same rows.
+[Rounding the
+timestamp](/transform-data/optimization/#improve-performance-when-using-temporal-filters)
+reduces CPU usage, but not this memory.
+
+The `mz_now()` condition doesn't currently skip any data on hydration. Add a
+literal lower bound, as in the example, so hydration can skip older data. The
+bound only needs to be earlier than the start of the window.
+
+### Query cold data
 
 Queries against `events_hot` are served from the index. Queries against
 `events` that fall outside the hot window build a temporary dataflow, so they
@@ -176,7 +228,7 @@ with the `date_trunc` unit.
 Use this approach when another engine, such as a data warehouse or lakehouse,
 should serve historical queries. Send your data in two directions:
 
-- **Hot:** index a view with a temporal filter, as in [Index only hot
+- **Hot:** index only recent rows, as in [Index only hot
   data](#index-only-hot-data).
 - **Cold:** sink the full, unfiltered relation to an [Iceberg
   sink](/export-data/iceberg/) in append mode.
