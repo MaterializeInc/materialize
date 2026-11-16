@@ -69,7 +69,6 @@ proxy.
 - Broad CI is not green. The last reviewed run is
   [Build141419](https://buildkite.com/materialize/test/builds/141419), which
   predates the latest removals.
-- Commits since November 10 are local only.
 
 ## Worker and evidence
 
