@@ -1082,6 +1082,7 @@ impl PeekClient {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
+        let subscribe_as_of = determination.subscribe_as_of();
         let session_meta = session.meta();
         let now = catalog.config().now.clone();
         let target_cluster_name = target_cluster_name.clone();
@@ -1371,7 +1372,7 @@ impl PeekClient {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
                             let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
-                            let as_of = timestamp_context.timestamp_or_default();
+                            let as_of = subscribe_as_of;
 
                             if let Some(up_to) = optimizer.up_to() {
                                 if as_of > up_to {

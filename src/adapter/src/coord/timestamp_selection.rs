@@ -712,6 +712,22 @@ impl TimestampDetermination {
             TimestampContext::NoTimestamp => true,
         }
     }
+
+    /// The timestamp at which a `SUBSCRIBE` reading this determination starts.
+    ///
+    /// A read without a timestamp is valid at every time, so it takes the
+    /// largest time the constraints allow: the `AS OF` of the query if it
+    /// gave one, and [`Timestamp::MAX`] otherwise.
+    pub fn subscribe_as_of(&self) -> Timestamp {
+        match &self.timestamp_context {
+            TimestampContext::TimelineTimestamp { chosen_ts, .. } => *chosen_ts,
+            TimestampContext::NoTimestamp => self
+                .constraints
+                .upper_bound()
+                .into_option()
+                .unwrap_or_else(Timestamp::maximum),
+        }
+    }
 }
 
 /// Information used when determining the timestamp for a query.
