@@ -63,8 +63,10 @@ executions, preserving items on promotion. Do not make `mz_sessions` a correctne
 dependency or add per-connection catalog records.
 Experimental catalog-format changes may require fresh environments. Do not add
 an in-branch migration or infer ownership for existing UUID-only temporary Items.
-Read-only prewarming or build-metadata variants of one version do not satisfy
-this outcome. Keep schema/encoding/semantic compatibility checks. Document and
+Read-only prewarming does not satisfy this outcome. Two package versions built
+from the current source, sharing implementation and plan encoding, are the
+accepted pair for M3. Report them as such, not as release-skew or migration
+coverage. Keep schema/encoding/semantic compatibility checks. Document and
 execute the commands, not only test coverage. Reuse catalog admission and Persist
 protocols rather than adding a separate consensus or leadership mechanism.
 
@@ -108,6 +110,8 @@ Production test-only APIs need approval. Preserve freshness, structural
 validation, protection and definitive submitted-write outcomes. Do not tune
 Persist leases, statement deadlines or the 60s publication default, weaken safety
 checks, or invent scheduling guarantees to turn an unexplained failure green.
+Judge publication behavior at that default. Workflows that shorten the interval
+are stress tests, not acceptance gates or optimization targets.
 Keep the upstream base pinned unless Aljoscha authorizes integration.
 
 Debugging and verification
@@ -128,8 +132,8 @@ reclamation distinct. Unrelated failures must not displace the current slice.
 Follow repository instructions and skills. Use one dedicated x86_64 scratch
 worker via bin/scratch and misc/scratch/decoupled-coordination.json:
 16 vCPUs, 64 GiB RAM and 500 GiB disk. Keep the shared editing VM lightweight.
-Reuse the worker and build caches, extending expiry proactively without renewed
-approval. Record its ID and expiry and preserve useful evidence off-worker.
+Reuse the worker and build caches, restarting it or extending expiry proactively
+without renewed approval. Record its ID and expiry and preserve useful evidence off-worker.
 Ask before increasing instance size, count or disk. SSO renewal requires
 Aljoscha to authenticate with bin/scratch login. Report that access blocker
 without treating it as a reason to replace the worker.
@@ -154,8 +158,9 @@ Documentation and history
 
 The handoff is a resume pointer, not a work log. Keep only the current slice,
 outcomes, live blockers, the next useful check and evidence pointers.
-Replace current state and remove resolved work. Do not append a
-paragraph for each fix, experiment or verification run, or start another diary.
+Replace current state and remove resolved work. Update it once per finished
+outcome, not per step, experiment or verification run. Per-run receipts, hashes
+and file inventories belong in the evidence directory, not the handoff.
 Keep the PR description concise and reviewer-facing: motivation, approach, scope,
 current verification and open blockers, with evidence links. Update that summary
 in place, not with per-commit or per-run history. Detailed logs, test inventories
@@ -166,7 +171,8 @@ explicitly assigned. Flag resolved steering for removal. Re-read this prompt
 after compaction.
 
 Commit coherent changes with jj and continue beyond intermediate commits.
-You may commit and push to the bookmark above without asking. Before finishing,
+You may commit and push to the bookmark above without asking. Push at least
+daily so work does not live on one machine. Before finishing,
 fold your own fixups and handoff updates into a straight implementation history
 while preserving useful review boundaries. Check remote changes before pushing.
 Ask before rewriting others' commits or commits others have built on.

@@ -1,157 +1,90 @@
 # Decoupled coordination: current handoff
 
-## Objective and next action
+## Next action
 
-Finish native-only ownership, execution and harness cleanup. Preserve adapter
-policy, validated transactions, durable read protection, compatible full writers
-and explicit retirement. Keep Persist and the 60s publication default unchanged.
+Diagnose the controller wait that blocks deployment retirement in zippy
+KafkaSources. After a late promotion the retirement POST stays outstanding and
+`/api/inventory` times out, while the adapter reports `IsLeader`. It reproduced
+on an unchanged rerun. Find the specific await that holds the controller's
+administrative loop and bound it. Do not rework controller concurrency or raise
+the runner's guard.
 
-KafkaSources is running on the worker as `aj-native-parallel-81e1a8b8`.
-Next: inspect its outcome and logs, run PostgresCdc, then verify the latest
-compatible-version pair. Do not restart a live run after an observation timeout.
-The core candidates are hash-verified and execute locally with `--version`.
-Ancillary binaries are separately preserved and pass their help commands. Their
-build passed with one job, two CPUs and 6 GiB, without changing Cargo.lock.
-No local build remains active. Do not replace pinned candidates with incidental
-build outputs.
-Do not reduce workloads, assertions, cadence or retry limits to obtain passes.
+Then, in order:
 
-## Current outcome
+1. Finish KafkaSources and PostgresCdc at seed 42 and default length, including
+   backup/restore where the scenario has it.
+2. Run `index-read-protection` with four indexes once at the 60s publication
+   default and report per-publisher commit rates.
+3. Rebuild the 26.46/26.47 pair from the current source and rerun lifecycle,
+   DDL and adapter-loss coverage against it.
+4. Push the bookmark and get a broad CI run on the current head.
+
+## Current state
 
 Controllerd owns processes, replica followers own maintained execution, and
-adapters retain policy, transactions, protection and transient queries. Native
-startup is mandatory. Temporary objects retain execution ownership and session
-visibility. Subscription identities remain execution-qualified through observations,
-logging and dependencies. Bounded audits found no reachable legacy alternative in
-the inspected startup and command-ingress paths. Obsolete replay-history work and
-its diagnostics are removed. No overall memory saving is established.
+adapters keep policy, transactions, protection and transient queries. Native
+startup is mandatory and the controller-owned execution paths are removed.
+Temporary objects carry execution ownership. Subscription identities are
+execution-qualified through observations, logging and dependencies.
 
-Combined protection publications derive against the current transaction, including
-proposed client changes. Frontier-only retries preserve consolidated effects,
-incarnation fencing and pending-publication barriers. Targeted checks pass.
-Unprofiled normal-INFO runs twice passed the unchanged four-index case at original
-limits. Earlier intermittent failures are not declared resolved.
+Protection publications derive bounds inside the catalog transaction, including
+the publisher's proposed client changes. Frontier-only conflicts retry without
+resampling.
 
-Targeted DEBUG diagnostics inflated application CPU through tracing bookkeeping.
-Removing only that diagnostic target reduced measured inner application residence
-from 4.54s to 0.66s with similar call counts. Batches were not perfectly matched.
-An isolated reproduction confirms rejected spans can still acquire registry IDs.
-Do not redesign catalog maps based on the instrumented timings or expand into a
-tracing fix without scope agreement. Whole-deployment CPU remains high.
+Verified on the current binaries, same build, original resource limits:
 
-Every declared ingestion workload passed at its default duration, including
-promotions, explicit retirements and forced restarts. Captured logs have no panic
-signatures. This is seed42, same-build native coverage with mounted binaries across
-four separate runs, not the full ingestion suite in one invocation or green CI.
-Original assertions, replica sizes and resource limits were retained.
-Earlier lifecycle/DDL coverage used distinct 26.46/26.47 package versions sharing
-implementation and plan encoding. It is not latest-binary, arbitrary-release or
-builtin-migration coverage. Earlier checks also cover both Timely topologies,
-surviving subscriptions, source lifecycle/status, metrics and HTTP proxy behavior.
+- Every declared ingestion workload at default duration, including promotions,
+  explicit retirements and forced restarts.
+- `index-read-protection` with four indexes at a 1s publication interval, twice.
 
-## Live gaps and approved deferrals
+Verified on earlier binaries only: distinct-version lifecycle and DDL, both
+Timely topologies, surviving subscriptions, source status, metrics and the HTTP
+proxy.
 
-- Complete seed42 default-length zippy scenarios and actual backup/restore.
-  The combined data-ingest invocation remains unverified despite individual
-  scenario passes. PostgreSQL CDC deliberately excludes restore.
-  Local mounted-binary fixtures are prepared and smoke-checked. Full standalone
-  images and the jobs image's broader contents are not verified by those checks.
-- Rebuild and verify the latest compatible-version pair. Adapter-loss coverage
-  still needs to run with the new compatible Persist CLI fixture. Do not
-  substitute old candidate artifacts.
-  `build_current_version_pair.py` is prepared and passed its non-building
-  provenance check. All 3124 build-input hashes match the pinned candidate,
-  without exceptions. Its build mode requires the existing 32-GiB/four-CPU
-  worker build limits and no running containers. Do not use the historical
-  `native-compatible-current/build-pair.py` unchanged.
-- Native parallel stress has a repaired one-cycle pass. Earlier timeout,
-  two-cycle retirement and bootstrap failures are retained in the evidence.
-  Broader current-binary repeat coverage remains incomplete.
-- Original-limit debug upsert hydration OOM reproduces on both native and pinned
-  upstream base. Decoded rows and processing buffers dominate sampled heaps.
-  The retaining queue is not established. No native-specific repair is evidenced.
-  Do not raise memory limits or shrink the workload. General input-memory bounds
-  are separate scope.
-- Positive native builtin-schema migrations, pre-native conversion and current-native
-  Kubernetes/operator/Terraform integration are unsupported within M3. Keep guards
-  and visible unsupported outcomes without disabling historical/unrelated tests.
-- Broad CI is not green. Last reviewed evidence is
-  [Build141419](https://buildkite.com/materialize/test/builds/141419). Registry/image
-  gates, merge skew, Persist JSON-order checking and stale hydration expectations
-  remain unresolved. Full bin/fmt reports unchanged long catalog-file lines.
+## Decisions
+
+- The 26.46/26.47 pair, which shares implementation and plan encoding, is the
+  accepted version pair for M3. Report it as such, not as release-skew or
+  migration coverage.
+- `index-read-protection` at a 1s interval is a stress test, not an acceptance
+  gate. It runs 18 publishers at 60 times the default cadence, and slow
+  publishers can starve under that commit rate. Do not optimize candidate cost
+  further for it. The scaling limit belongs in the
+  [follow-up inventory](20260903_decoupled_coordination_followups.md).
+- Deferred beyond M3: positive builtin-schema migrations, conversion of
+  pre-native environments, and Kubernetes, operator and Terraform integration.
+  Keep the guards and report affected coverage as unsupported.
+- A tracing layer allocates spans that the output filter rejects, which inflated
+  the targeted DEBUG measurements. A tracing fix is separate scope.
+
+## Open gaps
+
+- Zippy scenarios and backup/restore are unverified. The combined data-ingest
+  invocation is unverified despite the individual scenario passes.
+- Native parallel stress has one repaired single-cycle pass. Repeat coverage on
+  the current binaries is incomplete.
+- The debug upsert hydration OOM at original limits reproduces on the pinned
+  upstream base as well. No native-specific cause is established. Do not raise
+  memory limits or shrink the workload.
+- Broad CI is not green. The last reviewed run is
+  [Build141419](https://buildkite.com/materialize/test/builds/141419), which
+  predates the latest removals.
+- Commits since November 10 are local only.
 
 ## Worker and evidence
 
-Evidence root: `/home/ubuntu/.local/share/aj/m3-evidence/native-only/`.
-Current investigation directory: `upsert-oom-investigation/` below that root,
-mirrored on worker `i-0b3699392b71bd7d2` (16 CPUs, 61 GiB). The user approved
-restarting it. Since the proposed 06:00 deadline had passed, the new bounded window
-ends at 2026-11-16 15:30 UTC. Both expiry tags and `aj-worker-deadline.timer` are
-set. Aggregate resource limits were restored after reboot and verified.
-See `worker-resume-{preflight,limits}.log`. Binary preservation is complete.
-Credentials were restored without access-rule changes.
-Use `remote_with_cli_credentials.py` in the investigation directory.
+Worker `i-0b3699392b71bd7d2` has 16 CPUs and 61 GiB. Runtime limits are 40 GiB
+and eight CPUs in aggregate, with four CPUs and 6 GiB per deployment. Builds use
+one job, 32 GiB and four CPUs on the worker. Do not overlap builds and runtimes,
+and keep heavy work off the local VM. Restarting the worker or extending its
+expiry within these limits needs no approval.
 
-Keep heavy work sequential and off the local VM. Runtime aggregate limits are
-40 GiB, eight CPUs and no swap. Deployments use four CPUs and 6 GiB each. Builds
-use one job, 32 GiB and four CPUs. Preserve 30 GiB disk and 2 GiB available RAM.
-Do not overlap builds and runtimes. Cleanup is supervised, including after SIGKILL.
-Commits remain local and unpushed. Preserve pinned binaries and source manifests.
-Local cache cleanup reclaimed about 5 GiB from unused test executables and
-incremental caches, without deleting source, library artifacts or debug sidecars.
-The local VM has substantially less RAM than the worker. Do not reuse its 32-GiB
-build limit locally.
+Evidence lives in
+`~/.local/share/aj/m3-evidence/native-only/upsert-oom-investigation/`. The
+detailed pointers to binaries, receipts, runners and individual runs are in
+`handoff-before-cleanup.md` and `handoff-before-ingest-verification.md` there.
+Historical passes are not acceptance of the latest binary.
 
-Essential pointers in `upsert-oom-investigation/`:
-- Current binaries: `native-publication-projection-candidate/` and
-  `native-publication-projection-binaries.json`. Build/check receipts:
-  `projection-publication-build-evidence.tar.gz`.
-  Local preservation: `native-projection-local-preservation.json`.
-  Ancillary binaries: `native-ancillary-preservation.json` and
-  `local-ancillary-only-{build-result.json,driver.log}`.
-  Teardown and cache cleanup: `worker-final-runtime-check.log`,
-  `local-build-cache-cleanup.json`.
-- Four-index verification: `index-four-info-unprofiled{,-repeat}-evidence.tar.gz`.
-- Ingestion passes: `data-ingest-0dt-evidence.tar.gz`,
-  `data-ingest-delete-0dt-evidence.tar.gz`, `data-ingest-normal-evidence.tar.gz`,
-  and `data-ingest-disruptions-evidence.tar.gz`. Coverage against current workload
-  declarations: `data-ingest-native-coverage.json`.
-- Observer-cost evidence: `publication-tracing-findings.md`,
-  `publication-tracing-control.json`, `publication-leaf-v2-evidence.tar.gz`,
-  `publication-info-evidence.tar.gz`, and `tracing-filter-control/`.
-  `leaf-calibration-findings.md` preserves the failed first sampler and its repair.
-- Upsert/native-baseline evidence and independent review: `findings.md` and
-  `comparison-review.md`. Native stress repair: `parallel-retirement-policy-evidence.tar.gz`.
-- Zippy prerequisites and restore contract: `zippy-acceptance-audit.md`.
-  Prepared fixtures: `zippy_fixture_mounts.py`, `native-zippy-fixtures/` and
-  `zippy-fixture-smoke-result.json`. Both ancillary binaries run in the exact
-  base image, including idle-container Persist CLI execution. Nested-override
-  checks are reproducible with `check_zippy_fixture_render.py`. These are fixture
-  checks, not zippy/restore acceptance or standalone-image CI. The repository's
-  SSH fixture parent is available locally (`zippy-ssh-image-pull.log`).
-  Runner: `native_zippy.py`, with `NATIVE_ZIPPY_SCENARIO=KafkaSources` or
-  `PostgresCdc`. Both configurations passed `check_native_zippy.py` locally.
-  Live run: `zippy-kafka-{launch.json,driver.log,progress.log}` and worker project
-  `aj-native-parallel-81e1a8b8`. Worker fixture checks passed before launch.
-  Review dispositions: `zippy-runner-review-resolution.json`. A workflow pass
-  still requires crash-log review before acceptance. The inherited 1800s outer
-  guard may abort a long case, which is incomplete evidence, not a workflow bug.
-  The standalone storaged native bootstrap is present. A private wrapper must
-  retain the current binary mount through its inner service override. KafkaSources
-  uses managed storage, while PostgresCdc exercises standalone storaged.
-- Earlier receipts, failed runs and detailed pointers are preserved in
-  `handoff-before-ingest-verification.md`. Do not treat historical passes as
-  acceptance of the latest binary.
-
-Earlier compatible-version lifecycle evidence is in `native-driver-scratch/`,
-including `native-history-lifecycle-complete-evidence.tar.gz` and
-`native-history-compatible-ddl-evidence.tar.gz`.
-
-The [follow-up inventory](20260903_decoupled_coordination_followups.md) keeps
-architectural opportunities separate from this cleanup. The
-[publication comparison](20260903_decoupled_coordination_publication_interval.md)
-and `logical-component-load/` remain the performance baseline, not measured
-benefits of the removals. Preserve native observation SQL inputs until replaced.
-
-Preserve the unrelated
-`tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.
+Leave the untracked
+`tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`
+alone.
