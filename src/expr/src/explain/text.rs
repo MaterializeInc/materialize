@@ -204,41 +204,28 @@ where
     }
 }
 
-/// Renders `desc` as the column definitions of a `CREATE MATERIALIZED VIEW`
-/// statement, one per line.
+/// Renders the columns of `desc` as the column definitions of a `CREATE
+/// MATERIALIZED VIEW` statement, one per line.
 ///
-/// Keys are rendered as `UNIQUE NULLS NOT DISTINCT` if they contain nullable
-/// columns, because `RelationDesc` keys treat `NULL` like any other value.
-/// Empty keys have no SQL syntax and are omitted.
+/// Keys are omitted, because column definitions cannot declare them.
 fn fmt_schema(
     f: &mut fmt::Formatter<'_>,
     desc: &RelationDesc,
     humanizer: &dyn ExprHumanizer,
 ) -> fmt::Result {
     let ident = |name: &ColumnName| Ident::new_unchecked(name.as_str()).to_ast_string_simple();
-    let columns = desc.iter().map(|(name, typ)| {
-        format!(
-            "{} {}{}",
-            ident(name),
-            humanizer.humanize_sql_scalar_type(&typ.scalar_type, false),
-            if typ.nullable { "" } else { " NOT NULL" },
-        )
-    });
-    let keys = desc
-        .typ()
-        .keys
+    let columns: Vec<_> = desc
         .iter()
-        .filter(|key| !key.is_empty())
-        .map(|key| {
-            let nullable = key.iter().any(|&i| desc.typ().column_types[i].nullable);
+        .map(|(name, typ)| {
             format!(
-                "UNIQUE{} ({})",
-                if nullable { " NULLS NOT DISTINCT" } else { "" },
-                separated(", ", key.iter().map(|&i| ident(desc.get_name(i)))),
+                "{} {}{}",
+                ident(name),
+                humanizer.humanize_sql_scalar_type(&typ.scalar_type, false),
+                if typ.nullable { "" } else { " NOT NULL" },
             )
-        });
-    let defs: Vec<_> = columns.chain(keys).collect();
-    writeln!(f, "  {}", defs.join(",\n  "))
+        })
+        .collect();
+    writeln!(f, "  {}", columns.join(",\n  "))
 }
 
 impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing, M>

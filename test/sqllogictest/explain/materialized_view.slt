@@ -333,3 +333,25 @@ Schema of materialize.public.mv_schema:
 Target cluster: quickstart
 
 EOF
+
+# Keys are not part of the printed schema.
+statement ok
+CREATE MATERIALIZED VIEW mv_schema_keyed AS SELECT a, count(*) AS n FROM schema_t GROUP BY a
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_schema_keyed
+----
+materialize.public.mv_schema_keyed:
+  Reduce group_by=[#0{a}] aggregates=[count(*)]
+    Project (#0{a})
+      ReadStorage materialize.public.schema_t
+
+Source materialize.public.schema_t
+
+Schema of materialize.public.mv_schema_keyed:
+  a integer,
+  n bigint NOT NULL
+
+Target cluster: quickstart
+
+EOF
