@@ -30,7 +30,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import urllib3
 from kubernetes import watch  # type: ignore
@@ -163,7 +163,8 @@ class ResourceWatch:
                     self.window_seconds + self.request_timeout,
                 ),
             )
-            for event in stream:
+            for raw_event in stream:
+                event = cast(dict[str, Any], raw_event)
                 obj = event["raw_object"]
                 rv = resource_version(obj) or rv
                 if event["type"] != "BOOKMARK":

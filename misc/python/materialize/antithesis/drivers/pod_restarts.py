@@ -832,12 +832,17 @@ def _active_replica_interleaving(
                 return
             chosen = rng.choice(candidates)
             metadata = chosen.metadata
+            assert metadata is not None and metadata.name is not None
             current = kube.core.read_namespaced_pod(
                 metadata.name,
                 kube.namespace,
                 _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
             )
-            if not matches(current) or current.metadata.uid != metadata.uid:
+            if (
+                not matches(current)
+                or current.metadata is None
+                or current.metadata.uid != metadata.uid
+            ):
                 return
             # The shared cluster ID also exists in the candidate generation.
             # Recheck the active CR identity after the pod read, then preserve

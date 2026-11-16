@@ -340,6 +340,7 @@ def _restart(env: Environment, host: str, deadline: float) -> dict[str, Any] | N
             None,
         )
         if replacement is not None:
+            assert replacement.metadata is not None
             return {
                 "pod": victim.pod,
                 "prior_uid": victim.uid,

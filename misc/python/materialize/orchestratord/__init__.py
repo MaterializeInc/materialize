@@ -21,7 +21,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import requests
 import urllib3
@@ -79,13 +79,16 @@ class Materialize:
 
     def get(self) -> dict[str, Any] | None:
         try:
-            return self.custom.get_namespaced_custom_object(
-                GROUP,
-                VERSION,
-                self.namespace,
-                PLURAL,
-                self.name,
-                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            return cast(
+                dict[str, Any],
+                self.custom.get_namespaced_custom_object(
+                    GROUP,
+                    VERSION,
+                    self.namespace,
+                    PLURAL,
+                    self.name,
+                    _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+                ),
             )
         except ApiException as e:
             if e.status == 404:
@@ -104,14 +107,17 @@ class Materialize:
 
     def patch_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Merge-patch the spec and return the resulting object."""
-        return self.custom.patch_namespaced_custom_object(
-            GROUP,
-            VERSION,
-            self.namespace,
-            PLURAL,
-            self.name,
-            {"spec": spec},
-            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        return cast(
+            dict[str, Any],
+            self.custom.patch_namespaced_custom_object(
+                GROUP,
+                VERSION,
+                self.namespace,
+                PLURAL,
+                self.name,
+                {"spec": spec},
+                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            ),
         )
 
     def request_rollout(

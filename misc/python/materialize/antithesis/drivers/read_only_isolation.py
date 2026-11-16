@@ -164,9 +164,10 @@ class Checker:
             metadata, status = pod.metadata, pod.status
             if metadata is None or status is None or not status.pod_ip:
                 continue
-            generation = pod_generation(metadata.name or "")
+            name = metadata.name or ""
+            generation = pod_generation(name)
             if generation is not None and metadata.uid is not None:
-                out[status.pod_ip] = PodRef(metadata.name, metadata.uid, generation)
+                out[status.pod_ip] = PodRef(name, metadata.uid, generation)
         return out
 
     def oracle_sample(self) -> None:

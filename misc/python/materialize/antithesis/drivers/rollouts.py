@@ -48,7 +48,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 import requests
@@ -342,13 +342,16 @@ class Kube:
     def snapshot(self) -> Snapshot:
         started = time.monotonic()
         snap = Snapshot(
-            self.custom.get_namespaced_custom_object(
-                orchestratord.GROUP,
-                orchestratord.VERSION,
-                self.namespace,
-                orchestratord.PLURAL,
-                self.name,
-                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            cast(
+                dict[str, Any],
+                self.custom.get_namespaced_custom_object(
+                    orchestratord.GROUP,
+                    orchestratord.VERSION,
+                    self.namespace,
+                    orchestratord.PLURAL,
+                    self.name,
+                    _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+                ),
             )
         )
         if snap.phase_is_current:
@@ -367,14 +370,17 @@ class Kube:
     def patch_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Merge-patch the spec. A `None` value removes the field. Returns the
         CR as stored by the patch, status included."""
-        return self.custom.patch_namespaced_custom_object(
-            orchestratord.GROUP,
-            orchestratord.VERSION,
-            self.namespace,
-            orchestratord.PLURAL,
-            self.name,
-            {"spec": spec},
-            _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        return cast(
+            dict[str, Any],
+            self.custom.patch_namespaced_custom_object(
+                orchestratord.GROUP,
+                orchestratord.VERSION,
+                self.namespace,
+                orchestratord.PLURAL,
+                self.name,
+                {"spec": spec},
+                _request_timeout=K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            ),
         )
 
     def envd_statefulsets(self, resource_id: str) -> list[EnvdStatefulSet]:
