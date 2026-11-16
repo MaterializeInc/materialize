@@ -238,7 +238,9 @@ jobs:
                 }
                 cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
               } while (cursor);
-              return [...committers.values()].filter(c => !ALLOWLIST.has(c.name));
+              // An unlinked author's name is free-form git config, so only a
+              // linked login can match the allowlist.
+              return [...committers.values()].filter(c => c.id === null || !ALLOWLIST.has(c.name));
             }
 
             // Records sign phrase comments by PR committers in the signatures
