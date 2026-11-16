@@ -3370,7 +3370,8 @@ fn plan_materialized_view_declared_desc(
         column_types.push(ty.nullable(nullable.unwrap_or(true)));
     }
 
-    for constraint in constraints {
+    // No table constraint is supported, so the first one is the error.
+    if let Some(constraint) = constraints.first() {
         match constraint {
             TableConstraint::Unique { .. } => {
                 bail_unsupported!("PRIMARY KEY and UNIQUE on materialized views")
