@@ -15,13 +15,17 @@
 //!
 //! - `/api/mcp/agent` - User data products for customer AI agents
 //! - `/api/mcp/developer` - System catalog (`mz_*`) for troubleshooting
+//! - `/api/mcp` - The unified route that replaces both
 //!
 //! ## Tools
 //!
 //! **Agent:** `get_data_products`, `get_data_product_details`, `read_data_product`, `query`
 //! **Developer:** `query_system_catalog`, `query`
+//! **Unified:** `list_data_products`, `get_data_product_details`, `query`
 //!
-//! `read_data_product` and both `query` tools are dyncfg-gated.
+//! `read_data_product` and the agent and developer `query` tools are
+//! dyncfg-gated. `list_data_products` and `get_data_products` are one tool, and
+//! either name works on every route.
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
@@ -501,18 +505,31 @@ where
         if arguments.is_null() {
             *arguments = json!({});
         }
+        // Mapped here because `#[serde(alias)]` would add the new name to the
+        // "expected one of" list in the unknown tool error the old routes
+        // return, which they must keep unchanged.
+        if fields.get("name").and_then(serde_json::Value::as_str) == Some(LIST_DATA_PRODUCTS) {
+            fields.insert("name".to_string(), json!("get_data_products"));
+        }
     }
     serde_json::from_value(params).map_err(serde::de::Error::custom)
 }
 
-impl std::fmt::Display for ToolsCallParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ToolsCallParams::GetDataProducts(_) => write!(f, "get_data_products"),
-            ToolsCallParams::GetDataProductDetails(_) => write!(f, "get_data_product_details"),
-            ToolsCallParams::ReadDataProduct(_) => write!(f, "read_data_product"),
-            ToolsCallParams::Query(_) => write!(f, "query"),
-            ToolsCallParams::QuerySystemCatalog(_) => write!(f, "query_system_catalog"),
+/// The `/api/mcp` name of `get_data_products`.
+const LIST_DATA_PRODUCTS: &str = "list_data_products";
+
+impl ToolsCallParams {
+    /// The name `endpoint_type` shows for this tool, also used as the
+    /// `tool_name` metric label so a route's metric keeps its name whichever
+    /// name the client sent.
+    fn route_name(&self, endpoint_type: McpEndpointType) -> &'static str {
+        match (self, endpoint_type) {
+            (ToolsCallParams::GetDataProducts(_), McpEndpointType::Unified) => LIST_DATA_PRODUCTS,
+            (ToolsCallParams::GetDataProducts(_), _) => "get_data_products",
+            (ToolsCallParams::GetDataProductDetails(_), _) => "get_data_product_details",
+            (ToolsCallParams::ReadDataProduct(_), _) => "read_data_product",
+            (ToolsCallParams::Query(_), _) => "query",
+            (ToolsCallParams::QuerySystemCatalog(_), _) => "query_system_catalog",
         }
     }
 }
@@ -539,12 +556,13 @@ fn default_read_limit() -> u32 {
 
 #[derive(Debug, Deserialize)]
 struct QueryParams {
-    /// Required on the developer endpoint. The agent endpoint accepts `None`
-    /// (omitted or JSON null) so products whose cluster discovery hides stay
-    /// readable (DEX-71).
+    /// Required on the developer endpoint. The agent and unified endpoints
+    /// accept `None` (omitted or JSON null) so products whose cluster discovery
+    /// hides stay readable (DEX-71).
     cluster: Option<String>,
-    /// Only honored on the developer endpoint. The agent endpoint's dispatch
-    /// arm drops it, since replica pinning is not part of the agent surface.
+    /// Honored on the developer and unified endpoints. The agent endpoint's
+    /// dispatch arm drops it, since replica pinning is not part of the agent
+    /// surface.
     cluster_replica: Option<String>,
     sql_query: String,
 }
@@ -554,6 +572,19 @@ impl QueryParams {
         match (self.cluster.as_deref(), self.cluster_replica.as_deref()) {
             (None, _) => Err(McpRequestError::QueryValidationFailed(
                 "cluster is required".to_string(),
+            )),
+            (Some(cluster), None) => Ok(Placement::Cluster(cluster)),
+            (Some(cluster), Some(replica)) => Ok(Placement::Replica { cluster, replica }),
+        }
+    }
+
+    fn unified_placement(&self) -> Result<Placement<'_>, McpRequestError> {
+        match (self.cluster.as_deref(), self.cluster_replica.as_deref()) {
+            (None, None) => Ok(Placement::SessionDefault),
+            // A lone replica would pin a replica of the session's default
+            // cluster.
+            (None, Some(_)) => Err(McpRequestError::QueryValidationFailed(
+                "cluster_replica requires cluster".to_string(),
             )),
             (Some(cluster), None) => Ok(Placement::Cluster(cluster)),
             (Some(cluster), Some(replica)) => Ok(Placement::Replica { cluster, replica }),
@@ -853,8 +884,8 @@ impl From<McpRequestError> for McpError {
 enum McpEndpointType {
     Agent,
     Developer,
-    /// Serves the agent endpoint's tools and instructions until `/api/mcp`
-    /// gets its own (DEX-109, DEX-110).
+    /// Serves its own tool list, and the agent endpoint's instructions.
+    // TODO(DEX-110): give it its own instructions.
     Unified,
 }
 
@@ -1103,10 +1134,11 @@ async fn handle_mcp_request(
     // signatures unchanged since each handler invocation is already bound to a
     // single endpoint.
     let query_tool_enabled = match endpoint_type {
-        McpEndpointType::Agent | McpEndpointType::Unified => {
-            ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs)
-        }
+        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
+        // `query` is one of the route's three tools. `enable_mcp_unified`
+        // gates the whole route.
+        McpEndpointType::Unified => true,
     };
     // Only meaningful on the agent endpoint; the developer endpoint doesn't
     // expose `read_data_product`. Read it unconditionally so the plumbing
@@ -1375,7 +1407,7 @@ async fn handle_mcp_method(
             )
         }
         McpMethod::ToolsCall(params) => {
-            debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
+            debug!(tool = params.route_name(endpoint_type), endpoint = %endpoint_type, "Processing tools/call");
             handle_tools_call(
                 client,
                 params,
@@ -1541,6 +1573,10 @@ fn handle_discover(
     }))
 }
 
+const DATA_PRODUCTS_DESCRIPTION: &str = "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.";
+
+const DATA_PRODUCT_DETAILS_DESCRIPTION: &str = "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.";
+
 fn handle_tools_list(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
@@ -1553,12 +1589,12 @@ fn handle_tools_list(
     );
 
     let tools = match endpoint_type {
-        McpEndpointType::Agent | McpEndpointType::Unified => {
+        McpEndpointType::Agent => {
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
                     title: Some("List Data Products".to_string()),
-                    description: "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.".to_string(),
+                    description: DATA_PRODUCTS_DESCRIPTION.to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {},
@@ -1569,7 +1605,7 @@ fn handle_tools_list(
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
                     title: Some("Get Data Product Details".to_string()),
-                    description: "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.".to_string(),
+                    description: DATA_PRODUCT_DETAILS_DESCRIPTION.to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -1634,6 +1670,61 @@ fn handle_tools_list(
             }
             tools
         }
+        McpEndpointType::Unified => vec![
+            ToolDefinition {
+                name: LIST_DATA_PRODUCTS.to_string(),
+                title: Some("List Data Products".to_string()),
+                description: DATA_PRODUCTS_DESCRIPTION.to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+                annotations: Some(READ_ONLY_ANNOTATIONS),
+            },
+            ToolDefinition {
+                name: "get_data_product_details".to_string(),
+                title: Some("Get Data Product Details".to_string()),
+                description: DATA_PRODUCT_DETAILS_DESCRIPTION.to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Exact name of the data product from list_data_products() list"
+                        }
+                    },
+                    "required": ["name"]
+                }),
+                annotations: Some(READ_ONLY_ANNOTATIONS),
+            },
+            ToolDefinition {
+                name: "query".to_string(),
+                title: Some("Query".to_string()),
+                description: format!(
+                    "Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including data products and the system catalog. Pass the cluster from the data product details so indexed reads hit the arrangement. Omit `cluster` to run on your session's default cluster, for example when the data product's cluster is null. Write system object names in full, such as `mz_catalog.mz_clusters`. {size_hint}",
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "cluster": {
+                            "type": "string",
+                            "description": "Exact cluster name the query should run on, such as the cluster from the data product details. Omit it to run on your session's default cluster. EXPLAIN ANALYZE needs a cluster."
+                        },
+                        "cluster_replica": {
+                            "type": "string",
+                            "description": "Optional replica name (e.g. 'r1') to target one replica of `cluster`. Requires `cluster`. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
+                        },
+                        "sql_query": {
+                            "type": "string",
+                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Use the fully qualified data product name exactly as provided (with double quotes). Multi-statement queries are rejected."
+                        }
+                    },
+                    "required": ["sql_query"]
+                }),
+                annotations: Some(READ_ONLY_ANNOTATIONS),
+            },
+        ],
         McpEndpointType::Developer => {
             let mut tools = vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
@@ -1700,19 +1791,18 @@ async fn handle_tools_call(
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
     // Drop-recording so metrics survive task cancellation.
-    let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
+    let tool_name = params.route_name(endpoint_type);
+    let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), tool_name.to_string());
 
-    let tool_set = match endpoint_type {
-        McpEndpointType::Unified => McpEndpointType::Agent,
-        other => other,
-    };
-    let result = match (tool_set, params) {
-        (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
-            get_data_products(client, max_response_size).await
-        }
-        (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
-            get_data_product_details(client, &p.name, max_response_size).await
-        }
+    let result = match (endpoint_type, params) {
+        (
+            McpEndpointType::Agent | McpEndpointType::Unified,
+            ToolsCallParams::GetDataProducts(_),
+        ) => get_data_products(client, max_response_size).await,
+        (
+            McpEndpointType::Agent | McpEndpointType::Unified,
+            ToolsCallParams::GetDataProductDetails(p),
+        ) => get_data_product_details(client, &p.name, max_response_size).await,
         (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(_))
             if !read_data_product_tool_enabled =>
         {
@@ -1763,10 +1853,15 @@ async fn handle_tools_call(
             }
             Err(e) => Err(e),
         },
+        (McpEndpointType::Unified, ToolsCallParams::Query(p)) => match p.unified_placement() {
+            Ok(placement) => {
+                execute_query(client, placement, &p.sql_query, max_response_size).await
+            }
+            Err(e) => Err(e),
+        },
         // Tool called on wrong endpoint
-        (_, tool) => Err(McpRequestError::ToolNotFound(format!(
-            "{} is not available on {} endpoint",
-            tool, endpoint_type
+        (_, _) => Err(McpRequestError::ToolNotFound(format!(
+            "{tool_name} is not available on {endpoint_type} endpoint"
         ))),
     };
 
@@ -3429,6 +3524,56 @@ mod tests {
                     Err(McpRequestError::QueryValidationFailed(_))
                 ),
                 "expected validation error for {bad:?}",
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_unified_placement() {
+        let params = |cluster: Option<&str>, replica: Option<&str>| QueryParams {
+            cluster: cluster.map(str::to_string),
+            cluster_replica: replica.map(str::to_string),
+            sql_query: "SELECT 1".to_string(),
+        };
+        assert_eq!(
+            params(None, None).unified_placement().unwrap(),
+            Placement::SessionDefault
+        );
+        assert!(matches!(
+            params(None, Some("r1")).unified_placement(),
+            Err(McpRequestError::QueryValidationFailed(_))
+        ));
+        assert_eq!(
+            params(Some("c"), Some("r1")).unified_placement().unwrap(),
+            Placement::Replica {
+                cluster: "c",
+                replica: "r1"
+            }
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_list_data_products_is_get_data_products() {
+        for name in ["list_data_products", "get_data_products"] {
+            let req: McpRequest = serde_json::from_value(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name},
+            }))
+            .unwrap();
+            let McpMethod::ToolsCall(params) = req.method else {
+                panic!("expected tools/call for {name}");
+            };
+            assert_eq!(
+                params.route_name(McpEndpointType::Agent),
+                "get_data_products",
+                "agent metric label for {name}"
+            );
+            assert_eq!(
+                params.route_name(McpEndpointType::Unified),
+                "list_data_products",
+                "unified metric label for {name}"
             );
         }
     }
