@@ -10,17 +10,18 @@
 rules:
   dangerous-triggers:
     ignore:
+      # workflow_run and issue_comment run the default branch's workflow,
+      # which reads the PR through the API and never checks out PR code.
       - cla.yml
+      - linear_links.yml
+      - slack_notify_design_doc.yml
+      - slack_notify_labeled.yml
+      - slack_notify_sql_parser.yml
       # issue_comment and review triggers start Claude Code on an `@claude`
       # mention. claude-code-action rejects actors without write access to the
       # repository before Claude runs, and the job's token has no write scope
       # besides `id-token`.
       - claude.yml
-      - linear_links.yml
-      - slack_notify_design_doc.yml
-      - slack_notify_labeled.yml
-      - slack_notify_qa_risky.yml
-      - slack_notify_sql_parser.yml
   # Concurrency groups would cancel or queue independent runs of event-driven
   # workflows, such as back-to-back CLA comments, without a benefit.
   concurrency-limits:

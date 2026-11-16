@@ -1,0 +1,31 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Starts the CLA check in cla.yml for a pull request. A `pull_request` run gets
+# no secrets and a read-only token on PRs from forks, so this workflow only
+# exists for its completion to trigger cla.yml through `workflow_run`.
+#
+# NOTE: This workflow runs from the PR's merge commit, so a PR can change it.
+# Its outcome must never decide the CLA check. The `cla-assistant` check comes
+# from cla.yml, which always runs from the default branch.
+
+name: CLA trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  request:
+    name: request-cla-check
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "cla.yml checks this pull request once this run completes."
