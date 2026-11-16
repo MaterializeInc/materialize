@@ -53,7 +53,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{ClusterSchedule, Params, Plan, PlanContext, PlanError, StatementDesc};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarInput};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, ReferencedConnection,
@@ -651,6 +651,15 @@ impl CatalogRuntime {
             aws_account_id: None,
             helm_chart_version: None,
         };
+        // Projects can use syntax behind feature flags. The server rejects it on
+        // deploy if the flag is off there.
+        let mut system_vars = SystemVars::new();
+        system_vars
+            .set(
+                "enable_materialized_view_column_definitions",
+                VarInput::Flat("on"),
+            )
+            .expect("valid system variable");
         let mut catalog = Self {
             active_role,
             active_database: None,
@@ -666,7 +675,7 @@ impl CatalogRuntime {
             items_by_name: HashMap::new(),
             cluster,
             config,
-            system_vars: SystemVars::new(),
+            system_vars,
             ids: IdAllocator::new(),
             mz_internal_schema_id: SchemaId::System(0),
             mz_unsafe_schema_id: SchemaId::System(0),
