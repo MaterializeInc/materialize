@@ -207,10 +207,16 @@ describe("FreshnessTable placement column", () => {
     scope: FreshnessScope,
     search: string,
     tableRows: FreshnessRow[],
+    placementPathname?: string,
   ) =>
-    renderComponent(<FreshnessTable rows={tableRows} scope={scope} />, {
-      initialRouterEntries: [search],
-    });
+    renderComponent(
+      <FreshnessTable
+        rows={tableRows}
+        scope={scope}
+        placementPathname={placementPathname}
+      />,
+      { initialRouterEntries: [search] },
+    );
   const searchOf = (link: HTMLElement) =>
     new URLSearchParams(link.getAttribute("href")?.split("?")[1]);
 
@@ -232,6 +238,25 @@ describe("FreshnessTable placement column", () => {
     expect(search.get("schema")).toBe("u3");
     expect(search.get("cluster")).toBeNull();
     // The reader's other controls survive the jump.
+    expect(search.get("threshold")).toBe("5000");
+    expect(search.get("type")).toBe("index,sink");
+  });
+
+  it("links a schema to the given page, keeping the other controls", async () => {
+    await renderAt(
+      "cluster",
+      "/u1/quickstart/freshness?threshold=5000&type=index,sink",
+      [buildRow({})],
+      "/freshness",
+    );
+
+    const link = await screen.findByRole("link", {
+      name: "materialize.public",
+    });
+    expect(link.getAttribute("href")?.split("?")[0]).toBe("/freshness");
+    const search = searchOf(link);
+    expect(search.get("scope")).toBe("schema");
+    expect(search.get("schema")).toBe("u3");
     expect(search.get("threshold")).toBe("5000");
     expect(search.get("type")).toBe("index,sink");
   });

@@ -25,7 +25,11 @@ import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
 import ClusterOverview from "./ClusterOverview";
 import { CLUSTER_OBJECT_TYPES } from "./ClusterPage/clusterObjectTypes";
 import ClusterPage, { ClusterPageHeader } from "./ClusterPage/ClusterPage";
-import { HYDRATION_TAB_PATH, WORKERS_TAB_PATH } from "./ClusterPage/tabLinks";
+import {
+  FRESHNESS_TAB_PATH,
+  HYDRATION_TAB_PATH,
+  WORKERS_TAB_PATH,
+} from "./ClusterPage/tabLinks";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
@@ -72,9 +76,10 @@ const ClassicClusterDetailPage = () => {
       <Route path="sinks" element={<Sinks key={clusterName} />} />
       <Route path="objects" element={<ClassicObjectsRedirect />} />
       <Route path="objects/:objectType" element={<ClassicObjectsRedirect />} />
-      {/* The redesigned Workers and Hydration tabs have no classic counterpart. */}
+      {/* The redesigned Workers, Hydration and Freshness tabs have no classic counterpart. */}
       <Route path={WORKERS_TAB_PATH} element={<Navigate to=".." replace />} />
       <Route path={HYDRATION_TAB_PATH} element={<Navigate to=".." replace />} />
+      <Route path={FRESHNESS_TAB_PATH} element={<Navigate to=".." replace />} />
     </SentryRoutes>
   );
 };
