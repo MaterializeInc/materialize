@@ -124,6 +124,11 @@ pub struct Session {
     /// TODO: We might want to track changes also to session variables.
     /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
     state_revision: u64,
+    /// A committed definition awaiting setup on the session task.
+    pub(crate) pending_continual_transaction: Option<(
+        Vec<crate::frontend_continual_transaction::ContinualStatement>,
+        mz_sql::plan::ContinualCommitMode,
+    )>,
 }
 
 impl SessionMetadata for Session {
@@ -356,6 +361,7 @@ impl Session {
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
             state_revision: 0,
+            pending_continual_transaction: None,
         }
     }
 
@@ -391,6 +397,7 @@ impl Session {
                 TransactionOps::None
                 | TransactionOps::Writes(_)
                 | TransactionOps::SingleStatement { .. }
+                | TransactionOps::ContinualTransaction { .. }
                 | TransactionOps::DDL { .. } => false,
             };
 
@@ -505,6 +512,7 @@ impl Session {
             TransactionOps::Writes(_)
             | TransactionOps::Subscribe
             | TransactionOps::SingleStatement { .. }
+            | TransactionOps::ContinualTransaction { .. }
             | TransactionOps::DDL { .. } => return None,
         };
         if matches!(self.transaction, TransactionStatus::Failed(_)) {
@@ -1271,7 +1279,8 @@ impl TransactionStatus {
                         TransactionOps::Peeks { .. }
                         | TransactionOps::Writes(_)
                         | TransactionOps::Subscribe
-                        | TransactionOps::SingleStatement { .. } => false,
+                        | TransactionOps::SingleStatement { .. }
+                        | TransactionOps::ContinualTransaction { .. } => false,
                     }
             }
             Self::Default | Self::Failed(_) => false,
@@ -1330,6 +1339,7 @@ impl TransactionStatus {
                 | TransactionOps::Peeks { .. }
                 | TransactionOps::Subscribe
                 | TransactionOps::SingleStatement { .. }
+                | TransactionOps::ContinualTransaction { .. }
                 | TransactionOps::DDL { .. } => false,
             },
             TransactionStatus::Default
@@ -1440,6 +1450,9 @@ impl TransactionStatus {
                     TransactionOps::Subscribe => false,
                     TransactionOps::Writes(_) => true,
                     TransactionOps::SingleStatement { .. } => false,
+                    TransactionOps::ContinualTransaction { .. } => {
+                        access != &Some(TransactionAccessMode::ReadOnly)
+                    }
                     TransactionOps::DDL { .. } => false,
                 }
             }
@@ -1508,7 +1521,8 @@ impl TransactionStatus {
                             TransactionOps::Peeks { .. }
                             | TransactionOps::Writes(_)
                             | TransactionOps::Subscribe
-                            | TransactionOps::SingleStatement { .. } => {
+                            | TransactionOps::SingleStatement { .. }
+                            | TransactionOps::ContinualTransaction { .. } => {
                                 pending_ddl_inspections.clear();
                             }
                         }
@@ -1597,6 +1611,18 @@ impl TransactionStatus {
                     TransactionOps::SingleStatement { .. } => {
                         return Err(AdapterError::SingleStatementTransaction);
                     }
+                    TransactionOps::ContinualTransaction { statements } => match add_ops {
+                        TransactionOps::ContinualTransaction {
+                            statements: mut new_stmts,
+                        } => {
+                            statements.append(&mut new_stmts);
+                        }
+                        _ => {
+                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                "only read-then-write statements (INSERT..SELECT, UPDATE, DELETE) are allowed inside a continual transaction"
+                            )));
+                        }
+                    },
                     TransactionOps::DDL {
                         commands,
                         state,
@@ -1708,6 +1734,7 @@ impl Transaction {
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
             | TransactionOps::SingleStatement { .. }
+            | TransactionOps::ContinualTransaction { .. }
             | TransactionOps::DDL { .. } => None,
         }
     }
@@ -1720,6 +1747,7 @@ impl Transaction {
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
             | TransactionOps::SingleStatement { .. }
+            | TransactionOps::ContinualTransaction { .. }
             | TransactionOps::DDL { .. } => None,
         }
     }
@@ -1805,6 +1833,11 @@ pub enum TransactionOps {
         /// The statement params.
         params: mz_sql::plan::Params,
     },
+    /// This transaction is accumulating statements for a continual transaction.
+    ContinualTransaction {
+        /// Mutations to evaluate against each iteration's common snapshot.
+        statements: Vec<crate::frontend_continual_transaction::ContinualStatement>,
+    },
     /// This transaction has run some _simple_ DDL and must do nothing else. Any statement/plan that
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
@@ -1828,6 +1861,7 @@ impl TransactionOps {
             TransactionOps::Writes(_)
                 | TransactionOps::DDL { .. }
                 | TransactionOps::SingleStatement { .. }
+                | TransactionOps::ContinualTransaction { .. }
         )
     }
 }

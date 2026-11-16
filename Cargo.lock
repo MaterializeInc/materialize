@@ -6323,6 +6323,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-core",
  "tracing-opentelemetry",

@@ -451,7 +451,7 @@ pub(crate) fn validate_selection_dependencies(
 ///
 /// `dependency_policy` decides which relations the selection may read. Both
 /// policies reject `mz_now()` anywhere in the transitive dependencies.
-fn validate_read_then_write(
+pub(crate) fn validate_read_then_write(
     catalog: &Arc<Catalog>,
     session: &Session,
     plan: &plan::ReadThenWritePlan,
@@ -662,7 +662,7 @@ fn governing_timeline(timeline: &TimelineContext) -> Option<Timeline> {
 /// A handle to an internal subscribe, meaning one that writes no
 /// `mz_subscriptions` row. A `Drop` impl ensures the subscribe's dataflow is
 /// cleaned up when dropped.
-struct SubscribeHandle {
+pub(crate) struct SubscribeHandle {
     rx: mpsc::UnboundedReceiver<PeekResponseUnary>,
     sink_id: GlobalId,
     /// Wrapped in `Option` so we can move it out in `Drop`.
@@ -1187,7 +1187,7 @@ impl PeekClient {
     /// applied, so the subscribe's sink emits ready-to-write table diffs rather
     /// than query results. `finishing` and `returning` are deliberately not part
     /// of the dataflow, and unmaterializable functions are prepared one-shot.
-    fn optimize_mir_read_then_write(
+    pub(crate) fn optimize_mir_read_then_write(
         &self,
         catalog: &Arc<Catalog>,
         session: &dyn SessionMetadata,
@@ -1271,7 +1271,7 @@ impl PeekClient {
 
     /// The governing oracle's read timestamp, used as a lower bound for
     /// timestamp selection. `None` when the selection needs no oracle.
-    async fn oracle_read_ts(
+    pub(crate) async fn oracle_read_ts(
         &mut self,
         timeline: &TimelineContext,
     ) -> Result<Option<Timestamp>, AdapterError> {
@@ -1292,7 +1292,7 @@ impl PeekClient {
     /// timestamp at least as large as `as_of`, so reads at `as_of` (and
     /// writes derived from them) cannot appear to "go backwards" relative
     /// to subsequent queries.
-    async fn ensure_read_linearized(
+    pub(crate) async fn ensure_read_linearized(
         &mut self,
         timeline: &TimelineContext,
         as_of: Timestamp,
@@ -1402,7 +1402,7 @@ impl PeekClient {
     /// Creates an internal subscribe, meaning one that writes no
     /// `mz_subscriptions` row. Returns a [`SubscribeHandle`] that ensures
     /// cleanup on drop.
-    async fn create_internal_subscribe(
+    pub(crate) async fn create_internal_subscribe(
         &self,
         df_desc: Box<optimize::LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
@@ -1789,13 +1789,13 @@ impl PeekClient {
 }
 
 /// Result of validating a read-then-write operation.
-struct ValidationResult {
+pub(crate) struct ValidationResult {
     cluster_id: ComputeInstanceId,
-    replica_id: Option<ReplicaId>,
+    pub(crate) replica_id: Option<ReplicaId>,
     timeline: TimelineContext,
-    depends_on: BTreeSet<GlobalId>,
+    pub(crate) depends_on: BTreeSet<GlobalId>,
     /// The table descriptor, used for constraint validation.
-    table_desc: RelationDesc,
+    pub(crate) table_desc: RelationDesc,
 }
 
 /// Accumulated state for the OCC loop in `run_occ_loop`.

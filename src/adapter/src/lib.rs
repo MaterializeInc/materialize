@@ -42,6 +42,7 @@ mod command;
 mod coord;
 mod error;
 mod explain;
+mod frontend_continual_transaction;
 mod frontend_read_then_write;
 mod frontend_transaction;
 mod notice;

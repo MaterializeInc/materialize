@@ -2171,3 +2171,173 @@ fn test_serializable_read_sees_own_refresh_mv_write() {
         "a serializable read must see the session's own write"
     );
 }
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_continual_transaction_queue_and_disconnect() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut observer = server.connect(postgres::NoTls).unwrap();
+    let mut worker = server.connect(postgres::NoTls).unwrap();
+    observer
+        .batch_execute("CREATE TABLE queue (x INT)")
+        .unwrap();
+    observer
+        .batch_execute("CREATE TABLE archive (x INT)")
+        .unwrap();
+    observer
+        .batch_execute("INSERT INTO queue VALUES (1), (2)")
+        .unwrap();
+    worker
+        .batch_execute(
+            "BEGIN CONTINUAL TRANSACTION;
+        INSERT INTO archive SELECT x FROM queue WHERE x = 1;
+        INSERT INTO archive SELECT x FROM queue WHERE x <> 1;
+        DELETE FROM queue;
+        COMMIT ASAP",
+        )
+        .unwrap();
+    for expected in [2_i64, 3] {
+        if expected == 3 {
+            observer
+                .batch_execute("INSERT INTO queue VALUES (3)")
+                .unwrap();
+        }
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let row = observer
+                    .query_one(
+                        "SELECT (SELECT count(*) FROM queue), (SELECT count(*) FROM archive)",
+                        &[],
+                    )
+                    .unwrap();
+                let queue: i64 = row.get(0);
+                let archive: i64 = row.get(1);
+                assert_eq!(queue + archive, expected, "all table writes must be atomic");
+                if queue == 0 {
+                    Ok(())
+                } else {
+                    Err("queue has not drained")
+                }
+            })
+            .unwrap();
+        // Foreground commands on the owning connection must not retire its subscriptions.
+        worker.simple_query("SELECT 1").unwrap();
+    }
+    drop(worker);
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let active: f64 = server
+                .metrics_registry()
+                .gather()
+                .iter()
+                .filter(|m| m.name() == "mz_active_internal_subscribes")
+                .flat_map(|m| m.get_metric())
+                .map(|m| m.get_gauge().value())
+                .sum();
+            if active == 0.0 {
+                Ok(())
+            } else {
+                Err("subscriptions still active")
+            }
+        })
+        .unwrap();
+    observer
+        .batch_execute("INSERT INTO queue VALUES (4)")
+        .unwrap();
+    let remaining: i32 = observer
+        .query_one("SELECT x FROM queue", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining, 4);
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_continual_transaction_rollback_and_interval() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (x INT)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    client
+        .batch_execute("BEGIN CONTINUAL TRANSACTION; DELETE FROM t; ROLLBACK")
+        .unwrap();
+    assert_eq!(
+        client
+            .query_one("SELECT x FROM t", &[])
+            .unwrap()
+            .get::<_, i32>(0),
+        0
+    );
+    client
+        .batch_execute(
+            "BEGIN CONTINUAL TRANSACTION; UPDATE t SET x = x + 1 WHERE x < 2;
+        COMMIT EVERY '0.2' SECOND",
+        )
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let x: i32 = client.query_one("SELECT x FROM t", &[]).unwrap().get(0);
+            if x == 2 {
+                Ok(())
+            } else {
+                Err("update has not converged")
+            }
+        })
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN CONTINUAL; INSERT INTO t VALUES (10);
+        COMMIT EVERY '0.1' SECOND",
+        )
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let count: i64 = client
+                .query_one("SELECT count(*) FROM t WHERE x = 10", &[])
+                .unwrap()
+                .get(0);
+            if count >= 2 {
+                Ok(())
+            } else {
+                Err("constant input has not repeated")
+            }
+        })
+        .unwrap();
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_continual_transaction_setup_errors() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (x INT)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    for (sql, expected) in [
+        ("COMMIT ASAP", "requires BEGIN CONTINUAL TRANSACTION"),
+        ("BEGIN CONTINUAL; COMMIT ASAP", "has no statements"),
+        ("BEGIN CONTINUAL; DELETE FROM t RETURNING x", "RETURNING"),
+        (
+            "BEGIN CONTINUAL; DELETE FROM t; COMMIT EVERY '0' SECOND",
+            "must be positive",
+        ),
+        (
+            "BEGIN CONTINUAL; DELETE FROM t; COMMIT",
+            "use COMMIT ASAP or COMMIT EVERY",
+        ),
+    ] {
+        let error = client.batch_execute(sql).unwrap_err();
+        assert_contains!(server_error_message(&error), expected);
+        client.batch_execute("ROLLBACK").unwrap();
+        assert_eq!(
+            client
+                .query_one("SELECT x FROM t", &[])
+                .unwrap()
+                .get::<_, i32>(0),
+            1
+        );
+    }
+}

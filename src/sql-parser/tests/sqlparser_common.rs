@@ -1455,3 +1455,17 @@ fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
         );
     }
 }
+
+#[mz_ore::test]
+fn test_continual_transaction_display_roundtrip() {
+    for sql in [
+        "BEGIN CONTINUAL TRANSACTION",
+        "BEGIN CONTINUAL",
+        "COMMIT ASAP",
+        "COMMIT EVERY '10' SECOND",
+        "COMMIT EVERY '1 minute'",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+    assert!(parser::parse_statements("COMMIT EVERY").is_err());
+}
