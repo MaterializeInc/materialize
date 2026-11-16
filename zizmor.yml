@@ -16,7 +16,6 @@ rules:
       - linear_links.yml
       - slack_notify_design_doc.yml
       - slack_notify_labeled.yml
-      - slack_notify_qa_risky.yml
       - slack_notify_sql_parser.yml
       # issue_comment and review triggers start Claude Code on an `@claude`
       # mention. claude-code-action rejects actors without write access to the
