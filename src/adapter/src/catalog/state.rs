@@ -1816,10 +1816,14 @@ impl CatalogState {
                     }
                 };
                 let declared_schema = materialized_view.declared_desc.is_some();
+                let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
                 let desc = match materialized_view.declared_desc {
-                    Some(desc) => desc,
+                    // Keys stay inferred, see `optimize::materialized_view`.
+                    Some(desc) => typ
+                        .keys
+                        .into_iter()
+                        .fold(desc.without_keys(), |desc, key| desc.with_key(key)),
                     None => {
-                        let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
                         for &i in &materialized_view.non_null_assertions {
                             typ.column_types[i].nullable = false;
                         }

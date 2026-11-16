@@ -246,7 +246,12 @@ impl Optimize<LocalMirPlan> for Optimizer {
                     "declared types {desc:?} do not match the query's types {:?}",
                     plan.typ,
                 );
-                desc.clone()
+                // A declared schema fixes names, types and nullability. Keys stay
+                // what the running version infers, replacing any stored ones.
+                plan.typ
+                    .keys
+                    .into_iter()
+                    .fold(desc.clone().without_keys(), |desc, key| desc.with_key(key))
             }
             None => {
                 let mut rel_typ = plan.typ;

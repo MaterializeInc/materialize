@@ -65,6 +65,26 @@ SELECT name, nullable FROM (SHOW COLUMNS FROM mv_nullable)
 ----
 n  true
 
+# Keys are not declared but stay inferred, so readers of the materialized view
+# can use them.
+statement ok
+CREATE MATERIALIZED VIEW mv_keyed (a int4, n int8 NOT NULL) AS SELECT a, count(*) FROM t GROUP BY a
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR SELECT * FROM mv_keyed
+----
+Explained Query:
+  ReadStorage materialize.public.mv_keyed // { keys: "([0])" }
+
+Source materialize.public.mv_keyed
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW mv_keyed
+
 # Declared NOT NULL is checked at runtime.
 statement ok
 CREATE MATERIALIZED VIEW mv_not_null (a int4 NOT NULL) AS SELECT a FROM t
