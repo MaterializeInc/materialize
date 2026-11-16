@@ -865,6 +865,9 @@ pub struct CreateMaterializedViewFinish {
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
     optimizer_features: OptimizerFeatures,
+    /// The inferred schema as column definitions, if it was frozen into the
+    /// statement.
+    frozen_columns: Option<Vec<mz_sql::ast::ColumnDef<mz_sql::ast::Raw>>>,
 }
 
 #[derive(Debug)]

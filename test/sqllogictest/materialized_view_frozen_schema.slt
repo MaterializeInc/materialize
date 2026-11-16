@@ -1,0 +1,155 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for freezing the inferred schema of new materialized views into their
+# definition.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_column_definitions = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_schema_freezing = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (a int4, b text NOT NULL, c numeric(10, 2), ts timestamp(3))
+
+statement ok
+INSERT INTO t VALUES (1, 'x', 1.25, '2026-01-01'), (2, 'y', NULL, NULL)
+
+# Names, types and inferred nullability become column definitions.
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b, c, ts FROM t
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'mv'
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" ("a" [s20 AS "pg_catalog"."int4"], "b" [s46 AS "pg_catalog"."text"] NOT NULL, "c" [s32 AS "pg_catalog"."numeric"](39, 2), "ts" [s50 AS "pg_catalog"."timestamp"](3)) IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT "a", "b", "c", "ts" FROM [u1 AS "materialize"."public"."t"]
+EOF
+
+query TTT rowsort
+SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv)
+----
+a  true  integer
+b  false  text
+c  true  numeric
+ts  true  timestamp␠without␠time␠zone
+
+# A bare-name list is replaced by the definitions, and an aggregate's inferred
+# NOT NULL is frozen.
+statement ok
+CREATE MATERIALIZED VIEW mv_agg (k, n) AS SELECT a, count(*) FROM t GROUP BY a
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'mv_agg'
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv_agg" ("k" [s20 AS "pg_catalog"."int4"], "n" [s22 AS "pg_catalog"."int8"] NOT NULL) IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT "a", "pg_catalog"."count"(*) FROM [u1 AS "materialize"."public"."t"] GROUP BY "a"
+EOF
+
+# Keys stay inferred.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR SELECT * FROM mv_agg
+----
+Explained Query:
+  ReadStorage materialize.public.mv_agg // { keys: "([0])" }
+
+Source materialize.public.mv_agg
+
+Target cluster: quickstart
+
+EOF
+
+# `ASSERT NOT NULL` becomes a NOT NULL column definition.
+statement ok
+CREATE MATERIALIZED VIEW mv_assert WITH (ASSERT NOT NULL a) AS SELECT a FROM t
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'mv_assert'
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv_assert" ("a" [s20 AS "pg_catalog"."int4"] NOT NULL) IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT "a" FROM [u1 AS "materialize"."public"."t"]
+EOF
+
+# A schema with a type that cannot be spelled stays implicit.
+statement ok
+CREATE MATERIALIZED VIEW mv_record AS SELECT ROW(a, b) AS r FROM t
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'mv_record'
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv_record" IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT ROW("a", "b") AS "r" FROM [u1 AS "materialize"."public"."t"]
+EOF
+
+# User-defined types are spelled by id and recorded as dependencies.
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_typed AS SELECT LIST[a]::int4_list AS l, LIST[c] AS cs FROM t
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'mv_typed'
+----
+CREATE MATERIALIZED VIEW "materialize"."public"."mv_typed" ("l" [u6 AS "materialize"."public"."int4_list"] NOT NULL, "cs" [s32 AS "pg_catalog"."numeric"] list NOT NULL) IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT LIST["a"]::[u6 AS "materialize"."public"."int4_list"] AS "l", LIST["c"] AS "cs" FROM [u1 AS "materialize"."public"."t"]
+EOF
+
+statement error cannot drop type "int4_list": still depended upon by materialized view "mv_typed"
+DROP TYPE int4_list
+
+statement ok
+DROP MATERIALIZED VIEW mv_typed
+
+# A replacement inherits the frozen schema.
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + 1, b, c, ts FROM t
+
+query T multiline
+SELECT regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name = 'rp'
+----
+CREATE REPLACEMENT MATERIALIZED VIEW "materialize"."public"."rp" ("a" [s20 AS "pg_catalog"."int4"], "b" [s46 AS "pg_catalog"."text"] NOT NULL, "c" [s32 AS "pg_catalog"."numeric"](39, 2), "ts" [s50 AS "pg_catalog"."timestamp"](3)) FOR [u2 AS "materialize"."public"."mv"] IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT "a" + 1, "b", "c", "ts" FROM [u1 AS "materialize"."public"."t"]
+EOF
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query ITRT rowsort
+SELECT * FROM mv
+----
+2  x  1.25  2026-01-01␠00:00:00
+3  y  NULL  NULL
+
+# Without the flag, schemas stay implicit, and a replacement of an implicit
+# target is not frozen.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_schema_freezing = false
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW mv_implicit AS SELECT a FROM t
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_schema_freezing = true
+----
+COMPLETE 0
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp_implicit FOR mv_implicit AS SELECT a + 1 AS a FROM t
+
+query TT rowsort
+SELECT name, regexp_replace(create_sql, ' AS OF \d+', '') FROM mz_materialized_views WHERE name IN ('mv_implicit', 'rp_implicit')
+----
+mv_implicit  CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv_implicit"␠IN␠CLUSTER␠[u1]␠WITH␠(REFRESH␠=␠ON␠COMMIT)␠AS␠SELECT␠"a"␠FROM␠[u1␠AS␠"materialize"."public"."t"]
+rp_implicit  CREATE␠REPLACEMENT␠MATERIALIZED␠VIEW␠"materialize"."public"."rp_implicit"␠FOR␠[u9␠AS␠"materialize"."public"."mv_implicit"]␠IN␠CLUSTER␠[u1]␠WITH␠(REFRESH␠=␠ON␠COMMIT)␠AS␠SELECT␠"a"␠+␠1␠AS␠"a"␠FROM␠[u1␠AS␠"materialize"."public"."t"]

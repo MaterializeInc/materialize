@@ -181,13 +181,14 @@ SELECT i+i+5 FROM t;
 query T multiline
 SELECT regexp_replace(redacted_create_sql, 'AS OF [0-9]+', 'AS OF xxxxxxx', 'g') FROM mz_materialized_views WHERE name = 'mv1'
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t] AS OF xxxxxxx
+CREATE MATERIALIZED VIEW materialize.public.mv1 ("?column?" [s20 AS pg_catalog.int4]) IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t] AS OF xxxxxxx
 EOF
 
 query T multiline
 SELECT create_sql FROM (SHOW REDACTED CREATE MATERIALIZED VIEW mv1);
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    ("?column?" pg_catalog.int4)
     IN CLUSTER quickstart
     WITH (REFRESH = ON COMMIT)
     AS SELECT i + i + '<REDACTED>' FROM materialize.public.t;
@@ -197,6 +198,7 @@ query T multiline
 SELECT regexp_replace(pretty_sql(redacted_create_sql), 'AS OF [0-9]+', 'AS OF xxxxxxx', 'g') FROM mz_materialized_views WHERE name = 'mv1'
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    ("?column?" [s20 AS pg_catalog.int4])
     IN CLUSTER [u1]
     WITH (REFRESH = ON COMMIT)
     AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t]
@@ -207,6 +209,7 @@ query T multiline
 SELECT pretty_sql(create_sql) FROM (SHOW REDACTED CREATE MATERIALIZED VIEW mv1);
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    ("?column?" pg_catalog.int4)
     IN CLUSTER quickstart
     WITH (REFRESH = ON COMMIT)
     AS SELECT i + i + '<REDACTED>' FROM materialize.public.t;

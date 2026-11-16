@@ -115,6 +115,32 @@ impl Optimizer {
             duration: Default::default(),
         }
     }
+
+    /// The schema the global stage derives for `plan` without a declared schema.
+    pub fn inferred_desc(&self, plan: &LocalMirPlan) -> RelationDesc {
+        let mut rel_typ = plan.typ.clone();
+        for &i in self.non_null_assertions.iter() {
+            rel_typ.column_types[i].nullable = false;
+        }
+        RelationDesc::new(rel_typ, self.column_names.clone())
+    }
+
+    /// Makes the global stage use `desc` as if it was declared in the statement:
+    /// its names, types and nullability are fixed, and its non-nullable columns
+    /// are asserted.
+    pub fn declare_desc(&mut self, desc: RelationDesc) {
+        self.non_null_assertions = non_nullable_columns(&desc);
+        self.declared_desc = Some(desc.without_keys());
+    }
+}
+
+/// The indices of the columns of `desc` that are not nullable.
+pub fn non_nullable_columns(desc: &RelationDesc) -> Vec<usize> {
+    desc.iter_types()
+        .enumerate()
+        .filter(|(_, typ)| !typ.nullable)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
@@ -235,6 +261,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
     fn optimize(&mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
         let time = Instant::now();
 
+        let inferred_desc = self.inferred_desc(&plan);
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
@@ -259,13 +286,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
                     .into_iter()
                     .fold(desc.clone().without_keys(), |desc, key| desc.with_key(key))
             }
-            None => {
-                let mut rel_typ = plan.typ;
-                for &i in self.non_null_assertions.iter() {
-                    rel_typ.column_types[i].nullable = false;
-                }
-                RelationDesc::new(rel_typ, self.column_names.clone())
-            }
+            None => inferred_desc,
         };
 
         let mut df_builder = {

@@ -437,6 +437,7 @@ impl Coordinator {
                 plan::MaterializedView {
                     column_names,
                     declared_desc,
+                    replacement_target,
                     cluster_id,
                     non_null_assertions,
                     refresh_schedule,
@@ -444,6 +445,16 @@ impl Coordinator {
                 },
             ..
         } = &plan;
+
+        // Freeze the inferred schema of a new materialized view into its statement.
+        // A replacement keeps the kind of schema its target has: purification gives
+        // it a declared target's definitions, and an implicit target stays implicit.
+        let system_config = self.catalog().system_config();
+        let freeze_schema = declared_desc.is_none()
+            && replacement_target.is_none()
+            && system_config.enable_materialized_view_column_definitions()
+            && system_config.enable_materialized_view_schema_freezing();
+        let catalog = self.owned_catalog();
 
         // Collect optimizer parameters.
         let compute_instance = self
@@ -487,6 +498,7 @@ impl Coordinator {
                         optimize::materialized_view::LocalMirPlan,
                         optimize::materialized_view::GlobalMirPlan,
                         optimize::materialized_view::GlobalLirPlan,
+                        Option<Vec<ast::ColumnDef<ast::Raw>>>,
                     ), AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -494,17 +506,38 @@ impl Coordinator {
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        // The schema is frozen before the global stage, so that the
+                        // dataflow asserts the frozen `NOT NULL` columns from the start.
+                        // A schema with a type that cannot be spelled stays implicit.
+                        let frozen_columns = if freeze_schema {
+                            let desc = optimizer.inferred_desc(&local_mir_plan);
+                            let columns = mz_sql::plan::materialized_view_column_defs(
+                                &catalog.for_system_session(),
+                                &desc,
+                            );
+                            if columns.is_some() {
+                                optimizer.declare_desc(desc);
+                            }
+                            columns
+                        } else {
+                            None
+                        };
                         let global_mir_plan =
                             optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                         let global_lir_plan =
                             optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+                        Ok((
+                            local_mir_plan,
+                            global_mir_plan,
+                            global_lir_plan,
+                            frozen_columns,
+                        ))
                     };
 
                     let stage = match pipeline() {
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
+                        Ok((local_mir_plan, global_mir_plan, global_lir_plan, frozen_columns)) => {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateMaterializedViewStage::Explain(
@@ -527,6 +560,7 @@ impl Coordinator {
                                     global_mir_plan,
                                     global_lir_plan,
                                     optimizer_features,
+                                    frozen_columns,
                                 })
                             }
                         }
@@ -601,11 +635,12 @@ impl Coordinator {
                     if_not_exists,
                     ..
                 },
-            resolved_ids,
+            mut resolved_ids,
             local_mir_plan,
             global_mir_plan,
             global_lir_plan,
             optimizer_features,
+            frozen_columns,
             ..
         } = stage;
 
@@ -692,7 +727,8 @@ impl Coordinator {
         // is persisted to the catalog and can be relied on during bootstrapping.
         // This has to be the `storage_as_of`, because bootstrapping uses this in
         // `bootstrap_storage_collections`.
-        if let Some(storage_as_of_ts) = storage_as_of.as_option() {
+        let storage_as_of_ts = storage_as_of.as_option();
+        if storage_as_of_ts.is_some() || frozen_columns.is_some() {
             let stmt = mz_sql::parse::parse(&create_sql)
                 .map_err(|_| {
                     AdapterError::internal(
@@ -705,10 +741,36 @@ impl Coordinator {
             let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
                 panic!("unexpected statement type");
             };
-            stmt.as_of = Some(storage_as_of_ts.into());
+            if let Some(storage_as_of_ts) = storage_as_of_ts {
+                stmt.as_of = Some(storage_as_of_ts.into());
+            }
+            // The frozen schema replaces a bare-name list. Its `NOT NULL` columns
+            // include the `ASSERT NOT NULL` ones, which cannot be combined with
+            // column definitions.
+            if let Some(columns) = frozen_columns.clone() {
+                stmt.columns = ast::MaterializedViewColumns::Definitions {
+                    columns,
+                    constraints: vec![],
+                };
+                // Types in the definitions are dependencies when the statement is
+                // re-planned, so they are recorded now.
+                let (_, column_ids) = mz_sql::names::resolve(
+                    &self.catalog().for_system_session(),
+                    stmt.columns.clone(),
+                )?;
+                resolved_ids.extend_from(&column_ids);
+                stmt.with_options
+                    .retain(|o| o.name != ast::MaterializedViewOptionName::AssertNotNull);
+            }
             create_sql = stmt.to_ast_string_stable();
         }
 
+        // The frozen schema asserts all its `NOT NULL` columns, see `Optimizer::declare_desc`.
+        let non_null_assertions = if frozen_columns.is_some() {
+            optimize::materialized_view::non_nullable_columns(global_lir_plan.desc())
+        } else {
+            non_null_assertions
+        };
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
@@ -729,7 +791,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
-                    declared_schema: declared_desc.is_some(),
+                    declared_schema: declared_desc.is_some() || frozen_columns.is_some(),
                     collections,
                     resolved_ids,
                     dependencies,

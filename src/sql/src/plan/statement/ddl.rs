@@ -127,6 +127,7 @@ use mz_storage_types::wire_format::WireFormat;
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
+use crate::ast::{ColumnOptionDef, Raw, RawDataType, RawItemName};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
@@ -3322,6 +3323,126 @@ pub fn plan_create_materialized_view(
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
+}
+
+/// Spells `desc` as materialized view column definitions that plan back to its
+/// exact names, scalar types and nullability. Keys are not spelled.
+///
+/// Returns `None` if a column type cannot be spelled, e.g. an anonymous record
+/// or an array whose element type has modifiers.
+pub fn materialized_view_column_defs(
+    catalog: &dyn crate::catalog::SessionCatalog,
+    desc: &RelationDesc,
+) -> Option<Vec<ColumnDef<Raw>>> {
+    let scx = StatementContext::new(None, catalog);
+    desc.iter()
+        .map(|(name, typ)| {
+            let candidate = raw_data_type(catalog, &typ.scalar_type)?;
+            // The spelling is only a candidate: it has to plan back to the same type.
+            let (resolved, _) = names::resolve(catalog, candidate).ok()?;
+            if scalar_type_from_sql(&scx, &resolved).ok()? != typ.scalar_type {
+                return None;
+            }
+            let data_type = raw_data_type_by_id(&resolved)?;
+            let options = if typ.nullable {
+                vec![]
+            } else {
+                vec![ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::NotNull,
+                }]
+            };
+            Some(ColumnDef {
+                name: Ident::new(name.as_str()).ok()?,
+                data_type,
+                collation: None,
+                options,
+            })
+        })
+        .collect()
+}
+
+/// Spells a resolved data type with item ids, as `create_sql` stores names.
+fn raw_data_type_by_id(data_type: &ResolvedDataType) -> Option<RawDataType> {
+    match data_type {
+        ResolvedDataType::AnonymousList(element_type) => Some(RawDataType::List(Box::new(
+            raw_data_type_by_id(element_type)?,
+        ))),
+        ResolvedDataType::AnonymousMap {
+            key_type,
+            value_type,
+        } => Some(RawDataType::Map {
+            key_type: Box::new(raw_data_type_by_id(key_type)?),
+            value_type: Box::new(raw_data_type_by_id(value_type)?),
+        }),
+        ResolvedDataType::Named {
+            id,
+            full_name,
+            modifiers,
+            ..
+        } => Some(RawDataType::Other {
+            name: RawItemName::Id(id.to_string(), full_name.clone().into(), None),
+            typ_mod: modifiers.clone(),
+        }),
+        ResolvedDataType::Error => None,
+    }
+}
+
+/// Spells `typ` as a raw data type, keeping its modifiers.
+///
+/// Unlike `StatementContext::resolve_type`, this keeps timestamp precision and
+/// spells user-defined types by id.
+fn raw_data_type(
+    catalog: &dyn crate::catalog::SessionCatalog,
+    typ: &SqlScalarType,
+) -> Option<RawDataType> {
+    match typ {
+        SqlScalarType::List {
+            element_type,
+            custom_id: None,
+        } => Some(RawDataType::List(Box::new(raw_data_type(
+            catalog,
+            element_type,
+        )?))),
+        SqlScalarType::Map {
+            value_type,
+            custom_id: None,
+        } => Some(RawDataType::Map {
+            key_type: Box::new(raw_data_type(catalog, &SqlScalarType::String)?),
+            value_type: Box::new(raw_data_type(catalog, value_type)?),
+        }),
+        SqlScalarType::List {
+            custom_id: Some(id),
+            ..
+        }
+        | SqlScalarType::Map {
+            custom_id: Some(id),
+            ..
+        }
+        | SqlScalarType::Record {
+            custom_id: Some(id),
+            ..
+        } => {
+            let full_name = catalog.resolve_full_name(catalog.get_item(id).name());
+            Some(RawDataType::Other {
+                name: RawItemName::Id(id.to_string(), full_name.into(), None),
+                typ_mod: vec![],
+            })
+        }
+        _ => {
+            let ty = mz_pgrepr::Type::from(typ);
+            let schema = if ty.oid() >= mz_pgrepr::oid::FIRST_USER_OID {
+                return None;
+            } else if ty.oid() < mz_pgrepr::oid::FIRST_MATERIALIZE_OID {
+                "pg_catalog"
+            } else {
+                "mz_catalog"
+            };
+            // `pgrepr::Type`'s display is an unqualified, unquoted type name with
+            // its modifiers.
+            mz_sql_parser::parser::parse_data_type(&format!("{schema}.{ty}")).ok()
+        }
+    }
 }
 
 /// Plans the schema a `CREATE MATERIALIZED VIEW` statement declares with column
