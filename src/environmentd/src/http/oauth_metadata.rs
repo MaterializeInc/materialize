@@ -85,10 +85,12 @@ const PUBLISHED_SCHEME: &str = "https";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
 /// Path-suffixed aliases of [`PROTECTED_RESOURCE_METADATA_PATH`] per
-/// RFC 9728 §3.1. Both MCP endpoints serve an identical metadata
-/// document today, so the same handler is mounted at all three paths;
-/// the aliases exist so strict clients that always probe with a path
-/// suffix do not have to fall back to the bare URI.
+/// RFC 9728 §3.1. All MCP endpoints serve an identical metadata
+/// document, so the same handler is mounted at every path; the aliases
+/// exist so strict clients that always probe with a path suffix do not
+/// have to fall back to the bare URI.
+pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_UNIFIED: &str =
+    "/.well-known/oauth-protected-resource/api/mcp";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
     "/.well-known/oauth-protected-resource/api/mcp/agent";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
@@ -613,6 +615,10 @@ mod tests {
     /// probe these before the bare URI.
     #[mz_ore::test]
     fn test_path_suffixed_alias_paths_are_correct() {
+        assert_eq!(
+            PROTECTED_RESOURCE_METADATA_PATH_UNIFIED,
+            "/.well-known/oauth-protected-resource/api/mcp",
+        );
         assert_eq!(
             PROTECTED_RESOURCE_METADATA_PATH_AGENT,
             "/.well-known/oauth-protected-resource/api/mcp/agent",

@@ -7642,6 +7642,7 @@ fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
 
     for suffix in [
         "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/api/mcp",
         "/.well-known/oauth-protected-resource/api/mcp/agent",
         "/.well-known/oauth-protected-resource/api/mcp/developer",
     ] {
@@ -7660,9 +7661,26 @@ fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
         assert_eq!(
             authorization_servers,
             vec!["https://issuer.test.example.com".to_string()],
-            "all three URIs must serve the same metadata document",
+            "every URI must serve the same metadata document",
         );
     }
+
+    // RFC 9728 §3.3: clients reject a document whose `resource` differs from
+    // the URL they built the well-known URI from.
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource/api/mcp",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    let body: serde_json::Value = res.json().unwrap();
+    let resource = body["resource"].as_str().expect("resource is a string");
+    let path = url::Url::parse(resource)
+        .expect("resource is a URL")
+        .path()
+        .to_string();
+    assert_eq!(path, "/api/mcp", "unexpected resource {resource}");
 }
 
 /// An `oidc_issuer` value that does not parse as a URL must NOT be
