@@ -21,7 +21,7 @@ attach a policy to a cluster, and it applies to every role that runs queries on
 that cluster. A cluster can have at most one policy, and many clusters can share
 a policy.
 
-## Background: the query lifecycle
+## Background: What's the lifecycle of a query in Materialize?
 
 Materialize answers a `SELECT` in one of two ways. An indexed read returns
 results directly from an existing index on the cluster, which is cheap. Any
@@ -181,6 +181,15 @@ reads from an index on the cluster, such as point lookups and filters on a
 single indexed object. Joins and aggregations need their own view and index.
 This is the strictest option, and the one the [tutorial](#tutorial-set-up-a-query-policy)
 uses.
+
+```mzsql
+CREATE QUERY POLICY indexed_reads_only (
+  RULES (
+    no_temporary_dataflows (action = 'reject', metric = 'query_plan_includes', value = 'temporary_dataflow'),
+    no_storage_reads (action = 'reject', metric = 'query_plan_includes', value = 'storage_read')
+  )
+);
+```
 
 ### Allow indexed reads, with joins
 
