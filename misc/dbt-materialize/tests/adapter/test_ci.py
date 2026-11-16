@@ -28,6 +28,7 @@ class TestClusterOps:
         project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling_dbt_deploy CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS test_autoscaling_unmanaged CASCADE")
+        project.run_sql('DROP CLUSTER IF EXISTS "Test_Cluster_dbt_deploy" CASCADE')
 
     def test_create_and_drop_cluster(self, project):
         # Test creating a cluster
@@ -70,6 +71,35 @@ class TestClusterOps:
             fetch="one",
         )
         assert result is None, "Cluster was not dropped successfully"
+
+    def test_drop_cluster_with_mixed_case_name(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "create_cluster",
+                "--args",
+                '{"cluster_name": "Test_Cluster", "size": "scale=1,workers=1", "replication_factor": 1, "ignore_existing_objects": true, "force_deploy_suffix": true}',
+            ]
+        )
+        result = project.run_sql(
+            "SELECT name FROM mz_clusters WHERE name = 'Test_Cluster_dbt_deploy'",
+            fetch="one",
+        )
+        assert result is not None, "Cluster was not created successfully"
+
+        run_dbt(
+            [
+                "run-operation",
+                "drop_cluster",
+                "--args",
+                '{"cluster_name": "Test_Cluster_dbt_deploy"}',
+            ]
+        )
+        result = project.run_sql(
+            "SELECT name FROM mz_clusters WHERE name = 'Test_Cluster_dbt_deploy'",
+            fetch="one",
+        )
+        assert result is None, "drop_cluster left the mixed-case cluster behind"
 
     def test_create_existing_cluster(self, project):
         # Create the cluster for the first time

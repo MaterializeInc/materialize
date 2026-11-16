@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Quote the cluster name in `drop_cluster`, matching `create_cluster` and
+  `deploy_cleanup`. A cluster whose name needs quoting, such as one with
+  uppercase letters, was left in place while the operation reported it as
+  dropped.
+
 ## 1.9.13 - 2026-11-10
 
 * Quote names in the hints `deploy_init` prints when the deploying role lacks
