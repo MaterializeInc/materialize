@@ -182,8 +182,8 @@ pub struct ExpressionCacheConfig {
     /// belongs to. All ids of an item map to that same version, which is the one its entries
     /// record, rather than the version the id itself denotes.
     pub current_items: BTreeMap<GlobalId, RelationVersion>,
-    /// Whether to durably remove the entries of previous build versions.
-    pub remove_prior_versions: bool,
+    /// Whether to advance the backing shard to the Persist client's version target.
+    pub upgrade_shard: bool,
     pub compact_shard: bool,
     pub dyncfgs: ConfigSet,
 }
@@ -209,12 +209,14 @@ impl ExpressionCache {
     /// version of the target.
     ///
     /// The apply also invalidates the target's entries, but that alone would not do: it only
-    /// reaches entries under the applying process's build version, while a 0dt deployment in
-    /// its read-only phase caches under its own build version and reads those entries again
-    /// when it reboots after promotion.
+    /// reaches entries under the applying process's build version. Other deployments
+    /// must validate their own entries when reopening.
     ///
-    /// If `remove_prior_versions` is `true`, then the entries of all previous build versions are
-    /// durably removed from the cache.
+    /// Other build namespaces remain intact: another executable or a coexisting
+    /// deployment may still use them. Opening a cache does not authorize their reclamation.
+    ///
+    /// If `upgrade_shard` is `true`, advance the backing shard to the Persist client's
+    /// version target without changing expression-build isolation.
     ///
     /// If `compact_shard` is `true`, then this function will block on fully compacting the backing
     /// persist shard.
@@ -227,7 +229,7 @@ impl ExpressionCache {
             persist,
             shard_id,
             current_items,
-            remove_prior_versions,
+            upgrade_shard,
             compact_shard,
             dyncfgs,
         }: ExpressionCacheConfig,
@@ -246,12 +248,7 @@ impl ExpressionCache {
         const RETRIES: usize = 100;
         for _ in 0..RETRIES {
             match cache
-                .try_open(
-                    &current_items,
-                    remove_prior_versions,
-                    compact_shard,
-                    &dyncfgs,
-                )
+                .try_open(&current_items, upgrade_shard, compact_shard, &dyncfgs)
                 .await
             {
                 Ok((local_expressions, global_expressions)) => {
@@ -267,7 +264,7 @@ impl ExpressionCache {
     async fn try_open(
         &mut self,
         current_items: &BTreeMap<GlobalId, RelationVersion>,
-        remove_prior_versions: bool,
+        upgrade_shard: bool,
         compact_shard: bool,
         dyncfgs: &ConfigSet,
     ) -> Result<
@@ -278,11 +275,11 @@ impl ExpressionCache {
         mz_durable_cache::Error,
     > {
         let (local_expressions, global_expressions, keys_to_remove) =
-            self.select_cached_expressions(current_items, remove_prior_versions, true);
+            self.select_cached_expressions(current_items, true);
         let keys_to_remove: Vec<_> = keys_to_remove.iter().map(|key| (key, None)).collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
 
-        if remove_prior_versions {
+        if upgrade_shard {
             self.durable_cache.upgrade_version().await;
         }
         if compact_shard {
@@ -300,7 +297,6 @@ impl ExpressionCache {
     fn select_cached_expressions(
         &self,
         current_items: &BTreeMap<GlobalId, RelationVersion>,
-        remove_prior_versions: bool,
         include_global: bool,
     ) -> (
         BTreeMap<GlobalId, LocalExpressions>,
@@ -375,9 +371,6 @@ impl ExpressionCache {
                         }
                     }
                 }
-            } else if remove_prior_versions {
-                // Remove expressions from previous build versions.
-                keys_to_remove.push(key.clone());
             }
         }
         (local_expressions, global_expressions, keys_to_remove)
@@ -622,7 +615,7 @@ impl ExpressionCacheHandle {
             written_plan_namespace,
             durable_cache: DurableCache::new(persist, shard_id, "expressions").await,
         };
-        let (local, _, _) = cache.select_cached_expressions(current_items, false, false);
+        let (local, _, _) = cache.select_cached_expressions(current_items, false);
         (Self::spawn(cache), local)
     }
 
@@ -893,7 +886,7 @@ mod tests {
             persist: persist.clone(),
             shard_id: shard,
             current_items: BTreeMap::new(),
-            remove_prior_versions: true,
+            upgrade_shard: true,
             compact_shard: false,
             dyncfgs: mz_persist_client::cfg::all_dyncfgs(ConfigSet::default()),
         })
@@ -977,7 +970,7 @@ mod tests {
                 persist: persist.clone(),
                 shard_id: shard,
                 current_items: BTreeMap::new(),
-                remove_prior_versions: true,
+                upgrade_shard: true,
                 compact_shard: false,
                 dyncfgs: mz_persist_client::cfg::all_dyncfgs(ConfigSet::default()),
             })
@@ -1106,20 +1099,20 @@ mod tests {
         let shard_id = ShardId::new();
 
         let mut current_items = BTreeMap::new();
-        let mut remove_prior_versions = false;
+        let mut upgrade_shard = false;
         // Compacting the shard takes too long, so we leave it to integration tests.
         let compact_shard = false;
         let dyncfgs = &mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
         let spawn = |build_version: &Version,
                      current_items: &BTreeMap<GlobalId, RelationVersion>,
-                     remove_prior_versions: bool| {
+                     upgrade_shard: bool| {
             ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                 build_version: build_version.clone(),
                 written_plan_namespace: build_version.to_string(),
                 persist: persist.clone(),
                 shard_id,
                 current_items: current_items.clone(),
-                remove_prior_versions,
+                upgrade_shard,
                 compact_shard,
                 dyncfgs: dyncfgs.clone(),
             })
@@ -1130,7 +1123,7 @@ mod tests {
         let (mut local_exps, mut global_exps) = {
             // Open a new empty cache.
             let (cache, local_exprs, global_exprs) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(local_exprs, BTreeMap::new(), "new cache should be empty");
             assert_eq!(global_exprs, BTreeMap::new(), "new cache should be empty");
             assert_eq!(cache.get_global(GlobalId::User(next_id)).await, None);
@@ -1168,7 +1161,7 @@ mod tests {
         {
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, local_exps,
                 "local expression with non-matching optimizer features should be removed during reconciliation"
@@ -1188,7 +1181,7 @@ mod tests {
 
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, local_exps,
                 "dropped local objects should be removed during reconciliation"
@@ -1208,7 +1201,7 @@ mod tests {
 
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, local_exps,
                 "local expressions of an earlier item version should be removed during reconciliation"
@@ -1221,7 +1214,7 @@ mod tests {
             // The removal is durable: restoring the item version does not bring the entries back.
             current_items.insert(id_to_bump, RelationVersion::root());
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, local_exps,
                 "local expressions of an earlier item version should be durably removed"
@@ -1255,7 +1248,7 @@ mod tests {
 
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, local_exps,
                 "dropped object dependencies should NOT remove local expressions"
@@ -1269,7 +1262,7 @@ mod tests {
         let (new_gen_local_exps, new_gen_global_exps) = {
             // Open the cache at a new build version.
             let (cache, local_entries, global_entries) =
-                spawn(&second_build_version, &current_items, remove_prior_versions).await;
+                spawn(&second_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries,
                 BTreeMap::new(),
@@ -1314,7 +1307,7 @@ mod tests {
         {
             // Re-open the cache at the first build version.
             let (cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             for id in new_gen_global_exps.keys() {
                 assert_eq!(cache.get_global(*id).await, None);
             }
@@ -1329,10 +1322,10 @@ mod tests {
         }
 
         {
-            // Open the cache at a new build version and clear previous build versions.
-            remove_prior_versions = true;
+            // Upgrading the Persist shard must not evict another build namespace.
+            upgrade_shard = true;
             let (cache, local_entries, global_entries) =
-                spawn(&second_build_version, &current_items, remove_prior_versions).await;
+                spawn(&second_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
                 local_entries, new_gen_local_exps,
                 "new build version local expressions should be persisted"
@@ -1350,17 +1343,55 @@ mod tests {
         {
             // Re-open the cache at the first build version.
             let (_cache, local_entries, global_entries) =
-                spawn(&first_build_version, &current_items, remove_prior_versions).await;
+                spawn(&first_build_version, &current_items, upgrade_shard).await;
             assert_eq!(
-                local_entries,
-                BTreeMap::new(),
-                "Previous build version local expressions should be cleared"
+                local_entries, local_exps,
+                "Previous build version local expressions must survive shard upgrade"
             );
             assert_eq!(
-                global_entries,
-                BTreeMap::new(),
-                "Previous build version global expressions should be cleared"
+                global_entries, global_exps,
+                "Previous build version global expressions must survive shard upgrade"
             );
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn executable_namespaces_survive_each_others_startup() {
+        let persist = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+        let id = GlobalId::System(1);
+        let builds = [
+            Version::parse("0.1.0-dev.0+adapter").unwrap(),
+            Version::parse("0.1.0-dev.0+controller").unwrap(),
+        ];
+        let expressions = [gen_local_expressions(), gen_local_expressions()];
+        let config = |build: &Version| ExpressionCacheConfig {
+            build_version: build.clone(),
+            written_plan_namespace: "shared-written-plans".into(),
+            persist: persist.clone(),
+            shard_id,
+            current_items: BTreeMap::from([(id, RelationVersion::root())]),
+            upgrade_shard: true,
+            compact_shard: false,
+            dyncfgs: mz_persist_client::cfg::all_dyncfgs(ConfigSet::default()),
+        };
+
+        // Both executables cache the same builtin ID, but neither can consume
+        // the other's optimized expression or discard its namespace on open.
+        for (build, expression) in builds.iter().zip(&expressions) {
+            let (cache, local, global) =
+                ExpressionCacheHandle::spawn_expression_cache(config(build)).await;
+            assert!(local.is_empty());
+            assert!(global.is_empty());
+            cache
+                .update(vec![(id, expression.clone())], Vec::new(), BTreeSet::new())
+                .await;
+        }
+        for (build, expression) in builds.iter().zip(&expressions) {
+            let (_cache, local, global) =
+                ExpressionCacheHandle::spawn_expression_cache(config(build)).await;
+            assert_eq!(local, BTreeMap::from([(id, expression.clone())]));
+            assert!(global.is_empty());
         }
     }
 

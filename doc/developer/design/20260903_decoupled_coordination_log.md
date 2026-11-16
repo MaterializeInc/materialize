@@ -2,17 +2,23 @@
 
 ## Next action
 
-Collect KafkaSources repeat `aj-native-parallel-bf20a714` on the retirement repair.
-The first run, `aj-native-parallel-748e9f12`, hit the unchanged 1800s guard at
-action 349 after resuming SQL following promotion. It did not pass the workflow.
-The repeat uses identical binaries, workload, guards and resource limits.
-The repair retains retirement-relevant raw rows through the existing listener,
-recomputes cleanup after catch-up and discards preparation when the bounded request ends. It preserves
-unknown fields, full-prefix validation and atomic admission plus cleanup.
-Targeted catalog, oracle and HTTP tests, all-target checks and the debug build
-passed. Independent review found no remaining safety or public-contract issue.
-Nine retirements completed, including recovery from two HTTP contention responses.
-This verifies bounded lifecycle progress, not completion of the full workflow.
+Collect cache-repair repeat `aj-native-parallel-6de307a2` and compare startup
+phases with the saved runs. The first post-fix run reached action 409 but hit
+the unchanged guard during generation-10 readiness. The full workflow remains
+incomplete. Workload and limits are unchanged. The new regression reproduces
+cross-executable eviction on the old code and passes with the repair. Targeted
+checks and the debug build passed. Independent review found no blocking issue.
+Exact-build validation and Persist-format upgrade behavior are unchanged. Obsolete build
+namespaces remain for later reclamation. Matched full-restart adapter initialization
+fell from 50–57s to 9–14s, and later candidate catalog-open fell from 10–12s to
+1.2–1.4s. Readiness still consumed about ten minutes across nine deployments.
+This is a phase-specific improvement, not full workflow acceptance.
+
+The retirement repair is pushed. Both Kafka runs completed nine promotions and
+retirements, recovering HTTP contention through existing retries, but exhausted
+the unchanged 1800s guard at actions 349 and 345. Neither passed the full workflow.
+Startup and readiness dominate measured elapsed time. Do not raise guards,
+resource caps or retry limits.
 
 PostgresCdc passed its full default workload and final validation with the capture
 resource fix, within the original limits and deadline. The driver now closes
@@ -111,7 +117,9 @@ and eight CPUs in aggregate, with four CPUs and 6 GiB per deployment. Builds use
 one job, 32 GiB and four CPUs on the worker. Do not overlap builds and runtimes,
 and keep heavy work off the local VM. Restarting the worker or extending its
 expiry within these limits needs no approval. Its shutdown timer is set for
-2026-11-16 at 23:30 UTC. KafkaSources is the only live test run.
+2026-11-16 at 23:30 UTC. Only KafkaSources project
+`aj-native-parallel-6de307a2` is active. Its runner is
+`native_zippy_expression_cache.py`.
 
 Evidence lives in
 `~/.local/share/aj/m3-evidence/native-only/upsert-oom-investigation/`. The
@@ -137,7 +145,11 @@ The timed-out run's complete evidence is saved locally in
 `retirement-kafka-phase-analysis.md` documents successful retirement receipts,
 readiness and startup time, and a recovered generation-6 storage-initialization
 `CatalogOutOfSync` exit. No panic or OOM was observed. The startup exit remains
-an open defect, separate from retirement.
+an open defect, separate from retirement. The unchanged repeat is archived in
+`zippy-retirement-KafkaSources-repeat-evidence.tar.gz` and analyzed in
+`retirement-kafka-repeat-analysis.md`. It records three retired predecessor
+controllers panicking on confirmed retirement. These are not new-generation
+startup failures, but clean retirement shutdown remains unresolved.
 Capture regression evidence is in `capture-fd-regression-before.log` and
 `capture-fd-regression-after.log`. Passing Postgres evidence, harness provenance
 and worker checks are in `zippy-capture-fixed-PostgresCdc-evidence.tar.gz`.
@@ -146,8 +158,13 @@ OOM events.
 
 `startup-expression-cache-source-analysis.md` identifies cross-executable cache
 eviction at controller startup. It records source and archived timing evidence,
-not a measured repair. Keep that change behind zippy completion, preserve exact-build
-cache validation and separate eviction from the existing shard-format upgrade call.
+not a measured repair. The repair preserves exact-build validation
+and the existing shard-format upgrade call. Its guarded red/green build driver is
+`build_expression_cache.py`. Successful checks, source hashes and binary receipts
+are preserved locally in `expression-cache-build-evidence.tar.gz`. The first
+post-fix runtime archive is `zippy-expression-cache-KafkaSources-evidence.tar.gz`.
+`expression-cache-kafka-phase-analysis.md` gives matched before/after phases,
+remaining costs and verification limits.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`
