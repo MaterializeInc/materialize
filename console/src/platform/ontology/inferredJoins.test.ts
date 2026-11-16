@@ -353,6 +353,45 @@ describe("columns views pass through", () => {
     expect(joins(graph.edges)).toContain("inferred_join: u5.cust -> u2.id");
   });
 
+  it("gives a passed key only its direct reference, not the closure", () => {
+    // top_orgs.cust passes order_summary.id, a key that itself passes orders.id.
+    const graph = build({
+      relations: [ORDERS, CUSTOMERS, SUMMARY, TOP_ORGS],
+      columns: new Map([
+        ["u1", [column("id")]],
+        ["u2", [column("id")]],
+        ["u3", [column("id")]],
+        ["u5", [column("id")]],
+      ]),
+      viewJoins: new Map([
+        [
+          "u3",
+          {
+            pairs: [],
+            usingJoins: [],
+            outputs: [
+              { column: "id", source: { objectId: "u1", column: "id" } },
+            ],
+          },
+        ],
+        [
+          "u5",
+          {
+            pairs: [],
+            usingJoins: [],
+            outputs: [
+              { column: "id", source: { objectId: "u3", column: "id" } },
+            ],
+          },
+        ],
+      ]),
+    });
+    expect(joins(graph.edges)).toEqual([
+      "inferred_join: u3.id -> u1.id",
+      "inferred_join: u5.id -> u3.id",
+    ]);
+  });
+
   it("ignores passed-through columns that are neither key nor reference", () => {
     const graph = build({
       viewJoins: new Map([

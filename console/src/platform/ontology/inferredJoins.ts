@@ -177,8 +177,12 @@ export function inferJoinEdges(input: InferenceInput): OntologyEdge[] {
         const from = nodes.get(source.objectId);
         if (!from) continue;
         const passed = `${view.label}.${column} is ${from.label}.${source.column}, passed through.`;
+        // A passed key references its source directly. Propagating through
+        // it too would add every key it reaches transitively, which grows
+        // with the square of a view stack's depth.
         if (isKey(source)) {
           changed = add(output, source, true, viewId, passed) || changed;
+          continue;
         }
         for (const target of references.get(refKey(source)) ?? []) {
           changed = add(output, target, true, viewId, passed) || changed;
