@@ -457,7 +457,10 @@ impl BatchBuilderConfig {
 
         BatchBuilderConfig {
             writer_key,
-            blob_target_size: BLOB_TARGET_SIZE.get(value).clamp(1, usize::MAX),
+            blob_target_size: value
+                .blob_target_size_override
+                .unwrap_or_else(|| BLOB_TARGET_SIZE.get(value))
+                .clamp(1, usize::MAX),
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
             batch_builder_max_outstanding_parts: BATCH_BUILDER_MAX_OUTSTANDING_PARTS.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),

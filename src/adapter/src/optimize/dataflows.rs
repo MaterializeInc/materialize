@@ -128,6 +128,9 @@ pub struct DataflowBuilder<'a> {
     pub replan: Option<GlobalId>,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
+    /// Whether to read a view through its materialized index, if it has one,
+    /// instead of computing the view. See [`Self::read_views_from_materialized_indexes`].
+    view_materialized_indexes: bool,
 }
 
 /// Behavior to prepare relation and scalar expressions for use in a dataflow.
@@ -288,7 +291,45 @@ impl<'a> DataflowBuilder<'a> {
             compute,
             replan: None,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            view_materialized_indexes: false,
         }
+    }
+
+    /// Reads each imported view that has a materialized index from that index's
+    /// shard, which holds the view's computed result, instead of computing the
+    /// view from its inputs.
+    ///
+    /// NOTE(poc): must stay off for the dataflow that maintains a materialized
+    /// index, which would otherwise read its own output.
+    pub fn read_views_from_materialized_indexes(mut self) -> Self {
+        self.view_materialized_indexes = true;
+        self
+    }
+
+    /// The materialized index to read view `id` from, with its relation type.
+    fn view_materialized_index(
+        &self,
+        id: &GlobalId,
+    ) -> Option<(
+        GlobalId,
+        mz_sql::plan::MaterializedIndexDesc,
+        ReprRelationType,
+    )> {
+        if !self.view_materialized_indexes {
+            return None;
+        }
+        let entry = self.catalog.get_entry(id);
+        entry.used_by().iter().find_map(|item_id| {
+            let mi_entry = self.catalog.get_entry_by_item_id(item_id);
+            let mv = mi_entry.materialized_view()?;
+            let mi = mv.materialized_index.as_ref()?;
+            if mi.on != *id {
+                return None;
+            }
+            let mi_id = mv.global_id_writes();
+            let typ = ReprRelationType::from(mv.desc_for(&mi_id).typ());
+            Some((mi_id, mi.clone(), typ))
+        })
     }
 
     // TODO(aalexandrov): strictly speaking it should be better if we can make
@@ -353,8 +394,23 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.locally_optimized_expr.as_ref();
-                        self.import_view_into_dataflow(id, expr, dataflow, features)?;
+                        if let Some((mi_id, mi, mi_typ)) = self.view_materialized_index(id) {
+                            self.import_into_dataflow(&mi_id, dataflow, features)?;
+                            let arity = view.desc.arity();
+                            let mut position = vec![0; arity];
+                            for (stored, column) in mi.stored_columns(arity).into_iter().enumerate()
+                            {
+                                position[column] = stored;
+                            }
+                            let expr = MirRelationExpr::global_get(mi_id, mi_typ).project(position);
+                            dataflow.insert_plan(
+                                *id,
+                                OptimizedMirRelationExpr::declare_optimized(expr),
+                            );
+                        } else {
+                            let expr = view.locally_optimized_expr.as_ref();
+                            self.import_view_into_dataflow(id, expr, dataflow, features)?;
+                        }
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
                         // Can't read from replacements, use the view definition directly.

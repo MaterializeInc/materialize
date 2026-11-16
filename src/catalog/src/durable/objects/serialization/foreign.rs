@@ -229,7 +229,11 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             CatalogItemType::Source => proto::CatalogItemType::Source,
             CatalogItemType::Sink => proto::CatalogItemType::Sink,
             CatalogItemType::View => proto::CatalogItemType::View,
-            CatalogItemType::MaterializedView => proto::CatalogItemType::MaterializedView,
+            // NOTE(poc): only system object mappings serialize item types, and no system object
+            // is a materialized index. A real version adds a proto variant with a migration.
+            CatalogItemType::MaterializedView | CatalogItemType::MaterializedIndex => {
+                proto::CatalogItemType::MaterializedView
+            }
             CatalogItemType::Index => proto::CatalogItemType::Index,
             CatalogItemType::Type => proto::CatalogItemType::Type,
             CatalogItemType::Func => proto::CatalogItemType::Func,

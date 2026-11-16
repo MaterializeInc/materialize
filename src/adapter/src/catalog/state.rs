@@ -1844,6 +1844,8 @@ impl CatalogState {
                     cluster_id: materialized_view.cluster_id,
                     target_replica: materialized_view.target_replica,
                     non_null_assertions: materialized_view.non_null_assertions,
+                    partition_by: materialized_view.partition_by,
+                    materialized_index: materialized_view.materialized_index,
                     custom_logical_compaction_window: materialized_view.compaction_window,
                     refresh_schedule: materialized_view.refresh_schedule,
                     initial_as_of,
@@ -2263,6 +2265,7 @@ impl CatalogState {
             | CatalogItemType::MetricSink
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
+            | CatalogItemType::MaterializedIndex
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection => schema.items[builtin.name()],

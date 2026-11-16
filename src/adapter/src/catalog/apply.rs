@@ -2391,6 +2391,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
+                | CatalogItemType::MaterializedIndex
                 | CatalogItemType::Index
                 | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),

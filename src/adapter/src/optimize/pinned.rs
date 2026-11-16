@@ -77,6 +77,7 @@ impl InstantiationContext for CatalogInstantiationContext<'_> {
         Some(MaterializedViewInfo {
             desc: mv.desc.latest(),
             non_null_assertions: mv.non_null_assertions.clone(),
+            partition_by: mv.partition_by,
             refresh_schedule: mv.refresh_schedule.clone(),
         })
     }

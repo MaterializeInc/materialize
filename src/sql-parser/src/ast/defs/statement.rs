@@ -2036,11 +2036,20 @@ pub struct CreateIndexStatement<T: AstInfo> {
     pub key_parts: Option<Vec<Expr<T>>>,
     pub with_options: Vec<IndexOption<T>>,
     pub if_not_exists: bool,
+    /// `CREATE MATERIALIZED INDEX`: the index is stored in persist, sorted by
+    /// its key, rather than arranged in memory.
+    pub materialized: bool,
+    /// Internal `AS OF` of a materialized index's storage collection, recorded
+    /// like [`CreateMaterializedViewStatement::as_of`].
+    pub as_of: Option<u64>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE ");
+        if self.materialized {
+            f.write_str("MATERIALIZED ");
+        }
         if self.key_parts.is_none() {
             f.write_str("DEFAULT ");
         }
@@ -2080,6 +2089,10 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
+        }
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
         }
     }
 }

@@ -454,6 +454,7 @@ pub fn create_fast_path_plan(
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
     persist_fast_path_order: bool,
+    persist_sorted_prefix: &dyn Fn(GlobalId) -> Option<usize>,
 ) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -616,10 +617,17 @@ pub fn create_fast_path_plan(
                         false
                     };
 
+                    // NOTE(poc): a shard sorted by `PARTITION BY` prunes parts by any
+                    // literal on its leading columns, so the peek reads about one part per
+                    // run regardless of how many rows match.
+                    let sorted_constraint =
+                        literal_constraint.is_some() && persist_sorted_prefix(*get_id).is_some();
+
                     // We can generate a persist peek when:
                     // - We have a literal constraint that includes an entire key (so we'll return at most one value)
+                    // - We have a literal constraint on the sort key of a sorted shard
                     // - We can return the first N key values (no filters, small limit, consistent order)
-                    if key_constraint || (filters.is_empty() && finish_ok) {
+                    if key_constraint || sorted_constraint || (filters.is_empty() && finish_ok) {
                         return Ok(Some(FastPathPlan::PeekPersist(
                             *get_id,
                             literal_constraint,

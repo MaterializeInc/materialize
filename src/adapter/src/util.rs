@@ -223,6 +223,8 @@ pub fn index_sql(
                 .collect(),
         ),
         with_options: vec![],
+        materialized: false,
+        as_of: None,
         if_not_exists: false,
     }
     .to_ast_string_stable()

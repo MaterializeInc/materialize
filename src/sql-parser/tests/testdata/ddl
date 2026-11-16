@@ -1220,70 +1220,70 @@ CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR '1000 hours')
 ----
 CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR '1000 hours')
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1000 hours"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1000 hours"))) }], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: Name(UnresolvedItemName([Ident("ascii")])), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: Name(UnresolvedItemName([Ident("ascii")])), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("no_parentheses")])), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("no_parentheses")])), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER [u1] ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER [u1] ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("u1")), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("u1")), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
 ----
 CREATE DEFAULT INDEX ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 ----
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: true })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: true, materialized: false, as_of: None })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
@@ -1304,7 +1304,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
@@ -3966,3 +3966,24 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
+
+parse-statement
+CREATE MATERIALIZED INDEX foo IN CLUSTER c ON t (a, b)
+----
+CREATE MATERIALIZED INDEX foo IN CLUSTER c ON t (a, b)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("c"))), on_name: Name(UnresolvedItemName([Ident("t")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false, materialized: true, as_of: None })
+
+parse-statement
+CREATE MATERIALIZED INDEX ON t (a) AS OF 42
+----
+CREATE MATERIALIZED INDEX ON t (a) AS OF 42
+=>
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("t")])), key_parts: Some([Identifier([Ident("a")])]), with_options: [], if_not_exists: false, materialized: true, as_of: Some(42) })
+
+parse-statement
+CREATE MATERIALIZED DEFAULT INDEX ON t
+----
+error: Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found MATERIALIZED
+CREATE MATERIALIZED DEFAULT INDEX ON t
+       ^

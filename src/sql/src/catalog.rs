@@ -973,6 +973,10 @@ pub enum CatalogItemType {
     Connection,
     /// A metric sink.
     MetricSink,
+    /// A materialized index: an index stored in persist, sorted by its key.
+    /// Users see an index. Internally it is maintained like a materialized
+    /// view, with a storage collection written by a compute sink.
+    MaterializedIndex,
 }
 
 impl CatalogItemType {
@@ -1001,6 +1005,7 @@ impl CatalogItemType {
             CatalogItemType::View => true,
             CatalogItemType::MaterializedView => true,
             CatalogItemType::Index => true,
+            CatalogItemType::MaterializedIndex => true,
             CatalogItemType::Type => true,
             CatalogItemType::Sink => false,
             CatalogItemType::Func => false,
@@ -1025,6 +1030,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::MetricSink => f.write_str("metric sink"),
+            CatalogItemType::MaterializedIndex => f.write_str("materialized index"),
         }
     }
 }
@@ -1037,7 +1043,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Sink => ObjectType::Sink,
             CatalogItemType::View => ObjectType::View,
             CatalogItemType::MaterializedView => ObjectType::MaterializedView,
-            CatalogItemType::Index => ObjectType::Index,
+            CatalogItemType::Index | CatalogItemType::MaterializedIndex => ObjectType::Index,
             CatalogItemType::Type => ObjectType::Type,
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
@@ -1054,7 +1060,9 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Source => mz_audit_log::ObjectType::Source,
             CatalogItemType::View => mz_audit_log::ObjectType::View,
             CatalogItemType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
-            CatalogItemType::Index => mz_audit_log::ObjectType::Index,
+            CatalogItemType::Index | CatalogItemType::MaterializedIndex => {
+                mz_audit_log::ObjectType::Index
+            }
             CatalogItemType::Type => mz_audit_log::ObjectType::Type,
             CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,

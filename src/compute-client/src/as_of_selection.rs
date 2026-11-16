@@ -1094,6 +1094,7 @@ mod tests {
                         monotonic: Default::default(),
                         with_snapshot: true,
                         upper: Default::default(),
+                        lookup: None,
                     },
                 )
             })
@@ -1138,6 +1139,7 @@ mod tests {
                         MaterializedViewSinkConnection {
                             value_desc: RelationDesc::empty(),
                             storage_metadata: Default::default(),
+                            partition_by: None,
                         },
                     ),
                     with_snapshot: Default::default(),

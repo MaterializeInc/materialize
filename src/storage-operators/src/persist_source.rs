@@ -202,6 +202,63 @@ where
     CB::Container: Clone,
     X: PlanExpr,
 {
+    persist_source_with_part_filter::<E, CB, X>(
+        scope,
+        source_id,
+        persist_clients,
+        txns_ctx,
+        metadata,
+        read_schema,
+        as_of,
+        snapshot_mode,
+        until,
+        map_filter_project,
+        max_inflight_bytes,
+        start_signal,
+        error_handler,
+        None,
+        None,
+    )
+}
+
+/// A predicate on a part's stats that can rule out fetching it. Parts that may hold errors are
+/// fetched regardless.
+pub type PartFilter = Box<dyn for<'a> FnMut(&RelationPartStats<'a>) -> bool>;
+
+/// A predicate on a decoded row, in the read schema's column order, that drops it before the MFP.
+pub type RowFilter = Box<dyn FnMut(&Row) -> bool>;
+
+/// Like [`persist_source`], but also skips parts for which `part_filter` returns false.
+///
+/// NOTE(poc): the part filter can depend on state that becomes known only once `start_signal`
+/// resolves, because the shard source lists parts only after it does.
+pub fn persist_source_with_part_filter<'scope, E, CB, X>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
+    source_id: GlobalId,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: &TxnsContext,
+    metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
+    as_of: Option<Antichain<Timestamp>>,
+    snapshot_mode: SnapshotMode,
+    until: Antichain<Timestamp>,
+    map_filter_project: Option<&mut MfpPlan<X>>,
+    max_inflight_bytes: Option<usize>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
+    error_handler: ErrorHandler,
+    part_filter: Option<PartFilter>,
+    row_filter: Option<RowFilter>,
+) -> (
+    Stream<'scope, mz_repr::Timestamp, CB::Container>,
+    StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
+    Vec<PressOnDropButton>,
+)
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    CB: ContainerBuilder + PushInto<(Row, mz_repr::Timestamp, Diff)>,
+    CB::Container: Clone,
+    X: PlanExpr,
+{
     let mut tokens = vec![];
     let name = source_id.to_string();
 
@@ -261,6 +318,7 @@ where
                 subscribe_sleep,
                 start_signal,
                 error_handler,
+                part_filter,
             );
             tokens.extend(source_tokens);
 
@@ -271,6 +329,7 @@ where
                 until.clone(),
                 map_filter_project,
                 |time| time.0,
+                row_filter,
             );
 
             // The handle's frontier is the meet of what its clones report, so both streams
@@ -375,6 +434,7 @@ where
         listen_sleep,
         start_signal,
         error_handler,
+        None,
     );
     let (oks, errs) = decode_and_mfp::<E, RefinedTime, RowVecBuilder<RefinedTime>, X>(
         cfg,
@@ -383,6 +443,7 @@ where
         until,
         map_filter_project,
         |time| time,
+        None,
     );
     (oks, errs, token)
 }
@@ -407,6 +468,7 @@ fn fetch_parts<'g, 'outer, X: PlanExpr>(
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
+    mut part_filter: Option<PartFilter>,
 ) -> (
     PersistConfig,
     StreamVec<'g, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
@@ -478,12 +540,24 @@ where
 
             let time_range =
                 ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
-            if let Some(plan) = &filter_plan {
+            let result = if let Some(plan) = &filter_plan {
                 let metrics = &metrics.pushdown.part_stats;
                 let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
                 filter_result(&read_desc, time_range, stats, plan)
             } else {
                 FilterResult::Keep
+            };
+            match (result, &mut part_filter) {
+                (result @ FilterResult::Discard, _) | (result, None) => result,
+                (result, Some(part_filter)) => {
+                    let metrics = &metrics.pushdown.part_stats;
+                    let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
+                    if stats.err_count().is_none_or(|errs| errs > 0) || part_filter(&stats) {
+                        result
+                    } else {
+                        FilterResult::Skip
+                    }
+                }
             }
         },
         listen_sleep,
@@ -564,6 +638,7 @@ fn decode_and_mfp<'scope, E, RT, CB, X>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan<X>>,
     record_time: fn(RefinedTime) -> RT,
+    mut row_filter: Option<RowFilter>,
 ) -> (
     Stream<'scope, RefinedTime, CB::Container>,
     StreamVec<'scope, RefinedTime, (E, RT, Diff)>,
@@ -639,6 +714,7 @@ where
                     &name,
                     &until,
                     map_filter_project.as_ref(),
+                    row_filter.as_mut(),
                     &mut datum_vec,
                     &mut row_builder,
                     &mut work,
@@ -711,6 +787,7 @@ fn decode_part<E, F, X>(
     name: &str,
     until: &Antichain<Timestamp>,
     map_filter_project: Option<&MfpPlan<X>>,
+    mut row_filter: Option<&mut RowFilter>,
     datum_vec: &mut DatumVec,
     row_builder: &mut Row,
     work: &mut usize,
@@ -732,6 +809,10 @@ where
             continue;
         }
         match (key, val) {
+            (SourceData(Ok(row)), ()) if row_filter.as_mut().is_some_and(|keep| !keep(&row)) => {
+                *work += 1;
+                row_buf.replace(SourceData(Ok(row)));
+            }
             (SourceData(Ok(row)), ()) => {
                 if let Some(mfp) = map_filter_project {
                     // We originally accounted work as the number of outputs, to give downstream

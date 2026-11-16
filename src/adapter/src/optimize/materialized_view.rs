@@ -69,6 +69,8 @@ pub struct Optimizer {
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
     /// statement.
     non_null_assertions: Vec<usize>,
+    /// Number of leading columns named by `PARTITION BY`, if set.
+    partition_by: Option<usize>,
     /// Refresh schedule, e.g., `REFRESH EVERY '1 day'`
     refresh_schedule: Option<RefreshSchedule>,
     /// A human-readable name exposed internally (useful for debugging).
@@ -89,6 +91,7 @@ impl Optimizer {
         view_id: GlobalId,
         column_names: Vec<ColumnName>,
         non_null_assertions: Vec<usize>,
+        partition_by: Option<usize>,
         refresh_schedule: Option<RefreshSchedule>,
         debug_name: String,
         config: OptimizerConfig,
@@ -102,6 +105,7 @@ impl Optimizer {
             view_id,
             column_names,
             non_null_assertions,
+            partition_by,
             refresh_schedule,
             debug_name,
             config,
@@ -254,6 +258,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
                 value_desc: rel_desc,
                 storage_metadata: (),
+                partition_by: self.partition_by,
             }),
             with_snapshot: true,
             up_to: Antichain::default(),

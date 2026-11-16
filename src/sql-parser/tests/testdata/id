@@ -117,7 +117,7 @@ CREATE INDEX i IN CLUSTER ["row"] ON t (a)
 ----
 CREATE INDEX i IN CLUSTER ["row"] ON t (a)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("i")), in_cluster: Some(Resolved("row")), on_name: Name(UnresolvedItemName([Ident("t")])), key_parts: Some([Identifier([Ident("a")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("i")), in_cluster: Some(Resolved("row")), on_name: Name(UnresolvedItemName([Ident("t")])), key_parts: Some([Identifier([Ident("a")])]), with_options: [], if_not_exists: false, materialized: false, as_of: None })
 
 parse-statement
 COMMENT ON NETWORK POLICY ["row"] IS 'x'

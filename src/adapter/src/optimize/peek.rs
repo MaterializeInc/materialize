@@ -37,6 +37,7 @@ use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
+use crate::optimize::materialized_index::MaterializedIndexRoutes;
 use crate::optimize::{
     MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
     optimize_mir_local, trace_plan,
@@ -61,9 +62,26 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// Relations to read through a materialized index, chosen before the
+    /// query's timestamp.
+    materialized_index_routes: MaterializedIndexRoutes,
+    /// Transient ids for the objects lookup joins add.
+    lookup_ids: Vec<GlobalId>,
 }
 
 impl Optimizer {
+    /// Reads the given relations through their materialized indexes. The
+    /// caller must have chosen the timestamp with these routes applied.
+    pub fn with_materialized_index_routes(
+        mut self,
+        routes: MaterializedIndexRoutes,
+        lookup_ids: Vec<GlobalId>,
+    ) -> Self {
+        self.materialized_index_routes = routes;
+        self.lookup_ids = lookup_ids;
+        self
+    }
+
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
@@ -83,6 +101,8 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            materialized_index_routes: Default::default(),
+            lookup_ids: Vec::new(),
         }
     }
 
@@ -186,7 +206,11 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(&mut self.metrics),
             Some(self.select_id),
         );
-        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let mut mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        crate::optimize::materialized_index::apply_routes(
+            &mut mir_expr,
+            &self.materialized_index_routes,
+        );
         let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
@@ -336,12 +360,20 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
         // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
         // ahead of us.)
+        let catalog = Arc::clone(&self.catalog);
+        let sorted_prefix = move |id: GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(&id)
+                .and_then(|entry| entry.materialized_view())
+                .and_then(|mv| mv.partition_by)
+        };
         let use_fast_path_optimizer = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            &sorted_prefix,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
             Err(OptimizerError::InternalUnsafeMfpPlan(_)) => {
@@ -377,6 +409,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
             self.config.persist_fast_path_order,
+            &sorted_prefix,
         )? {
             Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {
@@ -404,6 +437,12 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 soft_assert_or_log!(
                     !use_fast_path_optimizer || self.config.no_fast_path,
                     "The fast_path_optimizer shouldn't make a fast path plan slow path."
+                );
+
+                crate::optimize::materialized_index::plan_lookup_join(
+                    &mut df_desc,
+                    &self.materialized_index_routes,
+                    &mut self.lookup_ids,
                 );
 
                 // Ensure all expressions are normalized before finalizing.

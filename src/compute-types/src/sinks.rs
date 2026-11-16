@@ -121,4 +121,7 @@ pub struct MaterializedViewSinkConnection<S> {
     pub value_desc: RelationDesc,
     /// TODO(database-issues#7533): Add documentation.
     pub storage_metadata: S,
+    /// Number of leading columns the shard is sorted by (`PARTITION BY`).
+    /// When set, the sink writes sorted runs so readers can prune parts by key.
+    pub partition_by: Option<usize>,
 }
