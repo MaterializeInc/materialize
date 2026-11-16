@@ -64,7 +64,7 @@ pub struct PendingSourceStatement {
 pub struct PendingDdlCommit {
     context: DdlCommitContext,
     commands: Vec<catalog::command::CatalogCommand>,
-    responses: BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    responses: BTreeMap<usize, catalog::CommandResponse>,
 }
 
 #[derive(Debug)]
@@ -193,6 +193,68 @@ impl Coordinator {
         );
         ctx.session_mut().retain_catalog_result(command);
         ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
+    pub(super) async fn sequence_create_connection_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let mut command = catalog::command::connection::ConnectionStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
+        let compiled = match command.compile_create(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        let plan = mz_sql::plan::Plan::CreateConnection(compiled.plan);
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let id = match self.allocate_user_id().await {
+            Ok(id) => id,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        command.allocate_create(id);
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            crate::ExecuteResponse::CreatedConnection,
+            vec![catalog::command::CatalogCommand::CreateConnection(
+                Arc::new(command),
+            )],
+        ))
+        .await;
+    }
+
+    pub(super) async fn sequence_alter_connection_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let command = catalog::command::connection::ConnectionStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
+        let compiled = match command.compile_alter(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &compiled.plan) {
+            return ctx.retire(Err(error));
+        }
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::Connection),
+            vec![catalog::command::CatalogCommand::AlterConnection(Arc::new(
+                command,
+            ))],
+        ))
+        .await;
     }
 
     pub(super) async fn sequence_source_statement(
@@ -332,6 +394,14 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
+        if let catalog::command::CatalogCommand::CreateConnection(command) = command {
+            if let Some(name) = command.skipped_name() {
+                session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
+                    name: name.to_owned(),
+                    ty: "connection",
+                });
+            }
+        }
         let catalog::command::CatalogCommand::Source(command) = command else {
             return;
         };
@@ -669,10 +739,50 @@ impl Coordinator {
                             }
                             catalog::command::CatalogCommand::Rename(_)
                             | catalog::command::CatalogCommand::CatalogResult(_)
-                            | catalog::command::CatalogCommand::Description(_) => {
-                                unreachable!("renames do not allocate IDs");
+                            | catalog::command::CatalogCommand::Description(_)
+                            | catalog::command::CatalogCommand::AlterConnection(_)
+                            | catalog::command::CatalogCommand::CreateConnection(_) => {
+                                unreachable!("this command does not allocate IDs");
                             }
                         }
+                    }
+                    catalog::CommandWork::ConnectionSecret(request) => {
+                        self.release_ddl_lock(guard);
+                        let controller = Arc::clone(&self.secrets_controller);
+                        let secrets = self.caching_secrets_reader.clone();
+                        let tx = self.internal_cmd_tx.clone();
+                        let otel_ctx = OpenTelemetryContext::obtain();
+                        task::spawn(|| "ddl_connection_secret", async move {
+                            let response = request.execute(controller.as_ref(), &secrets).await;
+                            pending.responses.insert(
+                                index, catalog::CommandResponse::ConnectionSecret(response),
+                            );
+                            if let Err(error) =
+                                tx.send(Message::DdlCommandsReady { pending, otel_ctx })
+                            {
+                                warn!("internal_cmd_rx dropped before connection secret completed: {error:?}");
+                            }
+                        }.instrument(tracing::Span::current()));
+                        return;
+                    }
+                    catalog::CommandWork::Connection(request) => {
+                        self.release_ddl_lock(guard);
+                        let config = self.controller.storage.config().clone();
+                        let secrets = self.caching_secrets_reader.clone();
+                        let tx = self.internal_cmd_tx.clone();
+                        let otel_ctx = OpenTelemetryContext::obtain();
+                        task::spawn(|| "ddl_connection_preparation", async move {
+                            let response = request.execute(&config, &secrets).await;
+                            pending.responses.insert(
+                                index, catalog::CommandResponse::Connection(response),
+                            );
+                            if let Err(error) =
+                                tx.send(Message::DdlCommandsReady { pending, otel_ctx })
+                            {
+                                warn!("internal_cmd_rx dropped before connection preparation completed: {error:?}");
+                            }
+                        }.instrument(tracing::Span::current()));
+                        return;
                     }
                     catalog::CommandWork::Prepare(request) => {
                         self.release_ddl_lock(guard);
@@ -687,7 +797,9 @@ impl Coordinator {
                                 %conn_id, kind = "purification", "catalog preparation complete"
                             );
                             catalog_preparation_test_pause("catalog_purification_ready").await;
-                            pending.responses.insert(index, response);
+                            pending.responses.insert(
+                                index, catalog::CommandResponse::Source(response),
+                            );
                             if let Err(error) =
                                 tx.send(Message::DdlCommandsReady { pending, otel_ctx })
                             {
@@ -710,19 +822,53 @@ impl Coordinator {
         mut pending: PendingDdlCommit,
         result: Result<(), AdapterError>,
     ) {
+        let cleanup_ids: Vec<_> = pending
+            .commands
+            .iter()
+            .filter_map(|command| {
+                let catalog::command::CatalogCommand::CreateConnection(command) = command else {
+                    return None;
+                };
+                command
+                    .cleanup_secret_id()
+                    .filter(|id| self.catalog().state().try_get_entry(id).is_none())
+            })
+            .collect();
         if result.is_ok() && matches!(pending.context, DdlCommitContext::Statement { .. }) {
             for command in &pending.commands {
                 self.emit_command_notices(pending.context.context_mut().session(), command);
             }
         }
-        pending.context.finish(result);
+        if cleanup_ids.is_empty() {
+            pending.context.finish(result);
+        } else {
+            let controller = Arc::clone(&self.secrets_controller);
+            let secrets = self.caching_secrets_reader.clone();
+            task::spawn(
+                || "ddl_connection_cleanup",
+                async move {
+                    for id in cleanup_ids {
+                        match controller.delete(id).await {
+                            Ok(()) => {
+                                secrets.invalidate(id);
+                            }
+                            Err(error) => {
+                                warn!("failed to clean up uncommitted connection secret: {error}")
+                            }
+                        }
+                    }
+                    pending.context.finish(result);
+                }
+                .instrument(tracing::Span::current()),
+            );
+        }
     }
 
     pub(crate) async fn catalog_transact_commands(
         &mut self,
         ctx: &mut ExecuteContext,
         commands: &mut [catalog::command::CatalogCommand],
-        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &mut BTreeMap<usize, catalog::CommandResponse>,
     ) -> Result<(), catalog::CommandExecutionError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly.into());
