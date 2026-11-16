@@ -19,6 +19,7 @@ def report(
     upper: list[int],
     controller: list[int] | None = None,
     tombstone: bool = False,
+    updates: int | None = 1,
 ) -> dict[str, Any]:
     return {
         "shard_id": "s",
@@ -26,6 +27,7 @@ def report(
         "tombstone": tombstone,
         "since": since,
         "upper": upper,
+        "updates": updates,
         "controller_critical_since": controller,
         "critical_sinces": {},
         "leased_sinces": {},
@@ -87,6 +89,21 @@ def test_unwritten_or_sealed_exports_are_skipped() -> None:
     assert classify(f([50], [60]), f([0], [0])).verdict is Verdict.SKIP
     assert classify(f([50], [60]), f([3], [])).verdict is Verdict.SKIP
     assert classify(f([], []), f([3], [])).verdict is Verdict.SKIP
+
+
+def test_exports_without_updates_are_exempt_from_the_upper_comparison() -> None:
+    # A table added to an established source holds an empty batch up to its
+    # snapshot's as_of, which is the remap since, until the snapshot finishes.
+    remap = f([1000], [9000], controller=[5000])
+    assert classify(remap, f([0], [1000], updates=0)).verdict is Verdict.SKIP
+    assert classify(remap, f([5000], [1000], updates=0)).verdict is Verdict.SKIP
+    assert classify(f([9], [20]), f([9], [10], updates=0)).verdict is Verdict.OK
+    # An export with updates, or of unknown size, is still compared, and an
+    # empty remap since is not exempt.
+    assert classify(remap, f([0], [1000], updates=3)).violated
+    assert classify(remap, f([0], [1000], updates=None)).violated
+    empty_since = classify(f([], [20]), f([3], [10], updates=0))
+    assert empty_since.verdict is Verdict.EMPTY_SINCE
 
 
 def test_tombstoned_or_uninitialized_shards_are_skipped() -> None:

@@ -26,9 +26,14 @@ bootstrap paths assume this of durable state:
 Both skip an export whose upper is `[0]` (never written) or empty (sealed).
 If the remap since reaches the export upper, a restarting ingestion cannot
 tell which remapped updates the export already holds and may write them again.
+An export whose shard holds no updates has nothing to write again, so both
+comparisons skip it too: an export added to an established source commits an
+empty batch up to its snapshot's as_of, which is the remap since, and stays
+there until the snapshot finishes.
 
 The checked invariant, per live (remap, export) pair whose export upper is
-neither `[0]` nor empty: `remap_since < export_upper`, where `remap_since` is
+neither `[0]` nor empty and whose shard holds updates: `remap_since <
+export_upper`, where `remap_since` is
 the controller's critical since of the remap shard (what a read-write
 controller bootstraps from) or, when no controller critical reader is
 registered, the shard since. The shard since is never above the critical
@@ -93,6 +98,8 @@ class Frontiers:
     since: tuple[int, ...]
     upper: tuple[int, ...]
     controller_since: tuple[int, ...] | None
+    updates: int | None = None
+    """Updates in the shard's batches. None if the report does not say."""
 
     @classmethod
     def parse(cls, report: dict[str, Any]) -> Frontiers | None:
@@ -102,12 +109,14 @@ class Frontiers:
             if not initialized:
                 return cls(False, False, (), (), None)
             controller = report.get("controller_critical_since")
+            updates = report.get("updates")
             return cls(
                 True,
                 bool(report["tombstone"]),
                 tuple(int(t) for t in report["since"]),
                 tuple(int(t) for t in report["upper"]),
                 tuple(int(t) for t in controller) if controller is not None else None,
+                int(updates) if updates is not None else None,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -121,8 +130,9 @@ class Frontiers:
 
 class Verdict(Enum):
     SKIP = "skip"
-    """Not comparable: a shard is uninitialized or tombstoned, or the export
-    upper is `[0]` or empty."""
+    """Not comparable: a shard is uninitialized or tombstoned, the export
+    upper is `[0]` or empty, or the remap since reached the upper of an export
+    that holds no updates."""
     OK = "ok"
     PAST_UPPER_BEHIND = "past_upper_export_since_behind"
     """Remap since at or past the export upper, export since behind the remap
@@ -191,6 +201,8 @@ def classify(remap: Frontiers, data: Frontiers) -> Check:
         return check(Verdict.EMPTY_SINCE)
     if _less(remap_since, data.upper):
         return check(Verdict.OK)
+    if data.updates == 0:
+        return check(Verdict.SKIP)
     if _less(data_since, remap_since):
         return check(Verdict.PAST_UPPER_BEHIND)
     return check(Verdict.PAST_UPPER_AHEAD)

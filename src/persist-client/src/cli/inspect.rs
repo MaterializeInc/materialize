@@ -1028,6 +1028,9 @@ pub struct FrontierAuditReport {
     /// The meet of every reader's since.
     since: Option<Vec<u64>>,
     upper: Option<Vec<u64>>,
+    /// The updates in the shard's batches, before consolidation. Zero while
+    /// nothing but empty batches was ever appended.
+    updates: Option<usize>,
     /// The since of [PersistClient::CONTROLLER_CRITICAL_SINCE], if registered.
     /// A read-write storage controller bootstraps a collection from this since.
     controller_critical_since: Option<Vec<u64>>,
@@ -1059,6 +1062,7 @@ pub(crate) async fn audit_frontiers(
     report.seqno = Some(state.seqno.0);
     report.since = Some(state.collections.trace.since().elements().to_vec());
     report.upper = Some(state.collections.trace.upper().elements().to_vec());
+    report.updates = Some(state.collections.trace.batches().map(|b| b.len).sum());
     for (id, reader) in &state.collections.critical_readers {
         let since = reader.since.elements().to_vec();
         if *id == PersistClient::CONTROLLER_CRITICAL_SINCE {
@@ -1657,6 +1661,7 @@ mod tests {
         assert!(report.initialized);
         assert_eq!(report.tombstone, Some(false));
         assert_eq!(report.upper, Some(vec![3]));
+        assert_eq!(report.updates, Some(1));
         // The leased reader still holds the shard since back.
         assert_eq!(report.since, Some(vec![0]), "{report:?}");
         assert_eq!(
