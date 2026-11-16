@@ -453,7 +453,7 @@ class Composition:
             file.seek(0)
             try:
                 if capture_and_print:
-                    p = subprocess.Popen(
+                    with subprocess.Popen(
                         cmd,
                         close_fds=False,
                         stdin=subprocess.PIPE,
@@ -462,85 +462,87 @@ class Composition:
                         text=True,
                         bufsize=1,
                         env=environment,
-                    )
-                    if stdin is not None:
-                        p.stdin.write(stdin)  # type: ignore
-                    if p.stdin is not None:
-                        p.stdin.close()
-                    sel = selectors.DefaultSelector()
-                    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
-                    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
-                    assert p.stdout is not None
-                    assert p.stderr is not None
-                    os.set_blocking(p.stdout.fileno(), False)
-                    os.set_blocking(p.stderr.fileno(), False)
-                    running = True
-                    # Hold each stream's trailing partial line and print only
-                    # complete lines, so a line from one stream is never split
-                    # in the merged output by a chunk of the other stream. The
-                    # raw bytes are still captured in full below for the
-                    # returned CompletedProcess. Keyed by is_stdout.
-                    emit_partial = {True: "", False: ""}
-
-                    def emit(is_stdout: bool, text: str) -> None:
-                        file = sys.stdout if is_stdout else sys.stderr
-                        if print_prefix:
-                            for line in text.splitlines(keepends=True):
-                                print(
-                                    f"{print_prefix}{line}",
-                                    end="",
-                                    file=file,
-                                    flush=True,
-                                )
-                        else:
-                            print(text, end="", file=file, flush=True)
-
-                    while running:
-                        running = False
-                        for key, val in sel.select():
-                            output = io.StringIO()
-                            while True:
-                                new_output = key.fileobj.read(1024)  # type: ignore
-                                if not new_output:
-                                    break
-                                output.write(new_output)
-                            contents = output.getvalue()
-                            output.close()
-                            if not contents:
-                                continue
-                            # Keep running as long as stdout or stderr have any content
+                    ) as p:
+                        if stdin is not None:
+                            p.stdin.write(stdin)  # type: ignore
+                        if p.stdin is not None:
+                            p.stdin.close()
+                        with selectors.DefaultSelector() as sel:
+                            sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+                            sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+                            assert p.stdout is not None
+                            assert p.stderr is not None
+                            os.set_blocking(p.stdout.fileno(), False)
+                            os.set_blocking(p.stderr.fileno(), False)
                             running = True
-                            is_stdout = key.fileobj is p.stdout
-                            complete, emit_partial[is_stdout] = _split_complete_lines(
-                                emit_partial[is_stdout] + contents
+                            # Hold each stream's trailing partial line and print only
+                            # complete lines, so a line from one stream is never split
+                            # in the merged output by a chunk of the other stream. The
+                            # raw bytes are still captured in full below for the
+                            # returned CompletedProcess. Keyed by is_stdout.
+                            emit_partial = {True: "", False: ""}
+
+                            def emit(is_stdout: bool, text: str) -> None:
+                                file = sys.stdout if is_stdout else sys.stderr
+                                if print_prefix:
+                                    for line in text.splitlines(keepends=True):
+                                        print(
+                                            f"{print_prefix}{line}",
+                                            end="",
+                                            file=file,
+                                            flush=True,
+                                        )
+                                else:
+                                    print(text, end="", file=file, flush=True)
+
+                            while running:
+                                running = False
+                                for key, val in sel.select():
+                                    output = io.StringIO()
+                                    while True:
+                                        new_output = key.fileobj.read(1024)  # type: ignore
+                                        if not new_output:
+                                            break
+                                        output.write(new_output)
+                                    contents = output.getvalue()
+                                    output.close()
+                                    if not contents:
+                                        continue
+                                    # Keep running as long as stdout or stderr have any content
+                                    running = True
+                                    is_stdout = key.fileobj is p.stdout
+                                    complete, emit_partial[is_stdout] = (
+                                        _split_complete_lines(
+                                            emit_partial[is_stdout] + contents
+                                        )
+                                    )
+                                    if complete:
+                                        emit(is_stdout, complete)
+                                    if is_stdout:
+                                        stdout_result.write(contents)
+                                    else:
+                                        stderr_result.write(contents)
+                            # Flush any trailing partial line left without a newline.
+                            for is_stdout, partial in emit_partial.items():
+                                if partial:
+                                    emit(is_stdout, partial)
+                            p.wait()
+                            retcode = p.poll()
+                            assert retcode is not None
+                            stdout_contents = stdout_result.getvalue()
+                            stdout_result.close()
+                            stderr_contents = stderr_result.getvalue()
+                            stderr_result.close()
+                            if check and retcode:
+                                raise subprocess.CalledProcessError(
+                                    retcode,
+                                    p.args,
+                                    output=stdout_contents,
+                                    stderr=stderr_contents,
+                                )
+                            return subprocess.CompletedProcess(
+                                p.args, retcode, stdout_contents, stderr_contents
                             )
-                            if complete:
-                                emit(is_stdout, complete)
-                            if is_stdout:
-                                stdout_result.write(contents)
-                            else:
-                                stderr_result.write(contents)
-                    # Flush any trailing partial line left without a newline.
-                    for is_stdout, partial in emit_partial.items():
-                        if partial:
-                            emit(is_stdout, partial)
-                    p.wait()
-                    retcode = p.poll()
-                    assert retcode is not None
-                    stdout_contents = stdout_result.getvalue()
-                    stdout_result.close()
-                    stderr_contents = stderr_result.getvalue()
-                    stderr_result.close()
-                    if check and retcode:
-                        raise subprocess.CalledProcessError(
-                            retcode,
-                            p.args,
-                            output=stdout_contents,
-                            stderr=stderr_contents,
-                        )
-                    return subprocess.CompletedProcess(
-                        p.args, retcode, stdout_contents, stderr_contents
-                    )
                 else:
                     return subprocess.run(
                         cmd,

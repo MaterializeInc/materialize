@@ -2,13 +2,20 @@
 
 ## Next action
 
-Finish the unchanged KafkaSources repeat, then run PostgresCdc. The registration
-repair passed targeted checks and seven promotion cycles with SQL resuming.
-KafkaSources still hit the 1800s guard during generation 8 readiness, not the
-previous terminal registration wait. The repeat is running as
-`aj-native-parallel-6a2dc9e1` on the worker. Do not raise the guard.
+Finish the unchanged PostgresCdc repeat, `aj-native-parallel-a71dc604`, then
+install the capture-resource fix on the idle worker and rerun. Its first run
+failed at action 671 because the Python driver exhausted file descriptors.
+Captured subprocesses now close their selector and pipes deterministically.
+The real-subprocess regression fails before the fix and passes afterward,
+alongside the neighboring composition tests. Full workflow verification is pending.
 
-Investigate the remaining hydration delay if it repeats. The first run ended
+The registration repair passed targeted checks and seven promotion cycles with
+SQL resuming. KafkaSources first hit the 1800s guard during generation 8 readiness.
+Its unchanged repeat failed after generation 6 promotion when retirement exhausted
+the existing HTTP contention retries. Neither run passed. Keep guards, workload
+and retry limits unchanged.
+
+Investigate retirement contention and the remaining hydration delay. The first run ended
 with three system indexes unhydrated. The same IDs in the fresh repeat identify
 `mz_source_statistics_ind`, `mz_hydration_statuses_ind` and
 `mz_show_cluster_replicas_ind`. This identifies candidates, not their root cause.
@@ -105,6 +112,11 @@ The Kafka failure is in `zippy-adoption-KafkaSources-evidence.tar.gz`, with phas
 analysis in `zippy-adoption-phase-analysis.md`. The runner is
 `native_zippy_adoption.py`. Neither the full zippy workflow nor backup/restore
 passed. The bounded build resumed after its resource guard, without raising caps.
+The repeat and Postgres evidence are `zippy-adoption-KafkaSources-repeat-evidence.tar.gz`
+and `zippy-adoption-PostgresCdc-evidence.tar.gz`. Retirement's raw-key and prefix
+constraints are surveyed in `retirement-retry-source-analysis.md`, not yet implemented.
+Capture regression evidence is in `capture-fd-regression-before.log` and
+`capture-fd-regression-after.log`. Do not change the worker's harness under its live run.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`
