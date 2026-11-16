@@ -546,8 +546,10 @@ impl HttpServer {
         }
 
         // MCP (Model Context Protocol) endpoints
-        // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
-        if routes_enabled.mcp_agent.is_enabled() || routes_enabled.mcp_developer.is_enabled() {
+        if routes_enabled.mcp_agent.is_enabled()
+            || routes_enabled.mcp_developer.is_enabled()
+            || routes_enabled.mcp.is_enabled()
+        {
             use tracing::info;
 
             // RFC 9728 Protected Resource Metadata. Public route: MCP
@@ -606,6 +608,18 @@ impl HttpServer {
                     )
                     .authorize(mcp_developer_roles);
                 mcp_router = mcp_router.merge(developer_router);
+            }
+
+            if let RouteGroup::Enabled(mcp_roles) = routes_enabled.mcp {
+                info!("Enabling MCP endpoint: /api/mcp");
+                let unified_router = Router::new()
+                    .route(
+                        "/api/mcp",
+                        routing::post(mcp::handle_mcp_unified)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_roles);
+                mcp_router = mcp_router.merge(unified_router);
             }
 
             // The MCP handlers perform a server-side Origin check against this
