@@ -910,8 +910,15 @@ impl Coordinator {
         }
 
         // Clean up any pending peeks that rely on dropped relations or clusters.
+        // NOTE: `dropped_item_names` also names collections that stay readable,
+        // such as the old version of a materialized view after a replacement.
+        let dropped_readable_names: BTreeMap<_, _> = dropped_item_names
+            .iter()
+            .filter(|(gid, _)| readable_collections_to_drop.contains(gid))
+            .map(|(gid, name)| (*gid, name.clone()))
+            .collect();
         self.peek_registry
-            .invalidate(&dropped_item_names, &dropped_cluster_names);
+            .invalidate(&dropped_readable_names, &dropped_cluster_names);
         // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
         for (conn_id, pending_copy) in &self.active_copies {
             let dropping_table = tables_to_drop
