@@ -19,7 +19,7 @@ permissions: {}
 
 env:
   # renovate: datasource=docker depName=ghcr.io/renovatebot/renovate
-  RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.240.0@sha256:e33a3330128949311ebc9c4c2ffda7452ab58da8a04e17216a03755ca3449949
+  RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.241.0@sha256:7397a1b4893806ca4f25b175236932e2496bca52e9230668ac79ea0ef3868e5f
 
 jobs:
   validate:
