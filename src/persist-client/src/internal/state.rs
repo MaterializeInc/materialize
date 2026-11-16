@@ -2487,6 +2487,14 @@ where
     }
 }
 
+/// See [State::finalized_gc_step].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FinalizedGcStep {
+    WriteRollup,
+    /// GC through this seqno.
+    Gc(SeqNo),
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct GcConfig {
     pub use_active_gc: bool,
@@ -2559,6 +2567,55 @@ where
 
     pub(crate) fn seqno_since(&self) -> SeqNo {
         self.collections.seqno_since(self.seqno)
+    }
+
+    /// Whether a tombstone has committed anything after linking its latest
+    /// rollup. A rollup of seqno X is linked at X+1, so a settled tombstone
+    /// has exactly those two live diffs.
+    fn tombstone_needs_rollup(&self) -> bool {
+        let (latest, _) = self.latest_rollup();
+        self.collections.is_tombstone() && latest.next() < self.seqno
+    }
+
+    /// The next step toward finishing GC on a finalized shard, or `None` when
+    /// it's done. `earliest_live` is the earliest live diff's seqno in
+    /// consensus, which state doesn't record.
+    ///
+    /// Each pass that removes old rollups adds one rollup of finalized state,
+    /// which is kept, so a shard GC'd in several passes keeps one per pass.
+    pub(crate) fn finalized_gc_step(
+        &self,
+        earliest_live: SeqNo,
+        max_versions: usize,
+        remove_finalized_rollups: bool,
+    ) -> Option<FinalizedGcStep> {
+        // GC can only delete what a commit after the latest rollup removed
+        // (shrinking batches, or old rollups) by truncating to a later rollup.
+        if self.tombstone_needs_rollup() {
+            return Some(FinalizedGcStep::WriteRollup);
+        }
+        let (latest, _) = self.latest_rollup();
+        // GC keeps the newest rollup <= new_seqno_since and truncates to it. With
+        // only one rollup in range it removes and truncates nothing, so cap the
+        // versions one pass fetches at max_versions, but extend to the next rollup
+        // so every pass makes progress.
+        let mut later_rollups = self.collections.rollups.range(earliest_live.next()..);
+        let next_rollup = later_rollups.next().map(|(seqno, _)| *seqno);
+        let capped = SeqNo(earliest_live.0.saturating_add(u64::cast_from(max_versions)));
+        let new_seqno_since = self.seqno.min(capped.max(next_rollup.unwrap_or(capped)));
+        // A rollup older than `latest` is still live in consensus, so there's one
+        // to truncate away.
+        if earliest_live < *latest {
+            return Some(FinalizedGcStep::Gc(new_seqno_since));
+        }
+        // Consensus is already truncated to `latest`, but state can still list older
+        // rollups: a prior GC died after truncating but before removing them from
+        // state, or ran with remove_finalized_rollups off.
+        let mut old_rollups = self.collections.rollups.values().rev().skip(1);
+        if remove_finalized_rollups && old_rollups.any(|x| !x.finalized) {
+            return Some(FinalizedGcStep::Gc(new_seqno_since));
+        }
+        None
     }
 
     // Returns whether the cmd proposing this state has been selected to perform
@@ -2754,7 +2811,7 @@ where
         // transition (in this case from X to X+1), the minimum number of
         // live diffs is actually two. Detect when we're in this minimal
         // two diff state and stop the (otherwise) infinite iteration.
-        if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
+        if self.tombstone_needs_rollup() {
             return Some(self.seqno);
         }
 
