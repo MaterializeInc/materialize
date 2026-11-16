@@ -32,6 +32,7 @@ import { MaterializeTheme } from "~/theme";
 import { JOTAI_DEBOUNCE_WAIT_MS } from "./constants";
 import heightByListItemIndex, { getTotalHeight } from "./heightByListItem";
 import HistoryOutput from "./HistoryOutput";
+import { isScrollAtBottom } from "./scrollPosition";
 import { historyIdsAtom, shellStateAtom } from "./store/shell";
 import {
   ShellVirtualizedListContext,
@@ -219,10 +220,7 @@ export const ShellVirtualizedListProvider = ({
 
   const isScrolledToBottom = useCallback(() => {
     const domEl = listOuterRef.current;
-    return (
-      domEl !== null &&
-      domEl?.scrollTop + domEl?.clientHeight >= domEl?.scrollHeight
-    );
+    return domEl !== null && isScrollAtBottom(domEl);
   }, []);
 
   const setSize = useCallback((index: number, newSize: number) => {
