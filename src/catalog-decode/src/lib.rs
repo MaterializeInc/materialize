@@ -20,3 +20,4 @@
 pub mod audit_log;
 pub mod create_sql;
 pub mod durable;
+pub mod view_joins;

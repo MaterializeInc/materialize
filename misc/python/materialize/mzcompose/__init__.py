@@ -340,6 +340,9 @@ def get_variable_system_parameters(
         # On by default so CI exercises the jq function, which is off in
         # production while it earns trust.
         VariableSystemParameter("enable_jq", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "enable_inferred_relationships", "true", ["true", "false"]
+        ),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(

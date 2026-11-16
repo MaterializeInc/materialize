@@ -10,7 +10,7 @@
 //! Scalar functions that decode durable catalog data for the builtin catalog
 //! views. The decoders live in `mz_catalog_decode`, documented there.
 
-use mz_catalog_decode::{audit_log, create_sql, durable};
+use mz_catalog_decode::{audit_log, create_sql, durable, view_joins};
 use mz_expr_derive::sqlfunc;
 use mz_repr::ArrayRustType;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
@@ -64,6 +64,11 @@ fn parse_catalog_item_references<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     create_sql::item_references(a)
         .map(to_jsonb)
         .map_err(catalog_err)
+}
+
+#[sqlfunc]
+fn parse_catalog_view_joins<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    view_joins::view_joins(a).map(to_jsonb).map_err(catalog_err)
 }
 
 #[sqlfunc]

@@ -536,6 +536,30 @@ deploying the changes to production.
 | `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
 | `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
 
+## `mz_inferred_relationships`
+
+The `mz_inferred_relationships` view describes relationships between user
+relations that the definitions of views and materialized views imply, without
+declared keys. A view that joins two relations on a pair of columns implies a
+relationship between them. A view that passes a key column through, as in
+`SELECT o.id AS org_id`, implies that its output column references that key.
+
+The referenced side of a join is a column that alone keys an index, then a
+column named `id`, then the side not named `*_id`. A relationship that none of
+these settle is undirected. Relationships implied by passed-through columns
+describe the columns' domain, not their data: a view may filter, so its input
+column can hold values that its output never shows.
+
+<!-- RELATION_SPEC mz_internal.mz_inferred_relationships -->
+| Field           | Type        | Meaning  |
+| --------------- | ----------- | -------- |
+| `source_id`     | [`text`]    | The ID of the relation holding the referencing column. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| `source_column` | [`text`]    | The referencing column. |
+| `target_id`     | [`text`]    | The ID of the relation holding the referenced column. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| `target_column` | [`text`]    | The referenced column. |
+| `is_directed`   | [`boolean`] | Whether a key decides which side references the other. When false, the two columns are only known to be joined, and their order is arbitrary. |
+| `inferred_from` | [`text array`] | The IDs of the views and materialized views whose definitions imply the relationship. |
+
 ## `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.

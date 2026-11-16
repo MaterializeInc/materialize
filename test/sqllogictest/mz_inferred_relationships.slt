@@ -1,0 +1,158 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for mz_internal.mz_inferred_relationships and the function it reads
+# view definitions with, mz_internal.parse_catalog_view_joins.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_inferred_relationships = on
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE organizations (id int, name text)
+
+statement ok
+CREATE TABLE users (id int, org_id int, name text)
+
+statement ok
+CREATE TABLE accounts (id int, org_id int, balance int)
+
+statement ok
+CREATE TABLE auctions (id int, seller int, item text)
+
+statement ok
+CREATE TABLE bids (id int, buyer int, auction_id int, amount int)
+
+# Joins `bids.auction_id` to `auctions.id`, and passes `auctions.id`,
+# `bids.id`, `bids.buyer` and `auctions.seller` through.
+statement ok
+CREATE MATERIALIZED VIEW winning_bids AS
+  SELECT DISTINCT ON (a.id) b.id AS bid_id, a.id AS auction_id, b.buyer, a.seller
+  FROM auctions a JOIN bids b ON a.id = b.auction_id
+  ORDER BY a.id, b.amount DESC
+
+statement ok
+CREATE VIEW org_spend AS
+  SELECT o.id AS org_id, o.name
+  FROM organizations o
+  JOIN users u ON u.org_id = o.id
+  JOIN winning_bids w ON w.buyer = u.id
+
+statement ok
+CREATE VIEW seller_performance AS
+  SELECT u.id AS seller_id, count(*) AS sold
+  FROM users u JOIN winning_bids w ON w.seller = u.id
+  GROUP BY u.id
+
+# Neither column is a key, so the relationship stays undirected.
+statement ok
+CREATE VIEW user_accounts AS
+  SELECT users.name, a.balance FROM users JOIN accounts a USING (org_id)
+
+# Nothing here is attributable: a CTE, an expression, and an alias bound to
+# two relations.
+statement ok
+CREATE VIEW opaque AS
+  WITH x AS (SELECT seller FROM auctions)
+  SELECT u.name FROM x, users u WHERE u.id = x.seller
+  UNION ALL
+  SELECT a.item FROM auctions a JOIN bids b ON a.id + 0 = b.auction_id
+  UNION ALL
+  SELECT a.item FROM auctions a JOIN (SELECT a.id FROM bids a) s ON s.id = a.id
+
+query TTTTB
+SELECT s.name, r.source_column, t.name, r.target_column, r.is_directed
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+JOIN mz_objects t ON t.id = r.target_id
+ORDER BY 1, 2, 3, 4
+----
+auctions  seller  users  id  true
+bids  auction_id  auctions  id  true
+bids  buyer  users  id  true
+org_spend  org_id  organizations  id  true
+seller_performance  seller_id  users  id  true
+users  org_id  accounts  org_id  false
+users  org_id  organizations  id  true
+winning_bids  auction_id  auctions  id  true
+winning_bids  bid_id  bids  id  true
+winning_bids  buyer  users  id  true
+winning_bids  seller  users  id  true
+
+# Evidence names the views that imply each relationship.
+query TT
+SELECT r.source_column, v.name
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+CROSS JOIN unnest(r.inferred_from) AS e(id)
+JOIN mz_objects v ON v.id = e.id
+WHERE s.name = 'bids' AND r.source_column = 'buyer'
+----
+buyer  winning_bids
+
+# A column that alone keys an index is the referenced side.
+statement ok
+CREATE TABLE products (sku text, name text)
+
+statement ok
+CREATE TABLE order_lines (sku text, quantity int)
+
+statement ok
+CREATE INDEX products_sku ON products (sku)
+
+statement ok
+CREATE VIEW order_products AS
+  SELECT p.name, o.quantity FROM order_lines o JOIN products p ON p.sku = o.sku
+
+query TTTTB
+SELECT s.name, r.source_column, t.name, r.target_column, r.is_directed
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+JOIN mz_objects t ON t.id = r.target_id
+WHERE s.name = 'order_lines'
+----
+order_lines  sku  products  sku  true
+
+# Dropping the view retracts what it implied.
+statement ok
+DROP VIEW order_products
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+WHERE s.name = 'order_lines'
+----
+0
+
+query T
+SELECT mz_internal.parse_catalog_view_joins(create_sql)->'outputs'
+FROM mz_views WHERE name = 'seller_performance'
+----
+[{"column":"seller_id","source_column":"id","source_id":"u2"}]
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_inferred_relationships = off
+----
+COMPLETE 0
+
+query error inferring relationships between relations from view definitions is not available
+SELECT mz_internal.parse_catalog_view_joins(create_sql) FROM mz_views
+
+# The builtin is maintained regardless, it does not call the function at
+# query time.
+query B
+SELECT count(*) > 0 FROM mz_internal.mz_inferred_relationships
+----
+true

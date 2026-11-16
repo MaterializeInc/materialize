@@ -33,6 +33,8 @@ mod mz_internal;
 pub use mz_internal::*;
 mod mz_object_dependencies;
 pub use mz_object_dependencies::*;
+mod mz_inferred_relationships;
+pub use mz_inferred_relationships::*;
 mod mz_introspection;
 pub use mz_introspection::*;
 mod information_schema;
@@ -1253,6 +1255,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_METRIC_SINKS),
         Builtin::MaterializedView(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
+        Builtin::MaterializedView(&MZ_INFERRED_RELATIONSHIPS),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
@@ -1516,6 +1519,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
         Builtin::Index(&MZ_OBJECT_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_INFERRED_RELATIONSHIPS_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_GRAPH_EDGES_IND),

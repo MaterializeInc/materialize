@@ -3102,6 +3102,7 @@
   "ParseCatalogId": "UNITSTRUCT",
   "ParseCatalogItemReferences": "UNITSTRUCT",
   "ParseCatalogPrivileges": "UNITSTRUCT",
+  "ParseCatalogViewJoins": "UNITSTRUCT",
   "ParseConnectionDetails": "UNITSTRUCT",
   "ParseIdent": "UNITSTRUCT",
   "ParseKafkaSourceDetails": "UNITSTRUCT",
@@ -5265,6 +5266,11 @@
       "ParseCatalogPrivileges": {
         "NEWTYPE": {
           "TYPENAME": "ParseCatalogPrivileges"
+        }
+      },
+      "ParseCatalogViewJoins": {
+        "NEWTYPE": {
+          "TYPENAME": "ParseCatalogViewJoins"
         }
       },
       "ParseConnectionDetails": {

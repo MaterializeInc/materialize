@@ -304,6 +304,16 @@ details  text  Additional␠details␠on␠why␠the␠`hint`␠was␠proposed�
 referenced_object_ids  list  The␠IDs␠of␠objects␠referenced␠by␠`details`.␠Corresponds␠to␠mz_objects.id.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_inferred_relationships' ORDER BY position
+----
+source_id  text  The␠ID␠of␠the␠relation␠holding␠the␠referencing␠column.␠Corresponds␠to␠`mz_objects.id`.
+source_column  text  The␠referencing␠column.
+target_id  text  The␠ID␠of␠the␠relation␠holding␠the␠referenced␠column.␠Corresponds␠to␠`mz_objects.id`.
+target_column  text  The␠referenced␠column.
+is_directed  boolean  Whether␠a␠key␠decides␠which␠side␠references␠the␠other.␠When␠false,␠the␠two␠columns␠are␠only␠known␠to␠be␠joined,␠and␠their␠order␠is␠arbitrary.
+inferred_from  text[]  The␠IDs␠of␠the␠views␠and␠materialized␠views␠whose␠definitions␠imply␠the␠relationship.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠a␠materialization.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_catalog.mz_sinks.id`.
@@ -850,6 +860,7 @@ mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
 mz_index_advice
+mz_inferred_relationships
 mz_internal_cluster_replicas
 mz_kafka_source_tables
 mz_license_keys
