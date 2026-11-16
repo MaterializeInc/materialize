@@ -331,7 +331,7 @@ so it is executed.""",
         and fail_build_reason is None
     ):
         trim_test_selection_id(pipeline, set())
-        # lint-docs is required for website deploy, the others are free because an agent is always around anyway
+        # These are free because an agent is always around anyway
         for step in steps(pipeline):
             if step.get("id") in (
                 "lint-docs",
