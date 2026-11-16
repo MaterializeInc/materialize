@@ -413,7 +413,7 @@ so it is executed.""",
     add_annotate_errors_plugin(pipeline)
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
-    prioritize_pipeline(pipeline, args.priority)
+    prioritize_pipeline(pipeline, args.priority, args.pipeline)
     # Before `switch_jobs_to_aws`, so that steps on the default queue are
     # switched too.
     set_default_agents_queue(pipeline)
@@ -478,7 +478,7 @@ class PipelineStep:
         return inputs
 
 
-def prioritize_pipeline(pipeline: Any, priority: int) -> None:
+def prioritize_pipeline(pipeline: Any, priority: int, pipeline_name: str) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
@@ -489,6 +489,8 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     # Release results are time sensitive
     if tag.startswith("v"):
         priority += 10
+        if pipeline_name == "nightly":
+            priority += 10
 
     # main branch is less time sensitive than results on PRs
     if branch == "main":

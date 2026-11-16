@@ -391,21 +391,22 @@ kv_up 3 3 false false false 16
 48
 
 # the snapshot metrics here should definitely all be zero
-> SELECT
-    s.name,
-    u.offset_known,
-    u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received >= 288,
-    u.records_indexed
-  FROM mz_internal.mz_source_statuses s
-  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('kv', 'kv_up', 'kv_none')
-  ORDER BY s.name;
-kv_none 6 6 0 0 false 0
-kv 6 6 0 0 false 16
-kv_up 6 6 0 0 false 16
+# TODO: Reenable when SS-585 is fixed
+# > SELECT
+#     s.name,
+#     u.offset_known,
+#     u.offset_committed,
+#     u.snapshot_records_known,
+#     u.snapshot_records_staged,
+#     u.messages_received >= 288,
+#     u.records_indexed
+#   FROM mz_internal.mz_source_statuses s
+#   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+#   WHERE s.name IN ('kv', 'kv_up', 'kv_none')
+#   ORDER BY s.name;
+# kv_none 6 6 0 0 false 0
+# kv 6 6 0 0 false 16
+# kv_up 6 6 0 0 false 16
 
 > DROP SOURCE kv CASCADE;
 

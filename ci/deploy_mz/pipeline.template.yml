@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Deploys are fast, do them quickly
-priority: 30
+priority: 80
 
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.version
