@@ -52,15 +52,14 @@ involvement.
 
 | Role | Commands |
 |------|-------------|
-| `materialize_deployer` | `delete`, `stage`, `promote`, `abort` — full write access |
+| `materialize_deployer` | `apply`, `delete`, `stage`, `promote`, `abort` — full write access |
 | `materialize_developer` | `dev`, `list`, `describe`, `log` |
 | `materialize_monitor` | `list`, `describe`, `log` — read-only deployment state |
 
-Membership is enforced when the command connects: `stage`, `promote`,
-`abort`, and `delete` require `materialize_deployer`; `dev` requires
+Membership is enforced when the command connects: `apply`, `stage`,
+`promote`, `abort`, and `delete` require `materialize_deployer`; `dev` requires
 `materialize_developer`; and `list`, `describe`, and `log` accept any of the
-three roles. `apply` provisions infrastructure (clusters, secrets,
-connections, sources, tables) and is not currently restricted by role.
+three roles.
 
 Your database user must be a member of one of these roles to run commands
 that connect to the database. Grant the appropriate role to each user:
