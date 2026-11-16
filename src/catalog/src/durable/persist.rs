@@ -439,6 +439,37 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// This distinguishes empty upper progress from content. Memory updates are insufficient
     /// because kinds such as ID allocators do not produce them.
     updates_applied: u64,
+    /// Lazily seeded for the caller's bounded retirement retry sequence.
+    /// Raw keys preserve compatible-build fields absent from the typed snapshot.
+    retirement_snapshot: Option<RetirementSnapshot>,
+}
+
+#[derive(Debug)]
+struct RetirementSnapshot {
+    /// The seed includes this timestamp. The listener can still be behind it
+    /// after empty upper advances, so seed-covered deltas must not be replayed.
+    as_of: Timestamp,
+    rows: BTreeSet<StateUpdateKindJson>,
+}
+
+impl RetirementSnapshot {
+    fn apply(&mut self, updates: &[StateUpdate<StateUpdateKindJson>]) {
+        let mut changes: Vec<_> = updates
+            .iter()
+            .filter(|update| update.ts > self.as_of)
+            .filter(|update| super::promotion::is_retirement_input(&update.kind))
+            .map(|update| (update.kind.clone(), update.diff))
+            .collect();
+        differential_dataflow::consolidation::consolidate(&mut changes);
+        for (row, diff) in changes {
+            if diff == Diff::ONE {
+                assert!(self.rows.insert(row), "duplicate retirement input");
+            } else {
+                assert_eq!(diff, Diff::MINUS_ONE);
+                assert!(self.rows.remove(&row), "missing retirement input");
+            }
+        }
+    }
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
@@ -913,9 +944,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     ) -> impl std::future::Future<Output = Result<(), DurableCatalogError>> + '_ {
         self.metrics.syncs.inc();
         let histogram = self.metrics.sync_latency_seconds.clone();
-        self.sync_inner(target_upper, terminal)
-            .wall_time()
-            .observe(histogram)
+        async move {
+            // A failed or canceled catch-up must not leave a partially updated
+            // raw projection available for a later retirement attempt.
+            let mut retirement = self.retirement_snapshot.take();
+            let result = self
+                .sync_inner(target_upper, terminal, &mut retirement)
+                .wall_time()
+                .observe(histogram)
+                .await;
+            if result.is_ok() {
+                self.retirement_snapshot = retirement;
+            }
+            result
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -923,6 +965,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         &mut self,
         target_upper: Timestamp,
         terminal: bool,
+        retirement: &mut Option<RetirementSnapshot>,
     ) -> Result<(), DurableCatalogError> {
         self.fenceable_token.validate()?;
 
@@ -964,6 +1007,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         // before attempting to deserialize the new updates.
                         while let Some((ts, updates)) = updates.pop_first() {
                             assert!(ts < self.upper, "expected {} < {}", ts, self.upper);
+                            if let Some(retirement) = retirement.as_mut() {
+                                retirement.apply(&updates);
+                            }
                             let updates = updates.into_iter().map(
                                 |update: StateUpdate<StateUpdateKindJson>| {
                                     let kind =
@@ -1162,6 +1208,95 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 }
 
 impl PersistCatalogState {
+    fn retirement_admission(
+        &self,
+        generation: u64,
+    ) -> Result<(DeploymentAdmission, DeploymentAdmission), CatalogError> {
+        let own = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog identity");
+        let active = self
+            .fenceable_token
+            .durable_token()
+            .expect("opened catalog authority")
+            .deploy_generation;
+        if self.mode != Mode::Writable
+            || !self.update_applier.protected
+            || own.deploy_generation != active
+        {
+            return Err(DurableCatalogError::NotWritable(
+                "deployment retirement requires the serving protected catalog".into(),
+            )
+            .into());
+        }
+        let previous = self
+            .update_applier
+            .deployment_admission
+            .as_ref()
+            .ok_or_else(|| {
+                DurableCatalogError::NotWritable("missing deployment admission metadata".into())
+            })?
+            .clone();
+        let mut admission = previous.clone();
+        admission.retire(generation, active)?;
+        Ok((previous, admission))
+    }
+
+    async fn prepare_retirement_snapshot(&mut self) -> Result<(), DurableCatalogError> {
+        let mut read_handle = self.read_handle().await;
+        let as_of = as_of(&read_handle, self.upper);
+        let rows = snapshot_binary(&mut read_handle, as_of, &self.metrics)
+            .await
+            .map(|update| update.kind)
+            .filter(super::promotion::is_retirement_input)
+            .collect();
+        read_handle.expire().await;
+        self.retirement_snapshot = Some(RetirementSnapshot { as_of, rows });
+        // The leased reader can force a newer seed cut. Catch authority up to
+        // that cut, and incorporate any suffix observed while reading the seed.
+        let target = self.current_upper().await.max(as_of.step_forward());
+        self.sync(target).await
+    }
+
+    async fn retire_deployment_inner(&mut self, generation: u64) -> Result<bool, CatalogError> {
+        self.sync_to_current_upper().await?;
+        let (mut previous, mut admission) = self.retirement_admission(generation)?;
+        if admission == previous {
+            return Ok(true);
+        }
+        if self.retirement_snapshot.is_none() {
+            self.prepare_retirement_snapshot().await?;
+            // Preparation can observe promotion or another retirement. Never
+            // carry admission or cleanup decisions across that catch-up.
+            (previous, admission) = self.retirement_admission(generation)?;
+            if admission == previous {
+                return Ok(true);
+            }
+        }
+        let snapshot = self.retirement_snapshot.as_ref().expect("prepared above");
+        let mut updates: Vec<_> =
+            super::promotion::retired_realizations(snapshot.rows.iter(), generation..=generation)?
+                .into_iter()
+                .map(|row| (row, Diff::MINUS_ONE))
+                .collect();
+        updates.push((
+            StateUpdateKind::DeploymentAdmission(previous).into(),
+            Diff::MINUS_ONE,
+        ));
+        updates.push((
+            StateUpdateKind::DeploymentAdmission(admission).into(),
+            Diff::ONE,
+        ));
+        // This remains one full-prefix commit, including exclusion and cleanup.
+        // Retain current raw inputs on conflict, never this candidate's diffs.
+        match self.commit_exact_prefix(updates, self.upper.into()).await {
+            Ok(_) => Ok(true),
+            Err(DurableCatalogError::CatalogOutOfSync { .. }) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Execute and return the results of `f` on the current catalog snapshot.
     ///
     /// Will return an error if the catalog has been fenced out.
@@ -1445,6 +1580,7 @@ impl UnopenedPersistCatalogState {
             timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
+            retirement_snapshot: None,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
         // updates, then we might accidentally fence ourselves out.
@@ -1909,6 +2045,7 @@ impl UnopenedPersistCatalogState {
             timestamp_oracle: self.timestamp_oracle,
             size_at_last_consolidation: None,
             updates_applied: 0,
+            retirement_snapshot: None,
         };
         catalog.metrics.collection_entries.reset();
         // Normally, `collection_entries` is updated in `apply_updates`. The audit log updates skip
@@ -3084,65 +3221,15 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 #[allow(mismatched_lifetime_syntaxes)]
 impl DurableCatalogState for PersistCatalogState {
     async fn retire_deployment(&mut self, generation: u64) -> Result<bool, CatalogError> {
-        self.sync_to_current_upper().await?;
-        let own = self
-            .fenceable_token
-            .token()
-            .expect("opened catalog identity");
-        let active = self
-            .fenceable_token
-            .durable_token()
-            .expect("opened catalog authority")
-            .deploy_generation;
-        if self.mode != Mode::Writable
-            || !self.update_applier.protected
-            || own.deploy_generation != active
-        {
-            return Err(DurableCatalogError::NotWritable(
-                "deployment retirement requires the serving protected catalog".into(),
-            )
-            .into());
+        let result = self.retire_deployment_inner(generation).await;
+        if !matches!(result, Ok(false)) {
+            self.retirement_snapshot = None;
         }
-        let previous = self
-            .update_applier
-            .deployment_admission
-            .as_ref()
-            .ok_or_else(|| {
-                DurableCatalogError::NotWritable("missing deployment admission metadata".into())
-            })?
-            .clone();
-        let mut admission = previous.clone();
-        admission.retire(generation, active)?;
-        if admission == previous {
-            return Ok(true);
-        }
+        result
+    }
 
-        // Retirement is infrequent and uses a consolidated snapshot, including
-        // every build's realization metadata. The CAS below binds cleanup and
-        // admission exclusion to this exact prefix, including against promotion.
-        let snapshot: Vec<StateUpdateKindJson> = self
-            .persist_snapshot_raw()
-            .await
-            .map(|update| update.kind)
-            .collect();
-        let mut updates: Vec<_> =
-            super::promotion::retired_realizations(snapshot.iter(), generation..=generation)?
-                .into_iter()
-                .map(|row| (row, Diff::MINUS_ONE))
-                .collect();
-        updates.push((
-            StateUpdateKind::DeploymentAdmission(previous).into(),
-            Diff::MINUS_ONE,
-        ));
-        updates.push((
-            StateUpdateKind::DeploymentAdmission(admission).into(),
-            Diff::ONE,
-        ));
-        match self.commit_exact_prefix(updates, self.upper.into()).await {
-            Ok(_) => Ok(true),
-            Err(DurableCatalogError::CatalogOutOfSync { .. }) => Ok(false),
-            Err(error) => Err(error.into()),
-        }
+    fn discard_retirement_preparation(&mut self) {
+        self.retirement_snapshot = None;
     }
 
     fn is_read_only(&self) -> bool {

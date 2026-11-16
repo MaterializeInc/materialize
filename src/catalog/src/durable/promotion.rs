@@ -61,6 +61,22 @@ struct Item {
     definition: proto::CatalogItem,
 }
 
+/// Inputs to retirement selection, including rows that establish surviving owners.
+pub(super) fn is_retirement_input(row: &StateUpdateKindJson) -> bool {
+    matches!(
+        row.kind(),
+        "ClientIncarnation"
+            | "ClientReadRequirement"
+            | "ClusterReplica"
+            | "ClusterReplicaDeclaration"
+            | "ClusterRuntime"
+            | "AdapterRuntime"
+            | "ReplicaSystemConfiguration"
+            | "WrittenPlan"
+            | "Comment"
+    )
+}
+
 /// Selects realization metadata and protection owned by the given deployments.
 /// Commit these exact rows with retirement authority derived from the same
 /// consolidated snapshot. Shared identities and other owners remain untouched.
@@ -68,6 +84,7 @@ pub(super) fn retired_realizations<'a>(
     snapshot: impl Iterator<Item = &'a StateUpdateKindJson> + Clone,
     generations: impl RangeBounds<u64>,
 ) -> Result<Vec<StateUpdateKindJson>, CatalogError> {
+    let snapshot = snapshot.filter(|row| is_retirement_input(row));
     #[derive(Deserialize)]
     struct Key<K> {
         key: K,

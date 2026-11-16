@@ -119,7 +119,11 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     }
 
     let oracle = Arc::new(TestOracle::default());
+    let metrics = Arc::new(mz_catalog::durable::Metrics::new(
+        &mz_ore::metrics::MetricsRegistry::new(),
+    ));
     let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_metrics(Arc::clone(&metrics))
         .with_deploy_generation(7)
         .with_timestamp_oracle(CatalogTimestampOracle::new(
             Arc::<TestOracle>::clone(&oracle),
@@ -222,6 +226,30 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
             .is_retired(old_client)
     );
 
+    // A second public attempt reuses preparation, but still rejects a fresh
+    // content race. Ending that retry sequence releases its local raw rows.
+    let snapshots = metrics.snapshots_taken.get();
+    let cleanup_gate = Arc::new(Notify::new());
+    *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
+    let retiring = mz_ore::task::spawn(|| "retirement preparation reuse", async move {
+        let result = promoted.retire_deployment(7).await.unwrap();
+        (promoted, result)
+    });
+    tokio::time::timeout(Duration::from_secs(5), oracle.allocation_started.notified())
+        .await
+        .unwrap();
+    assert_eq!(metrics.snapshots_taken.get(), snapshots);
+    let mut txn = peer.transaction().await.unwrap();
+    txn.set_config("retirement_peer_conflict".into(), Some(1))
+        .unwrap();
+    commit(txn).await;
+    cleanup_gate.notify_one();
+    let (mut promoted, retired) = tokio::time::timeout(Duration::from_secs(5), retiring)
+        .await
+        .unwrap();
+    assert!(!retired);
+    promoted.discard_retirement_preparation();
+
     // Unlike content, empty upper progress must preserve the prepared retirement.
     let cleanup_gate = Arc::new(Notify::new());
     *oracle.allocation_gate.lock().unwrap() = Some(Arc::clone(&cleanup_gate));
@@ -232,6 +260,7 @@ async fn explicit_retirement_is_scoped_and_waits_for_oracle_completion() {
     tokio::time::timeout(Duration::from_secs(5), oracle.allocation_started.notified())
         .await
         .unwrap();
+    assert_eq!(metrics.snapshots_taken.get(), snapshots + 1);
     let upper = peer.current_upper().await;
     peer.advance_upper(upper.step_forward()).await.unwrap();
 

@@ -632,6 +632,14 @@ land only at `T >= B+1`. Its cached catalog upper is `<= C_f`, hence
 no-op and must observe the fence durably before the txns compare-and-append.
 This proof is independent of W and does not require T to become the new R.
 
+Retirement retractions preserve exact raw catalog keys, including fields written
+by compatible builds that this build does not interpret. A bounded request may
+retain retirement inputs across conflicts through the existing catalog listener.
+Recompute admission and cleanup after catch-up, and commit them together against
+the full prefix. A cached projection grants no authority and must be discarded
+when the request's retry sequence ends. Finish submitted writes before releasing
+that preparation, including when the HTTP caller disconnects.
+
 Shared configuration rows describe the active deployment. Writable bootstrap
 reconciles desired-minus-current at the WAL fence timestamp B and conditionally
 appends the differences at B+1, after advancing the catalog upper to B+2. Check

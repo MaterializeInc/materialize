@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
+
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
@@ -814,6 +816,194 @@ async fn test_exact_prefix_append_rebases_only_empty_progress() {
         Box::new(peer).expire().await;
         active.expire().await;
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_retirement_reuses_raw_preparation_after_peer_and_own_writes() {
+    let version = semver::Version::new(26, 1, 0);
+    let organization_id = Uuid::new_v4();
+    let mut cache = PersistClientCache::new_no_metrics();
+    let (_, active_builder) = admission_participant(&mut cache, organization_id, 7, &version).await;
+    let active = bootstrap_admission(active_builder.clone()).await;
+    let (_, pending_builder) =
+        admission_participant(&mut cache, organization_id, 8, &version).await;
+    let pending = pending_builder
+        .unwrap_build()
+        .await
+        .join_prewarming(&version.to_string())
+        .await
+        .expect("admit retirement target");
+    let row = |generation, replica, preserve| {
+        StateUpdateKindJson::from_serde(serde_json::json!({
+            "kind": "ReplicaSystemConfiguration",
+            "key": {
+                "replica_id": {"User": replica},
+                "deployment_generation": generation,
+                "name": "max_result_size"
+            },
+            "value": {"value": "1GB", "unknown_extra_field": {"preserve": preserve}}
+        }))
+    };
+    let target = row(8, 23, true);
+    let replacement = row(8, 23, false);
+    let added_by_peer = row(8, 24, true);
+    let added_by_self = row(8, 25, true);
+    let survivor = row(9, 26, true);
+    let mut peer = raw_catalog(&active_builder).await;
+    let ts = peer.upper;
+    peer.compare_and_append(
+        vec![(target.clone(), Diff::ONE), (survivor.clone(), Diff::ONE)],
+        ts,
+    )
+    .await
+    .expect("seed raw configuration rows");
+    let mut candidate = raw_catalog(&active_builder)
+        .await
+        .open_inner(
+            super::Mode::Writable,
+            mz_repr::Timestamp::MIN,
+            super::OpenPurpose::Join,
+        )
+        .await
+        .expect("open typed retirement writer");
+    // Own empty advances can leave the existing listener behind the seed cut.
+    let advanced = candidate.upper.step_forward();
+    assert!(candidate.try_advance_upper(advanced).await.unwrap());
+    candidate
+        .prepare_retirement_snapshot()
+        .await
+        .expect("prepare once");
+    let prepared_at = candidate.upper;
+    let snapshots = candidate.metrics.snapshots_taken.get();
+    peer.sync_to_current_upper().await.expect("observe join");
+    let ts = peer.upper;
+    peer.compare_and_append(
+        vec![
+            (target.clone(), Diff::MINUS_ONE),
+            (replacement, Diff::ONE),
+            (added_by_peer, Diff::ONE),
+        ],
+        ts,
+    )
+    .await
+    .expect("peer changes exact raw keys after preparation");
+    assert!(matches!(
+        candidate
+            .commit_exact_prefix(vec![(target, Diff::MINUS_ONE)], prepared_at.into())
+            .await,
+        Err(DurableCatalogError::CatalogOutOfSync { .. })
+    ));
+    // A successful write by this handle also flows through its existing listen.
+    // Retrying retirement must see this new target row without another snapshot.
+    let upper = candidate.upper;
+    candidate
+        .commit_exact_prefix(vec![(added_by_self, Diff::ONE)], upper.into())
+        .await
+        .expect("own write before retirement retry");
+    assert!(
+        candidate
+            .retire_deployment(8)
+            .await
+            .expect("retire refreshed target")
+    );
+    assert_eq!(candidate.metrics.snapshots_taken.get(), snapshots);
+    peer.sync_to_current_upper()
+        .await
+        .expect("observe retirement");
+    peer.consolidate();
+    assert!(peer.snapshot.iter().all(|(_, _, diff)| *diff == Diff::ONE));
+    let configs: Vec<_> = peer
+        .snapshot
+        .iter()
+        .filter(|(row, _, _)| row.kind() == "ReplicaSystemConfiguration")
+        .map(|(row, _, _)| row.clone())
+        .collect();
+    assert_eq!(configs, vec![survivor]);
+    assert!(
+        peer.update_applier
+            .deployment_admission
+            .as_ref()
+            .unwrap()
+            .retired
+            .contains(&8)
+    );
+    pending.expire().await;
+    candidate.expire().await;
+    Box::new(peer).expire().await;
+    active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_prepared_retirement_revalidates_promotion() {
+    let version = semver::Version::new(26, 1, 0);
+    let organization_id = Uuid::new_v4();
+    let mut cache = PersistClientCache::new_no_metrics();
+    let (_, active_builder) = admission_participant(&mut cache, organization_id, 7, &version).await;
+    let active = bootstrap_admission(active_builder.clone()).await;
+    let (_, pending_builder) =
+        admission_participant(&mut cache, organization_id, 8, &version).await;
+    let pending = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming(&version.to_string())
+        .await
+        .expect("admit candidate");
+    let mut candidate = raw_catalog(&active_builder)
+        .await
+        .open_inner(
+            super::Mode::Writable,
+            mz_repr::Timestamp::MIN,
+            super::OpenPurpose::Join,
+        )
+        .await
+        .expect("join serving generation");
+    candidate
+        .prepare_retirement_snapshot()
+        .await
+        .expect("prepare before promotion");
+    let promoted = pending_builder
+        .unwrap_build()
+        .await
+        .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("peer promotes after preparation");
+    let before = raw_catalog(&active_builder).await;
+    let rows_before: BTreeSet<_> = before
+        .snapshot
+        .iter()
+        .map(|(row, _, diff)| (row.clone(), *diff))
+        .collect();
+    assert!(matches!(
+        candidate.retire_deployment(8).await,
+        Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+    ));
+    let after = raw_catalog(&active_builder).await;
+    let rows_after: BTreeSet<_> = after
+        .snapshot
+        .iter()
+        .map(|(row, _, diff)| (row.clone(), *diff))
+        .collect();
+    assert_eq!(
+        rows_before, rows_after,
+        "stale serving authority must not retire the promoted peer"
+    );
+    assert_eq!(
+        after
+            .fenceable_token
+            .durable_token()
+            .unwrap()
+            .deploy_generation,
+        8
+    );
+    candidate.expire().await;
+    Box::new(before).expire().await;
+    Box::new(after).expire().await;
+    promoted.expire().await;
+    pending.expire().await;
+    active.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

@@ -628,7 +628,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Only the serving deployment may call this. Success is durable, includes
     /// target-owned cleanup and prevents readmission. Returns false on a catalog
     /// conflict, requiring a fresh attempt after relinquishing the caller's lock.
+    /// Call [`Self::discard_retirement_preparation`] when the retry sequence ends.
     async fn retire_deployment(&mut self, generation: u64) -> Result<bool, CatalogError>;
+
+    /// Releases local retirement preparation when the caller's retry sequence ends.
+    /// Does not change durable admission or cleanup and must follow the definitive
+    /// outcome of any submitted retirement write.
+    fn discard_retirement_preparation(&mut self);
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///

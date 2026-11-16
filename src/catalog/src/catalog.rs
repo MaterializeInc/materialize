@@ -310,6 +310,7 @@ impl Catalog {
     /// Returns false on contention. Callers must retry outside the coordinator
     /// loop and preserve the target identity. The durable layer validates serving
     /// authority and serializes retirement with promotion.
+    /// Call [`Self::discard_retirement_preparation`] when the retry sequence ends.
     pub async fn try_retire_deployment(
         &self,
         generation: u64,
@@ -319,6 +320,12 @@ impl Catalog {
             .await
             .retire_deployment(generation)
             .await
+    }
+
+    /// Releases local preparation after a completed retirement retry sequence.
+    /// This is memory cleanup, not cancellation of a submitted durable write.
+    pub async fn discard_retirement_preparation(&self) {
+        self.storage.lock().await.discard_retirement_preparation();
     }
 
     /// Non-durable environment context needed to reconstruct this catalog in a replica.

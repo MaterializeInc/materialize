@@ -759,10 +759,12 @@ async fn handle_deployment_retire(
             .await
             .map_err(|_| anyhow::anyhow!("adapter unavailable"))?;
         let catalog = client.catalog_snapshot_expensive().await;
-        catalog
+        let result = catalog
             .try_retire_deployment(request.generation)
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from);
+        catalog.discard_retirement_preparation().await;
+        result
     })
     .await;
     match result {

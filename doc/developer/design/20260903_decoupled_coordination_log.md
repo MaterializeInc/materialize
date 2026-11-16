@@ -2,17 +2,22 @@
 
 ## Next action
 
-Repair KafkaSources retirement contention, then rerun its unchanged workflow.
-Retirement currently repeats a full raw snapshot before each exact-prefix write.
-Investigate retaining retirement-relevant raw rows through the existing listener,
-recomputing cleanup after catch-up. Preserve unknown fields, full-prefix validation
-and atomic admission plus cleanup. Do not add a listener or raise retry limits.
-The source analysis below covers seed alignment and successful own-write updates.
+Collect KafkaSources repeat `aj-native-parallel-bf20a714` on the retirement repair.
+The first run, `aj-native-parallel-748e9f12`, hit the unchanged 1800s guard at
+action 349 after resuming SQL following promotion. It did not pass the workflow.
+The repeat uses identical binaries, workload, guards and resource limits.
+The repair retains retirement-relevant raw rows through the existing listener,
+recomputes cleanup after catch-up and discards preparation when the bounded request ends. It preserves
+unknown fields, full-prefix validation and atomic admission plus cleanup.
+Targeted catalog, oracle and HTTP tests, all-target checks and the debug build
+passed. Independent review found no remaining safety or public-contract issue.
+Nine retirements completed, including recovery from two HTTP contention responses.
+This verifies bounded lifecycle progress, not completion of the full workflow.
 
 PostgresCdc passed its full default workload and final validation with the capture
 resource fix, within the original limits and deadline. The driver now closes
-selectors and pipes rather than relying on cyclic garbage collection. The worker
-is idle and the completed run's containers are cleaned up.
+selectors and pipes rather than relying on cyclic garbage collection. That run's
+containers are cleaned up.
 
 The registration repair passed targeted checks and seven promotion cycles with
 SQL resuming. KafkaSources first hit the 1800s guard during generation 8 readiness.
@@ -105,7 +110,8 @@ Worker `i-0b3699392b71bd7d2` has 16 CPUs and 61 GiB. Runtime limits are 40 GiB
 and eight CPUs in aggregate, with four CPUs and 6 GiB per deployment. Builds use
 one job, 32 GiB and four CPUs on the worker. Do not overlap builds and runtimes,
 and keep heavy work off the local VM. Restarting the worker or extending its
-expiry within these limits needs no approval.
+expiry within these limits needs no approval. Its shutdown timer is set for
+2026-11-16 at 23:30 UTC. KafkaSources is the only live test run.
 
 Evidence lives in
 `~/.local/share/aj/m3-evidence/native-only/upsert-oom-investigation/`. The
@@ -122,12 +128,26 @@ analysis in `zippy-adoption-phase-analysis.md`. The runner is
 passed. The bounded build resumed after its resource guard, without raising caps.
 The repeat and Postgres evidence are `zippy-adoption-KafkaSources-repeat-evidence.tar.gz`
 and `zippy-adoption-PostgresCdc-evidence.tar.gz`. Retirement's raw-key and prefix
-constraints are surveyed in `retirement-retry-source-analysis.md`, not yet implemented.
+constraints are surveyed in `retirement-retry-source-analysis.md`. The repair's
+successful checks and exact source/binary provenance are preserved locally in
+`retirement-scoped-build-evidence.tar.gz`. Its runtime runner is
+`native_zippy_retirement.py`.
+The timed-out run's complete evidence is saved locally in
+`zippy-retirement-KafkaSources-evidence.tar.gz`. Its containers are cleaned up.
+`retirement-kafka-phase-analysis.md` documents successful retirement receipts,
+readiness and startup time, and a recovered generation-6 storage-initialization
+`CatalogOutOfSync` exit. No panic or OOM was observed. The startup exit remains
+an open defect, separate from retirement.
 Capture regression evidence is in `capture-fd-regression-before.log` and
 `capture-fd-regression-after.log`. Passing Postgres evidence, harness provenance
 and worker checks are in `zippy-capture-fixed-PostgresCdc-evidence.tar.gz`.
 `zippy-capture-fixed-PostgresCdc-crash-review.log` records no crash signatures or
-OOM events. No runtime remains active.
+OOM events.
+
+`startup-expression-cache-source-analysis.md` identifies cross-executable cache
+eviction at controller startup. It records source and archived timing evidence,
+not a measured repair. Keep that change behind zippy completion, preserve exact-build
+cache validation and separate eviction from the existing shard-format upgrade call.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`

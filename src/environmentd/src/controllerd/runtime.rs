@@ -132,6 +132,7 @@ pub async fn run(
             },
             Some(command) = commands.recv() => {
                 // Finish submitted catalog writes even if the HTTP caller disconnects.
+                let retiring = matches!(&command.action, Action::RetireDeployment { .. });
                 let result = administer(
                     &mut catalog,
                     &adapter_launch,
@@ -140,6 +141,9 @@ pub async fn run(
                     pubsub.as_ref(),
                     command.action,
                 ).await;
+                if retiring {
+                    catalog.discard_retirement_preparation().await;
+                }
                 let _ = command.response.send(result);
             }
             _ = interval.tick() => {
