@@ -549,6 +549,75 @@ struct QueryParams {
     sql_query: String,
 }
 
+impl QueryParams {
+    fn developer_placement(&self) -> Result<Placement<'_>, McpRequestError> {
+        match (self.cluster.as_deref(), self.cluster_replica.as_deref()) {
+            (None, _) => Err(McpRequestError::QueryValidationFailed(
+                "cluster is required".to_string(),
+            )),
+            (Some(cluster), None) => Ok(Placement::Cluster(cluster)),
+            (Some(cluster), Some(replica)) => Ok(Placement::Replica { cluster, replica }),
+        }
+    }
+}
+
+/// Where a read runs. Each endpoint builds it under its own rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement<'a> {
+    SessionDefault,
+    Cluster(&'a str),
+    /// One replica of `cluster`, e.g. for `EXPLAIN ANALYZE` on a cluster with
+    /// more than one replica.
+    Replica {
+        cluster: &'a str,
+        replica: &'a str,
+    },
+}
+
+impl<'a> Placement<'a> {
+    fn cluster_or_default(cluster: Option<&'a str>) -> Self {
+        cluster.map_or(Placement::SessionDefault, Placement::Cluster)
+    }
+
+    /// The `SET` clause scoping a read to this placement. Names are escaped,
+    /// since they are interpolated into SQL string literals.
+    fn set_clause(&self) -> Option<String> {
+        match self {
+            Placement::SessionDefault => None,
+            Placement::Cluster(cluster) => {
+                Some(format!("SET CLUSTER = {}", escaped_string_literal(cluster)))
+            }
+            Placement::Replica { cluster, replica } => Some(format!(
+                "SET CLUSTER = {}; SET CLUSTER_REPLICA = {}",
+                escaped_string_literal(cluster),
+                escaped_string_literal(replica),
+            )),
+        }
+    }
+
+    /// Rejects an empty or whitespace-only name, which would otherwise reach
+    /// the engine as `SET CLUSTER = ''` and fail there as an opaque execution
+    /// error.
+    fn validate(&self) -> Result<(), McpRequestError> {
+        let names = match self {
+            Placement::SessionDefault => [None, None],
+            Placement::Cluster(cluster) => [Some(("cluster", *cluster)), None],
+            Placement::Replica { cluster, replica } => [
+                Some(("cluster", *cluster)),
+                Some(("cluster_replica", *replica)),
+            ],
+        };
+        for (field, value) in names.into_iter().flatten() {
+            if value.trim().is_empty() {
+                return Err(McpRequestError::QueryValidationFailed(format!(
+                    "{field} must not be empty or whitespace-only"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct QuerySystemCatalogParams {
     sql_query: String,
@@ -1672,8 +1741,7 @@ async fn handle_tools_call(
             // drop `cluster_replica` even if a client supplies it.
             execute_query(
                 client,
-                p.cluster.as_deref(),
-                None,
+                Placement::cluster_or_default(p.cluster.as_deref()),
                 &p.sql_query,
                 max_response_size,
             )
@@ -1687,20 +1755,13 @@ async fn handle_tools_call(
                 "query tool is not available. Use query_system_catalog instead.".to_string(),
             ))
         }
-        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => match p.cluster.as_deref() {
-            None => Err(McpRequestError::QueryValidationFailed(
-                "cluster is required".to_string(),
-            )),
-            cluster => {
-                execute_query(
-                    client,
-                    cluster,
-                    p.cluster_replica.as_deref(),
-                    &p.sql_query,
-                    max_response_size,
-                )
-                .await
+        // NOTE: a `?` here would skip `guard.set_status` below and record the
+        // call as cancelled.
+        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => match p.developer_placement() {
+            Ok(placement) => {
+                execute_query(client, placement, &p.sql_query, max_response_size).await
             }
+            Err(e) => Err(e),
         },
         // Tool called on wrong endpoint
         (_, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -1932,7 +1993,11 @@ async fn read_data_product(
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
     // max_result_size at the adapter layer. Mirrors the SQL HTTP endpoint,
     // which also leans on a size cap rather than a row cap.
-    let read_query = build_read_query(&safe_name, limit, target_cluster);
+    let read_query = build_read_query(
+        &safe_name,
+        limit,
+        Placement::cluster_or_default(target_cluster),
+    );
 
     let rows = execute_sql(client, &read_query).await?;
 
@@ -1942,14 +2007,10 @@ async fn read_data_product(
 /// Builds the SQL the agent runs for `read_data_product`.
 ///
 /// `safe_name` must already be the validated, quoted form produced by
-/// [`safe_data_product_name`]. When `target_cluster` is `Some`, it is escaped
-/// as a SQL string literal and wrapped in `SET CLUSTER` inside the `BEGIN READ
-/// ONLY` transaction so the cluster choice is scoped to this read and does not
-/// leak into the session. When it is `None`, no `SET CLUSTER` is emitted and
-/// the read runs on the session's default (serving) cluster.
-fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
+/// [`safe_data_product_name`].
+fn build_read_query(safe_name: &str, limit: u32, placement: Placement<'_>) -> String {
     let body = format!("SELECT * FROM {safe_name} LIMIT {limit}");
-    read_only_txn(query_set_clause(target_cluster, None).as_deref(), &body)
+    read_only_txn(placement.set_clause().as_deref(), &body)
 }
 
 /// Wraps `body` in a `BEGIN READ ONLY; <set_clause>; <body>; COMMIT;` frame so
@@ -2016,67 +2077,22 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
 
 async fn execute_query(
     client: &mut AuthedClient,
-    cluster: Option<&str>,
-    cluster_replica: Option<&str>,
+    placement: Placement<'_>,
     sql_query: &str,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(cluster = ?cluster, cluster_replica = ?cluster_replica, "Executing user query");
+    debug!(?placement, "Executing user query");
 
     validate_readonly_query(sql_query)?;
-    validate_query_placement(cluster, cluster_replica)?;
+    placement.validate()?;
 
     // READ ONLY prevents mutations, and the SET clause scopes any placement to
     // this read.
-    let combined_query = read_only_txn(
-        query_set_clause(cluster, cluster_replica).as_deref(),
-        sql_query,
-    );
+    let combined_query = read_only_txn(placement.set_clause().as_deref(), sql_query);
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
-}
-
-/// Builds the `SET` clause scoping a read to `cluster` and, when requested,
-/// `cluster_replica` (e.g. for `EXPLAIN ANALYZE` on a cluster with multiple
-/// replicas). Both names pass through `escaped_string_literal` since they are
-/// interpolated into SQL string literals. Returns `None` without a cluster, so
-/// callers must reject a lone replica first (see [`validate_query_placement`]).
-fn query_set_clause(cluster: Option<&str>, cluster_replica: Option<&str>) -> Option<String> {
-    debug_assert!(cluster.is_some() || cluster_replica.is_none());
-    let mut set_clause = format!("SET CLUSTER = {}", escaped_string_literal(cluster?));
-    if let Some(replica) = cluster_replica {
-        set_clause.push_str(&format!(
-            "; SET CLUSTER_REPLICA = {}",
-            escaped_string_literal(replica)
-        ));
-    }
-    Some(set_clause)
-}
-
-/// Rejects an empty or whitespace-only `cluster` or `cluster_replica`, and a
-/// replica without a cluster.
-fn validate_query_placement(
-    cluster: Option<&str>,
-    cluster_replica: Option<&str>,
-) -> Result<(), McpRequestError> {
-    // An empty name would reach the engine as `SET CLUSTER = ''` and fail there
-    // as an opaque execution error.
-    for (field, value) in [("cluster", cluster), ("cluster_replica", cluster_replica)] {
-        if value.is_some_and(|v| v.trim().is_empty()) {
-            return Err(McpRequestError::QueryValidationFailed(format!(
-                "{field} must not be empty or whitespace-only"
-            )));
-        }
-    }
-    // A lone replica would pin a replica of the session's default cluster.
-    if cluster.is_none() && cluster_replica.is_some() {
-        return Err(McpRequestError::QueryValidationFailed(
-            "cluster_replica requires cluster".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 async fn query_system_catalog(
@@ -3361,38 +3377,33 @@ mod tests {
         );
     }
 
-    // ── query_set_clause tests (QAR-136) ───────────────────────────────
-
-    /// Without a replica, only `SET CLUSTER` is emitted.
-    #[mz_ore::test]
-    fn test_query_set_clause_without_replica() {
-        let clause = query_set_clause(Some("prod_cluster"), None);
-        assert_eq!(clause.as_deref(), Some("SET CLUSTER = 'prod_cluster'"));
-    }
+    // ── Placement tests (QAR-136) ──────────────────────────────────────
 
     #[mz_ore::test]
-    fn test_query_set_clause_without_cluster() {
-        assert_eq!(query_set_clause(None, None), None);
-    }
-
-    /// With a replica, `SET CLUSTER_REPLICA` follows `SET CLUSTER`, scoping
-    /// the read to one replica (what makes EXPLAIN ANALYZE usable on
-    /// clusters with multiple replicas).
-    #[mz_ore::test]
-    fn test_query_set_clause_with_replica() {
-        let clause = query_set_clause(Some("prod_cluster"), Some("r1"));
+    fn test_placement_set_clause() {
+        assert_eq!(Placement::SessionDefault.set_clause(), None);
         assert_eq!(
-            clause.as_deref(),
+            Placement::Cluster("prod_cluster").set_clause().as_deref(),
+            Some("SET CLUSTER = 'prod_cluster'")
+        );
+        assert_eq!(
+            Placement::Replica {
+                cluster: "prod_cluster",
+                replica: "r1"
+            }
+            .set_clause()
+            .as_deref(),
             Some("SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'")
         );
     }
 
-    /// Replica names are interpolated into a SQL string literal, so they get
-    /// the same escaping treatment as cluster names. Defends against
-    /// injection via adversarial replica names.
     #[mz_ore::test]
-    fn test_query_set_clause_escapes_replica_name() {
-        let clause = query_set_clause(Some("c"), Some("evil'; DROP TABLE secrets; --"));
+    fn test_placement_set_clause_escapes_replica_name() {
+        let clause = Placement::Replica {
+            cluster: "c",
+            replica: "evil'; DROP TABLE secrets; --",
+        }
+        .set_clause();
         assert_eq!(
             clause.as_deref(),
             Some("SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'")
@@ -3400,30 +3411,50 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_validate_query_placement_accepts_omitted_and_named() {
-        assert!(validate_query_placement(None, None).is_ok());
-        assert!(validate_query_placement(Some("c"), None).is_ok());
-        assert!(validate_query_placement(Some("c"), Some("r1")).is_ok());
+    fn test_placement_validate() {
+        assert!(Placement::SessionDefault.validate().is_ok());
+        assert!(Placement::Cluster("c").validate().is_ok());
+        let replica = |cluster, replica| Placement::Replica { cluster, replica };
+        assert!(replica("c", "r1").validate().is_ok());
+        for bad in [
+            Placement::Cluster(""),
+            Placement::Cluster("   "),
+            replica("", "r1"),
+            replica("c", ""),
+            replica("c", "\t\n"),
+        ] {
+            assert!(
+                matches!(
+                    bad.validate(),
+                    Err(McpRequestError::QueryValidationFailed(_))
+                ),
+                "expected validation error for {bad:?}",
+            );
+        }
     }
 
     #[mz_ore::test]
-    fn test_validate_query_placement_rejects_empty_and_lone_replica() {
-        let bad = [
-            (Some(""), None),
-            (Some("   "), None),
-            (Some("c"), Some("")),
-            (Some("c"), Some("\t\n")),
-            (None, Some("r1")),
-        ];
-        for (cluster, replica) in bad {
-            assert!(
-                matches!(
-                    validate_query_placement(cluster, replica),
-                    Err(McpRequestError::QueryValidationFailed(_))
-                ),
-                "expected validation error for {cluster:?}, {replica:?}",
-            );
-        }
+    fn test_developer_placement() {
+        let params = |cluster: Option<&str>, replica: Option<&str>| QueryParams {
+            cluster: cluster.map(str::to_string),
+            cluster_replica: replica.map(str::to_string),
+            sql_query: "SELECT 1".to_string(),
+        };
+        assert!(matches!(
+            params(None, Some("r1")).developer_placement(),
+            Err(McpRequestError::QueryValidationFailed(_))
+        ));
+        assert_eq!(
+            params(Some("c"), None).developer_placement().unwrap(),
+            Placement::Cluster("c")
+        );
+        assert_eq!(
+            params(Some("c"), Some("r1")).developer_placement().unwrap(),
+            Placement::Replica {
+                cluster: "c",
+                replica: "r1"
+            }
+        );
     }
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────
@@ -3433,7 +3464,11 @@ mod tests {
     /// into the rest of the session.
     #[mz_ore::test]
     fn test_build_read_query_with_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Some("prod_cluster"));
+        let sql = build_read_query(
+            "\"db\".\"sch\".\"v\"",
+            50,
+            Placement::Cluster("prod_cluster"),
+        );
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(sql.contains("SET CLUSTER = 'prod_cluster'"), "{sql}");
         assert!(
@@ -3447,7 +3482,7 @@ mod tests {
     /// the read omits `SET CLUSTER` and runs on the session's serving cluster.
     #[mz_ore::test]
     fn test_build_read_query_without_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, None);
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Placement::SessionDefault);
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(!sql.contains("SET CLUSTER"), "{sql}");
         assert!(
@@ -3466,7 +3501,7 @@ mod tests {
         let sql = build_read_query(
             "\"db\".\"sch\".\"v\"",
             10,
-            Some("evil'; DROP TABLE secrets; --"),
+            Placement::Cluster("evil'; DROP TABLE secrets; --"),
         );
         // The single quote in `evil'` must be doubled inside the literal.
         assert!(
