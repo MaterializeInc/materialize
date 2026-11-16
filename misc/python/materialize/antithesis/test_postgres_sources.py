@@ -22,6 +22,7 @@ pytest.importorskip("antithesis")
 from materialize.antithesis import pg_checkpoint as c
 from materialize.antithesis.drivers import postgres_sources as p
 from materialize.antithesis.test_pg_checkpoint import database, record
+from materialize.antithesis.test_telemetry import requires_procfs
 
 
 @pytest.mark.parametrize(
@@ -134,6 +135,7 @@ def test_checkpoint_requires_an_independent_upstream_outcome(
     assert db.execute("SELECT count(*) FROM ops").fetchone()[0] == 1
 
 
+@requires_procfs
 def test_retained_history_cap_stops_new_writes_without_forgetting_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,6 +149,7 @@ def test_retained_history_cap_stops_new_writes_without_forgetting_them(
     assert db.execute("SELECT txn_id FROM txns").fetchall() == [("pending",)]
 
 
+@requires_procfs
 def test_admission_reserves_space_and_reclaims_only_dead_processes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,6 +183,7 @@ def test_counter_lock_fence_resolves_unknown_commits_and_rollbacks() -> None:
     assert "FOR UPDATE" in up.execute.call_args_list[0].args[0]
 
 
+@requires_procfs
 def test_liveness_heartbeat_has_one_reserved_slot_under_backpressure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,6 +196,7 @@ def test_liveness_heartbeat_has_one_reserved_slot_under_backpressure(
     assert db.execute("SELECT count(*) FROM pg_writers").fetchone()[0] == 2
 
 
+@requires_procfs
 def test_retiring_history_does_not_allow_reused_transaction_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -210,6 +215,7 @@ def test_retiring_history_does_not_allow_reused_transaction_ids(
     assert first != second
 
 
+@requires_procfs
 def test_concurrent_admission_never_exceeds_the_history_cap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

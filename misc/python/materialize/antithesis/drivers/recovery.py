@@ -445,9 +445,13 @@ class ContainerObservation:
 
     @property
     def termination_count(self) -> int:
-        # The current incarnation has not incremented restart_count yet.
-        # Use its eventual ordinal to deduplicate it after the kubelet restarts it.
-        return self.restart_count + int(self.current_terminated)
+        # restart_count counts a termination only once the kubelet restarts
+        # the container. Until then the termination is the current state, or
+        # the last state of a container waiting out its restart backoff. Use
+        # its eventual ordinal, so one termination keeps one identity.
+        return self.restart_count + int(
+            self.current_terminated or self.waiting_reason == "CrashLoopBackOff"
+        )
 
 
 def pod_role(
@@ -579,6 +583,7 @@ class _LogSelector:
     pod_name: str
     restart_count: int
     current_terminated: bool
+    backing_off: bool
     exit_code: int
     signal: int | None
     finished_at: str | None
@@ -588,6 +593,11 @@ class _LogSelector:
     prior_finished_at: str | None
     next_started_at: str | None
     termination_message: str | None
+
+    @property
+    def termination_count(self) -> int:
+        # See `ContainerObservation.termination_count`.
+        return self.restart_count + int(self.current_terminated or self.backing_off)
 
 
 def _time_text(value: Any) -> str | None:
@@ -607,11 +617,13 @@ def _log_selector(pod: Any, container: str) -> _LogSelector | None:
         if term is None:
             return None
         running = getattr(getattr(cs, "state", None), "running", None)
+        waiting = getattr(getattr(cs, "state", None), "waiting", None)
         return _LogSelector(
             metadata.uid,
             metadata.name,
             cs.restart_count,
             current is not None,
+            getattr(waiting, "reason", None) == "CrashLoopBackOff",
             term.exit_code,
             term.signal,
             _time_text(term.finished_at),
@@ -643,8 +655,7 @@ def _correlated_log_time(stamp: str, selector: _LogSelector) -> bool:
         return False
     if following is not None and logged[1] > following[0]:
         return False
-    ordinal = selector.restart_count + int(selector.current_terminated)
-    if logged[0] < started[1] and ordinal != 1 and prior is None:
+    if logged[0] < started[1] and selector.termination_count != 1 and prior is None:
         return False
     # In the uncertain final bucket the new incarnation must be known to
     # start later. Otherwise a stale pod status can name the wrong log stream.
@@ -694,7 +705,7 @@ def _termination_file_key(selector: _LogSelector | None) -> tuple[Any, ...] | No
     return (
         selector.pod_uid,
         selector.pod_name,
-        selector.restart_count + int(selector.current_terminated),
+        selector.termination_count,
         selector.exit_code,
         selector.signal,
         selector.finished_at,
@@ -1066,7 +1077,9 @@ def record_halt_evidence(
 # deleted after the leasing reader expired, and the operator-requested 0dt
 # catch-up timeout.
 DESIGNED_BASE_PANICS = (
-    "fenced by new catalog epoch",
+    # `FenceError::DeployGeneration` also ends in "fenced by new catalog
+    # epoch", and later releases report a panic on it as a failure.
+    "current catalog epoch ",
     "Fence(Epoch {",
     "has been expired out of state",
     "not caught up within",
@@ -1720,11 +1733,9 @@ class Recovery:
                         crash_loops.Sample(
                             key=(o.pod_uid, o.container),
                             name=name,
-                            # A container waiting out its restart backoff has
-                            # not counted its last termination yet. Count it now
-                            # rather than at the restart, up to 300 s later.
-                            restart_count=o.termination_count
-                            + int(o.waiting_reason == "CrashLoopBackOff"),
+                            # Counts a crash whose restart still backs off
+                            # now, not at the restart up to 300 s later.
+                            restart_count=o.termination_count,
                             exit_class=(
                                 classify_exit(o.exit_code, o.reason)
                                 if o.exit_code is not None

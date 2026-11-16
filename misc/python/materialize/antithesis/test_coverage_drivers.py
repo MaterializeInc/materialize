@@ -29,6 +29,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 from materialize.antithesis import ivm_model, telemetry, telemetry_coverage, templates
 from materialize.antithesis import serializability as sz
 from materialize.antithesis.drivers import history, ivm, pod_restarts
+from materialize.antithesis.test_telemetry import requires_procfs
 
 
 @pytest.mark.parametrize(
@@ -428,6 +429,7 @@ def test_focused_faults_do_not_wait_for_unscheduled_workloads(
     assert ("environmentd_candidate" in params.target_weights) is candidate
 
 
+@requires_procfs
 def test_generated_command_records_real_measurements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

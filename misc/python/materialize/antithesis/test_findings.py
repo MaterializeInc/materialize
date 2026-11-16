@@ -219,6 +219,25 @@ def test_designed_panic_from_another_known_container_does_not_hide_native_crash(
 
 
 @pytest.mark.parametrize(
+    "container,verdict",
+    [("environmentd", "inconclusive"), ("clusterd", "product_failure")],
+)
+def test_upgrade_base_designed_panic_is_attributed_to_the_observed_container(
+    container: str, verdict: str
+) -> None:
+    observed = {
+        "source": {"container": "pod/workload", "namespace": "materialize"},
+        "workload_coverage": {
+            "message": "An upgrade-base Materialize process panicked by design",
+            "observed": True,
+            "details": {"container": container},
+        },
+    }
+    report = findings.summarize([passing(), exit_prop(134)], events=[observed])
+    assert report["verdict"] == verdict
+
+
+@pytest.mark.parametrize(
     "name,group", [("future property", "Future: New"), ("Peak memory usage", None)]
 )
 def test_unknown_failed_properties_are_never_silently_filtered(name, group) -> None:

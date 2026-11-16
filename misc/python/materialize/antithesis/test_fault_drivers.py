@@ -1420,6 +1420,51 @@ def test_current_termination_is_observed_and_not_counted_twice(
     assert recovery.record_terminations(db, observed) == 0
 
 
+def test_termination_keeps_its_ordinal_across_restart_backoff(
+    halt_capture: SimpleNamespace,
+) -> None:
+    # The kubelet reports a crash that waits out its restart backoff as the
+    # last state, before restart_count counts it.
+    backing_off = replace(
+        halt_capture.observation,
+        exit_code=137,
+        restart_count=1,
+        current_terminated=False,
+        waiting_reason="CrashLoopBackOff",
+    )
+    restarted = replace(backing_off, restart_count=2, waiting_reason=None)
+    assert backing_off.termination_count == restarted.termination_count == 2
+    assert recovery.record_terminations(halt_capture.db, [backing_off]) == 1
+    assert recovery.record_terminations(halt_capture.db, [restarted]) == 0
+
+
+def test_capture_keeps_one_termination_across_restart_backoff(
+    halt_capture: SimpleNamespace,
+) -> None:
+    status = halt_capture.pod.status.container_statuses[0]
+    term = status.state.terminated
+    status.restart_count = 1
+    keys = [
+        recovery._termination_file_key(
+            recovery._log_selector(halt_capture.pod, "environmentd")
+        )
+    ]
+    status.last_state = SimpleNamespace(terminated=term)
+    for restart_count, waiting in (
+        (1, SimpleNamespace(reason="CrashLoopBackOff")),
+        (2, None),
+    ):
+        status.restart_count = restart_count
+        status.state = SimpleNamespace(terminated=None, running=None, waiting=waiting)
+        keys.append(
+            recovery._termination_file_key(
+                recovery._log_selector(halt_capture.pod, "environmentd")
+            )
+        )
+    assert keys[0] is not None and keys[0][2] == 2
+    assert keys[0] == keys[1] == keys[2]
+
+
 def test_recovery_comparison_records_and_guards_its_pod_deletes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

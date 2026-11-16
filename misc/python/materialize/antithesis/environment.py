@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import cached_property
 
 from materialize import orchestratord
@@ -42,5 +43,10 @@ class Environment:
             if resource_id is None:
                 raise RuntimeError("Materialize CR has no resource id yet")
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(resource_id)
+            # Commands start concurrently and can be killed at any point. A
+            # truncated cache would name a host that never resolves, for the
+            # rest of the timeline.
+            tmp = cache.with_name(f"{cache.name}.{os.getpid()}.tmp")
+            tmp.write_text(resource_id)
+            os.replace(tmp, cache)
         return self.endpoints.environmentd_service(resource_id)

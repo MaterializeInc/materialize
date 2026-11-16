@@ -80,6 +80,10 @@ _NATIVE_INVARIANT_PREFIXES = (
     "soft assertion failed at ",
     "persist: ",
 )
+_DESIGNED_PANIC = "Materialize process panicked by design"
+# The workload observes this panic for a process that cannot report it, so the
+# details name the panicking container and the event source is the workload.
+_DESIGNED_BASE_PANIC = "An upgrade-base Materialize process panicked by design"
 
 
 def native_invariant(prop: Mapping[str, Any]) -> bool:
@@ -203,15 +207,28 @@ def _panic_conflicts(
         return []
     conflicts = []
     for event in events:
-        source = event.get("source")
-        source = source if isinstance(source, dict) else {}
-        reported = source.get("container")
+        reported, reported_namespace = _panic_site(event)
         if isinstance(reported, str) and reported.rsplit("/", 1)[-1] != container:
             continue
-        if namespace is not None and source.get("namespace") not in (None, namespace):
+        if namespace is not None and reported_namespace not in (None, namespace):
             continue
         conflicts.append(event)
     return conflicts
+
+
+def _panic_site(event: Mapping[str, Any]) -> tuple[Any, Any]:
+    """The container and namespace a designed-panic observation is about."""
+    observation = _payload(event).get("workload_coverage")
+    if (
+        isinstance(observation, dict)
+        and observation.get("message") == _DESIGNED_BASE_PANIC
+    ):
+        details = observation.get("details")
+        details = details if isinstance(details, dict) else {}
+        return details.get("container"), None
+    source = event.get("source")
+    source = source if isinstance(source, dict) else {}
+    return source.get("container"), source.get("namespace")
 
 
 def summarize(
@@ -319,7 +336,7 @@ def summarize(
                 )
                 result["coverage_events"].append(copy.deepcopy(dict(event)))
                 if (
-                    message == "Materialize process panicked by design"
+                    message in (_DESIGNED_PANIC, _DESIGNED_BASE_PANIC)
                     and observation["observed"]
                 ):
                     designed_panics.append(event)

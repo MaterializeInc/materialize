@@ -27,6 +27,12 @@ pytest.importorskip("antithesis")
 from materialize.antithesis import observations, quiet, state, telemetry
 from materialize.antithesis.drivers import rollouts
 
+# The workload identifies a process by its start time in `/proc/<pid>/stat`,
+# which exists only on Linux, where the workload runs.
+requires_procfs = pytest.mark.skipif(
+    not Path("/proc/self/stat").exists(), reason="process identity needs /proc"
+)
+
 
 @pytest.fixture(autouse=True)
 def local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,6 +236,7 @@ def test_protocol_outcomes_keep_copied_metadata_and_restore_the_outer_round(
     assert recorder.interleaving_details == {}
 
 
+@requires_procfs
 def test_concurrent_comparisons_are_counted_and_normalized(tmp_path: Path) -> None:
     source = command(
         tmp_path,
@@ -254,6 +261,7 @@ comparison('read_paths', 'subscribe', None, 5)
     assert report["commands"][0]["no_comparison"] == 0
 
 
+@requires_procfs
 def test_skipped_checks_and_uninstrumented_checks_are_distinct(tmp_path: Path) -> None:
     skipped = command(
         tmp_path,
@@ -273,6 +281,7 @@ def test_skipped_checks_and_uninstrumented_checks_are_distinct(tmp_path: Path) -
     assert rows[driver.name]["uninstrumented"] == 0
 
 
+@requires_procfs
 @pytest.mark.parametrize("value,expected", [(None, 0), (0, 0), (7, 7), ("message", 1)])
 def test_exit_status_and_profile_environment_are_preserved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value, expected: int
@@ -296,6 +305,7 @@ raise SystemExit({value!r})
     assert telemetry.summary()["active_commands"] == 0
 
 
+@requires_procfs
 def test_command_exceptions_are_not_hidden(tmp_path: Path) -> None:
     source = command(
         tmp_path, "anytime_error", "raise RuntimeError('underlying failure')\n"
@@ -307,6 +317,7 @@ def test_command_exceptions_are_not_hidden(tmp_path: Path) -> None:
     assert row["errors"] == 1 and row["completed"] == 0
 
 
+@requires_procfs
 def test_killed_command_is_reaped_without_crediting_its_completion(
     tmp_path: Path,
 ) -> None:
@@ -371,6 +382,7 @@ def test_pid_reuse_does_not_keep_an_interrupted_command_alive() -> None:
     assert row["interrupted"] == 1
 
 
+@requires_procfs
 def test_measurements_do_not_claim_system_or_unobserved_interrupted_cpu(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -480,6 +492,7 @@ def test_coverage_preserves_evidence_and_bounds_label_cardinality(
     assert any(r["phase"] == "" and r["role"] == "" for r in rows)
 
 
+@requires_procfs
 def test_quiet_fraction_counts_the_union_of_overlapping_requests(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -512,6 +525,7 @@ def test_measurement_failures_are_reported_without_masking_command_errors(
     assert not telemetry.enabled()
 
 
+@requires_procfs
 def test_observations_keep_false_counts_and_unseen_inventory_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -554,6 +568,7 @@ def test_unreadable_required_inventory_marks_harness_invalid(
     )
 
 
+@requires_procfs
 def test_harness_health_is_counted_persisted_and_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -77,7 +77,7 @@ def main() -> None:
             deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
             if public_check is not None:
                 public_check.result()
-        annotate_buildkite_with_tags(repo.rd.arch, deps)
+        annotate_buildkite_with_tags(repo.rd.arch, deps, antithesis)
     except (RustIncrementalBuildFailure, CargoRegistryFetchFailure) as e:
         exit_for_retryable_build_failure(e)
 
@@ -141,17 +141,22 @@ def _annotate(style: str, context: str, messages: list[str]) -> None:
     )
 
 
-def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:
+def annotate_buildkite_with_tags(
+    arch: Arch, deps: mzbuild.DependencySet, antithesis: bool = False
+) -> None:
     if not ui.env_is_truthy("CI"):
         return
 
+    # The Antithesis flavor builds in the same pipeline as the regular build of
+    # its architecture, which would replace an annotation of the same context.
+    name = f"{arch}-antithesis" if antithesis else str(arch)
     tags = "\n".join([f"* `{dep.spec()}`" for dep in deps])
-    markdown = f"""<details><summary>{arch} Docker tags produced in this build</summary>
+    markdown = f"""<details><summary>{name} Docker tags produced in this build</summary>
 
 {tags}
 </details>"""
     spawn.runv(
-        ["buildkite-agent", "annotate", "--style=info", f"--context=build-{arch}"],
+        ["buildkite-agent", "annotate", "--style=info", f"--context=build-{name}"],
         stdin=markdown.encode(),
     )
 
