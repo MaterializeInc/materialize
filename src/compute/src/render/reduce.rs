@@ -228,26 +228,15 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arrangement = match plan {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.build_distinct(collection, mfp_after);
-                errors.push(errs);
-                arranged_output
-            }
+            ReducePlan::Distinct => self.build_distinct(collection, mfp_after, errors),
             ReducePlan::Accumulable(expr) => {
-                let (arranged_output, errs) =
-                    self.build_accumulable(collection, expr, key_arity, mfp_after);
-                errors.push(errs);
-                arranged_output
+                self.build_accumulable(collection, expr, key_arity, mfp_after, errors)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
-                let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
-                errors.push(errs);
-                output
+                self.build_monotonic(collection, expr, mfp_after, errors)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
-                let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
-                errors.push(errs);
-                output
+                self.build_bucketed(collection, expr, key_arity, mfp_after, errors)
             }
             ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
                 expr,
@@ -257,7 +246,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // because this is already a CPU-intensive situation due to the non-incrementalness
                 // of window functions.
                 let validating = !fused_unnest_list;
-                let (output, errs) = self.build_basic_aggregate(
+                self.build_basic_aggregate(
                     collection,
                     0,
                     &expr,
@@ -265,15 +254,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     key_arity,
                     mfp_after,
                     fused_unnest_list,
-                );
-                errors.extend(errs);
-                output
+                    errors,
+                )
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-                let (output, errs) =
-                    self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
-                errors.push(errs);
-                output
+                self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after, errors)
             }
         };
         arrangement
@@ -284,10 +269,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>> {
         let error_logger = self.error_logger();
 
         // Allocations for the two closures.
@@ -323,7 +306,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     }
                 },
             );
-        let errors = arranged.mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>, _>(
+        let errs = arranged.mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>, _>(
             "DistinctByErrorCheck",
             move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowErrorSer, _)>| {
                 for (_, count) in input.iter() {
@@ -346,7 +329,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 }
             },
         );
-        (output, errors.as_collection(|_k, v| v.clone()))
+        errors.push(errs.as_collection(|_k, v| v.clone()));
+        output
     }
 
     /// Build the dataflow to compute and arrange multiple non-accumulable,
@@ -362,10 +346,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         aggrs: Vec<LirAggregateExpr>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T> {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
         if aggrs.len() <= 1 {
@@ -374,21 +356,18 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 &format!("len={}", aggrs.len()),
             )
         }
-        let mut err_output = None;
         let mut to_collect = Vec::new();
         for (index, aggr) in aggrs.into_iter().enumerate() {
-            let (result, errs) = self.build_basic_aggregate(
+            let result = self.build_basic_aggregate(
                 input.clone(),
                 index,
                 &aggr,
-                err_output.is_none(),
+                index == 0,
                 key_arity,
                 None,
                 false,
+                errors,
             );
-            if errs.is_some() {
-                err_output = errs
-            }
             to_collect
                 .push(result.as_collection(move |key, val| (key.to_row(), (index, val.to_row()))));
         }
@@ -434,7 +413,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // to scan for these potential errors. Note that we cannot directly use
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
         // conditionally render the second component of the reduction pair.
-        let validation_errs = err_output.expect("expected to validate in at least one aggregate");
         if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
                 .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>, _>(
@@ -456,18 +434,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     },
                 )
                 .as_collection(|_, v| v.clone());
-            (output, validation_errs.concat(mfp_errs))
-        } else {
-            (output, validation_errs)
+            errors.push(mfp_errs);
         }
+        output
     }
 
     /// Build the dataflow to compute a single basic aggregation.
     ///
     /// This method also applies distinctness if required.
     ///
-    /// The returned errors are the validation errors, if `validating`, and the errors of
-    /// `mfp_after`, if it can error. They are `None` only when there are neither.
+    /// Pushes the validation errors, if `validating`, and the errors of `mfp_after`, if it can
+    /// error, onto `errors`.
     fn build_basic_aggregate<'s>(
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
@@ -477,10 +454,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
         fused_unnest_list: bool,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T> {
         let LirAggregateExpr {
             func,
             expr: _,
@@ -495,7 +470,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             (key, row_builder.clone())
         });
 
-        let mut err_output = None;
+        // Whether the distinct step already validated the input.
+        let mut validated = false;
 
         // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
         if distinct {
@@ -531,7 +507,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             }
                         },
                     );
-                err_output = Some(errs);
+                errors.push(errs);
+                validated = true;
                 partial = oks;
             } else {
                 partial = self
@@ -648,7 +625,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
         // rationale around using a second reduction here.
-        let must_validate = validating && err_output.is_none();
+        let must_validate = validating && !validated;
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         if must_validate || mfp_after2.is_some() {
             let error_logger = self.error_logger();
@@ -746,13 +723,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .as_collection(|_, v| v.clone())
             };
 
-            if let Some(e) = err_output {
-                err_output = Some(e.concat(errs));
-            } else {
-                err_output = Some(errs);
-            }
+            errors.push(errs);
         }
-        (oks, err_output)
+        oks
     }
 
     fn build_reduce_inaccumulable_distinct<'s, Bu, Tr>(
@@ -832,13 +805,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         }: BucketedPlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
-        let mut err_output: Option<VecCollection<'s, T, _, _>> = None;
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T> {
+        // Whether a stage already validated the input.
+        let mut validated = false;
         let outer_scope = input.scope();
-        let arranged_output = outer_scope
+        outer_scope
             .clone()
             .region_named("ReduceHierarchical", |inner| {
                 let input = input.enter(inner);
@@ -882,11 +854,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     // We only want the first stage to perform validation of whether invalid accumulations
                     // were observed in the input. Subsequently, we will either produce an error in the error
                     // stream or produce correct data in the output stream.
-                    let validating = err_output.is_none();
+                    let validating = !validated;
 
                     let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
                     if let Some(errs) = errs {
-                        err_output = Some(errs.leave_region(outer_scope));
+                        errors.push(errs.leave_region(outer_scope));
+                        validated = true;
                     }
                     stage = oks
                 }
@@ -921,7 +894,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
                 // but we then wouldn't be able to do this error check conditionally.  See its documentation
                 // for the rationale around using a second reduction here.
-                let must_validate = err_output.is_none();
+                let must_validate = !validated;
                 if must_validate || mfp_after2.is_some() {
                     let errs = arranged
                         .clone()
@@ -979,11 +952,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         )
                         .as_collection(|_, v| v.clone())
                         .leave_region(outer_scope);
-                    if let Some(e) = err_output.take() {
-                        err_output = Some(e.concat(errs));
-                    } else {
-                        err_output = Some(errs);
-                    }
+                    errors.push(errs);
                 }
                 arranged
                     .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
@@ -1021,11 +990,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         },
                     )
                     .leave_region(outer_scope)
-            });
-        (
-            arranged_output,
-            err_output.expect("expected to validate in one level of the hierarchy"),
-        )
+            })
     }
 
     /// Build a bucketed stage fragment that wraps [`Self::build_bucketed_negated_output`], and
@@ -1195,10 +1160,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T> {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
@@ -1228,6 +1191,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             let m = "tried to build a monotonic reduction on non-monotonic input".into();
             (EvalError::Internal(m).into(), Diff::ONE)
         });
+        errors.push(validation_errs);
         // We can place our rows directly into the diff field, and
         // only keep the relevant one corresponding to evaluating our
         // aggregate, instead of having to do a hierarchical reduction.
@@ -1301,10 +1265,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     },
                 )
                 .as_collection(|_k, v| v.clone());
-            (output, validation_errs.concat(mfp_errs))
-        } else {
-            (output, validation_errs)
+            errors.push(mfp_errs);
         }
+        output
     }
 
     /// Build the dataflow to compute and arrange multiple accumulable aggregations.
@@ -1323,10 +1286,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         }: AccumulablePlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T> {
         let collection_scope = collection.scope();
 
         // we must have called this function with something to reduce
@@ -1436,28 +1397,26 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 RowBatcher<_, _, Coltainer<_>>,
                 RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
             >("ArrangeAccumulable [val: empty]");
-            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after, errors)
         } else {
             let arranged = collection
                 .mz_arrange::<RowBatcher<_, _>, RowSpine<_, (Vec<Accum>, Diff)>>(
                     "ArrangeAccumulable [val: empty]",
                 );
-            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after, errors)
         }
     }
 
-    /// Reduces arranged accumulators to output rows, and to the errors the accumulated
-    /// values can reveal. Generic over the container holding the diffs, so both diff
+    /// Reduces arranged accumulators to output rows, pushing the errors the accumulated
+    /// values can reveal onto `errors`. Generic over the container holding the diffs, so both diff
     /// layouts share one rendering of the reduce operators.
     fn reduce_accumulable<'s, DC>(
         &self,
         arranged: Arranged<'s, RowAgent<T, (Vec<Accum>, Diff), DC>>,
         full_aggrs: Vec<LirAggregateExpr>,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
-    ) -> (
-        RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    )
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> RowRowArrangement<'s, T>
     where
         DC: BatchContainer<Owned = (Vec<Accum>, Diff)>,
     {
@@ -1581,10 +1540,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     }
                 },
             );
-        (
-            arranged_output,
-            arranged_errs.as_collection(|_key, error| error.clone()),
-        )
+        errors.push(arranged_errs.as_collection(|_key, error| error.clone()));
+        arranged_output
     }
 }
 
