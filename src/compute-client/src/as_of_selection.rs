@@ -523,33 +523,7 @@ impl<'a> Context<'a> {
     /// hydrate immediately, but it will be able to hydrate once its inputs have sufficiently
     /// advanced.
     fn apply_warmup_constraints(&self) {
-        // Collect write frontiers from storage inputs.
-        let mut write_frontiers = BTreeMap::new();
-        for (id, collection) in &self.collections {
-            let storage_frontiers = self
-                .storage_collections
-                .collections_frontiers(collection.storage_inputs.clone())
-                .expect("storage collections exist");
-
-            let mut write_frontier = Antichain::new();
-            for frontiers in storage_frontiers {
-                write_frontier.extend(frontiers.write_frontier);
-            }
-
-            write_frontiers.insert(*id, write_frontier);
-        }
-
-        // Propagate write frontiers through compute inputs.
-        fixpoint(|changed| {
-            for (id, collection) in &self.collections {
-                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
-                for input_id in &collection.compute_inputs {
-                    let frontier = &write_frontiers[input_id];
-                    *changed |= write_frontier.extend(frontier.iter().cloned());
-                }
-                write_frontiers.insert(*id, write_frontier);
-            }
-        });
+        let write_frontiers = self.transitive_storage_write_frontiers();
 
         // Apply the warmup constraint.
         for (id, write_frontier) in write_frontiers {
@@ -584,7 +558,36 @@ impl<'a> Context<'a> {
         // (transitive) storage inputs. This is an upper bound for the write frontier the index
         // could have had before the restart. For indexes without storage inputs we use the current
         // time.
+        let mut write_frontiers = self.transitive_storage_write_frontiers();
 
+        // Apply the read policy constraint to indexes.
+        for (id, collection) in &self.collections {
+            if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
+                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
+                if write_frontier.is_empty() {
+                    write_frontier = Antichain::from_elem(self.current_time.clone());
+                }
+                let upper = read_policy.frontier(write_frontier.borrow());
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: &format!(
+                        "read policy applied to write frontier {:?}",
+                        write_frontier.elements()
+                    ),
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Restore `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Returns, for each collection, the meet of the write frontiers of its transitive storage
+    /// inputs.
+    fn transitive_storage_write_frontiers(&self) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
         // Collect write frontiers from storage inputs.
         let mut write_frontiers = BTreeMap::new();
         for (id, collection) in &self.collections {
@@ -613,29 +616,7 @@ impl<'a> Context<'a> {
             }
         });
 
-        // Apply the read policy constraint to indexes.
-        for (id, collection) in &self.collections {
-            if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
-                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
-                if write_frontier.is_empty() {
-                    write_frontier = Antichain::from_elem(self.current_time.clone());
-                }
-                let upper = read_policy.frontier(write_frontier.borrow());
-                let constraint = Constraint {
-                    type_: ConstraintType::Soft,
-                    bound_type: BoundType::Upper,
-                    frontier: &upper,
-                    reason: &format!(
-                        "read policy applied to write frontier {:?}",
-                        write_frontier.elements()
-                    ),
-                };
-                self.apply_constraint(*id, constraint);
-            }
-        }
-
-        // Restore `AsOfBounds` invariant (2).
-        self.propagate_bounds_upstream(BoundType::Upper);
+        write_frontiers
     }
 
     /// Apply as-of constraints to ensure indexes are immediately readable.
