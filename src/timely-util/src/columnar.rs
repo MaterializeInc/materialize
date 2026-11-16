@@ -23,7 +23,6 @@ pub mod builder;
 pub mod builder_input;
 pub mod chunk;
 pub mod consolidate;
-pub mod merge_batcher;
 pub mod unload;
 
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -60,25 +59,12 @@ pub type Col2ValBatcher<K, V, T, R, Chu, Se> =
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R, Chu, Se> = Col2ValBatcher<K, (), T, R, Chu, Se>;
 
-/// Pageable counterpart to [`Col2ValBatcher`]. Routes every chunk produced
-/// by chunking, merging, or extract through a [`crate::column_pager::ColumnPager`],
-/// so memory pressure can spill chains to a backing store without touching
-/// the merge / extract bodies.
-///
-/// Drop-in shape at the type level: both aliases take the same parameters and
-/// produce a `Batcher<C>` over the same chunk type. The pager itself defaults
-/// to [`crate::column_pager::ColumnPager::disabled`]; inject a real one via
-/// [`merge_batcher::ColumnMergeBatcher::set_pager`].
-pub type Col2ValPagedBatcher<K, V, T, R, Chu, Se> =
-    merge_batcher::ColumnMergeBatcher<Chu, (K, V), T, R, Se>;
-
 /// Columnar-native counterpart to [`Col2ValBatcher`], holding
 /// [`body::ColumnBody`] chunks rather than columnation stacks and merging
 /// them through [`batcher::ColumnMerger`].
 ///
 /// Pairs with [`batcher::ColumnChunker`] and any builder whose `Input` is
-/// `ColumnBody<((K, V), T, R)>`. Unlike [`Col2ValPagedBatcher`] the chains
-/// stay resident, so this arm carries no pager and no spill budget.
+/// `ColumnBody<((K, V), T, R)>`.
 pub type Col2ValColBatcher<K, V, T, R, Chu, Se> =
     MergeBatcher<Chu, batcher::ColumnMerger<(K, V), T, R>, Se>;
 

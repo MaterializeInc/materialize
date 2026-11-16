@@ -90,7 +90,7 @@ pub(super) fn upsert_value_byte_len(value: &UpsertValue) -> usize {
 }
 
 /// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
-/// `DatumSeq` view returned by a `ValRowSpine` cursor.
+/// `DatumSeq` view of a stored value.
 ///
 /// Exists only for the storage fuzz crate, so it is gated behind the `fuzzing`
 /// feature. Not a stable public API.
@@ -128,7 +128,7 @@ pub(super) fn decode_upsert_value<'a>(mut iter: impl Iterator<Item = Datum<'a>>)
 
 /// Key the persist feedback by [`UpsertKey`], record source statistics, and
 /// encode `(UpsertKey, UpsertValue)` as `(UpsertKey, Row)` `Column` chunks,
-/// the input both flavors' feedback arrangements consume. Built with
+/// the input the feedback arrangement consumes. Built with
 /// `Pipeline` downstream of an `UpsertKey::hashed` exchange, so the
 /// arrangement keeps that locality.
 pub(super) fn encode_feedback<'scope, T>(

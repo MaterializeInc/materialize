@@ -346,7 +346,7 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    // The chunked v2 stash spills only to swap, through the
+                    // The v2 stash spills only to swap, through the
                     // buffer pool. On a replica that cannot swap, v1 keeps its
                     // state in RocksDB on the scratch disk where one exists,
                     // and v2's footprint without swap has not been measured.
@@ -355,13 +355,6 @@ where
                         && storage_state.instance_context.swap_available;
                     let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
                     {
-                        // Resolved here, at operator construction, so the
-                        // dataflow keeps one stash flavor for its whole
-                        // life even if the flag flips underneath it.
-                        let stash_flavor =
-                            crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
-                                storage_state.storage_configuration.config_set(),
-                            );
                         crate::upsert::upsert_v2(
                             upsert_input.enter(scope),
                             upsert_envelope.clone(),
@@ -371,7 +364,6 @@ where
                             previous_token,
                             export_config,
                             backpressure_metrics,
-                            stash_flavor,
                         )
                     } else {
                         crate::upsert::upsert(

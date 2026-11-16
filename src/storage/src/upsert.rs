@@ -83,20 +83,16 @@ impl columnation::Columnation for UpsertKey {
 }
 
 /// Columnar (the `columnar` crate, distinct from `columnation`) support for
-/// `UpsertKey`, so the upsert-v2 source stash can use a paged columnar merge
+/// `UpsertKey`, so the upsert-v2 source stash can use a columnar merge
 /// batcher keyed natively by `UpsertKey` (no `Row` packing). `UpsertKey` is a
 /// POD `[u8; 32]` newtype, so the container is a fixed-stride byte column.
 ///
 /// This is hand-rolled rather than `#[derive(Columnar)]`d for one load-bearing
 /// reason: the reference type must be `&UpsertKey`. `&UpsertKey` is `Copy + Ord`
 /// (the lexicographic `[u8; 32]` order the persist-feedback trace is keyed on),
-/// which both satisfies the merge batcher's `Ref: Copy + Ord` requirement and —
-/// crucially — matches the read item of the feedback arrangement's
-/// `ColumnationStack<UpsertKey>` key container, so the paged `ValRow` builder
-/// can reconcile the `Column` input against the spine (its `BuilderInput` bound
-/// is `ReadItem: PartialEq<Ref<UpsertKey>>`). A derived impl would yield a
-/// generated `UpsertKeyReference` (and route `[u8; 32]` through the generic,
-/// non-fixed-stride array container), breaking that reconciliation.
+/// which satisfies the merge batcher's `Ref: Copy + Ord` requirement. A derived
+/// impl would yield a generated `UpsertKeyReference` and route `[u8; 32]`
+/// through the generic, non-fixed-stride array container.
 mod columnar_upsert_key {
     use super::UpsertKey;
     use columnar::Columnar;
@@ -221,7 +217,7 @@ mod columnar_upsert_key {
 /// Projects a source's native `FromTime` to a columnar, totally-ordered key
 /// used by the upsert source stash to keep the latest update per `(key, time)`.
 ///
-/// The upsert stash is a paged columnar merge batcher; its diff carries this
+/// The upsert stash is a columnar merge batcher; its diff carries this
 /// projection rather than the raw `FromTime`, so the only columnar type the
 /// stash needs is `Order` — never the (possibly structurally complex) source
 /// timestamp. This is what keeps the columnar requirement off the generic
@@ -301,10 +297,9 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// The storage spill gate ([`mz_timely_util::columnar::chunk::StorageSpill`]),
-/// used by the chunked upsert-v2 stash flavor.
+/// The storage spill gate ([`mz_timely_util::columnar::chunk::StorageSpill`]).
 ///
-/// In that flavor the source stash and feedback arrangement spill through the
+/// The upsert-v2 source stash and feedback arrangement spill through the
 /// process buffer pool: committed chunk bodies land in the pool once compute's
 /// config handler has installed and budgeted it (storage and compute run in
 /// the same `clusterd` process). The gate is consulted at every chunk commit,
@@ -313,43 +308,6 @@ pub mod upsert_stash_spill {
     /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {
         mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
-    }
-}
-
-/// Pager for the paged upsert-v2 stash flavor.
-///
-/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
-/// compute column-paged batcher — there is one budget and one underlying
-/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
-/// `enable_upsert_paged_spill` flag, independently of compute's
-/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
-/// codec are configured by compute's `apply_tiered_config` (storage and compute
-/// run in the same `clusterd` process).
-///
-/// Flipping the flag takes effect on dataflows created after the change: the
-/// paged flavor captures the pager once at operator construction.
-///
-/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
-pub mod upsert_stash_pager {
-    use std::sync::{LazyLock, RwLock};
-
-    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
-
-    /// Active pager handed to upsert source-stash batchers. Defaults to
-    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
-    static PAGER: LazyLock<RwLock<ColumnPager>> =
-        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
-
-    /// Enable or disable the stash's use of the shared column pager. When
-    /// enabled, the stash spills through the shared budget pool; when disabled
-    /// it keeps every chunk resident.
-    pub fn set_enabled(enabled: bool) {
-        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
-    }
-
-    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
-    pub fn pager() -> ColumnPager {
-        PAGER.read().expect("upsert stash pager poisoned").clone()
     }
 }
 
@@ -679,7 +637,6 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<UpsertBackpressureMetrics>,
-    stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -706,12 +663,10 @@ where
     tracing::info!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
-        ?stash_flavor,
         "rendering upsert source (btreemap backend)"
     );
 
     upsert_continual_feedback_v2::upsert_inner(
-        stash_flavor,
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,

@@ -7,16 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Draining sealed stash chunks against the persist feedback, one function per
-//! stash flavor.
+//! Draining sealed stash chunks against the persist feedback.
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
-use differential_dataflow::trace::cursor::cursor_list;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, GlobalId};
-use mz_row_spine::FundedValRowSpine;
-use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::body::ColumnBody;
 use mz_timely_util::columnar::unload::UnloadBatch;
 use timely::dataflow::operators::Capability;
@@ -40,8 +36,8 @@ enum TimeClass {
 
 /// Classify `ts` against `persist_upper`: the single spelling of the drain's
 /// eligibility test. The chunked drain's probe-collection pass and its
-/// classification pass, and the paged drain's cursor walk, all call this, so
-/// the probe set and the classification cannot disagree. Under the
+/// classification pass both call this, so the probe set and the
+/// classification cannot disagree. Under the
 /// operator's total order, `Eligible` means `ts` equals the frontier's one
 /// element.
 fn classify_time<T: PartialOrder>(persist_upper: &Antichain<T>, ts: &T) -> TimeClass {
@@ -54,8 +50,8 @@ fn classify_time<T: PartialOrder>(persist_upper: &Antichain<T>, ts: &T) -> TimeC
     }
 }
 
-/// Counts from a single call to [`drain_sealed_input_chunked`] or
-/// [`drain_sealed_input_paged`], used to update metrics.
+/// Counts from a single call to [`drain_sealed_input_chunked`], used to
+/// update metrics.
 pub(super) struct DrainStats {
     /// Number of eligible entries probed against the feedback trace.
     pub(super) eligible: u64,
@@ -276,163 +272,6 @@ where
                 }
             }
             start = end;
-        }
-    }
-
-    tracing::debug!(
-        worker_id = %worker_id,
-        source_id = %source_id,
-        ineligible = ineligible.len(),
-        eligible = eligible_count,
-        "drained stash",
-    );
-
-    DrainStats {
-        eligible: eligible_count,
-        result_count,
-        inserts,
-        updates,
-        deletes,
-        output_count,
-    }
-}
-
-/// [`drain_sealed_input_chunked`]'s counterpart for the paged flavor,
-/// classifying entries the same way but reading prior state through a trace
-/// cursor.
-///
-/// The sealed chunks are already sorted and consolidated by the merge
-/// batcher, so the trace cursor walks forward through keys in order and
-/// seeks amortize. Entries are walked by reference rather than collecting
-/// the eligible set into an owned Vec, and eligible values are emitted
-/// straight from the column's `RowRef` with no owned `UpsertDiff` copy. Only
-/// the re-stashed ineligible set is materialized.
-pub(super) async fn drain_sealed_input_paged<T, O>(
-    sealed: Vec<Column<UpsertUpdate<T, O>>>,
-    ineligible: &mut Vec<UpsertUpdate<T, O>>,
-    output_handle: &UpsertOutputHandle<T>,
-    output_cap: &Capability<T>,
-    persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<FundedValRowSpine<UpsertKey, T, Diff>>,
-    worker_id: usize,
-    source_id: GlobalId,
-) -> DrainStats
-where
-    T: Timestamp + TotalOrder + Lattice + Sync,
-    T: columnation::Columnation + columnar::Columnar,
-    O: columnar::Columnar,
-{
-    use columnar::Index as _;
-
-    // Classify each entry by its timestamp relative to `persist_upper`:
-    //
-    //   * `ts == persist_upper`: eligible for processing now.
-    //   * `ts >  persist_upper`: not yet processable; re-stashed (ineligible)
-    //     until the feedback frontier catches up to it.
-    //   * `ts <  persist_upper`: already persisted by some writer and not
-    //     relevant anymore. We DROP it. The downstream persist_sink would
-    //     filter such updates out anyway since the shard upper is further
-    //     ahead, and our state is already up-to-date to `persist_upper` so we
-    //     could not emit correct retractions for it. Re-stashing it would
-    //     strand the data forever (`persist_upper` only advances, so
-    //     `ts == persist_upper` can never again hold) and pin the operator's
-    //     output frontier below the shard upper. This mirrors v1's
-    //     `relevant = persist_upper.less_equal(ts)`.
-    let mut eligible_count: u64 = 0;
-    let mut result_count: u64 = 0;
-    let mut output_count: u64 = 0;
-    let mut inserts: u64 = 0;
-    let mut updates: u64 = 0;
-    let mut deletes: u64 = 0;
-
-    let batches = trace
-        .batches_through(Antichain::new().borrow())
-        .expect("complete batch set for the feedback trace; is it closed?");
-    let (mut cursor, storage) = cursor_list(batches);
-
-    for chunk in &sealed {
-        for (key, ts, diff) in chunk.borrow().into_index_iter() {
-            let ts = <T as columnar::Columnar>::into_owned(ts);
-            match classify_time(persist_upper, &ts) {
-                TimeClass::AlreadyPersisted => continue,
-                TimeClass::Ineligible => {
-                    // Re-stash for later (owned).
-                    ineligible.push((
-                        *key,
-                        ts,
-                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                    ));
-                    continue;
-                }
-                TimeClass::Eligible => {}
-            }
-
-            // ts == persist_upper: eligible. Look up the prior value for this
-            // key in the persist trace and emit the retraction / insertion. The
-            // spine stores keys in a columnation arena, so we seek by the
-            // column's borrowed `&UpsertKey` directly.
-            eligible_count += 1;
-            cursor.seek_key(&storage, key);
-            let old_value = match cursor.get_key(&storage) {
-                Some(found) if found == key => {
-                    let mut result = None;
-                    while let Some(val) = cursor.get_val(&storage) {
-                        let mut count = Diff::ZERO;
-                        cursor.map_times(&storage, |_time, d| {
-                            count += d.clone();
-                        });
-                        if count.is_positive() {
-                            assert!(
-                                count == 1.into(),
-                                "unexpected multiple entries for the same key in persist trace"
-                            );
-                            assert!(
-                                result.is_none(),
-                                "unexpected multiple values for the same key in persist trace"
-                            );
-                            result = Some(decode_upsert_value(val));
-                        }
-                        cursor.step_val(&storage);
-                    }
-                    result
-                }
-                _ => None,
-            };
-
-            if old_value.is_some() {
-                result_count += 1;
-            }
-
-            match diff.value {
-                Some(row) => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
-                        output_handle
-                            .give_fueled(output_cap, (old_val, ts.clone(), Diff::MINUS_ONE), size)
-                            .await;
-                        output_count += 1;
-                        updates += 1;
-                    } else {
-                        inserts += 1;
-                    }
-                    let new_val = decode_upsert_value(row.iter());
-                    let size = upsert_value_byte_len(&new_val);
-                    output_handle
-                        .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
-                        .await;
-                    output_count += 1;
-                }
-                None => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
-                        output_handle
-                            .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
-                            .await;
-                        output_count += 1;
-                        deletes += 1;
-                    }
-                }
-            }
         }
     }
 
