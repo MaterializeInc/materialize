@@ -46,6 +46,7 @@ query T multiline
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    (sum pg_catalog.int8)
     IN CLUSTER test REPLICA r1
     WITH (REFRESH = ON COMMIT)
     AS SELECT pg_catalog.sum(a) FROM materialize.public.t;

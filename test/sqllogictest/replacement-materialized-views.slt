@@ -12,6 +12,12 @@ mode cockroach
 # Reset so we get predictable catalog IDs.
 reset-server
 
+# These tests cover replacements of materialized views with an inferred schema.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_materialized_view_schema_freezing = false
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (a int, b int)
 
