@@ -60,7 +60,7 @@ the additions below.
 |----------|-------------|
 | Ory Kratos | Helm release in the `ory` namespace. Identity management: SSO sign-in, creating each identity on first sign-in. |
 | Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize Console trusts. Hydra Maester is enabled. |
-| Ory Selfservice UI | Helm release in the `ory` namespace. Renders the Kratos login, consent, and recovery pages. |
+| Ory Selfservice UI | Deployment in the `ory` namespace running [`materialize/ory-selfservice`](https://github.com/MaterializeInc/ory-selfservice). Serves the sign-in pages and Hydra's login, consent, and logout steps, and puts the user's email and groups on every token through Hydra's token hook. |
 | Ory Polis (optional) | Helm release in the `ory` namespace when `enable_polis = true`. SAML-to-OIDC bridge plus SCIM endpoint. |
 | Polis TLS termination (optional) | Polis serves plain HTTP internally. The Polis chart runs a TLS-terminating sidecar that presents HTTPS on the public port, using the cert-manager certificate mounted into it. |
 | cert-manager `ClusterIssuer` | Defaults to the in-cluster self-signed issuer. Override via `cert_issuer_ref` to plug in a real one (corporate CA, Let's Encrypt, etc.). |
@@ -131,6 +131,7 @@ An active Azure subscription with permission to create:
    - `license_key`: Materialize license key JWT with the `ory` entitlement
    - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the AKS API server (required, no default)
    - `ory_hydra_fqdn`, `ory_ui_fqdn`, `ory_kratos_fqdn`, `materialize_console_fqdn`, `materialize_balancerd_fqdn`: Hostnames for the browser-facing services
+   - `ory_kratos_cookie_domain`: Domain for the Kratos session cookie. It must cover `ory_kratos_fqdn` and `ory_ui_fqdn`, and every host under it receives the cookie, so use the narrowest such domain, ideally a subdomain that holds only these hostnames
    - `internal_load_balancer`: Defaults to `true`, which gives every load balancer a private address. Set it to `false` to reach the endpoints from outside the VPC. SCIM from a cloud IdP such as Okta requires this, because the IdP must reach Polis
    - `ingress_cidr_blocks`: CIDRs allowed to reach the load balancers when `internal_load_balancer = false` (defaults to `0.0.0.0/0`, tighten for production)
    - `tags`: Map of tags to apply to resources
@@ -147,6 +148,7 @@ An active Azure subscription with permission to create:
    ory_hydra_fqdn             = "hydra.example.com"
    ory_ui_fqdn                = "auth.example.com"
    ory_kratos_fqdn            = "kratos.example.com"
+   ory_kratos_cookie_domain   = "example.com" # covers kratos. and auth.; prefer a subdomain that holds only these hosts
    materialize_console_fqdn   = "console.example.com"
    materialize_balancerd_fqdn = "balancerd.example.com"
 
