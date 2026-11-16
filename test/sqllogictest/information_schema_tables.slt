@@ -146,7 +146,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_functions
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_iceberg_sinks
@@ -190,7 +190,7 @@ VIEW
 materialize
 mz_catalog
 mz_operators
-BASE TABLE
+VIEW
 materialize
 mz_catalog
 mz_pseudo_types
@@ -274,7 +274,7 @@ VIEW
 materialize
 mz_internal
 mz_aggregates
-BASE TABLE
+VIEW
 materialize
 mz_internal
 mz_aws_connections
@@ -290,6 +290,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_columns
+VIEW
+materialize
+mz_internal
+mz_builtin_functions
 VIEW
 materialize
 mz_internal
@@ -310,6 +314,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_object_mappings
+VIEW
+materialize
+mz_internal
+mz_builtin_operators
 VIEW
 materialize
 mz_internal
