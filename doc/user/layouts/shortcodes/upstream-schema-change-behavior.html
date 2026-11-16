@@ -91,10 +91,10 @@ Creating a newer capture instance with a different index lifts that protection.
 If you then drop the constraint, the Materialize table keeps a key that SQL
 Server no longer enforces, and queries that rely on the key can return wrong
 results. To change the key of a table, create the new capture instance,
-[re-create the table in
-Materialize](/ingest-data/sql-server/source-versioning/#c-create-a-new-table-from-the-source-in-materialize)
-so that it ingests from the new capture instance, and only then drop the old
-constraint upstream.
+re-create the table in Materialize so that it ingests from the new capture
+instance, and only then drop the old constraint upstream. See [Handle upstream
+constraint
+changes](/ingest-data/sql-server/source-versioning/#handle-upstream-constraint-changes).
 
 Tables created in Materialize before v26.49 record every `PRIMARY KEY` and
 `UNIQUE` constraint that existed when the table was created. Dropping one of
