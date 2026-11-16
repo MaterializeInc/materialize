@@ -85,6 +85,16 @@ EOF
 statement ok
 DROP MATERIALIZED VIEW mv_keyed
 
+# The schema `EXPLAIN ... WITH (schema)` prints plans back to the same types.
+statement ok
+CREATE TABLE typed (amount numeric(10, 2), at timestamp(3), v varchar(5) list)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_typed (amount numeric(39,2), at timestamp(3), v varchar(5) list) AS SELECT * FROM typed
+
+statement ok
+DROP MATERIALIZED VIEW mv_typed
+
 # Declared NOT NULL is checked at runtime.
 statement ok
 CREATE MATERIALIZED VIEW mv_not_null (a int4 NOT NULL) AS SELECT a FROM t
