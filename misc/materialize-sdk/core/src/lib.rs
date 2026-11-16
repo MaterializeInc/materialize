@@ -34,7 +34,11 @@
     )
 )]
 
+pub mod decode;
+pub mod error;
 pub mod frontier;
 mod wire;
 
+pub use decode::{Change, Datum, Decoder, Envelope, Message, Row, Update};
+pub use error::ProtocolError;
 pub use frontier::Frontier;
