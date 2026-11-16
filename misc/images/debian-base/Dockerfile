@@ -33,5 +33,9 @@ COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
     && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
-RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
+# The upstream image can lag Debian security updates by weeks, so upgrade the
+# packages it ships. Descendant images inherit the upgraded rootfs.
+RUN apt-get update --fix-missing \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy upgrade \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
     && rm -rf /var/lib/apt/lists/*
