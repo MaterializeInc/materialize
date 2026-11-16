@@ -9,8 +9,7 @@ Remote: origin, pointing to the contributor fork, not upstream
 
 Read the design and the current handoff in
 doc/developer/design/20260903_decoupled_coordination_log.md, then inspect the
-code, worktree and remote bookmark. Preserve other sessions' work. The archived
-log is historical context, not required reading or a task list. Current design
+code, worktree and remote bookmark. Preserve other sessions' work. Current design
 and steering supersede old proposals.
 
 Current steering
@@ -164,8 +163,7 @@ and file inventories belong in the evidence directory, not the handoff.
 Keep the PR description concise and reviewer-facing: motivation, approach, scope,
 current verification and open blockers, with evidence links. Update that summary
 in place, not with per-commit or per-run history. Detailed logs, test inventories
-and intermediate measurements belong in linked evidence. Do not append to the
-archive.
+and intermediate measurements belong in linked evidence, outside the repository.
 Design and prompt bodies are designer-owned unless documentation work is
 explicitly assigned. Flag resolved steering for removal. Re-read this prompt
 after compaction.

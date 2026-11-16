@@ -3,6 +3,8 @@
 This is an audit backlog, not an expansion of Milestone 3. Implementation of
 the opportunities below needs separate scope agreement. Findings are based on
 source inspection unless runtime evidence is cited.
+Measurement reports named in backticks, such as `backend_load`, are kept outside
+the repository in `~/.local/share/aj/m3-evidence/reports/`.
 
 The direction is incremental observation and publication by the component that
 owns a fact. Reuse existing identities, catalog changes and Persist listeners.
@@ -111,16 +113,16 @@ and the matched actor logs in `aj-native-ddl-6f303bf0/`.
 
 ## Backend writes and blob consumption
 
-The [backend attribution](20260903_decoupled_coordination_backend_load.md)
+The backend attribution (`backend_load`)
 reconciles CAS/blob calls and bytes against actual events. The
-[shared frontier repair](20260903_decoupled_coordination_shared_frontiers.md)
+shared frontier repair (`shared_frontiers`)
 removed duplicate observation-source reads and reduced total GETs by 28.7%.
 The catalog journal and progress fanout remain. A separate retained dependency
 MV lacks a common source predicate. Do not redirect its history through the
 unretained shared catalog arrangement.
 
 At 10s publication, most CAS excess was empty completeness fanout into 50 durable
-advancing catalog outputs. The [60s comparison](20260903_decoupled_coordination_publication_interval.md)
+advancing catalog outputs. The 60s comparison (`publication_interval`)
 reduces that contribution. Frontier observations now lead the remaining CAS gap.
 Slower protection publication reduces one source of input progress. General
 output coalescing still needs an explicit latency budget.
@@ -135,7 +137,7 @@ No saving from further batching is established. A cached shared-since shortcut
 would need a Persist API that is absent at this revision, so it remains deferred.
 The report separates measured attribution from prospective savings.
 
-The [fresh logical-component comparison](20260903_decoupled_coordination_logical_load.md)
+The fresh logical-component comparison (`logical_load`)
 confirms that output completeness, rather than raw catalog CAS count, dominates
 extra conditional writes. Source-linked CPU evidence also identifies repeated
 immutable written-plan decoding for producer schemas. Cache those facts by
@@ -274,13 +276,13 @@ Do not infer caller necessity or a fixed native overhead from retry counters.
 
 
 Persist-internal repairs are deferred. The current
-[resource comparison](20260903_decoupled_coordination_resource_review.md) ranks
+resource comparison (`resource_review`) ranks
 caller-side targets instead: frontier SQL/arrangement reuse, a shared query WAL
 reader, immutable producer facts, and evidence-driven observation batching.
 The measured memory premium includes caches, allocator residency and loaded code.
 Small plan-lifetime cleanups alone do not explain or remove it.
 
-The [measured scan audit](20260903_decoupled_coordination_replica_scans.md)
+The measured scan audit (`replica_scans`)
 confirms duplicate empty scans across same-process readers and upper observers.
 Distinct consumers do not require independent fallback polling. Keep oracle/
 catalog certification separate from background recovery. The catalog helper

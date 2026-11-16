@@ -1093,6 +1093,4 @@ deployments. The milestone exclusion does not change which pins can be created
 within a single deployment or defer the core replica identity contract.
 
 Resume from the [current handoff](20260903_decoupled_coordination_log.md) and
-[implementer prompt](20260903_decoupled_coordination_prompt.md). The
-[archived log](20260903_decoupled_coordination_log_archive.md) is historical
-context, not required reading or current steering.
+[implementer prompt](20260903_decoupled_coordination_prompt.md).
