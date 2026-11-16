@@ -1424,16 +1424,6 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     run_project = gcp_run_project()
     project = run_project or GCP_SHARED_PROJECT
 
-    if not run_project:
-        gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
-        assert (
-            gcp_service_account_json
-        ), "GCP_SERVICE_ACCOUNT_JSON environment variable has to be set"
-        gcloud_creds_path = path / "gcp.json"
-        with open(gcloud_creds_path, "w") as f:
-            f.write(gcp_service_account_json)
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcloud_creds_path)
-
     mz_debug_build_thread: threading.Thread | None = None
     try:
         if args.run_mz_debug:
@@ -1449,15 +1439,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             os.environ["TF_VAR_project_id"] = run_project
             if args.setup:
                 gcp_create_run_project(run_project)
-        else:
-            spawn.runv(
-                [
-                    "gcloud",
-                    "auth",
-                    "activate-service-account",
-                    f"--key-file={gcloud_creds_path}",
-                ],
-            )
+        # Outside Buildkite, gcloud and Terraform use the caller's own gcloud
+        # login and application default credentials.
         spawn.runv(["gcloud", "config", "set", "project", project])
 
         vars = [
