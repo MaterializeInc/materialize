@@ -160,7 +160,7 @@ A replacement with a bare-name list for a target with a declared schema is rejec
 A replacement *with* column definitions for a target *without* one is allowed if the declared desc equals the target's current desc.
 This is the migration path from an implicit to a declared schema for an existing materialized view.
 `EXPLAIN ... WITH (schema)` on the target prints the definitions to paste.
-Purification could fill them in instead, but a replacement without a column list for an implicit target then opts into a declared schema without the user asking, which is the decision [Phase 2](#phase-2-freezing-inferred-schemas) defers.
+Purification could fill them in instead, but a replacement without a column list for an implicit target then opts into a declared schema without the user asking, which is why [freezing at creation](#freezing-inferred-schemas-at-creation) skips replacements.
 
 ### Implementation sketch
 
@@ -214,22 +214,26 @@ The main risks are:
   `Map` carries a key over to a new column only if exactly one of its expressions preserves uniqueness, and `cast_relation` puts all casts into one `Map`, so declaring two columns with widening casts loses every key through them.
   Dependents then lose the optimizations those keys enabled.
 
-### Phase 2: freezing inferred schemas
+### Freezing inferred schemas at creation
 
 Declared schemas fix the problem only for materialized views that opt in.
-Two follow-ups would remove the implicit schema entirely:
+Behind `enable_materialized_view_schema_freezing`, a new materialized view without column definitions gets its inferred schema written into `create_sql` as column definitions, the same way the selected `AS OF` is written back.
+The sequencer freezes the schema between local and global optimization, from the same inference catalog loading uses, so the dataflow the statement creates already asserts the frozen `NOT NULL` columns.
+Inferred `NOT NULL` becomes a runtime assertion, which turns a nullability-inference bug from a persist encoder panic into a `MustNotBeNull` error, and keys stay inferred.
+`ASSERT NOT NULL` options fold into the definitions, and a bare-name list is replaced by them.
 
-* **Freeze at creation.**
-  When a materialized view is created without column definitions, write the inferred schema into `create_sql`, the same way the selected `AS OF` is written back today.
-  Keys stay inferred.
-  Inferred `NOT NULL` becomes a runtime assertion, which also turns a nullability-inference bug from a persist encoder panic into a query error.
-* **Migrate existing materialized views.**
-  Rewrite their `create_sql` with the schema their shard currently has.
-  `evolve_nullability_for_bootstrap` overwrites the shard schema with the newly inferred desc on every boot, so the migration has to read the shard's latest schema before that call, in the same boot.
-  Persist stores the complete `RelationDesc`, including nullability and keys, as the shard's schema (`encode_schema` for `SourceData` in `src/storage-types/src/sources.rs`), so the migration can use the last schema the system committed to rather than the new optimizer's inference.
-  Materialized views with columns of anonymous record type cannot be migrated and would keep an implicit schema.
+Each column type is spelled with item ids and kept only if it plans back to the exact type.
+A type that cannot be spelled leaves the schema implicit: anonymous records, and arrays and ranges whose element type has modifiers.
+Replacements are not frozen, because a declared target passes its definitions on through purification and an implicit target should stay implicit.
+Freezing changes what `SHOW CREATE MATERIALIZED VIEW` prints for users who never wrote a schema, which is why it starts behind a flag.
 
-Both change what `SHOW CREATE MATERIALIZED VIEW` prints for users who never asked for it, so they deserve their own decision.
+### Phase 2: migrating existing materialized views
+
+Freezing at creation leaves materialized views created before it with an implicit schema.
+A migration would rewrite their `create_sql` with the schema their shard currently has.
+`evolve_nullability_for_bootstrap` overwrites the shard schema with the newly inferred desc on every boot, so the migration has to read the shard's latest schema before that call, in the same boot.
+Persist stores the complete `RelationDesc`, including nullability and keys, as the shard's schema (`encode_schema` for `SourceData` in `src/storage-types/src/sources.rs`), so the migration can use the last schema the system committed to rather than the new optimizer's inference.
+Materialized views with types that cannot be spelled keep an implicit schema.
 
 ## Minimal Viable Prototype
 
@@ -253,7 +257,7 @@ A new statement would signal "this object has a fixed schema", but:
 
 Freezing the inferred desc in a new catalog field fixes drift without any syntax.
 It does not let users or replacements *state* the schema, and it creates a second source of truth next to `create_sql` that the two would have to agree with.
-Phase 2 achieves the same freezing through `create_sql`.
+[Freezing at creation](#freezing-inferred-schemas-at-creation) achieves the same through `create_sql`.
 
 ### Nullability stays inferred
 
@@ -381,6 +385,6 @@ A pinned plan was produced against the declared schema, so its output types are 
   It is useful to us for adoption and to users for tracking a migration to declared schemas.
   An `mz_internal` relation fits while the feature is behind a flag, and a column of `mz_materialized_views` once it is stable.
   The prototype does not expose it.
-* Do we want Phase 2, and if so, should freezing at creation be the default or opt-in?
+* Do we want Phase 2, migrating existing materialized views to frozen schemas?
 * Which syntax should declared keys use, column-definition constraints or a separate option?
   See [Follow-up: declared keys](#follow-up-declared-keys).
