@@ -62,6 +62,11 @@ def test_other_dependent_objects_errors_stay_violations():
     [
         ("storage error: error communicating with the server", sql.Outcome.REJECTED),
         ("storage error: error connecting to server", sql.Outcome.REJECTED),
+        (
+            "storage error: Meta data fetch error: BrokerTransportFailure"
+            " (Local: Broker transport failure)",
+            sql.Outcome.REJECTED,
+        ),
         ("storage error: db error", sql.Outcome.VIOLATION),
     ],
 )
@@ -70,4 +75,29 @@ def test_upstream_transport_errors_are_rejections_only_for_rtr_reads(
 ):
     error = psycopg.errors.InternalError_(message)
     assert sql.classify_rtr_read(error).outcome is rtr_outcome
+    assert sql.classify(error).outcome is sql.Outcome.VIOLATION
+
+
+@pytest.mark.parametrize(
+    "message,ddl_outcome",
+    [
+        ("KAFKA sink validation: admin client errored", sql.Outcome.REJECTED),
+        (
+            "KAFKA source validation: failed to create and connect Kafka consumer",
+            sql.Outcome.REJECTED,
+        ),
+        (
+            "Meta data fetch error: OperationTimedOut (Local: Timed out)",
+            sql.Outcome.REJECTED,
+        ),
+        (
+            "KAFKA sink validation: zero brokers discovered in metadata request",
+            sql.Outcome.VIOLATION,
+        ),
+        ("Topic does not exist", sql.Outcome.VIOLATION),
+    ],
+)
+def test_an_unreachable_broker_rejects_only_kafka_ddl(message, ddl_outcome):
+    error = psycopg.errors.InternalError_(message)
+    assert sql.classify_kafka_ddl(error).outcome is ddl_outcome
     assert sql.classify(error).outcome is sql.Outcome.VIOLATION

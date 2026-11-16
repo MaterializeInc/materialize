@@ -40,6 +40,7 @@ Operator steps (`OperatorUnstick`) patch without the lease: they run only from
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -87,6 +88,17 @@ from materialize.mz_version import MzVersion
 # NOTE: passed as `_request_timeout`, which every generated client method
 # accepts but kubernetes-stubs omits, hence the `reportCallIssue` ignores.
 K8S_TIMEOUT_SECONDS = 10
+
+
+def request_timeout(seconds: float) -> int:
+    """`seconds`, rounded up, as a `_request_timeout`.
+
+    The generated client honors an int or a (connect, read) pair and drops
+    anything else, so a float leaves the request without a timeout.
+    """
+    return max(1, math.ceil(seconds))
+
+
 # Per `/api/leader/status` probe. Needs calibration on one simulated core.
 LEADER_PROBE_TIMEOUT_SECONDS = 3.0
 # Poll interval while following a rollout. Short enough to see `Promoting`,
@@ -1193,7 +1205,8 @@ def foreign_ddl_since(host: str, after_id: int | None) -> int | None:
             row = conn.execute(
                 "SELECT count(*) FROM mz_catalog.mz_audit_events"
                 " WHERE id > %s"
-                " AND coalesce(details ->> 'name', '') NOT LIKE 'rollout_ddl_%%'",
+                " AND coalesce(details ->> 'item', details ->> 'name', '')"
+                " NOT LIKE 'rollout_ddl_%%'",
                 (after_id,),
             ).fetchone()
         return int(row[0]) if row else None

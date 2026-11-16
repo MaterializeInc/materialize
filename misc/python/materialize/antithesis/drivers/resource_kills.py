@@ -341,12 +341,7 @@ def check_once(db: sqlite3.Connection, check: Check) -> None:
                 },
             )
             continue
-        with db:
-            inserted = db.execute(
-                "INSERT OR IGNORE INTO seen VALUES (?, ?, ?, ?)",
-                (f.key, f.kind, repr(f.details), time.time()),
-            ).rowcount
-        if not inserted:
+        if db.execute("SELECT 1 FROM seen WHERE key = ?", (f.key,)).fetchone():
             continue
         details = {**f.details, "node_memory": memory}
         log(f"{f.kind}: {details}")
@@ -354,6 +349,13 @@ def check_once(db: sqlite3.Connection, check: Check) -> None:
             always(False, MSG_LIMIT, details)
         else:
             harness_error("resources", MESSAGES[f.kind], details)
+        # Marked after the report, so a command killed in between reports the
+        # finding again instead of never.
+        with db:
+            db.execute(
+                "INSERT OR IGNORE INTO seen VALUES (?, ?, ?, ?)",
+                (f.key, f.kind, repr(f.details), time.time()),
+            )
     if complete:
         always(True, MSG_LIMIT, summary)
 

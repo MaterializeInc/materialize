@@ -132,6 +132,7 @@ CHECK_SLOTS = 2
 MODEL_WAIT_S = 20.0
 FIRST_SETUP_BUDGET_S = 120.0
 CONSUMER_TIMEOUT_S = 10.0
+K8S_TIMEOUT_S = 10
 ABORTED_READ_P = 0.25
 
 # Calibration: after faults stop, the time for killed pods to return, the sink
@@ -280,7 +281,7 @@ def _ddl(conn: psycopg.Connection, statement: str) -> None:
 def _setup_retryable(e: BaseException) -> bool:
     if isinstance(e, KafkaException):
         return not e.args[0].fatal()
-    return sql.classify(e).outcome is not sql.Outcome.VIOLATION
+    return sql.classify_kafka_ddl(e).outcome is not sql.Outcome.VIOLATION
 
 
 def ensure_ready(
@@ -783,7 +784,14 @@ def _model(db: sqlite3.Connection, gen: int) -> dict[int, oracle.ModelRow]:
 
 def _restart_signature(env: Environment, cluster_id: str) -> str:
     """Uid and restart count of every clusterd pod of the sink cluster."""
-    pods = client.CoreV1Api().list_namespaced_pod(env.endpoints.namespace).items
+    pods = (
+        client.CoreV1Api()
+        .list_namespaced_pod(
+            env.endpoints.namespace,
+            _request_timeout=K8S_TIMEOUT_S,  # pyright: ignore[reportCallIssue]
+        )
+        .items
+    )
     sig = []
     for pod in pods:
         assert pod.metadata is not None

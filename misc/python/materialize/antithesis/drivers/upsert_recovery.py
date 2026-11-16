@@ -474,6 +474,9 @@ def main() -> int:
             telemetry.comparison("upsert_recovery", "point", None)
             if isinstance(error, psycopg.Error):
                 classified = sql.classify_as_of_read(error)
+                if classified.outcome is sql.Outcome.VIOLATION:
+                    # The round creates its own Kafka source.
+                    classified = sql.classify_kafka_ddl(error)
                 always(
                     classified.outcome is not sql.Outcome.VIOLATION,
                     "upsert recovery: lifecycle and reads return only classified SQL errors",

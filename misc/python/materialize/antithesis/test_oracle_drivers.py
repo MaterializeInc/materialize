@@ -26,6 +26,7 @@ from kubernetes import client
 from materialize.antithesis import ivm_model as model
 from materialize.antithesis import quiet
 from materialize.antithesis.drivers import (
+    history,
     ivm,
     pod_restarts,
     read_paths,
@@ -451,3 +452,72 @@ def test_schema_evolution_cancels_a_stuck_follower_and_leaves_it_its_session(
     assert (
         session.closed_by and "MainThread" not in session.closed_by
     ), "only the follower closes the session it may still be using"
+
+
+@pytest.mark.parametrize(
+    "named,accused", [("u55", False), ("u12", True), ("u55, u13", True)]
+)
+def test_schema_evolution_unreadable_read_accuses_only_the_tables_own_collections(
+    monkeypatch: pytest.MonkeyPatch, named: str, accused: bool
+) -> None:
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [("u12",), ("u13",)]
+    monkeypatch.setattr(
+        schema_evolution.sql, "connection", lambda host: nullcontext(conn)
+    )
+    checked = Mock()
+    monkeypatch.setattr(schema_evolution, "always_or_unreachable", checked)
+    table = schema_evolution.Table("t1", "u7", "CREATE TABLE t1 (a int)")
+    # A read planned through an index names that index when it was dropped.
+    error = psycopg.errors.NoDataFound(
+        f"collection '{named}' is not readable at any timestamp"
+    )
+    schema_evolution.read_failed("host", "table:c/r1", table, "t1", error, {})
+    assert conn.execute.call_args.args[1] == ("u7",)
+    assert checked.call_args.args[0] is (not accused)
+
+
+def test_history_check_orders_reads_that_complete_while_an_epoch_is_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = sqlite3.connect(":memory:")
+    monkeypatch.setattr(history.state, "open_db", lambda *args: db)
+    monkeypatch.setattr(history, "start_watchdog", lambda seconds: None)
+    monkeypatch.setattr(history, "_coverage_cluster_id", lambda *args: None)
+    failed: list[str] = []
+
+    def check(condition: bool, message: str, details: object) -> None:
+        if not condition:
+            failed.append(message)
+
+    monkeypatch.setattr(history, "always", check)
+    monkeypatch.setattr(history, "always_or_unreachable", check)
+    history.open_state()
+
+    def read(epoch: int, invoke: float, complete: float, ts: int) -> None:
+        with db:
+            db.execute(
+                "INSERT INTO ops (epoch, kind, session, isolation, endpoint, invoke_rt,"
+                " complete_rt, outcome, ts, uptime_s, observed) VALUES"
+                " (?, 'r', ?, 'strict serializable', 'service', ?, ?, 'ok', ?, 100.0,"
+                " '[[0, \"table\", [], []]]')",
+                (epoch, f"s{invoke}", invoke, complete, ts),
+            )
+
+    read(1, 1.0, 2.0, 1000)
+    read(2, 3.0, 4.0, 2000)
+    check_epoch = history._check_epoch
+
+    def racing(db_: sqlite3.Connection, epoch: int, scope: str, **kwargs):
+        if epoch == 1:
+            # A strict read whose timestamp went backwards completes in the
+            # live epoch while the older epoch is analysed.
+            read(2, 5.0, 6.0, 1500)
+        return check_epoch(db_, epoch, scope, **kwargs)
+
+    monkeypatch.setattr(history, "_check_epoch", racing)
+    history.client_history_check()
+    assert failed == [
+        "client history: strict serializable read timestamps never go backwards"
+        " in real time"
+    ]

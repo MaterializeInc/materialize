@@ -70,3 +70,28 @@ def test_missing_owned_objects_are_a_wrong_result() -> None:
         assert d.observe() is None
     checked.assert_called_once()
     assert checked.call_args.args[0] is False
+
+
+@pytest.mark.parametrize("kind,confirmed", [("owner", True), ("size", False)])
+def test_acknowledged_size_change_stays_pending_until_observed(
+    kind: str, confirmed: bool
+) -> None:
+    # The cluster controller applies a size change after the acknowledgment.
+    d = driver()
+    model = MagicMock()
+    d.model = model
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    with (
+        patch.object(d, "connect", return_value=conn),
+        patch.object(access_control, "sometimes"),
+        patch.object(
+            access_control.rng,
+            "choice",
+            side_effect=lambda seq: kind if kind in seq else seq[0],
+        ),
+    ):
+        d.step()
+    model.sent.assert_called_once()
+    assert model.acknowledged.called is confirmed
+    model.rejected.assert_not_called()

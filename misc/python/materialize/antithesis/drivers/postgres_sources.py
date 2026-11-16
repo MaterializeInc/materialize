@@ -1036,7 +1036,9 @@ def _run_txn(
         if recorded:
             with db:
                 db.execute(
-                    "UPDATE txns SET status = 'aborted' WHERE txn_id = ?", (txn_id,)
+                    "UPDATE txns SET status = 'aborted' WHERE txn_id = ?"
+                    " AND status = 'pending'",
+                    (txn_id,),
                 )
         return txn_id, "aborted"
 
@@ -1045,7 +1047,12 @@ def _run_txn(
     except psycopg.Error as e:
         status = "unknown" if _is_ambiguous_commit(e) else "aborted"
         with db:
-            db.execute("UPDATE txns SET status = ? WHERE txn_id = ?", (status, txn_id))
+            # A check that fenced this writer may have resolved the outcome
+            # from the ledger already, which this must not undo.
+            db.execute(
+                "UPDATE txns SET status = ? WHERE txn_id = ? AND status = 'pending'",
+                (status, txn_id),
+            )
         return txn_id, status
 
     lsn_after = None

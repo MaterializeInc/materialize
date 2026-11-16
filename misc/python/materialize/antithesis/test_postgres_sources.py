@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import psycopg
 import pytest
 
 pytest.importorskip("antithesis")
@@ -494,3 +495,27 @@ def test_full_ledger_sweep_finds_corruption_below_checkpoint(
         "postgres source: checkpointed ledger rows change only by the acknowledged atomic retirement"
     ]
     assert c.load(db, 0).rounds == cp.rounds
+
+
+def test_late_commit_failure_does_not_undo_a_resolved_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = database()
+    monkeypatch.setattr(p, "_exports", lambda db, slot=None: [])
+    monkeypatch.setattr(p, "mark_expected_unhealthy", Mock())
+    up = Mock()
+    up.execute.side_effect = lambda query, *args: SimpleNamespace(
+        fetchone=lambda: ("0/10",) if "lsn" in str(query) else (3,)
+    )
+
+    def commit() -> None:
+        # The commit succeeded upstream, and a check fenced this writer and
+        # resolved the transaction before the writer reports its lost reply.
+        with db:
+            db.execute("UPDATE txns SET status = 'acked' WHERE txn_id = 'late'")
+        raise psycopg.OperationalError("connection lost")
+
+    up.commit.side_effect = commit
+    plan = {"s0.t0": ("dml", [])}
+    assert p._run_txn(up, db, 0, plan, "late") == ("late", "unknown")
+    assert db.execute("SELECT status FROM txns").fetchall() == [("acked",)]

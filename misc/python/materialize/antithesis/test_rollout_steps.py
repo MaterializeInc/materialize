@@ -257,6 +257,49 @@ def test_scenarios_resume_through_actions_checks_and_cleanup(
         )
 
 
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_upgrade_cancel_expects_the_generation_only_without_a_rollout(
+    fleet: Fleet, monkeypatch: pytest.MonkeyPatch, unfinished: bool
+) -> None:
+    always = Mock()
+    monkeypatch.setattr(r, "always", always)
+    kube = fleet.kube
+    if unfinished:
+        # The scenario begins while an earlier request is still in flight.
+        kube.obj["status"]["lastCompletedRolloutRequest"] = "earlier"
+        kube.obj["status"]["conditions"][0].update(reason="Applying", status="Unknown")
+    fleet.choices.update(variant="restore_request", random=0.1)
+    steps.begin(fleet.ctx(), "upgrade")
+    for _ in range(30):
+        s = steps.load(fleet.db)
+        if s is None:
+            break
+        if s.stage == "wait":
+            kube.phase("ReadyToPromote")
+        if s.stage == "follow":
+            spec, status = kube.obj["spec"], kube.obj["status"]
+            if spec["requestRollout"] != status["lastCompletedRolloutRequest"]:
+                # The restored request never completed, so the operator rolls
+                # the old release out as a new generation.
+                status["activeGeneration"] += 1
+                kube.phase("Applied")
+            else:
+                kube.phase("WaitingForApproval")
+        if s.stage == "act":
+            fleet.now[0] = max(fleet.now[0], s.delay_until)
+        steps.step(fleet.ctx())
+    assert steps.load(fleet.db) is None
+    assert kube.obj["status"]["activeGeneration"] == (6 if unfinished else 5)
+    assert kube.obj["status"]["lastCompletedRolloutEnvironmentdImageRef"] == "old"
+    verdicts = [
+        c.args[0]
+        for c in always.call_args_list
+        if c.args[1]
+        == "A cancelled cross-version upgrade leaves the old release serving"
+    ]
+    assert verdicts == [True]
+
+
 def test_interrupted_delete_does_not_kill_a_replacement_again(
     fleet: Fleet, monkeypatch: pytest.MonkeyPatch
 ) -> None:

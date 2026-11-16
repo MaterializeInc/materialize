@@ -244,23 +244,49 @@ def classify_as_of_read(error: BaseException) -> Classified:
 
 # `StorageError::Generic` around a tokio-postgres transport error, whose Display
 # drops the cause. Observed: "error communicating with the server". The others
-# are the remaining transport kinds of the same client.
+# are the remaining transport kinds of the same client. For a Kafka source it
+# wraps rdkafka's metadata or watermark fetch error.
 _RTR_UPSTREAM_TEMPLATE = re.compile(
     r"^storage error: (error communicating with the server|error connecting to server"
-    r"|connection closed|timeout waiting for server)$"
+    r"|connection closed|timeout waiting for server|Meta data fetch error: .*)$"
 )
 
 
 def classify_rtr_read(error: BaseException) -> Classified:
     """`classify` for a read with `real_time_recency` on.
 
-    Such a read first fetches the upstream Postgres frontier from environmentd
-    (`PostgresSourceConnection::fetch_write_frontier`), and one failed connect
-    or query fails the read, without a retry within the RTR timeout. No other
-    read contacts the upstream, so for them the same error is a violation.
+    Such a read first fetches the upstream frontier from environmentd
+    (`fetch_write_frontier` of the Postgres or Kafka source connection), and
+    one failed connect or query fails the read, without a retry within the RTR
+    timeout. No other read contacts the upstream, so for them the same error
+    is a violation.
     """
     c = classify(error)
     if c.sqlstate == "XX000" and _RTR_UPSTREAM_TEMPLATE.search(c.template):
+        return Classified(Outcome.REJECTED, c.sqlstate, c.template)
+    return c
+
+
+# `PlanError::KafkaSinkPurification` and `KafkaSourcePurification` for a client
+# that cannot reach the broker, and rdkafka's error from
+# `kafka_util::ensure_topic_exists`, which `sql_err!` passes on unstructured.
+_KAFKA_DDL_BROKER_TEMPLATE = re.compile(
+    r"^(KAFKA sink validation: admin client errored"
+    r"|KAFKA source validation: failed to create and connect Kafka consumer"
+    r"|Meta data fetch error: )"
+)
+
+
+def classify_kafka_ddl(error: BaseException) -> Classified:
+    """`classify` for a `CREATE SOURCE` or `CREATE SINK` on a Kafka connection.
+
+    Purification asks the broker for metadata once, within the metadata
+    timeout, before the statement is sequenced. A broker that is down or
+    partitioned from environmentd fails it, and nothing is created. No other
+    statement contacts the broker, so for them the same error is a violation.
+    """
+    c = classify(error)
+    if c.sqlstate == "XX000" and _KAFKA_DDL_BROKER_TEMPLATE.search(c.template):
         return Classified(Outcome.REJECTED, c.sqlstate, c.template)
     return c
 

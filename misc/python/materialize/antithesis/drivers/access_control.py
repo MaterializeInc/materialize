@@ -52,7 +52,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 
 from materialize.antithesis import ddl_hold, sql, state
-from materialize.antithesis.drivers import rollouts
+from materialize.antithesis.drivers import history, rollouts
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.isolation import AclModel, Key
 from materialize.antithesis.observations import reachable, sometimes
@@ -82,6 +82,8 @@ OWNER_KEYWORD[CLUSTER] = "CLUSTER"
 SETTLE_S = 600.0
 STATEMENT_TIMEOUT_MS = 30_000
 STEPS_MENU = (1, 2, 4)
+# An invocation holds the lock for its whole run. Not yet calibrated.
+WATCHDOG_S = 600.0
 
 OWNERS_SQL = """
 SELECT o.name, r.name
@@ -337,7 +339,11 @@ class Driver:
                 self.model.rejected(key, value, sent_at)
             self.save()
             return
-        self.model.acknowledged(key, value, sent_at)
+        # The acknowledgment of a size change only records the reconfiguration.
+        # The cluster controller applies it in a later catalog transaction, so
+        # until then the cluster has either size, like after an unknown outcome.
+        if kind != "size":
+            self.model.acknowledged(key, value, sent_at)
         self.save()
         sometimes(
             snap is not None and snap.reason in ("Applying", "ReadyToPromote"),
@@ -359,6 +365,7 @@ def driver_main() -> int:
     if ddl_hold.strict_active():
         log("DDL is strictly held; skipping")
         return 0
+    history.start_watchdog(WATCHDOG_S)
     env = Environment()
     lock = str(env.endpoints.state_dir / LOCK_FILE)
     env.endpoints.state_dir.mkdir(parents=True, exist_ok=True)

@@ -58,6 +58,7 @@ from typing import Any
 
 import psycopg
 import requests
+import urllib3
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable,
     unreachable,
@@ -772,12 +773,12 @@ def capture_halt_evidence(
                 "observed": _selector_summary(observed),
             }
 
-    def timeout() -> float:
+    def timeout() -> int:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             counts["request_deadline"] += 1
             raise TimeoutError("halt evidence capture budget elapsed")
-        return min(HALT_EVIDENCE_REQUEST_S, remaining)
+        return rollouts.request_timeout(min(HALT_EVIDENCE_REQUEST_S, remaining))
 
     try:
         request_timeout = timeout()
@@ -1211,7 +1212,9 @@ def preserve_pod_exit(
     counts: Counter[str] = Counter()
     db = None
     try:
-        request_timeout = min(HALT_EVIDENCE_REQUEST_S, remaining)
+        request_timeout = rollouts.request_timeout(
+            min(HALT_EVIDENCE_REQUEST_S, remaining)
+        )
         current = client.CoreV1Api().read_namespaced_pod(
             pod,
             namespace,
@@ -2172,12 +2175,17 @@ class Recovery:
         if collections_ready and rng.random() < RESTART_COMPARE_P:
             try:
                 self.restart_and_compare()
-            except (psycopg.Error, OSError, ApiException) as e:
+            except (
+                psycopg.Error,
+                OSError,
+                ApiException,
+                urllib3.exceptions.HTTPError,
+            ) as e:
                 log(f"restart comparison aborted: {e}")
 
         try:
             record_terminations(self.db, observe_pods(self.env))
-        except (ApiException, OSError) as e:
+        except (ApiException, urllib3.exceptions.HTTPError, OSError) as e:
             log(f"cannot read pods: {e}")
         # Recovery's own steps do no DDL while a read-only generation runs
         # (`cr_up_to_date` settles any rollout first), and eventually_ and

@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -499,12 +500,24 @@ def check_read(
     return v
 
 
-def still_live(host: str, name: str) -> bool | None:
+def names_live_table(host: str, table: Table, e: BaseException) -> bool | None:
+    """Whether `e`, a `CollectionUnreadable` error, names a collection of the
+    still-live `table`. None if the catalog cannot be read.
+
+    The error lists every collection of the read without a readable timestamp.
+    A read planned through an index names that index when it was dropped,
+    which says nothing about the table.
+    """
+    named = set(re.findall(r"\b[us]\d+\b", str(e).partition("\n")[0]))
     try:
         with sql.connection(host) as conn:
-            return name in live_names(conn)
+            rows = conn.execute(
+                "SELECT global_id FROM mz_internal.mz_object_global_ids WHERE id = %s",
+                (table.id,),
+            ).fetchall()
     except (psycopg.Error, OSError):
         return None
+    return bool(named & {str(r[0]) for r in rows})
 
 
 def read_failed(
@@ -520,9 +533,10 @@ def read_failed(
     if c.outcome is sql.Outcome.VIOLATION:
         _report(READ_FAMILY, c, {"path": path, "table": table.name, **extra})
     elif c.sqlstate == "P0002" and read == table.name:
-        # `CollectionUnreadable` is a designed outcome only when the table was
-        # dropped while the read was sequenced.
-        live = still_live(host, read)
+        # `CollectionUnreadable` is a designed outcome only when the table, or
+        # an index the read was planned through, was dropped while the read
+        # was sequenced.
+        live = names_live_table(host, table, e)
         always_or_unreachable(
             live is not True,
             "schema evolution: a live evolved table is never reported unreadable at every timestamp",

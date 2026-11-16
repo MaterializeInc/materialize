@@ -52,6 +52,7 @@ from materialize.antithesis.drivers.rollouts import (
     Snapshot,
     lifecycle_ddl_in_flight,
     peek_db,
+    request_timeout,
 )
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -185,8 +186,8 @@ def delete_recorded(
                 _request_timeout=(  # pyright: ignore[reportCallIssue]
                     K8S_TIMEOUT_SECONDS
                     if deadline is None
-                    else min(
-                        K8S_TIMEOUT_SECONDS, max(0.001, deadline - time.monotonic())
+                    else request_timeout(
+                        min(K8S_TIMEOUT_SECONDS, deadline - time.monotonic())
                     )
                 ),
             )

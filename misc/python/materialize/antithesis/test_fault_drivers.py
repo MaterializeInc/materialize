@@ -632,10 +632,19 @@ def test_halt_capture_bounds_retries_for_a_truncated_single_line(
     ] == [200, 20, 1]
     assert halt_capture.core.read_namespaced_pod.call_count == 4
     assert all(
-        0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
+        type(call.kwargs["_request_timeout"]) is int
+        and 0 < call.kwargs["_request_timeout"] <= recovery.HALT_EVIDENCE_REQUEST_S
         for call in halt_capture.core.read_namespaced_pod_log.call_args_list
         + halt_capture.core.read_namespaced_pod.call_args_list
     )
+
+
+def test_request_timeouts_are_integers_the_client_honors() -> None:
+    # The generated client turns any other number into no timeout at all.
+    budgets = (-1.0, 0.001, 0.5, 1.0, 2.5, 10)
+    timeouts = [rollouts.request_timeout(seconds) for seconds in budgets]
+    assert timeouts == [1, 1, 1, 1, 3, 10]
+    assert all(type(timeout) is int for timeout in timeouts)
 
 
 def test_halt_capture_stops_shrinking_when_its_deadline_elapses(
@@ -1184,6 +1193,27 @@ def test_own_limit_oom_remains_a_product_failure(
         call.args[:2] == (False, resource_kills.MSG_LIMIT)
         for call in product.call_args_list
     )
+
+
+def test_resource_finding_interrupted_before_its_report_is_reported_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = sqlite3.connect(":memory:")
+    db.execute(
+        "CREATE TABLE seen (key TEXT PRIMARY KEY, kind TEXT, details TEXT, at REAL)"
+    )
+    finding = resource_kills.Finding("limit", "finding", {"memory_limit": "1Gi"})
+    killed = Mock(side_effect=KeyboardInterrupt)
+    monkeypatch.setattr(resource_kills, "always", killed)
+    monkeypatch.setattr(resource_kills, "node_memory", lambda: {})
+    with pytest.raises(KeyboardInterrupt):
+        resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
+    product = Mock()
+    monkeypatch.setattr(resource_kills, "always", product)
+    for _ in range(2):
+        resource_kills.check_once(db, Mock(sample=lambda: ([finding], True)))
+    failures = [c for c in product.call_args_list if c.args[0] is False]
+    assert len(failures) == 1
 
 
 def test_incomplete_resource_attribution_is_retried_without_a_product_verdict(

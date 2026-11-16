@@ -257,7 +257,7 @@ def _setup_retryable(e: BaseException) -> bool:
     # retriable by librdkafka, so only a fatal client error ends the retries.
     if isinstance(e, KafkaException):
         return not e.args[0].fatal()
-    return sql.classify(e).outcome is not sql.Outcome.VIOLATION
+    return sql.classify_kafka_ddl(e).outcome is not sql.Outcome.VIOLATION
 
 
 def ensure_slot(

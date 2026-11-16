@@ -811,8 +811,13 @@ def _read(
                     op_id,
                 ),
             )
+        # The first statement of a read transaction takes read holds on the
+        # whole schema, so it also fails when another epoch's tables are
+        # dropped. Only a single statement names nothing but this epoch.
         return (
-            c.race is sql.CatalogRace.MISSING and not session.target.is_other_generation
+            c.race is sql.CatalogRace.MISSING
+            and not as_txn
+            and not session.target.is_other_generation
         )
     complete = time.monotonic()
     timestamps = sorted({int(r[0]) for r in rows})
@@ -1505,15 +1510,17 @@ def client_history_check() -> int:
         telemetry.comparison("history", "history", None)
         log("no new operations to check")
         return 0
+    covered: list[int] = []
+    for epoch in sorted(epochs):
+        covered.extend(_check_epoch(db, epoch, "anytime", cluster_id=cluster_id))
+    # Read after the epoch checks: they mark every read they loaded as checked,
+    # including reads that completed while an older epoch was analysed.
     new_reads = {
         int(r[0])
         for r in db.execute(
             "SELECT op_id FROM ops WHERE checked = 0 AND kind = 'r' AND outcome = 'ok'"
         )
     }
-    covered: list[int] = []
-    for epoch in sorted(epochs):
-        covered.extend(_check_epoch(db, epoch, "anytime", cluster_id=cluster_id))
     _assert_timestamp_order(db, new_reads)
     _mark_checked(db, covered)
     log(f"checked epochs {sorted(epochs)}")

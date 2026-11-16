@@ -455,9 +455,17 @@ def _check(ctx: r.Ctx, s: Scenario) -> str:
             and after.last_completed == s.request
             and after.last_completed_image is not None
         ):
+            # Only restoring a request that had completed requests no rollout.
+            # A fresh request, or one the scenario found unfinished, rolls the
+            # old release out as a new generation.
+            no_rollout = (
+                s.variant == "restore_request"
+                and prior.request is not None
+                and prior.last_completed == prior.request
+            )
             r.always(
                 after.last_completed_image == prior.spec.get("environmentdImageRef")
-                and (s.variant == "fresh_request" or after.active == prior.active),
+                and (not no_rollout or after.active == prior.active),
                 "A cancelled cross-version upgrade leaves the old release serving",
                 {
                     **details,

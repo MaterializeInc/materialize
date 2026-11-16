@@ -34,7 +34,10 @@ restart-invariant view of the lifecycle objects, keyed by id:
 * index placement (index, on, cluster),
 * cluster shape (managed, size, replication factor) and replicas (name, size),
   omitted for clusters with an in-progress reconfiguration in either snapshot
-  because the controller legitimately changes them without DDL,
+  because the controller legitimately changes them without DDL, and for
+  managed clusters whose replicas do not match their configuration yet: the
+  cluster controller creates and drops them in its own catalog transactions,
+  after the DDL that changed the configuration,
 * graceful reconfiguration records without `status`, which advances on its
   own,
 * `dump`: in-memory storage controller state from environmentd's
@@ -68,6 +71,7 @@ from typing import Any
 
 import psycopg
 import requests
+import urllib3
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable,
 )
@@ -96,6 +100,10 @@ CONNECT_DEADLINE_S = 60
 DDL_TIMEOUT_MS = 60_000
 READ_TIMEOUT_MS = 30_000
 DUMP_TIMEOUT_S = 30
+K8S_TIMEOUT_S = 10
+# The client reports an API server it cannot reach as a urllib3 error, which
+# is neither an `ApiException` nor an `OSError`.
+K8S_ERRORS = (ApiException, urllib3.exceptions.HTTPError)
 
 # Object caps keep the whole environment within one simulated core. Creates
 # over a cap turn into the matching drop.
@@ -170,8 +178,9 @@ EXPECTED_REJECTIONS = [
 ]
 # Errors a read of a still-live collection gets when another invocation drops
 # the cluster or index it reads through, beyond the catalog races `sql.classify`
-# already rejects. Deliberately excludes "is not readable at any timestamp",
-# the symptom of a tombstoned live shard.
+# already rejects. Those include P0002 "is not readable at any timestamp",
+# which a dropped index gives a read planned through it, so a tombstoned live
+# shard only fails the read required to succeed after faults stop.
 READ_RACE_REJECTIONS = [
     re.compile(p)
     for p in (
@@ -404,7 +413,14 @@ class Session:
 
 def restart_signature(env: Environment) -> str:
     """Pod uid and restart count of every environmentd and clusterd pod."""
-    pods = client.CoreV1Api().list_namespaced_pod(env.endpoints.namespace).items
+    pods = (
+        client.CoreV1Api()
+        .list_namespaced_pod(
+            env.endpoints.namespace,
+            _request_timeout=K8S_TIMEOUT_S,  # pyright: ignore[reportCallIssue]
+        )
+        .items
+    )
     sig = []
     for pod in pods:
         assert pod.metadata is not None
@@ -422,7 +438,7 @@ def restart_signature(env: Environment) -> str:
 def safe_signature(env: Environment) -> str | None:
     try:
         return restart_signature(env)
-    except (ApiException, OSError) as e:
+    except (*K8S_ERRORS, OSError) as e:
         log(f"cannot read pods: {e}")
         return None
 
@@ -722,15 +738,31 @@ def dump_projection(host: str, global_ids: list[str]) -> dict[str, Any] | None:
     return {"collections": links, "read_policies": policies}
 
 
+def _unreconciled(snap: dict[str, Any]) -> set[str]:
+    """Managed clusters whose replicas do not match their configuration."""
+    result = set()
+    for id_, _, managed, size, rf in snap.get("clusters", []):
+        if managed != "True":
+            continue
+        sizes = [r[3] for r in snap.get("replicas", []) if r[2] == id_]
+        if str(len(sizes)) != rf or any(s != size for s in sizes):
+            result.add(id_)
+    return result
+
+
 def _strip_reconfiguring(
     a: dict[str, Any], b: dict[str, Any]
 ) -> tuple[set[str], dict[str, list[Any]], dict[str, list[Any]]]:
-    busy = {
-        r[0]
-        for snap in (a, b)
-        for r in snap.get("reconfigurations", [])
-        if r[1] == "in-progress"
-    }
+    busy = (
+        {
+            r[0]
+            for snap in (a, b)
+            for r in snap.get("reconfigurations", [])
+            if r[1] == "in-progress"
+        }
+        | _unreconciled(a)
+        | _unreconciled(b)
+    )
 
     def strip(snap: dict[str, Any]) -> dict[str, list[Any]]:
         return {
@@ -1107,7 +1139,7 @@ class Driver:
         try:
             flag = configure.roll_flag(self.s.env)
             log(f"rolled {flag}")
-        except (ApiException, OSError, RuntimeError) as e:
+        except (*K8S_ERRORS, OSError, RuntimeError) as e:
             log(f"flag roll failed: {e}")
 
     # Multi-step actions. Each records a pending op, then may abandon.
@@ -1139,8 +1171,13 @@ class Driver:
             )
             self.maybe_abandon()
         else:
-            # The chain ends with a dependent on the newest table version.
-            self.create_mv(live_objects(self.s) or objects, table, column)
+            # The chain ends with a dependent on the newest table version. An
+            # indeterminate ALTER may not have added the column.
+            self.create_mv(
+                live_objects(self.s) or objects,
+                table,
+                column if outcome is None else None,
+            )
 
     def create_replacement(
         self, objects: dict[str, dict[str, Any]], target: str | None = None
@@ -1421,13 +1458,13 @@ def main() -> int:
         env = Environment()
         s = Session(env, db)
         s.conn()
-    except (psycopg.Error, OSError, RuntimeError, ApiException) as e:
+    except (psycopg.Error, OSError, RuntimeError, *K8S_ERRORS) as e:
         log(f"environment unreachable, nothing to do: {e}")
         return 0
     try:
         if ensure_schema(s):
             run(s, weights)
-    except (psycopg.Error, OSError, ApiException) as e:
+    except (psycopg.Error, OSError, *K8S_ERRORS) as e:
         # Every SQL and Kubernetes call above already tolerates faults; this
         # catches a reconnect that outlasted its deadline.
         log(f"giving up this invocation: {e}")

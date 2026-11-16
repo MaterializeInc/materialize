@@ -110,6 +110,7 @@ def test_active_replica_arm_ignores_owned_preparation_and_only_deletes_scoped_ac
     call = f.kube.core.delete_namespaced_pod.call_args
     assert call.args == ("active", "ns")
     assert call.kwargs["body"].preconditions.uid == "active-uid"
+    assert type(call.kwargs["_request_timeout"]) is int
     assert call.kwargs["_request_timeout"] > 0
     release.assert_called_once()
     f.kube.patch_spec.assert_not_called()
