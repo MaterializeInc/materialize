@@ -2578,8 +2578,8 @@ where
     }
 
     /// The next step toward finishing GC on a finalized shard, or `None` when
-    /// it's done. `earliest_live` is the earliest seqno in consensus, which
-    /// state doesn't record.
+    /// it's done. `earliest_live` is the earliest live diff's seqno in
+    /// consensus, which state doesn't record.
     ///
     /// Each pass that removes old rollups adds one rollup of finalized state,
     /// which is kept, so a shard GC'd in several passes keeps one per pass.
@@ -2595,16 +2595,22 @@ where
             return Some(FinalizedGcStep::WriteRollup);
         }
         let (latest, _) = self.latest_rollup();
-        // Truncating deletes the blobs named in the diffs it drops. Cap the
-        // versions one GC fetches like `maybe_gc` does, but reach the next
-        // rollup so it always truncates something.
+        // GC keeps the newest rollup <= new_seqno_since and truncates to it. With
+        // only one rollup in range it removes and truncates nothing, so cap the
+        // versions one pass fetches at max_versions, but extend to the next rollup
+        // so every pass makes progress.
         let mut later_rollups = self.collections.rollups.range(earliest_live.next()..);
         let next_rollup = later_rollups.next().map(|(seqno, _)| *seqno);
         let capped = SeqNo(earliest_live.0.saturating_add(u64::cast_from(max_versions)));
         let new_seqno_since = self.seqno.min(capped.max(next_rollup.unwrap_or(capped)));
+        // A rollup older than `latest` is still live in consensus, so there's one
+        // to truncate away.
         if earliest_live < *latest {
             return Some(FinalizedGcStep::Gc(new_seqno_since));
         }
+        // Consensus is already truncated to `latest`, but state can still list older
+        // rollups: a prior GC died after truncating but before removing them from
+        // state, or ran with remove_finalized_rollups off.
         let mut old_rollups = self.collections.rollups.values().rev().skip(1);
         if remove_finalized_rollups && old_rollups.any(|x| !x.finalized) {
             return Some(FinalizedGcStep::Gc(new_seqno_since));
