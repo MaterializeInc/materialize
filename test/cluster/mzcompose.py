@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from typing import LiteralString
 
 import psycopg
 import requests
@@ -4540,6 +4541,116 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         assert (
             c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
         ), "environmentd unreachable after char-param test"
+
+
+def workflow_statement_logging_throttled_count(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Executions dropped by throttling between two logged executions of the
+    same prepared statement must be reported by the later one, in
+    `mz_recent_activity_log.throttled_count`. Runs once per logging path: the
+    frontend peek sequencing logs the SELECT, the coordinator logs the SET."""
+
+    application_name = "throttled_count_repro"
+    num_throttled_executions = 20
+
+    def set_throttle(target_data_rate: str, max_data_credit: str) -> None:
+        # The empty string disables throttling, whatever the composition's
+        # system parameter mode passed as the default.
+        c.sql(
+            f"""
+            ALTER SYSTEM SET statement_logging_target_data_rate = {target_data_rate};
+            ALTER SYSTEM SET statement_logging_max_data_credit = {max_data_credit};
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+    def logged_counts(cur: Cursor, sql: str) -> list[int]:
+        cur.execute(
+            """
+            SELECT throttled_count
+            FROM mz_internal.mz_recent_activity_log
+            WHERE application_name = %s AND sql = %s
+            ORDER BY began_at
+            """,
+            (application_name, sql),
+        )
+        return [int(row[0]) for row in cur.fetchall()]
+
+    def wait_for_counts(
+        cur: Cursor, sql: str, done: Callable[[list[int]], bool]
+    ) -> list[int]:
+        # Statement logging flushes asynchronously; wait for the executions to land.
+        deadline = time.time() + 30
+        while True:
+            counts = logged_counts(cur, sql)
+            if done(counts):
+                return counts
+            assert time.time() < deadline, f"{sql!r}: logged executions: {counts}"
+            time.sleep(0.5)
+
+    def check(
+        cur: Cursor,
+        sys_cur: Cursor,
+        query: LiteralString,
+        params: tuple,
+        logged_sql: str,
+    ) -> None:
+        # The first execution logs the prepared statement itself.
+        cur.execute(query, params, prepare=True)
+        assert wait_for_counts(
+            sys_cur, logged_sql, lambda counts: len(counts) == 1
+        ) == [0]
+
+        # Cap the credit at a single byte so that every execution is throttled.
+        set_throttle("1", "1")
+        for _ in range(num_throttled_executions):
+            cur.execute(query, params, prepare=True)
+
+        # Lift the throttle. The next execution is logged and reports the
+        # throttled ones, so every execution is either logged or counted by the
+        # next logged one.
+        set_throttle("''", "''")
+        cur.execute(query, params, prepare=True)
+        counts = wait_for_counts(
+            sys_cur,
+            logged_sql,
+            lambda counts: len(counts) + sum(counts) == num_throttled_executions + 2,
+        )
+        assert (
+            counts[-1] > 0
+        ), f"{logged_sql!r}: the last execution must report the throttled ones: {counts}"
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        set_throttle("''", "''")
+
+        conn = c.sql_connection(startup_params={"application_name": application_name})
+        cur = conn.cursor()
+        sys_cur = c.sql_cursor(port=6877, user="mz_system")
+
+        check(cur, sys_cur, "SELECT %s::text", ("marker",), "SELECT $1::text")
+        check(
+            cur,
+            sys_cur,
+            "SET statement_timeout = '10s'",
+            (),
+            "SET statement_timeout = '10s'",
+        )
+
+        cur.close()
+        conn.close()
+        sys_cur.close()
 
 
 def workflow_blue_green_deployment(
