@@ -68,9 +68,13 @@ jobs:
               state: 'open',
               head: `${run.head_repository.owner.login}:${run.head_branch}`,
             });
-            const pr = pulls.find(p => p.head.sha === run.head_sha);
+            // A push before this run moves the PR's head, so fall back to the
+            // branch's only open PR.
+            const open = pulls.filter(p => p.state === 'open');
+            const pr = pulls.find(p => p.head.sha === run.head_sha)
+              ?? (open.length === 1 ? open[0] : undefined);
             if (!pr || pr.draft) {
-              core.info('No ready-to-review pull request has this head commit.');
+              core.info('No ready-to-review pull request matches this run.');
               return;
             }
 

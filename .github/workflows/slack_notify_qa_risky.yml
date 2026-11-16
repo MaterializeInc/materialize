@@ -24,8 +24,7 @@
 # A notification is sent when all of these conditions are true:
 #   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
 #     to ready-to-review.
-#   * The PR changes one of the files listed in
-#     slack_notify_qa_risky_trigger.yml.
+#   * The PR changes one of the files in `RISKY_FILES` below.
 #   * The PR adds more than 300 lines to new or modified Rust files.
 #
 # A `pull_request` run gets no secrets on PRs from forks. A PR event runs
@@ -50,11 +49,36 @@ jobs:
     permissions:
       pull-requests: read # Looks up the PR of the trigger run and its files.
     steps:
-      - name: "Long change filter"
+      - name: "Risky change filter"
         id: pr
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
+            // A PR can change the trigger's path filter, so this list decides.
+            const RISKY_FILES = new Set([
+              'src/adapter/src/catalog.rs',
+              'src/adapter/src/coord.rs',
+              'src/adapter/src/coord/command_handler.rs',
+              'src/adapter/src/coord/sequencer.rs',
+              'src/adapter/src/coord/sequencer/inner.rs',
+              'src/catalog/src/builtin.rs',
+              'src/expr/src/relation/mod.rs',
+              'src/expr/src/scalar/func.rs',
+              'src/expr/src/scalar/mod.rs',
+              'src/pgwire/src/message.rs',
+              'src/pgwire/src/protocol.rs',
+              'src/sql-parser/src/ast/defs/statement.rs',
+              'src/sql-parser/src/parser.rs',
+              'src/sql/src/catalog.rs',
+              'src/sql/src/func.rs',
+              'src/sql/src/plan.rs',
+              'src/sql/src/plan/query.rs',
+              'src/sql/src/plan/statement.rs',
+              'src/sql/src/plan/statement/ddl.rs',
+              'src/sql/src/rbac.rs',
+              'src/sqllogictest/src/runner.rs',
+            ]);
+
             const run = context.payload.workflow_run;
             if (!run.head_repository) {
               core.info('The head repository no longer exists.');
@@ -67,9 +91,13 @@ jobs:
               state: 'open',
               head: `${run.head_repository.owner.login}:${run.head_branch}`,
             });
-            const pr = pulls.find(p => p.head.sha === run.head_sha);
+            // A push before this run moves the PR's head, so fall back to the
+            // branch's only open PR.
+            const open = pulls.filter(p => p.state === 'open');
+            const pr = pulls.find(p => p.head.sha === run.head_sha)
+              ?? (open.length === 1 ? open[0] : undefined);
             if (!pr || pr.draft) {
-              core.info('No ready-to-review pull request has this head commit.');
+              core.info('No ready-to-review pull request matches this run.');
               return;
             }
 
@@ -79,6 +107,10 @@ jobs:
               pull_number: pr.number,
               per_page: 100,
             });
+            if (!files.some(f => RISKY_FILES.has(f.filename))) {
+              core.info(`PR #${pr.number} changes no risky file.`);
+              return;
+            }
             const addedLines = files
               .filter(f => ['added', 'modified'].includes(f.status) && f.filename.endsWith('.rs'))
               .reduce((sum, f) => sum + f.additions, 0);
