@@ -100,6 +100,7 @@ use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::config::ScopedParameters;
 use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
+use crate::optimize::materialized_view::confirm_declared_keys;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 
@@ -1815,19 +1816,17 @@ impl CatalogState {
                         (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
-                let declared_schema = materialized_view.declared_desc.is_some();
                 let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
-                let desc = match materialized_view.declared_desc {
-                    // Keys stay inferred, see `optimize::materialized_view`.
-                    Some(desc) => typ
-                        .keys
-                        .into_iter()
-                        .fold(desc.without_keys(), |desc, key| desc.with_key(key)),
+                let (desc, unconfirmed_keys) = match &materialized_view.declared_desc {
+                    Some(declared) => confirm_declared_keys(declared, &typ.keys),
                     None => {
                         for &i in &materialized_view.non_null_assertions {
                             typ.column_types[i].nullable = false;
                         }
-                        RelationDesc::new(typ, materialized_view.column_names)
+                        (
+                            RelationDesc::new(typ, materialized_view.column_names),
+                            Vec::new(),
+                        )
                     }
                 };
                 let desc = VersionedRelationDesc::new(desc);
@@ -1847,7 +1846,8 @@ impl CatalogState {
                     raw_expr,
                     locally_optimized_expr: optimized_expr,
                     desc,
-                    declared_schema,
+                    declared_desc: materialized_view.declared_desc,
+                    unconfirmed_keys,
                     resolved_ids,
                     dependencies,
                     replacement_target: materialized_view.replacement_target,

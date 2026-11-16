@@ -1254,6 +1254,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+        Builtin::Table(&MZ_MATERIALIZED_VIEW_UNCONFIRMED_KEYS),
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
