@@ -2532,8 +2532,9 @@ pub fn is_http_config_var(name: &str) -> bool {
 }
 
 /// Whether `name` is a system parameter that sessions copy at connect time.
-pub fn is_session_var(name: &str) -> bool {
+pub fn is_session_default(name: &str) -> bool {
     SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
+        || name.eq_ignore_ascii_case(STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE.name())
 }
 
 /// Set of [`SystemVar`]s that can also get set at a per-Session level.

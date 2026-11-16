@@ -3682,7 +3682,7 @@ impl Coordinator {
         self.catalog_transact(Some(session), vec![op]).await?;
 
         Self::notice_if_startup_only(session, &name);
-        if vars::is_session_var(&name) {
+        if vars::is_session_default(&name) {
             session.add_notice(AdapterNotice::VarDefaultUpdated {
                 role: None,
                 var_name: Some(name),
@@ -3701,7 +3701,7 @@ impl Coordinator {
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
         Self::notice_if_startup_only(session, &name);
-        if vars::is_session_var(&name) {
+        if vars::is_session_default(&name) {
             session.add_notice(AdapterNotice::VarDefaultUpdated {
                 role: None,
                 var_name: Some(name),
@@ -3720,11 +3720,13 @@ impl Coordinator {
         // Which parameters `RESET ALL` changes has to be read before the
         // transaction applies it, afterwards they all read as their default.
         let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
-        let session_var_changed = {
+        let session_default_changed = {
             let config = self.catalog().system_config();
             let defaults = config.defaults();
             config
-                .iter_session()
+                .iter()
+                .chain(config.iter_session())
+                .filter(|v| vars::is_session_default(v.name()))
                 .any(|v| defaults.get(v.name()).is_some_and(|d| d != &v.value()))
         };
         let op = catalog::Op::ResetAllSystemConfiguration;
@@ -3734,7 +3736,7 @@ impl Coordinator {
                 var_name: name.to_string(),
             });
         }
-        if session_var_changed {
+        if session_default_changed {
             session.add_notice(AdapterNotice::VarDefaultUpdated {
                 role: None,
                 var_name: None,

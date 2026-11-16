@@ -8253,8 +8253,10 @@ fn test_alter_system_session_default_notice() {
     for stmt in [
         "ALTER SYSTEM SET statement_timeout = '2min'",
         "ALTER SYSTEM RESET statement_timeout",
+        "ALTER SYSTEM SET statement_logging_default_sample_rate = 0.5",
+        "ALTER SYSTEM RESET statement_logging_default_sample_rate",
     ] {
-        assert!(notified(stmt), "session var: {stmt} did not notify");
+        assert!(notified(stmt), "session default: {stmt} did not notify");
     }
     for stmt in [
         "ALTER SYSTEM SET enable_refresh_every_mvs = true",
@@ -8263,10 +8265,19 @@ fn test_alter_system_session_default_notice() {
         assert!(!notified(stmt), "system-only var: {stmt} notified");
     }
 
-    notified("ALTER SYSTEM SET statement_timeout = '2min'");
+    for stmt in [
+        "ALTER SYSTEM SET statement_timeout = '2min'",
+        "ALTER SYSTEM SET statement_logging_default_sample_rate = 0.5",
+    ] {
+        notified(stmt);
+        assert!(
+            notified("ALTER SYSTEM RESET ALL"),
+            "RESET ALL after {stmt} did not notify"
+        );
+    }
     assert!(
-        notified("ALTER SYSTEM RESET ALL"),
-        "RESET ALL of a changed session var did not notify"
+        !notified("ALTER SYSTEM RESET ALL"),
+        "RESET ALL without changes notified"
     );
     notified("ALTER SYSTEM SET enable_refresh_every_mvs = true");
     assert!(
