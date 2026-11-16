@@ -767,12 +767,29 @@ impl Coordinator {
                     }
                     catalog::CommandWork::Connection(request) => {
                         self.release_ddl_lock(guard);
+                        let conn_id = pending.context.context_mut().session().conn_id().clone();
+                        let (kind, failpoint) = match &pending.commands[index] {
+                            catalog::command::CatalogCommand::CreateConnection(_) => {
+                                ("create_connection", "catalog_create_connection_ready")
+                            }
+                            catalog::command::CatalogCommand::AlterConnection(_) => {
+                                ("alter_connection", "catalog_alter_connection_ready")
+                            }
+                            _ => unreachable!(
+                                "connection preparation belongs to a connection command"
+                            ),
+                        };
                         let config = self.controller.storage.config().clone();
                         let secrets = self.caching_secrets_reader.clone();
                         let tx = self.internal_cmd_tx.clone();
                         let otel_ctx = OpenTelemetryContext::obtain();
                         task::spawn(|| "ddl_connection_preparation", async move {
                             let response = request.execute(&config, &secrets).await;
+                            tracing::debug!(
+                                target: "mz_adapter::catalog_preparation",
+                                %conn_id, kind, "catalog preparation complete"
+                            );
+                            catalog_preparation_test_pause(failpoint).await;
                             pending.responses.insert(
                                 index, catalog::CommandResponse::Connection(response),
                             );
