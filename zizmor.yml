@@ -11,6 +11,11 @@ rules:
   dangerous-triggers:
     ignore:
       - cla.yml
+      # issue_comment and review triggers start Claude Code on an `@claude`
+      # mention. claude-code-action rejects actors without write access to the
+      # repository before Claude runs, and the job's token has no write scope
+      # besides `id-token`.
+      - claude.yml
       - linear_links.yml
       - slack_notify_design_doc.yml
       - slack_notify_labeled.yml
