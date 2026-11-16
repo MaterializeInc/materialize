@@ -223,7 +223,21 @@ impl PeekClient {
                     return Err(AdapterError::Canceled);
                 }
                 Err(RegisterError::CatalogChanged) => {
-                    catalog = self.catalog_snapshot("register_peek").await;
+                    // Not `catalog_snapshot`, for the reason `background_peek`
+                    // gives: a background client may race the coordinator's
+                    // shutdown.
+                    let refreshed = self
+                        .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+                        .await;
+                    catalog = match refreshed {
+                        Ok(CatalogSnapshot { catalog }) => catalog,
+                        Err(error) => {
+                            peek.lifecycle
+                                .complete(PeekNotification::Error(error.to_string()));
+                            return Err(error);
+                        }
+                    };
+                    self.catalog_cache = Arc::downgrade(&catalog);
                     let error = if catalog.try_get_cluster(cluster_id).is_none() {
                         Some(AdapterError::ConcurrentDependencyDrop {
                             dependency_kind: "cluster",
