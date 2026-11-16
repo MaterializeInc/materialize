@@ -13,32 +13,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Portions of this file are derived from the README examples in the
-# Contributor Assistant project. The original source code was retrieved on
-# July 31, 2024 from:
+# Portions of this file are derived from the Contributor Assistant project. The
+# original source code was retrieved on November 16, 2026 from:
 #
-#     https://github.com/contributor-assistant/github-action/blob/master/README.md
+#     https://github.com/contributor-assistant/github-action/tree/ca4a40a7d1004f18d9960b404b97e5f30a505a08
 
-# Check if PR authors have signed the Materialize CLA, and if not have them sign
-# and record their signature. The CLA and signatures are stored in
-# https://github.com/MaterializeInc/cla
+# Checks that the authors of a PR have signed the Materialize CLA, asks them to
+# sign if not, and records their signatures. The CLA and signatures are stored
+# in https://github.com/MaterializeInc/cla, in the file format of Contributor
+# Assistant.
+#
+# GitHub blocks `pull_request_target` in public repositories by default. A PR
+# event runs cla_trigger.yml instead, and its completion runs this workflow
+# from the default branch, with secrets and a write token, even for PRs from
+# forks. A PR comment with the sign phrase or `recheck` runs it too. Each run
+# records signature comments, then reports the `cla-assistant` check on the PR
+# head commit.
 
 name: CLA Assistant
+
 on:
+  workflow_run:
+    workflows: [CLA trigger]
+    types: [completed]
   issue_comment:
     types: [created]
-  pull_request_target:
-    types: [opened, closed, synchronize]
 
 permissions: {}
 
 jobs:
-  cla-assistant:
-    name: cla-assistant
-    if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+  check:
+    name: check
+    # Expression string comparisons ignore case. The script matches the sign
+    # phrase exactly.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.event == 'pull_request')
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && (github.event.comment.body == 'recheck'
+          || contains(github.event.comment.body, 'hereby sign the CLA')))
     runs-on: ubuntu-latest
     permissions:
-      actions: write # Re-runs the last failed CLA workflow run on the PR after a signature.
+      checks: write # Reports the cla-assistant check on the PR head commit.
       contents: read
       pull-requests: write # Creates and updates the CLA comment on the PR.
     steps:
@@ -51,21 +68,256 @@ jobs:
           owner: MaterializeInc
           repositories: cla
           permission-contents: write
-      - name: CLA Assistant
-        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1 # zizmor: ignore[archived-uses]
+      - name: Check CLA signatures
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The action reads the token for the remote signatures repository
-          # from this variable. It accepts any token type, not only a PAT.
-          PERSONAL_ACCESS_TOKEN: ${{ steps.cla-token.outputs.token }}
+          CLA_TOKEN: ${{ steps.cla-token.outputs.token }}
         with:
-          remote-organization-name: MaterializeInc
-          remote-repository-name: cla
-          branch: main
-          path-to-signatures: signatures.v1.json
-          path-to-document: https://github.com/MaterializeInc/cla/blob/main/cla.md
-          allowlist: materialize-bot,materialize-bot-monitoring,renovate[bot],claude,github-actions[bot],devin-ai-integration[bot]
-          custom-notsigned-prcomment: Thank you for your submission! We really appreciate it. Like many source-available projects, we require that you sign our [Contributor License Agreement](https://github.com/MaterializeInc/cla/blob/main/cla.md) (CLA) before we can accept your contribution.<br><br>You can sign the CLA by posting a comment with the message below.
-          custom-pr-sign-comment: I have read the Contributor License Agreement (CLA) and I hereby sign the CLA.
-          custom-allsigned-prcomment: All contributors have signed the CLA.
-          lock-pullrequest-aftermerge: false
+          script: |
+            const SIGN_PHRASE =
+              'I have read the Contributor License Agreement (CLA) and I hereby sign the CLA.';
+            const CLA_URL = 'https://github.com/MaterializeInc/cla/blob/main/cla.md';
+            const SIGNATURES = {
+              owner: 'MaterializeInc',
+              repo: 'cla',
+              path: 'signatures.v1.json',
+              branch: 'main',
+            };
+            // GitHub logins that need no signature.
+            const ALLOWLIST = new Set([
+              'claude',
+              'devin-ai-integration[bot]',
+              'github-actions[bot]',
+              'materialize-bot',
+              'materialize-bot-monitoring',
+              'renovate[bot]',
+            ]);
+            // A required status check in the main branch ruleset.
+            const CHECK_NAME = 'cla-assistant';
+            const MARKER = '<!-- cla-assistant -->';
+
+            const { owner, repo } = context.repo;
+            const claRepo = getOctokit(process.env.CLA_TOKEN);
+            const normalize = text => (text ?? '').trim().toLowerCase();
+
+            let pullRequests;
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+              if (!run.head_repository) {
+                core.info('The head repository no longer exists.');
+                return;
+              }
+              // `workflow_run.pull_requests` is empty for PRs from forks.
+              const { data } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                head: `${run.head_repository.owner.login}:${run.head_branch}`,
+              });
+              // A push after this run started has its own trigger run.
+              pullRequests = data.filter(pr => pr.head.sha === run.head_sha);
+            } else {
+              const { data } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: context.issue.number,
+              });
+              pullRequests = [data];
+            }
+            if (pullRequests.length === 0) {
+              core.info('No pull request has this head commit.');
+            }
+            for (const pr of pullRequests) {
+              await checkPullRequest(pr);
+            }
+
+            async function checkPullRequest(pr) {
+              const committers = await getCommitters(pr);
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pr.number,
+                per_page: 100,
+              });
+              const signed = await recordSignatures(pr, committers, comments);
+              const unknown = committers.filter(c => c.id === null);
+              const unsigned = committers.filter(c => c.id !== null && !signed.has(c.id));
+              const allSigned = unknown.length === 0 && unsigned.length === 0;
+              const message = allSigned
+                ? 'All contributors have signed the CLA.'
+                : unsignedMessage(unsigned, unknown);
+              core.info(`PR #${pr.number}: ${allSigned ? 'signed' : 'not signed'}`);
+
+              await github.rest.checks.create({
+                owner,
+                repo,
+                name: CHECK_NAME,
+                head_sha: pr.head.sha,
+                status: 'completed',
+                conclusion: allSigned ? 'success' : 'failure',
+                output: {
+                  title: allSigned
+                    ? 'All contributors have signed the CLA'
+                    : 'Contributors must sign the CLA',
+                  summary: message,
+                },
+              });
+
+              const body = `${MARKER}\n${message}`;
+              const existing = comments.find(
+                c => c.user.login === 'github-actions[bot]' && c.body.includes(MARKER),
+              );
+              if (existing) {
+                if (existing.body !== body) {
+                  await github.rest.issues.updateComment({
+                    owner,
+                    repo,
+                    comment_id: existing.id,
+                    body,
+                  });
+                }
+              } else if (!allSigned) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  body,
+                });
+              }
+            }
+
+            // Returns the PR's commit authors outside the allowlist. An author
+            // has `id: null` when the commit email is not linked to a GitHub
+            // account, and can then not sign.
+            async function getCommitters(pr) {
+              const committers = new Map();
+              let cursor = null;
+              do {
+                const { repository } = await github.graphql(
+                  `query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                    repository(owner: $owner, name: $repo) {
+                      pullRequest(number: $number) {
+                        commits(first: 100, after: $cursor) {
+                          pageInfo { hasNextPage endCursor }
+                          nodes {
+                            commit {
+                              author { name user { login databaseId } }
+                              committer { name user { login databaseId } }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }`,
+                  { owner, repo, number: pr.number, cursor },
+                );
+                const { nodes, pageInfo } = repository.pullRequest.commits;
+                for (const { commit } of nodes) {
+                  // Contributor Assistant falls back to the committer when the
+                  // author email is not linked to a GitHub account. Keeping
+                  // that rule lets the same commits pass as before.
+                  const user = commit.author?.user ?? commit.committer?.user;
+                  const name = user?.login ?? commit.author?.name ?? commit.committer?.name;
+                  if (!committers.has(name)) {
+                    committers.set(name, { name, id: user?.databaseId ?? null });
+                  }
+                }
+                cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+              } while (cursor);
+              return [...committers.values()].filter(c => !ALLOWLIST.has(c.name));
+            }
+
+            // Records sign phrase comments by PR committers in the signatures
+            // file, and returns the ids of all signed contributors.
+            async function recordSignatures(pr, committers, comments) {
+              const committerIds = new Set(committers.map(c => c.id));
+              for (let attempt = 1; ; attempt++) {
+                const { data: file } = await claRepo.rest.repos.getContent({
+                  owner: SIGNATURES.owner,
+                  repo: SIGNATURES.repo,
+                  path: SIGNATURES.path,
+                  ref: SIGNATURES.branch,
+                });
+                const content = JSON.parse(Buffer.from(file.content, 'base64').toString());
+                const signed = new Set(content.signedContributors.map(s => s.id));
+                const newSignatures = [];
+                for (const comment of comments) {
+                  const { id, login } = comment.user;
+                  if (
+                    normalize(comment.body) !== normalize(SIGN_PHRASE)
+                    || !committerIds.has(id)
+                    || signed.has(id)
+                  ) {
+                    continue;
+                  }
+                  signed.add(id);
+                  newSignatures.push({
+                    name: login,
+                    id,
+                    comment_id: comment.id,
+                    created_at: comment.created_at,
+                    repoId: context.payload.repository.id,
+                    pullRequestNo: pr.number,
+                  });
+                }
+                if (newSignatures.length === 0) {
+                  return signed;
+                }
+
+                content.signedContributors.push(...newSignatures);
+                const signers = newSignatures.map(s => `@${s.name}`).join(', ');
+                const verb = newSignatures.length === 1 ? 'has' : 'have';
+                try {
+                  await claRepo.rest.repos.createOrUpdateFileContents({
+                    owner: SIGNATURES.owner,
+                    repo: SIGNATURES.repo,
+                    path: SIGNATURES.path,
+                    branch: SIGNATURES.branch,
+                    sha: file.sha,
+                    message: `${signers} ${verb} signed the CLA in ${owner}/${repo}#${pr.number}`,
+                    content: Buffer.from(JSON.stringify(content, null, 2)).toString('base64'),
+                  });
+                  core.info(`Recorded signatures: ${signers}`);
+                  return signed;
+                } catch (error) {
+                  // 409 means another run changed the file since this one read it.
+                  if (error.status !== 409 || attempt === 3) {
+                    throw error;
+                  }
+                }
+              }
+            }
+
+            function unsignedMessage(unsigned, unknown) {
+              const lines = [
+                'Thank you for your submission! We really appreciate it. Like many '
+                  + 'source-available projects, we require that you sign our '
+                  + `[Contributor License Agreement](${CLA_URL}) (CLA) before we can `
+                  + 'accept your contribution.',
+                '',
+              ];
+              if (unsigned.length > 0) {
+                const mentions = unsigned.map(c => `@${c.name}`).join(', ');
+                lines.push(
+                  `${mentions}, you can sign the CLA by posting a comment with the message below.`,
+                  '',
+                  '```',
+                  SIGN_PHRASE,
+                  '```',
+                  '',
+                );
+              }
+              if (unknown.length > 0) {
+                // Git author names are free text. Code spans keep them from
+                // rendering as mentions or links.
+                const names = unknown.map(c => `\`${c.name.replaceAll('`', '')}\``).join(', ');
+                lines.push(
+                  `These commit authors are not linked to a GitHub account: ${names}. `
+                    + 'To sign the CLA, [add the commit email address to your GitHub '
+                    + 'account](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/troubleshooting-commits/why-are-my-commits-linked-to-the-wrong-user).',
+                  '',
+                );
+              }
+              lines.push('Comment `recheck` to run the CLA check again.');
+              return lines.join('\n');
+            }

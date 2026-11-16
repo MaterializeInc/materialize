@@ -19,27 +19,69 @@
 
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
+# Send a notification to the #release Slack channel when the `release-blocker`
+# label is added to a PR.
+#
+# A `pull_request` run gets no secrets on PRs from forks. A PR event runs
+# slack_notify_labeled_trigger.yml instead, and its completion runs this
+# workflow from the default branch with secrets.
+
 name: Slack Label Notifications
 
 on:
-  pull_request_target:
-    types:
-      - labeled
+  workflow_run:
+    workflows: [Slack Label Notifications trigger]
+    types: [completed]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   notify:
     name: notify
+    # The trigger run is skipped for other labels.
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read # Looks up the PR of the trigger run.
     steps:
+      - name: Find pull request
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            if (!run.head_repository) {
+              core.info('The head repository no longer exists.');
+              return;
+            }
+            // `workflow_run.pull_requests` is empty for PRs from forks. Merged
+            // PRs get the label too.
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              head: `${run.head_repository.owner.login}:${run.head_branch}`,
+              per_page: 100,
+            });
+            const pr = pulls.find(p => p.head.sha === run.head_sha);
+            if (!pr) {
+              core.info('No pull request has this head commit.');
+              return;
+            }
+            // A PR can change its trigger workflow, so the label is checked here.
+            if (!pr.labels.some(l => l.name === 'release-blocker')) {
+              return;
+            }
+            const assignee = pr.assignee?.login ?? 'unassigned';
+            core.setOutput(
+              'message',
+              `\`release-blocker\` label has been added to "${pr.title}" (${pr.html_url}) (assigned to: ${assignee}).`,
+            );
       - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
-        if: ${{ github.event.label.name == 'release-blocker' }}
+        if: steps.pr.outputs.message
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: release
-          message: |
-            `${{ github.event.label.name }}` label has been added to "${{ github.event.pull_request.title }}" (${{ github.event.pull_request.html_url }}) (assigned to: ${{ github.event.pull_request.assignee.login || 'unassigned' }}).
+          message: ${{ steps.pr.outputs.message }}
           color: red
           verbose: false

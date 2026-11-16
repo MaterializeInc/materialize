@@ -1,0 +1,51 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Starts slack_notify_qa_risky.yml for a pull request that changes one of the
+# files below.
+
+name: Slack QA Risky Notifications trigger
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    paths:
+      - src/pgwire/src/message.rs
+      - src/sql/src/plan/statement.rs
+      - src/catalog/src/builtin.rs
+      - src/sql/src/rbac.rs
+      - src/sqllogictest/src/runner.rs
+      - src/adapter/src/coord/command_handler.rs
+      - src/expr/src/relation/mod.rs
+      - src/adapter/src/coord.rs
+      - src/sql-parser/src/ast/defs/statement.rs
+      - src/adapter/src/catalog.rs
+      - src/sql/src/catalog.rs
+      - src/pgwire/src/protocol.rs
+      - src/expr/src/scalar/mod.rs
+      - src/adapter/src/coord/sequencer.rs
+      - src/sql/src/func.rs
+      - src/sql/src/plan.rs
+      - src/adapter/src/coord/sequencer/inner.rs
+      - src/expr/src/scalar/func.rs
+      - src/sql/src/plan/statement/ddl.rs
+      - src/adapter/src/catalog.rs
+      - src/adapter/src/coord.rs
+      - src/sql/src/plan/query.rs
+      - src/sql-parser/src/parser.rs
+
+permissions: {}
+
+jobs:
+  request:
+    name: request-qa-risky-notification
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "slack_notify_qa_risky.yml checks this pull request once this run completes."

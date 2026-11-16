@@ -20,78 +20,85 @@
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
 # Send a notification to the #team-testing-risky Slack channel when a risky change is made.
+#
+# A notification is sent when all of these conditions are true:
+#   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
+#     to ready-to-review.
+#   * The PR changes one of the files listed in
+#     slack_notify_qa_risky_trigger.yml.
+#   * The PR adds more than 300 lines to new or modified Rust files.
+#
+# A `pull_request` run gets no secrets on PRs from forks. A PR event runs
+# slack_notify_qa_risky_trigger.yml instead, and its completion runs this
+# workflow from the default branch with secrets.
 
 name: Slack QA Risky Notifications
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - reopened
-      - ready_for_review
-    paths:
-      - src/pgwire/src/message.rs
-      - src/sql/src/plan/statement.rs
-      - src/catalog/src/builtin.rs
-      - src/sql/src/rbac.rs
-      - src/sqllogictest/src/runner.rs
-      - src/adapter/src/coord/command_handler.rs
-      - src/expr/src/relation/mod.rs
-      - src/adapter/src/coord.rs
-      - src/sql-parser/src/ast/defs/statement.rs
-      - src/adapter/src/catalog.rs
-      - src/sql/src/catalog.rs
-      - src/pgwire/src/protocol.rs
-      - src/expr/src/scalar/mod.rs
-      - src/adapter/src/coord/sequencer.rs
-      - src/sql/src/func.rs
-      - src/sql/src/plan.rs
-      - src/adapter/src/coord/sequencer/inner.rs
-      - src/expr/src/scalar/func.rs
-      - src/sql/src/plan/statement/ddl.rs
-      - src/adapter/src/catalog.rs
-      - src/adapter/src/coord.rs
-      - src/sql/src/plan/query.rs
-      - src/sql-parser/src/parser.rs
+  workflow_run:
+    workflows: [Slack QA Risky Notifications trigger]
+    types: [completed]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   notify:
     name: "Notify about risky PRs"
+    # The trigger run is skipped for draft PRs.
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
+    permissions:
+      pull-requests: read # Looks up the PR of the trigger run and its files.
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 1
-          persist-credentials: false
       - name: "Long change filter"
-        id: long
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          num_lines=$(git diff --diff-filter=AM "$BASE_SHA" -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
-          if [[ $num_lines -gt 300 ]]; then
-            echo "long=true" >> $GITHUB_OUTPUT
-          fi
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            if (!run.head_repository) {
+              core.info('The head repository no longer exists.');
+              return;
+            }
+            // `workflow_run.pull_requests` is empty for PRs from forks.
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${run.head_repository.owner.login}:${run.head_branch}`,
+            });
+            const pr = pulls.find(p => p.head.sha === run.head_sha);
+            if (!pr || pr.draft) {
+              core.info('No ready-to-review pull request has this head commit.');
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const addedLines = files
+              .filter(f => ['added', 'modified'].includes(f.status) && f.filename.endsWith('.rs'))
+              .reduce((sum, f) => sum + f.additions, 0);
+            core.info(`PR #${pr.number} adds ${addedLines} lines to Rust files.`);
+            if (addedLines <= 300) {
+              return;
+            }
+
+            core.setOutput('payload', JSON.stringify({
+              blocks: [
+                {
+                  type: 'section',
+                  text: { type: 'mrkdwn', text: `• <${pr.html_url}|${pr.title}>` },
+                },
+              ],
+            }));
       - name: "Push to Slack"
-        if: steps.long.outputs.long == 'true'
+        if: steps.pr.outputs.payload
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: team-testing-risky
-          custom_payload: |
-            {
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "• <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
-                  }
-                }
-              ]
-            }
+          custom_payload: ${{ steps.pr.outputs.payload }}
