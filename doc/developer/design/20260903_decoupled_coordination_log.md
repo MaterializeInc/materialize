@@ -2,12 +2,17 @@
 
 ## Next action
 
-Finish the unchanged PostgresCdc repeat, `aj-native-parallel-a71dc604`, then
-install the capture-resource fix on the idle worker and rerun. Its first run
-failed at action 671 because the Python driver exhausted file descriptors.
-Captured subprocesses now close their selector and pipes deterministically.
-The real-subprocess regression fails before the fix and passes afterward,
-alongside the neighboring composition tests. Full workflow verification is pending.
+Repair KafkaSources retirement contention, then rerun its unchanged workflow.
+Retirement currently repeats a full raw snapshot before each exact-prefix write.
+Investigate retaining retirement-relevant raw rows through the existing listener,
+recomputing cleanup after catch-up. Preserve unknown fields, full-prefix validation
+and atomic admission plus cleanup. Do not add a listener or raise retry limits.
+The source analysis below covers seed alignment and successful own-write updates.
+
+PostgresCdc passed its full default workload and final validation with the capture
+resource fix, within the original limits and deadline. The driver now closes
+selectors and pipes rather than relying on cyclic garbage collection. The worker
+is idle and the completed run's containers are cleaned up.
 
 The registration repair passed targeted checks and seven promotion cycles with
 SQL resuming. KafkaSources first hit the 1800s guard during generation 8 readiness.
@@ -80,7 +85,10 @@ proxy.
 
 ## Open gaps
 
-- Zippy scenarios and backup/restore are unverified. The combined data-ingest
+- KafkaSources and backup/restore are unverified. PostgresCdc passed on the
+  registration-repair binaries with the capture fix, including standalone
+  storaged kill/start and final validation. This scenario has no backup/restore.
+  The combined data-ingest
   invocation is unverified despite the individual scenario passes.
 - Native parallel stress has one repaired single-cycle pass. Repeat coverage on
   the current binaries is incomplete.
@@ -116,7 +124,10 @@ The repeat and Postgres evidence are `zippy-adoption-KafkaSources-repeat-evidenc
 and `zippy-adoption-PostgresCdc-evidence.tar.gz`. Retirement's raw-key and prefix
 constraints are surveyed in `retirement-retry-source-analysis.md`, not yet implemented.
 Capture regression evidence is in `capture-fd-regression-before.log` and
-`capture-fd-regression-after.log`. Do not change the worker's harness under its live run.
+`capture-fd-regression-after.log`. Passing Postgres evidence, harness provenance
+and worker checks are in `zippy-capture-fixed-PostgresCdc-evidence.tar.gz`.
+`zippy-capture-fixed-PostgresCdc-crash-review.log` records no crash signatures or
+OOM events. No runtime remains active.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`
