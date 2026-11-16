@@ -115,7 +115,7 @@ pub struct ReplicaAllocation {
     /// The workload classes that clusters with replicas of this size may run.
     /// `None` allows every class. The adapter enforces this for user clusters
     /// and non-internal users.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_allowed_workloads")]
     pub allowed_workloads: Option<BTreeSet<WorkloadClass>>,
     /// Additional node selectors.
     #[serde(default)]
@@ -191,6 +191,38 @@ impl WorkloadClass {
             WorkloadClass::ComputeIntrospection => "compute_introspection",
         }
     }
+}
+
+impl WorkloadClass {
+    /// Parses workload class names, skipping names this version does not know.
+    ///
+    /// NOTE: A skipped name allows nothing. A config that misspells a class, or
+    /// names one only a newer version knows, then restricts more instead of
+    /// failing to load or lifting the restriction.
+    pub fn parse_known<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<WorkloadClass> {
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let class = WorkloadClass::ALL
+                    .into_iter()
+                    .find(|class| class.as_str() == name);
+                if class.is_none() {
+                    warn!(%name, "ignoring unknown workload class");
+                }
+                class
+            })
+            .collect()
+    }
+}
+
+fn deserialize_allowed_workloads<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeSet<WorkloadClass>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let names: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    Ok(names.map(|names| WorkloadClass::parse_known(names.iter().map(String::as_str))))
 }
 
 impl fmt::Display for WorkloadClass {
@@ -300,9 +332,13 @@ fn test_replica_allocation_deserialization() {
             WorkloadClass::ComputeMaintained
         ]))
     );
-    let data =
-        r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["select"]}"#;
-    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["ingest", "select"]}"#;
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("an unknown workload class does not fail deserialization");
+    assert_eq!(
+        replica_allocation.allowed_workloads,
+        Some(BTreeSet::from([WorkloadClass::Ingest]))
+    );
 }
 
 #[mz_ore::test]

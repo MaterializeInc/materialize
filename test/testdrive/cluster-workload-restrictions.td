@@ -16,12 +16,6 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_auto_scaling_strategy = true
 ALTER SYSTEM SET enable_hydration_burst = false
 
-> SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy', 'scale=1,workers=1,ingest-only', 'scale=1,workers=1,no-ingest')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
-"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
-"scale=1,workers=1,ingest-only" "{ingest}"
-"scale=1,workers=1,no-ingest" "{sink,compute_maintained,compute_interactive}"
-
 > CREATE CLUSTER ingest SIZE 'scale=1,workers=1,ingest-only'
 > CREATE CLUSTER regular SIZE 'scale=1,workers=1'
 > CREATE CLUSTER unmanaged REPLICAS (r1 (SIZE 'scale=1,workers=1'))
@@ -214,10 +208,6 @@ contains:cluster "burst" cannot host index "burst_idx" because its replica sizes
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "compute_introspection"]}'
 
-> SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
-"scale=1,workers=1,legacy" "{ingest,compute_introspection}"
-
 > CREATE CLUSTER legacy SIZE 'scale=1,workers=1,legacy'
 
 > CREATE SOURCE counter3 IN CLUSTER legacy FROM LOAD GENERATOR COUNTER
@@ -225,8 +215,12 @@ ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "comp
 ! CREATE MATERIALIZED VIEW mv_legacy IN CLUSTER legacy AS SELECT * FROM t
 contains:cluster "legacy" cannot host materialized view "mv_legacy" because its replica sizes do not allow compute_maintained workloads
 
-# The family restriction leaves the index running. Suspending its cluster
-# creates no replicas, so it succeeds, but resuming is rejected.
+# The family restriction leaves the index running. Changing the replica shape
+# would create replacement replicas running it, so it is rejected. Suspending
+# the cluster creates no replicas, so it succeeds, but resuming is rejected.
+
+! ALTER CLUSTER grandfathered SET (INTROSPECTION INTERVAL = '2s')
+contains:compute_maintained
 
 > ALTER CLUSTER grandfathered SET (REPLICATION FACTOR 0)
 
@@ -258,10 +252,6 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET cluster_family_allowed_workloads
-
-> SELECT size, allowed_workloads::text FROM mz_cluster_replica_sizes WHERE size IN ('scale=1,workers=1', 'scale=1,workers=1,legacy')
-"scale=1,workers=1" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
-"scale=1,workers=1,legacy" "{ingest,sink,compute_maintained,compute_interactive,compute_introspection}"
 
 > SELECT * FROM t
 1

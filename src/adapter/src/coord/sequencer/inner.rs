@@ -18,7 +18,9 @@ use futures::future::BoxFuture;
 use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::{
+    CLUSTER_FAMILY_ALLOWED_WORKLOADS, ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, DataSourceDesc, Index, Sink, Source, Table, TableDataSource, Type,
@@ -26,6 +28,7 @@ use mz_catalog::memory::objects::{
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_controller::clusters::WorkloadClass;
 use mz_expr::{MfpPlan, ResultSpec};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
@@ -2555,6 +2558,9 @@ impl Coordinator {
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
             self.validate_alter_system_network_policy(session, &value)?;
         }
+        if CLUSTER_FAMILY_ALLOWED_WORKLOADS.name() == name.to_lowercase() {
+            Self::validate_alter_system_family_allowed_workloads(&value)?;
+        }
 
         let op = match value {
             plan::VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
@@ -2722,6 +2728,35 @@ impl Coordinator {
                 },
             )),
         }
+    }
+
+    /// Rejects a `cluster_family_allowed_workloads` value that does not map
+    /// family names to arrays of known workload classes.
+    ///
+    /// The value is also read leniently at runtime, since system parameter
+    /// sync sets it without going through `ALTER SYSTEM`.
+    fn validate_alter_system_family_allowed_workloads(
+        value: &plan::VariableValue,
+    ) -> Result<(), AdapterError> {
+        let plan::VariableValue::Values(values) = value else {
+            return Ok(());
+        };
+        let reason = match values.as_slice() {
+            [value] => {
+                match serde_json::from_str::<BTreeMap<String, BTreeSet<WorkloadClass>>>(value) {
+                    Ok(_) => return Ok(()),
+                    Err(e) => e.to_string(),
+                }
+            }
+            _ => "expected a single JSON object".to_string(),
+        };
+        Err(AdapterError::PlanError(plan::PlanError::VarError(
+            VarError::InvalidParameterValue {
+                name: CLUSTER_FAMILY_ALLOWED_WORKLOADS.name(),
+                invalid_values: values.clone(),
+                reason,
+            },
+        )))
     }
 
     fn validate_alter_system_network_policy(

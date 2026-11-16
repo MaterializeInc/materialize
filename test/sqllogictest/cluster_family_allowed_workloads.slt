@@ -1,0 +1,58 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# `ALTER SYSTEM SET` rejects a `cluster_family_allowed_workloads` value that
+# does not map family names to arrays of known workload classes.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": ["ingest", "select"]}'
+----
+db error: ERROR: parameter "cluster_family_allowed_workloads" cannot have value "{\"legacy\": [\"ingest\", \"select\"]}": unknown variant `select`, expected one of `ingest`, `sink`, `compute_maintained`, `compute_interactive`, `compute_introspection` at line 1 column 30
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_family_allowed_workloads = '{"legacy": "ingest"}'
+----
+db error: ERROR: parameter "cluster_family_allowed_workloads" cannot have value "{\"legacy\": \"ingest\"}": invalid type: string "ingest", expected a sequence at line 1 column 19
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_family_allowed_workloads = '["ingest"]'
+----
+db error: ERROR: parameter "cluster_family_allowed_workloads" cannot have value "[\"ingest\"]": invalid type: sequence, expected a map at line 1 column 0
+
+# A valid value repacks the size rows, and resetting it restores them.
+
+simple conn=mz_system,user=mz_system
+SELECT allowed_workloads::text FROM mz_internal.mz_cluster_replica_size_internal WHERE size = 'scale=1,workers=1'
+----
+{ingest,sink,compute_maintained,compute_interactive,compute_introspection}
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_family_allowed_workloads = '{"cc": ["ingest", "compute_introspection"], "legacy": ["ingest", "compute_introspection"]}'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SELECT allowed_workloads::text FROM mz_internal.mz_cluster_replica_size_internal WHERE size = 'scale=1,workers=1'
+----
+{ingest,compute_introspection}
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET cluster_family_allowed_workloads
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SELECT allowed_workloads::text FROM mz_internal.mz_cluster_replica_size_internal WHERE size = 'scale=1,workers=1'
+----
+{ingest,sink,compute_maintained,compute_interactive,compute_introspection}
+COMPLETE 1

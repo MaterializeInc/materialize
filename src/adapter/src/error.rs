@@ -922,9 +922,7 @@ impl AdapterError {
             ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::WorkloadNotAllowed { .. } => Some(
-                "Use a cluster whose replica sizes allow this workload. \
-                mz_cluster_replica_sizes.allowed_workloads lists the workloads each size allows."
-                    .into(),
+                "Use a cluster whose replica sizes allow this workload.".into(),
             ),
             AdapterError::WorkloadSizeConflict { .. } => Some(
                 "Choose a size that allows the workloads the cluster runs, or drop \

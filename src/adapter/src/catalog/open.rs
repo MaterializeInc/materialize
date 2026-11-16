@@ -45,7 +45,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
 };
-use mz_controller::clusters::ReplicaLogging;
+use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
@@ -193,6 +193,15 @@ impl Catalog {
             // Populated from the durable catalog, which `sync_builtin_cluster_replica_sizes`
             // reconciles with `config.cluster_replica_sizes`.
             cluster_replica_sizes: ClusterReplicaSizeMap(BTreeMap::new()),
+            size_allowed_workloads: config
+                .cluster_replica_sizes
+                .0
+                .iter()
+                .filter_map(|(name, allocation)| {
+                    let allowed = allocation.allowed_workloads.clone()?;
+                    Some((name.clone(), allowed))
+                })
+                .collect(),
             // The coordinator repacks the size rows under the current value
             // once it boots.
             replica_sizes_family_workloads: Default::default(),
@@ -1189,15 +1198,20 @@ fn sync_builtin_cluster_replica_sizes(
         .collect();
 
     for (name, allocation) in &config_sizes.0 {
+        // The durable catalog drops `allowed_workloads`, and
+        // `CatalogState::size_allowed_workloads` supplies them instead.
+        // Comparing with them set would rewrite every restricted size at
+        // every boot.
+        let allocation = ReplicaAllocation {
+            allowed_workloads: None,
+            ..allocation.clone()
+        };
         match durable_sizes.remove(name) {
             None => {
-                txn.insert_system_cluster_replica_size(name.clone(), allocation.clone())?;
+                txn.insert_system_cluster_replica_size(name.clone(), allocation)?;
             }
-            Some(size) if size.allocation != *allocation => {
-                txn.update_cluster_replica_size(ClusterReplicaSize {
-                    allocation: allocation.clone(),
-                    ..size
-                })?;
+            Some(size) if size.allocation != allocation => {
+                txn.update_cluster_replica_size(ClusterReplicaSize { allocation, ..size })?;
             }
             Some(_) => {}
         }

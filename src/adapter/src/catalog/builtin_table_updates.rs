@@ -490,48 +490,10 @@ impl CatalogState {
         // Just invent something when the limits are `None`, which only happens in non-prod
         // environments (tests, process orchestrator, etc.)
         let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
-
-        // The disk column of mz_clusters / mz_cluster_replicas MVs needs
-        // `swap_enabled` and `disk_bytes`; expose them through a parallel
-        // internal table.
-        let internal_row = Row::pack_slice(&[
-            size.into(),
-            Datum::from(alloc.swap_enabled),
-            disk_bytes.into(),
-        ]);
-        vec![
-            BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZE_INTERNAL, internal_row, diff),
-            Self::pack_replica_size_row(size, alloc, family_workloads, diff),
-        ]
-    }
-
-    /// Packs the `mz_cluster_replica_sizes` rows of every size, with
-    /// `allowed_workloads` derived from `family_workloads`.
-    pub fn pack_replica_size_rows(
-        &self,
-        family_workloads: &FamilyWorkloads,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        self.cluster_replica_sizes
-            .0
-            .iter()
-            .map(|(size, alloc)| Self::pack_replica_size_row(size, alloc, family_workloads, diff))
-            .collect()
-    }
-
-    fn pack_replica_size_row(
-        size: &str,
-        alloc: &ReplicaAllocation,
-        family_workloads: &FamilyWorkloads,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
         let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
         let MemoryLimit(ByteSize(memory_bytes)) = (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
 
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.extend([
+        let row = Row::pack_slice(&[
             size.into(),
             u64::cast_from(alloc.scale).into(),
             u64::cast_from(alloc.workers).into(),
@@ -541,13 +503,53 @@ impl CatalogState {
             Datum::from(alloc.credits_per_hour),
             alloc.disabled.into(),
         ]);
+        vec![
+            Self::pack_replica_size_internal_row(size, alloc, family_workloads, diff),
+            BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZES, row, diff),
+        ]
+    }
+
+    /// Packs the `mz_cluster_replica_size_internal` rows of every size, with
+    /// `allowed_workloads` derived from `family_workloads`.
+    pub fn pack_replica_size_internal_rows(
+        &self,
+        family_workloads: &FamilyWorkloads,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        self.cluster_replica_sizes
+            .0
+            .iter()
+            .map(|(size, alloc)| {
+                Self::pack_replica_size_internal_row(size, alloc, family_workloads, diff)
+            })
+            .collect()
+    }
+
+    fn pack_replica_size_internal_row(
+        size: &str,
+        alloc: &ReplicaAllocation,
+        family_workloads: &FamilyWorkloads,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+
+        // The disk column of mz_clusters / mz_cluster_replicas MVs needs
+        // `swap_enabled` and `disk_bytes`; expose them through a parallel
+        // internal table.
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
+            size.into(),
+            Datum::from(alloc.swap_enabled),
+            disk_bytes.into(),
+        ]);
         packer.push_list(
             WorkloadClass::ALL
                 .iter()
                 .filter(|class| allocation_allows_workload(alloc, **class, family_workloads))
                 .map(|class| Datum::String(class.as_str())),
         );
-        BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZES, row, diff)
+        BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZE_INTERNAL, row, diff)
     }
 
     pub fn pack_subscribe_update(

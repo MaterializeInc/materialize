@@ -2704,8 +2704,9 @@ impl Coordinator {
             self.initialize_read_policies(&policies, cw).await;
         }
 
-        // Catalog open packed the size rows before the coordinator could read
-        // `cluster_family_allowed_workloads`.
+        // Catalog open can pack the size rows before
+        // `cluster_family_allowed_workloads` takes its configured value, for
+        // example a value set only through system parameter defaults.
         builtin_table_updates.extend(
             self.catalog_mut()
                 .repack_replica_sizes_if_family_workloads_changed(),

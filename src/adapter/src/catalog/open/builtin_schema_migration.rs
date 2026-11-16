@@ -574,9 +574,8 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_index_columns",
         ),
-        // `mz_cluster_replica_sizes` gained trailing `disabled` and
-        // `allowed_workloads` columns. The table is rewritten at every startup,
-        // so replacing the shard loses nothing.
+        // Adding the `disabled` column to mz_cluster_replica_sizes. The table
+        // is rewritten at every startup, so replacing the shard loses nothing.
         MigrationStep::replacement(
             "26.51.0-dev.0",
             CatalogItemType::Table,
@@ -603,6 +602,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
             "mz_comments",
+        ),
+        // Adding the `allowed_workloads` column to
+        // mz_cluster_replica_size_internal. The table is rewritten at every
+        // startup, so replacing the shard loses nothing.
+        MigrationStep::replacement(
+            "26.53.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_replica_size_internal",
         ),
     ]
 });

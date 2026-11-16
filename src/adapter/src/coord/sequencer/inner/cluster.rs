@@ -269,27 +269,39 @@ impl Coordinator {
             }
         }
 
-        // These options create replicas, so every size they can create one of
-        // must allow the workloads already on the cluster. Lowering the
-        // replication factor creates none, and checking it would stop owners
-        // from suspending a cluster whose grandfathered objects the size no
-        // longer allows.
-        let grows_replication = match (&config.variant, &new_config.variant) {
-            (Managed(old), Managed(new)) => new.replication_factor > old.replication_factor,
-            _ => !matches!(options.replication_factor, Unchanged),
-        };
-        let adds_replicas = !matches!(options.size, Unchanged)
-            || grows_replication
-            || !matches!(options.managed, Unchanged)
-            || !matches!(options.auto_scaling_strategy, Unchanged);
-        if let (Managed(managed), true) = (&new_config.variant, adds_replicas) {
-            let hydration_size = managed
-                .auto_scaling_strategy
-                .as_ref()
-                .and_then(|strategy| strategy.on_hydration.as_ref())
-                .map(|on_hydration| on_hydration.hydration_size.as_str());
-            for size in std::iter::once(managed.size.as_str()).chain(hydration_size) {
-                self.ensure_size_allows_cluster_workloads(cluster_id, size, session)?;
+        // An `ALTER` that creates replicas must use sizes that allow the
+        // workloads already on the cluster. The controller's replica creation
+        // does not check workloads.
+        if let Managed(new_managed) = &new_config.variant {
+            let (target, adds_replicas) = match &config.variant {
+                Managed(old_managed) => {
+                    let in_flight = old_managed
+                        .reconfiguration
+                        .as_ref()
+                        .filter(|record| record.is_in_progress())
+                        .map(|record| &record.target);
+                    let target = folded_reconfiguration_target(in_flight, new_managed, options);
+                    let adds_replicas = reconfiguration_creates_replicas(
+                        &old_managed.realized_reconfiguration_target(),
+                        in_flight,
+                        &target,
+                    ) || !matches!(options.auto_scaling_strategy, Unchanged);
+                    (target, adds_replicas)
+                }
+                Unmanaged => (
+                    folded_reconfiguration_target(None, new_managed, options),
+                    true,
+                ),
+            };
+            if adds_replicas {
+                let hydration_size = new_managed
+                    .auto_scaling_strategy
+                    .as_ref()
+                    .and_then(|strategy| strategy.on_hydration.as_ref())
+                    .map(|on_hydration| on_hydration.hydration_size.as_str());
+                for size in std::iter::once(target.size.as_str()).chain(hydration_size) {
+                    self.ensure_size_allows_cluster_workloads(cluster_id, size, session)?;
+                }
             }
         }
 
@@ -536,8 +548,6 @@ impl Coordinator {
         strategy: &AlterClusterPlanStrategy,
         validity: PlanValidity,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
-        use mz_sql::plan::AlterOptionParameter::Unchanged;
-
         let ClusterVariant::Managed(new_managed) = &new_config.variant else {
             return Err(AdapterError::Internal(
                 "reshape_alter_cluster_managed requires a managed target config".into(),
@@ -558,27 +568,10 @@ impl Coordinator {
                 .cloned(),
             ClusterVariant::Unmanaged => None,
         };
-        let new_target = ReconfigurationTarget {
-            size: new_managed.size.clone(),
-            replication_factor: new_managed.replication_factor,
-            availability_zones: new_managed.availability_zones.clone(),
-            logging: new_managed.logging.clone(),
-            arrangement_compression: new_managed.arrangement_compression,
-        };
-        let unchanged = ReconfigurationDimensionsUnchanged {
-            size: matches!(options.size, Unchanged),
-            replication_factor: matches!(options.replication_factor, Unchanged),
-            availability_zones: matches!(options.availability_zones, Unchanged),
-            // The two logging options fold independently, so a debugging-only
-            // `ALTER` cannot revert an in-flight interval change (or vice versa).
-            log_logging: matches!(options.introspection_debugging, Unchanged),
-            interval: matches!(options.introspection_interval, Unchanged),
-            arrangement_compression: matches!(options.arrangement_compression, Unchanged),
-        };
-        let target = fold_reconfiguration_target(
+        let target = folded_reconfiguration_target(
             in_flight.as_ref().map(|r| &r.target),
-            new_target,
-            unchanged,
+            new_managed,
+            options,
         );
 
         // Validate the target up front, so a bad reshape errors at `ALTER` time
@@ -1949,6 +1942,57 @@ fn alter_changes_reconfiguration_target(options: &PlanClusterOption) -> bool {
         || !matches!(arrangement_compression, Unchanged)
 }
 
+/// Whether converging on `target` creates replicas beyond those of the
+/// in-flight target, or of the realized shape when nothing is in flight.
+///
+/// Any change to the per-replica shape creates replacement replicas. Lowering
+/// the replication factor and cancelling back to the realized shape create
+/// none. Admission must not count those, or owners could not suspend or revert
+/// a cluster whose grandfathered objects its size no longer allows.
+fn reconfiguration_creates_replicas(
+    realized: &ReconfigurationTarget,
+    in_flight: Option<&ReconfigurationTarget>,
+    target: &ReconfigurationTarget,
+) -> bool {
+    if in_flight.is_some() && target == realized {
+        return false;
+    }
+    let current = in_flight.unwrap_or(realized);
+    let reshapes = ReconfigurationTarget {
+        replication_factor: current.replication_factor,
+        ..target.clone()
+    } != *current;
+    reshapes || target.replication_factor > current.replication_factor
+}
+
+/// Returns the reconfiguration target that an `ALTER` producing `new_managed`
+/// converges on, folded onto any in-flight target.
+fn folded_reconfiguration_target(
+    in_flight: Option<&ReconfigurationTarget>,
+    new_managed: &ClusterVariantManaged,
+    options: &PlanClusterOption,
+) -> ReconfigurationTarget {
+    use mz_sql::plan::AlterOptionParameter::Unchanged;
+    let new_target = ReconfigurationTarget {
+        size: new_managed.size.clone(),
+        replication_factor: new_managed.replication_factor,
+        availability_zones: new_managed.availability_zones.clone(),
+        logging: new_managed.logging.clone(),
+        arrangement_compression: new_managed.arrangement_compression,
+    };
+    let unchanged = ReconfigurationDimensionsUnchanged {
+        size: matches!(options.size, Unchanged),
+        replication_factor: matches!(options.replication_factor, Unchanged),
+        availability_zones: matches!(options.availability_zones, Unchanged),
+        // The two logging options fold independently, so a debugging-only
+        // `ALTER` cannot revert an in-flight interval change (or vice versa).
+        log_logging: matches!(options.introspection_debugging, Unchanged),
+        interval: matches!(options.introspection_interval, Unchanged),
+        arrangement_compression: matches!(options.arrangement_compression, Unchanged),
+    };
+    fold_reconfiguration_target(in_flight, new_target, unchanged)
+}
+
 /// Fold a new `ALTER` onto an in-flight reconfiguration target.
 ///
 /// `new_target` was built against the *realized* config, so any dimension the
@@ -2184,5 +2228,76 @@ mod tests {
                 interval: Some(Duration::from_secs(5)),
             }
         );
+    }
+
+    #[mz_ore::test]
+    fn reconfiguration_creates_replicas_for_shape_changes() {
+        let realized = target("restricted", 1, &[], false);
+        let mut interval = realized.clone();
+        interval.logging.interval = Some(Duration::from_secs(5));
+        assert!(reconfiguration_creates_replicas(&realized, None, &interval));
+        let debugging = target("restricted", 1, &[], true);
+        assert!(reconfiguration_creates_replicas(
+            &realized, None, &debugging
+        ));
+        let azs = target("restricted", 1, &["az1"], false);
+        assert!(reconfiguration_creates_replicas(&realized, None, &azs));
+        let compression = ReconfigurationTarget {
+            arrangement_compression: true,
+            ..realized.clone()
+        };
+        assert!(reconfiguration_creates_replicas(
+            &realized,
+            None,
+            &compression
+        ));
+        let grown = target("restricted", 2, &[], false);
+        assert!(reconfiguration_creates_replicas(&realized, None, &grown));
+    }
+
+    #[mz_ore::test]
+    fn reconfiguration_creates_no_replicas_when_shrinking_or_cancelling() {
+        let realized = target("restricted", 2, &[], false);
+        let suspended = target("restricted", 0, &[], false);
+        assert!(!reconfiguration_creates_replicas(
+            &realized, None, &suspended
+        ));
+        assert!(!reconfiguration_creates_replicas(
+            &realized, None, &realized
+        ));
+
+        let in_flight = target("unrestricted", 2, &[], false);
+        assert!(!reconfiguration_creates_replicas(
+            &realized,
+            Some(&in_flight),
+            &realized
+        ));
+    }
+
+    #[mz_ore::test]
+    fn reconfiguration_compares_against_in_flight_target() {
+        let realized = target("restricted", 1, &[], false);
+        let in_flight = target("unrestricted", 1, &[], false);
+        // Raising the replication factor during the resize folds onto the
+        // in-flight target, so admission checks the unrestricted size.
+        let grown = fold_reconfiguration_target(
+            Some(&in_flight),
+            target("restricted", 2, &[], false),
+            ReconfigurationDimensionsUnchanged {
+                replication_factor: false,
+                ..all_unchanged()
+            },
+        );
+        assert_eq!(grown.size, "unrestricted");
+        assert!(reconfiguration_creates_replicas(
+            &realized,
+            Some(&in_flight),
+            &grown
+        ));
+        assert!(!reconfiguration_creates_replicas(
+            &realized,
+            Some(&in_flight),
+            &in_flight
+        ));
     }
 }

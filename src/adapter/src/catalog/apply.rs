@@ -289,6 +289,10 @@ impl CatalogState {
 
         if update_system_config {
             self.system_configuration.sync_dyncfgs();
+            // Repacking here puts the new rows in the same catalog transaction
+            // as the change to `cluster_family_allowed_workloads`, so a read
+            // after `ALTER SYSTEM` returns sees them.
+            builtin_table_updates.extend(self.repack_replica_sizes_if_family_workloads_changed());
         }
 
         Ok((builtin_table_updates, catalog_updates))
@@ -667,10 +671,11 @@ impl CatalogState {
         size: mz_catalog::durable::ClusterReplicaSize,
         diff: StateDiff,
     ) {
+        let allocation = self.with_configured_workloads(&size.name, &size.allocation);
         let sizes = &mut self.cluster_replica_sizes.0;
         match diff {
             StateDiff::Addition => {
-                sizes.insert(size.name, size.allocation);
+                sizes.insert(size.name, allocation);
             }
             StateDiff::Retraction => {
                 sizes.remove(&size.name);
@@ -1508,7 +1513,7 @@ impl CatalogState {
             StateUpdateKind::ClusterReplica(_) => Vec::new(),
             StateUpdateKind::ClusterReplicaSize(size) => Self::pack_replica_size_update(
                 &size.name,
-                &size.allocation,
+                &self.with_configured_workloads(&size.name, &size.allocation),
                 &self.replica_sizes_family_workloads,
                 diff,
             ),

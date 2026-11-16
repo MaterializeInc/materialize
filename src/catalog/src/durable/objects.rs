@@ -404,6 +404,8 @@ impl DurableType for ClusterReplicaSize {
             swap_enabled,
             disabled,
             selectors,
+            // Not persisted. The adapter fills it in from
+            // `--cluster-replica-sizes` at every boot.
             allowed_workloads: _,
         } = self.allocation;
         (

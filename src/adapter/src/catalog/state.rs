@@ -180,10 +180,16 @@ pub struct CatalogState {
     #[serde(skip)]
     pub(super) config: mz_sql::catalog::CatalogConfig,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
+    /// The `allowed_workloads` that `--cluster-replica-sizes` sets per size.
+    /// The durable catalog does not store them, so applying a size update
+    /// fills them in from here.
+    #[serde(skip)]
+    pub(super) size_allowed_workloads: BTreeMap<String, BTreeSet<WorkloadClass>>,
     /// The `cluster_family_allowed_workloads` value that the rows of
-    /// `mz_cluster_replica_sizes` were packed with. Retractions must be packed
-    /// with it too, and [`Self::repack_replica_sizes_if_family_workloads_changed`]
-    /// moves the rows to a new value.
+    /// `mz_cluster_replica_size_internal` were packed with. Retractions must
+    /// be packed with it too, and
+    /// [`Self::repack_replica_sizes_if_family_workloads_changed`] moves the
+    /// rows to a new value.
     #[serde(skip)]
     pub(super) replica_sizes_family_workloads: FamilyWorkloads,
     #[serde(skip)]
@@ -554,6 +560,7 @@ impl CatalogState {
                 helm_chart_version: None,
             },
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
+            size_allowed_workloads: Default::default(),
             replica_sizes_family_workloads: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Arc::new(SystemVars::default()),
@@ -2894,18 +2901,46 @@ impl CatalogState {
     /// The workload classes allowed per replica size family, from
     /// `cluster_family_allowed_workloads`.
     ///
-    /// NOTE: A value that is not a JSON object mapping family names to arrays
-    /// of workload classes is logged and ignored, so a malformed setting
-    /// restricts no family.
+    /// NOTE: A malformed value restricts more, never less. An unknown class
+    /// allows nothing, and a family whose entry is not an array of strings
+    /// allows no class. A value that is not a JSON object names no family to
+    /// restrict, so the value the size rows were last packed with stays in
+    /// effect.
     pub(crate) fn family_allowed_workloads(&self) -> FamilyWorkloads {
         let value = CLUSTER_FAMILY_ALLOWED_WORKLOADS.get(self.system_config().dyncfgs());
-        serde_json::from_value(value).unwrap_or_else(|e| {
-            error!("invalid cluster_family_allowed_workloads, restricting no family: {e}");
-            FamilyWorkloads::new()
-        })
+        let serde_json::Value::Object(families) = value else {
+            error!(
+                "cluster_family_allowed_workloads is not a JSON object, keeping the previous value"
+            );
+            return self.replica_sizes_family_workloads.clone();
+        };
+        families
+            .into_iter()
+            .map(|(family, classes)| {
+                let names: Vec<String> = serde_json::from_value(classes).unwrap_or_else(|e| {
+                    error!(%family, "invalid cluster_family_allowed_workloads entry, allowing no class: {e}");
+                    Vec::new()
+                });
+                let classes = WorkloadClass::parse_known(names.iter().map(String::as_str));
+                (family, classes)
+            })
+            .collect()
     }
 
-    /// Moves the rows of `mz_cluster_replica_sizes` to the current
+    /// `allocation` with the `allowed_workloads` that `--cluster-replica-sizes`
+    /// sets for `size`.
+    pub(super) fn with_configured_workloads(
+        &self,
+        size: &str,
+        allocation: &ReplicaAllocation,
+    ) -> ReplicaAllocation {
+        ReplicaAllocation {
+            allowed_workloads: self.size_allowed_workloads.get(size).cloned(),
+            ..allocation.clone()
+        }
+    }
+
+    /// Moves the rows of `mz_cluster_replica_size_internal` to the current
     /// `cluster_family_allowed_workloads`, returning the updates that retract
     /// the old rows and insert the new ones.
     pub(crate) fn repack_replica_sizes_if_family_workloads_changed(
@@ -2915,9 +2950,9 @@ impl CatalogState {
         if family_workloads == self.replica_sizes_family_workloads {
             return Vec::new();
         }
-        let mut updates =
-            self.pack_replica_size_rows(&self.replica_sizes_family_workloads, Diff::MINUS_ONE);
-        updates.extend(self.pack_replica_size_rows(&family_workloads, Diff::ONE));
+        let mut updates = self
+            .pack_replica_size_internal_rows(&self.replica_sizes_family_workloads, Diff::MINUS_ONE);
+        updates.extend(self.pack_replica_size_internal_rows(&family_workloads, Diff::ONE));
         self.replica_sizes_family_workloads = family_workloads;
         updates
     }
@@ -3499,6 +3534,38 @@ pub(super) fn allocation_allows_workload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn family_allowed_workloads_fails_closed() {
+        let mut state = CatalogState::empty_test();
+        let set = |state: &mut CatalogState, value: &str| {
+            let config = Arc::make_mut(&mut state.system_configuration);
+            config
+                .set(
+                    CLUSTER_FAMILY_ALLOWED_WORKLOADS.name(),
+                    mz_sql::session::vars::VarInput::Flat(value),
+                )
+                .expect("valid JSON");
+            config.sync_dyncfgs();
+        };
+        set(
+            &mut state,
+            r#"{"legacy": ["ingest", "select"], "cc": "ingest"}"#,
+        );
+        let expected = FamilyWorkloads::from([
+            ("legacy".into(), BTreeSet::from([WorkloadClass::Ingest])),
+            ("cc".into(), BTreeSet::new()),
+        ]);
+        assert_eq!(state.family_allowed_workloads(), expected);
+
+        state.replica_sizes_family_workloads = expected.clone();
+        set(&mut state, "[]");
+        assert_eq!(
+            state.family_allowed_workloads(),
+            expected,
+            "a value that is not an object keeps the previous value"
+        );
+    }
 
     /// A deep dependency chain (a long chain of stacked views) must not
     /// overflow the stack when computing its dependents, and the dependents
