@@ -29,6 +29,7 @@ pub use startup::open_catalog;
 /// starts neither a SQL coordinator nor shared maintenance.
 pub async fn initialize_fresh(
     mut config: mz_catalog::config::Config<'_>,
+    txns_metrics: std::sync::Arc<mz_txn_wal::metrics::Metrics>,
     oracle: &(dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync),
 ) -> Result<mz_catalog::catalog::Catalog, mz_catalog::catalog::CatalogError> {
     if config.storage.is_read_only() || config.storage.is_savepoint() || config.storage.is_join() {
@@ -44,10 +45,9 @@ pub async fn initialize_fresh(
         .into());
     }
     let persist = config.state.persist_client.clone();
-    let metrics = config.metrics_registry.clone();
     mz_catalog::catalog::Catalog::open(config)
         .await?
-        .complete_fresh_deployment_initialization(persist, &metrics, oracle)
+        .complete_fresh_deployment_initialization(persist, txns_metrics, oracle)
         .await
 }
 

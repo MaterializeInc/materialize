@@ -7266,6 +7266,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timestamp-oracle",
  "mz-tracing",
+ "mz-txn-wal",
  "nix 0.31.3",
  "num_cpus",
  "openssl",

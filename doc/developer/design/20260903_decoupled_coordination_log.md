@@ -2,12 +2,16 @@
 
 ## Next action
 
-Verify the bounded table-registration repair, then rerun zippy KafkaSources.
-Promotion was retrying registration indefinitely: it allocated a WAL timestamp
-before spending several seconds opening writers, so peer progress invalidated
-each attempt. The worktree moves allocation after preparation, revalidates table
-bindings and returns definitive contention to the controller tick. Regression
-checks and runtime verification are pending. Do not raise the runner's guard.
+Finish the unchanged KafkaSources repeat, then run PostgresCdc. The registration
+repair passed targeted checks and seven promotion cycles with SQL resuming.
+KafkaSources still hit the 1800s guard during generation 8 readiness, not the
+previous terminal registration wait. The repeat is running as
+`aj-native-parallel-6a2dc9e1` on the worker. Do not raise the guard.
+
+Investigate the remaining hydration delay if it repeats. The first run ended
+with three system indexes unhydrated. The same IDs in the fresh repeat identify
+`mz_source_statistics_ind`, `mz_hydration_statuses_ind` and
+`mz_show_cluster_replicas_ind`. This identifies candidates, not their root cause.
 
 Then, in order:
 
@@ -34,7 +38,14 @@ Protection publications derive bounds inside the catalog transaction, including
 the publisher's proposed client changes. Frontier-only conflicts retry without
 resampling.
 
-Verified on the current binaries, same build, original resource limits:
+Table registration now retains adopted handles and incremental WAL state across
+retries. Only missing shards receive timestamped registration after fresh catalog
+validation. Controller activation prepares its four configuration tables and
+defers registration contention to its loop. Compilation, WAL tests, catalog
+regressions, HTTP tests and the debug binary build passed. Independent review
+found no DROP/Forget ordering issue. Full runtime acceptance remains incomplete.
+
+Verified before the registration repair, same build, original resource limits:
 
 - Every declared ingestion workload at default duration, including promotions,
   explicit retirements and forced restarts.
@@ -87,11 +98,13 @@ detailed pointers to binaries, receipts, runners and individual runs are in
 `handoff-before-cleanup.md` and `handoff-before-ingest-verification.md` there.
 Historical passes are not acceptance of the latest binary.
 
-The registration-starvation evidence is in
-`controller-table-stage-live-tail.log` and
-`zippy-controller-table-stage-evidence.tar.gz`. Current repair checks use
-`build_controller_registration.py` and `controller-registration-build.log` on
-the worker. These are not successful verification receipts until the checks finish.
+Registration-starvation evidence is in `controller-table-stage-live-tail.log`
+and `zippy-controller-table-stage-evidence.tar.gz`. Successful repair checks and
+binary provenance are preserved locally in `controller-adoption-build-evidence.tar.gz`.
+The Kafka failure is in `zippy-adoption-KafkaSources-evidence.tar.gz`, with phase
+analysis in `zippy-adoption-phase-analysis.md`. The runner is
+`native_zippy_adoption.py`. Neither the full zippy workflow nor backup/restore
+passed. The bounded build resumed after its resource guard, without raising caps.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`

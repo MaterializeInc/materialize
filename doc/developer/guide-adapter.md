@@ -594,6 +594,21 @@ requires a fresh timestamp and another catalog retirement check, not termination
 as a fenced adapter. Complete the WAL append before applying its timestamp to
 the oracle or using it for snapshots.
 
+Adopt prepared table handles locally and retain them with the incremental WAL
+cache across retries. Adoption does not change membership or grant authority.
+Already registered shards need no registration write or timestamp allocation,
+but reads still need a completed WAL prefix and read protection. Prepare only
+changed bindings. Controller activation selects its four configuration tables,
+not the tables recovered by initial seeding or adapter bootstrap.
+
+For missing registrations, allocate after handle and schema preparation, then
+certify the catalog and revalidate the selected bindings and schema versions.
+Cached absence alone never authorizes re-registration after DROP and Forget.
+A newer catalog cut requires a fresh allocation, not a locally raised timestamp.
+Controller activation makes one bounded registration round per tick and defers
+definitive contention without marking activation complete. Never cancel a
+submitted registration or its oracle completion to meet that scheduling bound.
+
 Bootstrap snapshots use the table-fence timestamp, not a subsequent oracle read.
 Catalog publishers can advance the shared oracle without advancing the table WAL.
 Waiting for that newer timestamp can deadlock bootstrap before normal table

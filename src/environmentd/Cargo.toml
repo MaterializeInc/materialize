@@ -84,6 +84,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-tracing = { path = "../tracing", optional = true }
+mz-txn-wal = { path = "../txn-wal" }
 nix.workspace = true
 num_cpus.workspace = true
 openssl.workspace = true

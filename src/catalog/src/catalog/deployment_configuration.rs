@@ -23,34 +23,64 @@ use mz_timestamp_oracle::TimestampOracle;
 use crate::builtin::{
     MZ_CLUSTER_REPLICA_SIZE_INTERNAL, MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS, MZ_LICENSE_KEYS,
 };
-use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogError, TableInfrastructure};
+use crate::catalog::{
+    BuiltinTableUpdate, Catalog, CatalogError, PreparedTableInfrastructure, TableInfrastructure,
+};
+
+fn configuration_tables() -> [&'static crate::builtin::BuiltinTable; 4] {
+    [
+        &*MZ_CLUSTER_REPLICA_SIZES,
+        &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+        &*MZ_EGRESS_IPS,
+        &*MZ_LICENSE_KEYS,
+    ]
+}
 
 impl Catalog {
     /// Publishes this controller's local configuration after becoming active.
     /// Does not initialize shared catalog projections or replace serving adapters.
+    /// Only the four configuration tables are needed here. Initial seeding and
+    /// adapter recovery complete other table registrations, not promotion.
+    /// Returns false on definitive table-registration contention. The caller must
+    /// yield to its scheduling loop before retrying and must not mark activation
+    /// complete until this returns true.
     pub async fn complete_deployment_activation(
         &mut self,
         persist: mz_persist_client::PersistClient,
-        metrics: &mz_ore::metrics::MetricsRegistry,
+        metrics: Arc<mz_txn_wal::metrics::Metrics>,
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
-    ) -> Result<(), CatalogError> {
+        prepared: &mut Option<PreparedTableInfrastructure>,
+    ) -> Result<bool, CatalogError> {
         if self.state().active_deployment_generation() != Some(self.state().deployment_generation())
         {
-            return Ok(());
+            *prepared = None;
+            return Ok(true);
         }
-        self.initialize_storage_metadata().await?;
-        let mut infrastructure = self
-            .complete_table_infrastructure(
-                persist.clone(),
-                Arc::new(mz_txn_wal::metrics::Metrics::new(metrics)),
-                oracle,
-            )
-            .await?;
+        if prepared.is_none() {
+            let selected = configuration_tables()
+                .into_iter()
+                .map(|table| self.resolve_builtin_table(table))
+                .collect();
+            *prepared = Some(
+                self.prepare_table_infrastructure(persist.clone(), metrics, Some(selected))
+                    .await?,
+            );
+        }
+        let Some(completed_at) = self
+            .try_complete_table_infrastructure(prepared.as_mut().expect("prepared above"), oracle)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let mut infrastructure = prepared
+            .take()
+            .expect("completed preparation")
+            .finish(completed_at);
         // Infrastructure completion follows catalog updates. A later promotion
         // can make this retained controller inactive before reconciliation starts.
         if self.state().active_deployment_generation() != Some(self.state().deployment_generation())
         {
-            return Ok(());
+            return Ok(true);
         }
         let mut snapshot = Vec::new();
         for ip in &self.state.egress_addresses {
@@ -68,7 +98,8 @@ impl Catalog {
             );
         }
         self.reconcile_deployment_configuration(&persist, &mut infrastructure, &snapshot, oracle)
-            .await
+            .await?;
+        Ok(true)
     }
 
     /// Reconciles the active initializer's configuration tables after WAL setup.
@@ -122,15 +153,10 @@ impl Catalog {
                 return Err(CatalogError::ReadOnly);
             }
         }
-        let mut desired: BTreeMap<_, Vec<(Row, i64)>> = [
-            &*MZ_CLUSTER_REPLICA_SIZES,
-            &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-            &*MZ_EGRESS_IPS,
-            &*MZ_LICENSE_KEYS,
-        ]
-        .into_iter()
-        .map(|table| (self.resolve_builtin_table(table), Vec::new()))
-        .collect();
+        let mut desired: BTreeMap<_, Vec<(Row, i64)>> = configuration_tables()
+            .into_iter()
+            .map(|table| (self.resolve_builtin_table(table), Vec::new()))
+            .collect();
         if initial_seed {
             for builtin in crate::builtin::BUILTINS::iter() {
                 if let crate::builtin::Builtin::Table(table) = builtin {

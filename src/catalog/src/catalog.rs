@@ -113,7 +113,7 @@ mod open;
 mod retention;
 mod state;
 mod table;
-pub use table::{TableInfrastructure, TableTxns};
+pub use table::{PreparedTableInfrastructure, TableInfrastructure, TableTxns};
 #[cfg(any(test, feature = "test"))]
 pub mod test_support;
 mod transact;
@@ -170,6 +170,9 @@ pub struct Catalog {
     shared_transient_revision: Arc<AtomicU64>,
     #[cfg(test)]
     before_commit: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
+    #[cfg(test)]
+    before_table_registration:
+        Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
 }
 
 /// A finite drained catalog prefix, applied in commit order before fetching more.
@@ -283,6 +286,8 @@ impl Clone for Catalog {
             shared_transient_revision: Arc::clone(&self.shared_transient_revision),
             #[cfg(test)]
             before_commit: self.before_commit.clone(),
+            #[cfg(test)]
+            before_table_registration: self.before_table_registration.clone(),
         }
     }
 }
@@ -1621,6 +1626,8 @@ impl Catalog {
                 diagnostic_config,
                 #[cfg(test)]
                 before_commit: None,
+                #[cfg(test)]
+                before_table_registration: None,
             },
             initial_updates: result.catalog_updates,
             plan_store: result.expr_cache_handle,

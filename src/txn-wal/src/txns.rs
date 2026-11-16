@@ -9,7 +9,7 @@
 
 //! An interface for atomic multi-shard writes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -284,97 +284,145 @@ where
         let op = &Arc::clone(&self.metrics).register;
         op.run(async {
             let mut data_writes = data_writes.into_iter().collect::<Vec<_>>();
-
-            // The txns system requires that all participating data shards have a
-            // schema registered. Importantly, we must register a data shard's
-            // schema _before_ we publish it to the txns shard.
             for data_write in &mut data_writes {
-                // Note that if this fails we'll bail out farther down in any case,
-                // so we might as well fail fast.
                 data_write
                     .try_register_schema()
                     .await
                     .expect("schema should be registered");
             }
-
-            let updates = data_writes
+            let ids = data_writes
                 .iter()
-                .map(|data_write| {
-                    let data_id = data_write.shard_id();
-                    let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
-                    (data_id, C::encode(entry))
-                })
+                .map(WriteHandle::shard_id)
                 .collect::<Vec<_>>();
-            let data_ids_debug = || {
-                data_writes
-                    .iter()
-                    .map(|x| format!("{:.9}", x.shard_id().to_string()))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
-
-            let mut txns_upper = self
-                .txns_write
-                .shared_upper()
-                .into_option()
-                .expect("txns should not be closed");
-            loop {
-                txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
-                // Figure out which are still unregistered as of `txns_upper`. Below
-                // we write conditionally on the upper being what we expect so than
-                // we can re-run this if anything changes from underneath us.
-                let updates = updates
-                    .iter()
-                    .flat_map(|(data_id, (key, val))| {
-                        let registered =
-                            self.txns_cache.registered_at_progress(data_id, &txns_upper);
-                        (!registered).then_some(((key, val), &register_ts, 1))
-                    })
-                    .collect::<Vec<_>>();
-                // If the txns_upper has passed register_ts, we can no longer write.
-                if register_ts < txns_upper {
-                    debug!(
-                        "txns register {} at {:?} mismatch current={:?}",
-                        data_ids_debug(),
-                        register_ts,
-                        txns_upper,
-                    );
-                    return Err(txns_upper);
-                }
-
-                let res = crate::small_caa(
-                    || format!("txns register {}", data_ids_debug()),
-                    &mut self.txns_write,
-                    &updates,
-                    txns_upper,
-                    register_ts.step_forward(),
-                )
-                .await;
-                match res {
-                    Ok(()) => {
-                        debug!(
-                            "txns register {} at {:?} success",
-                            data_ids_debug(),
-                            register_ts
-                        );
-                        break;
-                    }
-                    Err(new_txns_upper) => {
-                        let new_txns_upper = new_txns_upper
-                            .into_option()
-                            .expect("txns shard should not be closed");
-                        self.metrics.register.retry_count.inc();
-                        txns_upper = new_txns_upper;
-                        continue;
-                    }
-                }
-            }
+            self.register_data_ids(&register_ts, &ids).await?;
             self.adopt(data_writes);
-            let tidy = self.apply_le(&register_ts).await;
-
-            Ok(tidy)
+            Ok(self.apply_le(&register_ts).await)
         })
         .await
+    }
+
+    /// Registers shards whose local handles have already been adopted.
+    ///
+    /// Has the same shared-membership and application contract as [`Self::register`],
+    /// but retains the adopted handles on a definitive timestamp conflict. The
+    /// caller must revalidate its authority before retrying at a new timestamp.
+    /// Panics if any requested shard has no adopted handle with a registered schema.
+    pub async fn register_adopted(
+        &mut self,
+        register_ts: T,
+        data_ids: impl IntoIterator<Item = ShardId>,
+    ) -> Result<Tidy, T> {
+        let op = &Arc::clone(&self.metrics).register;
+        op.run(async {
+            let ids = data_ids.into_iter().collect::<Vec<_>>();
+            for id in &ids {
+                assert!(
+                    self.datas
+                        .data_write_for_commit
+                        .get(id)
+                        .is_some_and(|handle| handle.0.schema_id().is_some()),
+                    "registration requires an adopted handle with a registered schema"
+                );
+            }
+            self.register_data_ids(&register_ts, &ids).await?;
+            Ok(self.apply_le(&register_ts).await)
+        })
+        .await
+    }
+
+    async fn register_data_ids(&mut self, register_ts: &T, data_ids: &[ShardId]) -> Result<(), T> {
+        let updates = data_ids
+            .iter()
+            .map(|data_id| {
+                let entry = TxnsEntry::Register(*data_id, T::encode(register_ts));
+                (*data_id, C::encode(entry))
+            })
+            .collect::<Vec<_>>();
+        let data_ids_debug = || {
+            data_ids
+                .iter()
+                .map(|id| format!("{:.9}", id.to_string()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut txns_upper = self
+            .txns_write
+            .shared_upper()
+            .into_option()
+            .expect("txns should not be closed");
+        loop {
+            txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
+            let updates = updates
+                .iter()
+                .flat_map(|(data_id, (key, val))| {
+                    let registered = self.txns_cache.registered_at_progress(data_id, &txns_upper);
+                    (!registered).then_some(((key, val), register_ts, 1))
+                })
+                .collect::<Vec<_>>();
+            if register_ts < &txns_upper {
+                debug!(
+                    "txns register {} at {:?} mismatch current={:?}",
+                    data_ids_debug(),
+                    register_ts,
+                    txns_upper
+                );
+                return Err(txns_upper);
+            }
+            match crate::small_caa(
+                || format!("txns register {}", data_ids_debug()),
+                &mut self.txns_write,
+                &updates,
+                txns_upper,
+                register_ts.step_forward(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    debug!(
+                        "txns register {} at {:?} success",
+                        data_ids_debug(),
+                        register_ts
+                    );
+                    return Ok(());
+                }
+                Err(upper) => {
+                    self.metrics.register.retry_count.inc();
+                    txns_upper = upper
+                        .into_option()
+                        .expect("txns shard should not be closed");
+                }
+            }
+        }
+    }
+
+    /// Reads membership at an incrementally observed WAL prefix.
+    ///
+    /// Returns the exclusive upper of that prefix and the requested shards
+    /// registered there. This is not a grant of write authority and does not
+    /// apply transactions. A missing shard still requires authorized registration.
+    pub async fn registration_status(
+        &mut self,
+        data_ids: impl IntoIterator<Item = ShardId>,
+    ) -> (T, BTreeSet<ShardId>) {
+        let observed = self
+            .txns_write
+            .shared_upper()
+            .into_option()
+            .expect("txns should not be closed");
+        let progress = self.txns_cache.update_ge(&observed).await.clone();
+        let registered = data_ids
+            .into_iter()
+            .filter(|id| self.txns_cache.registered_at_progress(id, &progress))
+            .collect();
+        (progress, registered)
+    }
+
+    /// Discards unused local commit handles without changing WAL membership.
+    /// Handles needed to apply previously committed transactions remain available.
+    pub fn retain_adopted(&mut self, data_ids: &BTreeSet<ShardId>) {
+        self.datas
+            .data_write_for_commit
+            .retain(|id, _| data_ids.contains(id));
     }
 
     /// Removes data shards from use with this txn set.
@@ -1156,6 +1204,41 @@ mod tests {
             .expect_commit_at(6, data_id, &["after detach"], &log)
             .await;
         log.assert_snapshot(data_id, 6).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn adopted_registration_retries_without_reopening_handles() {
+        let client = PersistClient::new_for_tests().await;
+        let mut first = TxnsHandle::expect_open(client.clone()).await;
+        let log = first.new_log();
+        let existing = first.expect_register(2).await;
+        let mut second = TxnsHandle::expect_open_id(client.clone(), first.txns_id()).await;
+        let added = ShardId::new();
+        let mut handle = writer(&client, added).await;
+        handle.try_register_schema().await.expect("prepared schema");
+        second.adopt([handle]);
+
+        first.expect_commit_at(3, existing, &["peer"], &log).await;
+        assert_eq!(second.register_adopted(3, [added]).await.unwrap_err(), 4);
+        let (upper, registered) = second.registration_status([existing, added]).await;
+        assert_eq!(upper, 4);
+        assert_eq!(registered, BTreeSet::from([existing]));
+        second.register_adopted(4, [added]).await.unwrap();
+        second
+            .expect_commit_at(5, added, &["after retry"], &log)
+            .await;
+        first
+            .expect_commit_at(6, existing, &["continued"], &log)
+            .await;
+        log.assert_snapshot(existing, 6).await;
+        log.assert_snapshot(added, 6).await;
+
+        let before = first.txns_write.fetch_recent_upper().await.clone();
+        second.retain_adopted(&BTreeSet::new());
+        let (_, registered) = second.registration_status([existing, added]).await;
+        assert_eq!(registered, BTreeSet::from([existing, added]));
+        assert_eq!(first.txns_write.fetch_recent_upper().await, &before);
     }
 
     /// A sanity check that CommitLog catches an incorrect usage (proxy for a

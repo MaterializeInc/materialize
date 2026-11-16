@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mz_ore::metrics::MetricsRegistry;
@@ -93,6 +94,66 @@ struct Fixture {
     organization: uuid::Uuid,
     oracle: Arc<TableBootstrapOracle>,
     state: StateConfig,
+}
+
+struct OvertakingBootstrapOracle {
+    inner: Arc<TableBootstrapOracle>,
+    peer: tokio::sync::Mutex<(Catalog, TableInfrastructure)>,
+    enabled: AtomicBool,
+    allocations: AtomicUsize,
+    completions: AtomicUsize,
+}
+
+impl std::fmt::Debug for OvertakingBootstrapOracle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OvertakingBootstrapOracle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl OvertakingBootstrapOracle {
+    async fn advance_peer(&self) {
+        let peer_write = self.inner.write_ts().await;
+        let mut peer = self.peer.lock().await;
+        let (catalog, infrastructure) = &mut *peer;
+        catalog
+            .advance_upper(peer_write.timestamp.step_forward())
+            .await
+            .expect("peer catalog fence");
+        let mut txn = infrastructure.txns.begin();
+        let apply = txn
+            .commit_at(&mut infrastructure.txns, peer_write.timestamp)
+            .await
+            .expect("peer WAL advancement");
+        let tidy = apply.apply(&mut infrastructure.txns).await;
+        infrastructure.tidy.merge(tidy);
+        self.inner.apply_write(peer_write.timestamp).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl TimestampOracle<Timestamp> for OvertakingBootstrapOracle {
+    async fn write_ts(&self) -> WriteTimestamp {
+        self.allocations.fetch_add(1, Ordering::SeqCst);
+        let write = self.inner.write_ts().await;
+        if self.enabled.load(Ordering::SeqCst) {
+            self.advance_peer().await;
+        }
+        write
+    }
+
+    async fn peek_write_ts(&self) -> Timestamp {
+        self.inner.peek_write_ts().await
+    }
+
+    async fn read_ts(&self) -> Timestamp {
+        self.inner.read_ts().await
+    }
+
+    async fn apply_write(&self, timestamp: Timestamp) {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        self.inner.apply_write(timestamp).await;
+    }
 }
 
 impl Fixture {
@@ -202,7 +263,7 @@ impl Fixture {
         opened
             .complete_fresh_deployment_initialization(
                 self.persist.clone(),
-                &MetricsRegistry::new(),
+                Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
                 self.oracle.as_ref(),
             )
             .await
@@ -218,6 +279,58 @@ impl Fixture {
             )
             .await
             .expect("register table infrastructure")
+    }
+
+    async fn create_table(
+        &self,
+        catalog: &mut Catalog,
+    ) -> (mz_repr::CatalogItemId, mz_repr::GlobalId) {
+        use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+
+        let database = catalog.resolve_database("materialize").expect("database");
+        let database_spec = ResolvedDatabaseSpecifier::Id(database.id);
+        let schema = catalog
+            .resolve_schema_in_database(&database_spec, "public", &crate::SYSTEM_CONN_ID)
+            .expect("schema");
+        let name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            },
+            item: "registration_race".into(),
+        };
+        let (id, gid) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("table IDs");
+        let item = super::test_support::parse_item(
+            &mut catalog.state,
+            gid,
+            "CREATE TABLE materialize.public.registration_race (a int)",
+            &Default::default(),
+        )
+        .expect("table definition");
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![super::Op::CreateItem {
+                    id,
+                    name,
+                    item,
+                    owner_id: mz_sql::session::user::MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("commit table");
+        catalog
+            .initialize_storage_metadata()
+            .await
+            .expect("table binding");
+        (id, gid)
     }
 
     async fn append_type_row(&self, catalog: &mut Catalog, row: Row) {
@@ -410,7 +523,7 @@ async fn completed_restart_preserves_seed_drift() {
     let mut restarted = opened
         .complete_deployment_restart(
             fixture.persist.clone(),
-            &MetricsRegistry::new(),
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
             fixture.oracle.as_ref(),
         )
         .await
@@ -430,7 +543,7 @@ async fn completed_restart_preserves_seed_drift() {
         opened
             .complete_fresh_deployment_initialization(
                 fixture.persist.clone(),
-                &MetricsRegistry::new(),
+                Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
                 fixture.oracle.as_ref(),
             )
             .await
@@ -467,7 +580,7 @@ async fn delayed_initializer_preserves_completed_seed_changes() {
     let metrics = MetricsRegistry::new();
     let delayed = delayed.complete_fresh_deployment_initialization(
         fixture.persist.clone(),
-        &metrics,
+        Arc::new(mz_txn_wal::metrics::Metrics::new(&metrics)),
         &oracle,
     );
     let peer = async {
@@ -520,7 +633,7 @@ async fn unmarked_catalog_cannot_initialize() {
         opened
             .complete_fresh_deployment_initialization(
                 fixture.persist.clone(),
-                &MetricsRegistry::new(),
+                Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
                 fixture.oracle.as_ref(),
             )
             .await
@@ -613,4 +726,327 @@ async fn delayed_configuration_reconciliation_respects_promotion() {
     drop(infrastructure);
     opened.catalog.expire().await;
     active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn table_registration_retains_preparation_across_peer_progress() {
+    let fixture = Fixture::new().await;
+    let mut catalog = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    let storage = fixture
+        .builder()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("peer join");
+    let mut peer = fixture.open(storage).await.catalog;
+    let infrastructure = fixture.infrastructure(&mut peer).await;
+    let (_, gid) = fixture.create_table(&mut catalog).await;
+    let shard = catalog
+        .state()
+        .storage_metadata()
+        .get_collection_shard(gid)
+        .expect("table shard");
+    let oracle = OvertakingBootstrapOracle {
+        inner: Arc::clone(&fixture.oracle),
+        peer: tokio::sync::Mutex::new((peer, infrastructure)),
+        enabled: AtomicBool::new(true),
+        allocations: AtomicUsize::new(0),
+        completions: AtomicUsize::new(0),
+    };
+    let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+    let mut prepared = catalog
+        .prepare_table_infrastructure(fixture.persist.clone(), metrics, None)
+        .await
+        .expect("retained preparation");
+    for after_validation in [false, true] {
+        oracle.enabled.store(!after_validation, Ordering::SeqCst);
+        oracle.allocations.store(0, Ordering::SeqCst);
+        oracle.completions.store(0, Ordering::SeqCst);
+        let (hook, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+        if after_validation {
+            catalog.before_table_registration = Some(hook);
+        }
+        let completion = catalog.try_complete_table_infrastructure(&mut prepared, &oracle);
+        let interference = async {
+            if after_validation {
+                let resume = attempts.recv().await.expect("validated registration");
+                oracle.advance_peer().await;
+                resume.send(()).expect("resume registration CAS");
+            }
+        };
+        let (completed, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            tokio::join!(completion, interference)
+        })
+        .await
+        .expect("bounded round");
+        assert!(completed.expect("ordinary contention").is_none());
+        assert_eq!(
+            oracle.allocations.load(Ordering::SeqCst),
+            if after_validation { 1 } else { 3 }
+        );
+        assert_eq!(oracle.completions.load(Ordering::SeqCst), 0);
+        let (_, registered) = oracle
+            .peer
+            .lock()
+            .await
+            .1
+            .txns
+            .registration_status([shard])
+            .await;
+        assert!(
+            registered.is_empty(),
+            "rejected registration cannot admit the table"
+        );
+    }
+    oracle.enabled.store(false, Ordering::SeqCst);
+    let completed = catalog
+        .try_complete_table_infrastructure(&mut prepared, &oracle)
+        .await
+        .expect("retry")
+        .expect("registration completes after contention");
+    let mut infrastructure = prepared.finish(completed);
+    assert_eq!(infrastructure.routes[&gid], shard);
+    let (_, registered) = infrastructure.txns.registration_status([shard]).await;
+    assert!(registered.contains(&shard));
+    drop(infrastructure);
+    let (peer, infrastructure) = oracle.peer.into_inner();
+    drop(infrastructure);
+    peer.expire().await;
+    catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn prepared_table_registration_does_not_resurrect_forgotten_shard() {
+    let fixture = Fixture::new().await;
+    let mut peer = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    let mut infrastructure = fixture.infrastructure(&mut peer).await;
+    let (id, gid) = fixture.create_table(&mut peer).await;
+    let shard = peer
+        .state()
+        .storage_metadata()
+        .get_collection_shard(gid)
+        .expect("unregistered table shard");
+    let storage = fixture
+        .builder()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join");
+    let mut joining = fixture.open(storage).await.catalog;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let oracle = PausedBootstrapOracle {
+        inner: fixture.oracle.as_ref(),
+        pause: Mutex::new(Some((started_tx, resume_rx))),
+    };
+    let mut prepared = joining
+        .prepare_table_infrastructure(
+            fixture.persist.clone(),
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+            None,
+        )
+        .await
+        .expect("retained preparation");
+    let registration = joining.try_complete_table_infrastructure(&mut prepared, &oracle);
+    let retirement = async {
+        started_rx
+            .await
+            .expect("handles prepared before allocation");
+        let ts = peer.current_upper().await;
+        peer.transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![super::Op::DropObjects(vec![super::DropObjectInfo::Item(
+                id,
+            )])],
+        )
+        .await
+        .expect("retire table in catalog");
+        assert!(
+            peer.storage()
+                .await
+                .snapshot()
+                .await
+                .expect("retirement snapshot")
+                .unfinalized_shards
+                .keys()
+                .any(|key| key.shard == shard)
+        );
+        let write = fixture.oracle.write_ts().await;
+        peer.advance_upper(write.timestamp.step_forward())
+            .await
+            .expect("Forget fence");
+        infrastructure
+            .txns
+            .forget(write.timestamp, [shard])
+            .await
+            .expect("Forget retired table");
+        fixture.oracle.apply_write(write.timestamp).await;
+        resume_tx.send(()).expect("resume registration");
+    };
+    let (registration, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::join!(registration, retirement)
+    })
+    .await
+    .expect("registration observes retirement");
+    assert!(registration.expect("defer stale preparation").is_none());
+    let cut = joining
+        .try_complete_table_infrastructure(&mut prepared, fixture.oracle.as_ref())
+        .await
+        .expect("refresh retired bindings")
+        .expect("remaining tables are registered");
+    let completed = prepared.finish(cut);
+    assert!(!completed.routes.contains_key(&gid));
+    assert!(
+        !completed
+            .txns
+            .read_cache()
+            .registered_at_progress(&shard, &completed.completed_at.step_forward())
+    );
+    drop(completed);
+    drop(infrastructure);
+    joining.expire().await;
+    peer.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn table_schema_preparation_precedes_registration_timestamp() {
+    let fixture = Fixture::new().await;
+    let mut catalog = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    let (id, gid) = fixture.create_table(&mut catalog).await;
+    let shard = catalog
+        .state()
+        .storage_metadata()
+        .get_collection_shard(gid)
+        .expect("unregistered table shard");
+    let (_, new_global_id) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("version ID");
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![super::Op::AlterAddColumn {
+                id,
+                new_global_id,
+                name: "b".into(),
+                typ: mz_repr::SqlScalarType::Int64.nullable(true),
+                sql: mz_sql_parser::parser::parse_data_type("bigint").expect("column type"),
+            }],
+        )
+        .await
+        .expect("commit schema evolution without applying it");
+    catalog
+        .initialize_storage_metadata()
+        .await
+        .expect("version binding");
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let oracle = PausedBootstrapOracle {
+        inner: fixture.oracle.as_ref(),
+        pause: Mutex::new(Some((started_tx, resume_rx))),
+    };
+    let registration = catalog.complete_table_infrastructure(
+        fixture.persist.clone(),
+        Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+        &oracle,
+    );
+    let inspect = async {
+        started_rx.await.expect("registration timestamp requested");
+        let (_, schema, _) = fixture
+            .persist
+            .latest_schema::<SourceData, (), Timestamp, i64>(shard, Diagnostics::for_tests())
+            .await
+            .expect("read schema")
+            .expect("registered schema");
+        assert_eq!(
+            schema.arity(),
+            2,
+            "schema preparation must precede timestamp allocation"
+        );
+        resume_tx.send(()).expect("resume registration");
+    };
+    let (registration, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::join!(registration, inspect)
+    })
+    .await
+    .expect("prepared schema registers");
+    let infrastructure = registration.expect("registration");
+    assert_eq!(infrastructure.routes[&new_global_id], shard);
+    drop(infrastructure);
+    catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn activation_registers_no_unrelated_tables_and_join_adopts_existing_membership() {
+    let fixture = Fixture::new().await;
+    let mut catalog = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    let builtin = &crate::builtin::MZ_CLUSTER_REPLICA_SIZES;
+    let expected = fixture.rows(&mut catalog, builtin).await;
+    fixture
+        .append_row(
+            &mut catalog,
+            builtin,
+            expected.first().expect("sizes").0.clone(),
+        )
+        .await;
+    let mut observer = fixture.infrastructure(&mut catalog).await;
+    let (before, _) = observer.txns.registration_status([]).await;
+    let before_allocation = fixture.oracle.peek_write_ts().await;
+    let adopted = fixture.infrastructure(&mut catalog).await;
+    let (after, _) = observer.txns.registration_status([]).await;
+    assert_eq!(before, after, "adoption must not advance the WAL");
+    assert_eq!(
+        before_allocation,
+        fixture.oracle.peek_write_ts().await,
+        "adoption needs no timestamp allocation"
+    );
+    drop(adopted);
+    let (_, gid) = fixture.create_table(&mut catalog).await;
+    let shard = catalog
+        .state()
+        .storage_metadata()
+        .get_collection_shard(gid)
+        .expect("table shard");
+    let mut prepared = None;
+    let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+    assert!(
+        catalog
+            .complete_deployment_activation(
+                fixture.persist.clone(),
+                metrics,
+                fixture.oracle.as_ref(),
+                &mut prepared
+            )
+            .await
+            .expect("configuration activation")
+    );
+    let (_, registered) = observer.txns.registration_status([shard]).await;
+    assert!(
+        registered.is_empty(),
+        "activation must not register an unrelated user table"
+    );
+    assert_eq!(fixture.rows(&mut catalog, builtin).await, expected);
+    drop(observer);
+    catalog.expire().await;
 }

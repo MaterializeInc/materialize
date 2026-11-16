@@ -30,6 +30,7 @@ pub async fn open_catalog(
 ) -> anyhow::Result<(
     Catalog,
     Arc<dyn mz_timestamp_oracle::TimestampOracle<Timestamp> + Send + Sync>,
+    Arc<mz_txn_wal::metrics::Metrics>,
 )> {
     ensure!(
         config.joined_adapter_id.is_none(),
@@ -207,15 +208,16 @@ pub async fn open_catalog(
         },
     };
     let persist = catalog_config.state.persist_client.clone();
+    let txns_metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&config.metrics_registry));
     let catalog = if initialize {
-        super::initialize_fresh(catalog_config, oracle.as_ref()).await?
+        super::initialize_fresh(catalog_config, Arc::clone(&txns_metrics), oracle.as_ref()).await?
     } else {
         let catalog = Catalog::open(catalog_config).await?;
         if catalog.catalog.state().active_deployment_generation()
             == Some(config.controller.deploy_generation)
         {
             catalog
-                .complete_deployment_restart(persist, &config.metrics_registry, oracle.as_ref())
+                .complete_deployment_restart(persist, Arc::clone(&txns_metrics), oracle.as_ref())
                 .await?
         } else {
             catalog.catalog
@@ -225,5 +227,5 @@ pub async fn open_catalog(
         catalog.state().catalog_read_protection_enabled(),
         "controllerd requires catalog-following execution"
     );
-    Ok((catalog, oracle))
+    Ok((catalog, oracle, txns_metrics))
 }

@@ -25,7 +25,7 @@ impl crate::catalog::OpenCatalogResult {
     pub async fn complete_deployment_restart(
         mut self,
         persist: mz_persist_client::PersistClient,
-        metrics: &mz_ore::metrics::MetricsRegistry,
+        metrics: Arc<mz_txn_wal::metrics::Metrics>,
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
     ) -> Result<Catalog, CatalogError> {
         {
@@ -49,9 +49,19 @@ impl crate::catalog::OpenCatalogResult {
             )
             .into());
         }
-        self.catalog
-            .complete_deployment_activation(persist, metrics, oracle)
-            .await?;
+        let mut prepared = None;
+        while !self
+            .catalog
+            .complete_deployment_activation(
+                persist.clone(),
+                Arc::clone(&metrics),
+                oracle,
+                &mut prepared,
+            )
+            .await?
+        {
+            tokio::task::yield_now().await;
+        }
         Ok(self.catalog)
     }
 
@@ -63,7 +73,7 @@ impl crate::catalog::OpenCatalogResult {
     pub async fn complete_fresh_deployment_initialization(
         mut self,
         persist: mz_persist_client::PersistClient,
-        metrics: &mz_ore::metrics::MetricsRegistry,
+        metrics: Arc<mz_txn_wal::metrics::Metrics>,
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
     ) -> Result<Catalog, CatalogError> {
         {
@@ -91,11 +101,7 @@ impl crate::catalog::OpenCatalogResult {
         self.catalog.initialize_storage_metadata().await?;
         let mut infrastructure = self
             .catalog
-            .complete_table_infrastructure(
-                persist.clone(),
-                Arc::new(mz_txn_wal::metrics::Metrics::new(metrics)),
-                oracle,
-            )
+            .complete_table_infrastructure(persist.clone(), metrics, oracle)
             .await?;
         // Fence, snapshot and compare-and-append the differences. Repeating an
         // interrupted seed must not append its positive rows a second time.

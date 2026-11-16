@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
@@ -47,7 +48,8 @@ pub async fn run(
         anyhow::anyhow!("controllerd requires a shared catalog timestamp oracle URL")
     })?;
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
-    let (mut catalog, oracle) = super::open_catalog(&mut config, &adapter_sizes).await?;
+    let (mut catalog, oracle, txns_metrics) =
+        super::open_catalog(&mut config, &adapter_sizes).await?;
     let mut was_active =
         catalog.state().active_deployment_generation() == Some(config.controller.deploy_generation);
     let persist = config
@@ -93,6 +95,7 @@ pub async fn run(
         mz_ore::task::spawn(|| "controller-http", super::http::serve(listener, sender))
             .abort_on_drop();
     let mut observations = Observations::new()?;
+    let mut activation_preparation = None;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let progress = catalog.upper_frontiers().await?;
@@ -143,10 +146,21 @@ pub async fn run(
                 catalog.sync_to_observed_updates().await?;
                 let active = catalog.state().active_deployment_generation()
                     == Some(config.controller.deploy_generation);
+                if !active {
+                    activation_preparation = None;
+                }
                 if active && !was_active {
-                    catalog.complete_deployment_activation(
-                        persist.clone(), &config.metrics_registry, oracle.as_ref(),
-                    ).await?;
+                    if !catalog.complete_deployment_activation(
+                        persist.clone(), Arc::clone(&txns_metrics), oracle.as_ref(),
+                        &mut activation_preparation,
+                    ).await? {
+                        // A definitive registration conflict is ordinary contention,
+                        // not a failed controller. Leave activation pending and give
+                        // administrative commands a turn before retrying. Reset an
+                        // overdue tick rather than immediately entering another round.
+                        interval.reset();
+                        continue;
+                    }
                 }
                 was_active = active;
                 if let Some(relay) = &mut pubsub { relay.reconcile(); }

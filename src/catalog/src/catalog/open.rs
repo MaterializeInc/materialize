@@ -998,6 +998,8 @@ impl Catalog {
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
                 #[cfg(test)]
                 before_commit: None,
+                #[cfg(test)]
+                before_table_registration: None,
             };
 
             // Operators aren't stored in the catalog, but we would like them in
