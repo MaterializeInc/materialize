@@ -25,7 +25,7 @@
   {{ log("Dropping cluster " ~ cluster_name ~ "...", info=True) }}
 
   {% call statement('drop_cluster') -%}
-      DROP CLUSTER IF EXISTS {{ cluster_name }} CASCADE
+      DROP CLUSTER IF EXISTS {{ adapter.quote(cluster_name) }} CASCADE
   {%- endcall -%}
 
   {{ log("Cluster " ~ cluster_name ~ " dropped.", info=True) }}
