@@ -135,7 +135,7 @@ mz_views_ind  CREATE␠INDEX␠"mz_views_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s507
 mz_wallclock_global_lag_recent_history_ind  CREATE␠INDEX␠"mz_wallclock_global_lag_recent_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s747␠AS␠"mz_internal"."mz_wallclock_global_lag_recent_history"]␠("object_id")
 mz_webhook_sources_ind  CREATE␠INDEX␠"mz_webhook_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s552␠AS␠"mz_internal"."mz_webhook_sources"]␠("id")
 pg_attrdef_all_databases_ind  CREATE␠INDEX␠"pg_attrdef_all_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s652␠AS␠"mz_internal"."pg_attrdef_all_databases"]␠("oid",␠"adrelid",␠"adnum",␠"adbin",␠"adsrc")
-pg_attribute_all_databases_ind  CREATE␠INDEX␠"pg_attribute_all_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s645␠AS␠"mz_internal"."pg_attribute_all_databases"]␠("attrelid",␠"attname",␠"atttypid",␠"attlen",␠"attnum",␠"atttypmod",␠"attnotnull",␠"atthasdef",␠"attidentity",␠"attgenerated",␠"attisdropped",␠"attcollation",␠"database_name",␠"pg_type_database_name")
+pg_attribute_all_databases_ind  CREATE␠INDEX␠"pg_attribute_all_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s645␠AS␠"mz_internal"."pg_attribute_all_databases"]␠("attrelid")
 pg_authid_core_ind  CREATE␠INDEX␠"pg_authid_core_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s662␠AS␠"mz_internal"."pg_authid_core"]␠("rolname")
 pg_class_all_databases_ind  CREATE␠INDEX␠"pg_class_all_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s633␠AS␠"mz_internal"."pg_class_all_databases"]␠("relname")
 pg_description_all_databases_ind  CREATE␠INDEX␠"pg_description_all_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s642␠AS␠"mz_internal"."pg_description_all_databases"]␠("objoid",␠"classoid",␠"objsubid",␠"description",␠"oid_database_name",␠"class_database_name")
