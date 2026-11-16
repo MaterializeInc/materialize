@@ -410,7 +410,7 @@ impl PeekClient {
     /// to the coordinator and the slot is defused here. Query-client failures
     /// are reported through the peek response and retire the registered peek.
     pub(crate) async fn implement_fast_path_peek_plan(
-        &mut self,
+        &self,
         catalog: Arc<Catalog>,
         fast_path: FastPathPlan,
         timestamp: Timestamp,

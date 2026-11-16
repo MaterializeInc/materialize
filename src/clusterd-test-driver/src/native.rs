@@ -184,7 +184,11 @@ impl NativeCompute {
                     // Maintained progress is also broadcast to query connections.
                     // Use its native-owner stream only, so a delayed duplicate
                     // cannot regress a frontier watch.
-                    if matches!(&response, Some(ComputeResponse::Frontiers(id, _)) if !id.is_transient()) {
+                    let maintained_frontier = matches!(
+                        &response,
+                        Some(ComputeResponse::Frontiers(id, _)) if !id.is_transient()
+                    );
+                    if maintained_frontier {
                         continue;
                     }
                     return Ok(response);

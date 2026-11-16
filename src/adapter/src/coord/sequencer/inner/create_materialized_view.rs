@@ -1417,7 +1417,7 @@ impl Coordinator {
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
 
-    pub(crate) async fn explain_pushdown_materialized_view(
+    pub(crate) fn explain_pushdown_materialized_view(
         &mut self,
         ctx: ExecuteContext,
         item_id: CatalogItemId,
@@ -1507,8 +1507,7 @@ impl Coordinator {
             plan.source_imports
                 .into_iter()
                 .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
-        )
-        .await;
+        );
         let result = future.await;
         drop(holds);
         result

@@ -164,7 +164,6 @@ impl Coordinator {
             // retires it too, but only because its command is queued behind
             // ours, and that ordering is not ours to depend on.
             self.drop_internal_subscribe(sink_id).await;
-            return;
         }
     }
 

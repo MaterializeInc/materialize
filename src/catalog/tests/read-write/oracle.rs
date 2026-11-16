@@ -910,10 +910,12 @@ async fn retired_temporary_cleanup_rebuilds_after_peer_publication() {
             .expect("cleanup did not finish after gate release")
             .err()
             .expect("stale cleanup must conflict with peer publication");
+        let CoreCatalogError::Catalog(error) = error else {
+            panic!("expected catalog contention, got {error:?}");
+        };
         assert!(matches!(
-            error,
-            CoreCatalogError::Catalog(error)
-                if matches!(error.kind, ErrorKind::Durable(DurableCatalogError::CatalogOutOfSync { .. }))
+            error.kind,
+            ErrorKind::Durable(DurableCatalogError::CatalogOutOfSync { .. })
         ));
         snapshot
     };

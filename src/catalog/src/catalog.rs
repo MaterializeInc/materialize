@@ -2167,9 +2167,13 @@ impl Catalog {
         + use<>,
         mz_persist_client::error::InvalidUsage<mz_repr::Timestamp>,
     > {
+        use mz_storage_types::StorageDiff;
+        use mz_storage_types::sources::SourceData;
+
         let shard = self.storage().await.shard_id();
-        self.diagnostic_config.persist_client
-            .upper_frontiers::<mz_storage_types::sources::SourceData, (), mz_repr::Timestamp, mz_storage_types::StorageDiff>(
+        self.diagnostic_config
+            .persist_client
+            .upper_frontiers::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard,
                 mz_persist_client::Diagnostics {
                     shard_name: "catalog".into(),

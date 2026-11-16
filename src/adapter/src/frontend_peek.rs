@@ -1389,7 +1389,6 @@ impl PeekClient {
                         mz_now,
                         imports,
                     )
-                    .await
                     .await?,
                 ))
             }

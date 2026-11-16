@@ -12,11 +12,11 @@ one CPU and the eight-CPU aggregate budget nearly saturated. Leaf samples do not
 identify the readiness critical path. Source-statistics indexes s745/s747 were the
 last blockers, then reached readiness. Follow their inputs, not generic sampled
 functions. The diagnostic workload again reached action 409 before its unchanged
-deadline. Its runtimes are cleaned up. Finish and commit the scoped CI corrections
-while preparing this measurement. The Rust check failed again, but expired scratch
-SSO prevents retrieving its diagnostics. Renew access with `bin/scratch login`,
-then inspect `native-ci-rust-checked-build.log` and its restoration result before
-retrying. Do not start another workload while that source state is unverified.
+deadline. Its runtimes are cleaned up. Scoped Python and Rust lint corrections
+are verified. All-target Clippy passed for storage-controller, catalog,
+clusterd-test-driver, adapter and environmentd with warnings denied. Catalog oracle
+tests are compiling on the replacement worker. Collect that result, then rebuild
+the debug binaries for the input-progress capture. Runtime acceptance remains open.
 
 Both cache-repair comparison runs reached action 409 and exhausted the unchanged
 1800s guard during generation 10 readiness. Each completed nine promotions and
@@ -82,7 +82,8 @@ source status, metrics and HTTP proxy coverage. These are not latest-build accep
   hydration OOM at original limits also reproduces on the pinned upstream base.
   No native-specific cause is established. Do not raise memory or shrink workloads.
 - Current-head CI is red: [Build143686](https://buildkite.com/materialize/test/builds/143686)
-  covers `27a9d4cad532`. Source lint/type/format corrections are under verification.
+  covers `27a9d4cad532`. Scoped lint/type/format corrections pass locally, but
+  broader CI has not validated them.
   DockerHub visibility for `materialize/pubsubd` needs team-testing intervention.
   Merge-skew checking conflicts before compilation. Do not integrate main without
   approval. See `current-head-ci-143686.md` for job evidence. Local Python checks
@@ -99,13 +100,20 @@ source status, metrics and HTTP proxy coverage. These are not latest-build accep
 
 ## Worker and essential evidence
 
-Worker `i-0b3699392b71bd7d2` has 16 CPUs and 61 GiB, with shutdown/tag expiry
-2026-11-16 at 23:30 UTC. Keep runtime aggregate limits at eight CPUs/40 GiB and
+Worker `i-02f17d8a7d9534f5e` replaces the expired worker and its deleted disk.
+It has 16 CPUs, 61 GiB and 500 GiB disk, with shutdown at 2026-11-17 19:25 UTC
+and tag expiry at 19:27 UTC. Keep runtime aggregate limits at eight CPUs/40 GiB and
 four CPUs/6 GiB per deployment. Builds use one job, four CPUs/32 GiB. Do not overlap
 builds and runtimes. Keep heavy work off the local VM. Extending or restarting the
 worker within these caps needs no approval.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/upsert-oom-investigation/`.
+
+Replacement setup and verification live in sibling `native-ci-recovery/`:
+`worker.json`, `remote.py`, `combined-driver.log`, and
+`combined-lint-inputs.json`. The checkout base is `7339c6def589`. The guarded
+check restores that base after verification. Do not confuse the original runtime
+binary manifests below with replacement binaries, which have not been built yet.
 
 - Current binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:

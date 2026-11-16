@@ -481,8 +481,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
-                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&query_catalog))
-                        .await;
+                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&query_catalog));
                 }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
@@ -1157,7 +1156,7 @@ pub fn eval_copy_to_uri(
 ///
 /// Callers retain read protection until the returned future finishes.
 /// Coordinator callers must execute that future off the coordinator loop.
-pub(crate) async fn explain_pushdown_future_inner<
+pub(crate) fn explain_pushdown_future_inner<
     I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
 >(
     session: &Session,

@@ -617,12 +617,16 @@ async fn metadata_only_collection_survives_client_retirement() {
         .await
         .open(SYSTEM_TIME().into(), &bootstrap)
         .await
-        .unwrap();
+        .expect("can open durable catalog storage");
     let catalog = Catalog::open_debug_catalog_inner(
         persist.clone(),
         storage,
         SYSTEM_TIME.clone(),
-        Some(format!("local-az1-{organization}-0").parse().unwrap()),
+        Some(
+            format!("local-az1-{organization}-0")
+                .parse()
+                .expect("valid test environment ID"),
+        ),
         &mz_build_info::DUMMY_BUILD_INFO,
         BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
         &bootstrap,
@@ -630,7 +634,7 @@ async fn metadata_only_collection_survives_client_retirement() {
         None,
     )
     .await
-    .unwrap();
+    .expect("can open protected catalog");
     let mut storage = catalog.storage().await;
     let id = GlobalId::User(100_000);
     let shard = mz_persist_client::ShardId::new();
@@ -638,25 +642,33 @@ async fn metadata_only_collection_survives_client_retirement() {
     // This is the durable state after SQL DROP while a client still holds the
     // collection. Execution retirement can remove that grant independently of
     // the adapter's ordinary last-grant metadata cleanup transaction.
-    storage.sync_to_current_updates().await.unwrap();
-    let mut tx = storage.transaction().await.unwrap();
+    storage
+        .sync_to_current_updates()
+        .await
+        .expect("can sync durable catalog updates");
+    let mut tx = storage
+        .transaction()
+        .await
+        .expect("can start collection metadata transaction");
     let incarnation = tx
         .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
-        .unwrap();
+        .expect("can create client incarnation");
     tx.insert_collection_metadata(BTreeMap::from([(id, shard)]))
-        .unwrap();
+        .expect("can insert collection metadata");
     tx.set_collection_compaction_bound(id, Some(frontier))
-        .unwrap();
+        .expect("can set collection compaction bound");
     tx.grant_client_read_requirements(incarnation, BTreeMap::from([(id, frontier)]))
-        .unwrap();
+        .expect("can grant client read requirements");
     let _ = tx.get_and_commit_op_updates();
     let ts = tx.upper();
-    tx.commit(ts).await.unwrap();
+    tx.commit(ts)
+        .await
+        .expect("can commit collection metadata and read requirements");
 
     let mut follower =
         Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
             .await
-            .unwrap();
+            .expect("can open read-only catalog follower");
     assert!(
         follower
             .state()
@@ -665,16 +677,25 @@ async fn metadata_only_collection_survives_client_retirement() {
             .contains(&id)
     );
 
-    storage.sync_to_current_updates().await.unwrap();
-    let mut tx = storage.transaction().await.unwrap();
+    storage
+        .sync_to_current_updates()
+        .await
+        .expect("can sync durable catalog updates");
+    let mut tx = storage
+        .transaction()
+        .await
+        .expect("can start client retirement transaction");
     assert!(tx.remove_adapter_declaration(DEFAULT_ADAPTER_ID).is_some());
     let _ = tx.get_and_commit_op_updates();
     let ts = tx.upper();
-    tx.commit(ts).await.unwrap();
-    follower.sync_to_current_updates().await.unwrap();
+    tx.commit(ts).await.expect("can commit client retirement");
+    follower
+        .sync_to_current_updates()
+        .await
+        .expect("follower can observe client retirement");
     let restarted = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
         .await
-        .unwrap();
+        .expect("can reopen read-only catalog");
     for catalog in [&follower, &restarted] {
         assert!(catalog.state().client_read_frontier(id).is_none());
         let metadata = catalog.state().storage_metadata();
@@ -686,16 +707,27 @@ async fn metadata_only_collection_survives_client_retirement() {
         assert!(metadata.retained_collections.contains(&id));
     }
 
-    storage.sync_to_current_updates().await.unwrap();
-    let mut tx = storage.transaction().await.unwrap();
+    storage
+        .sync_to_current_updates()
+        .await
+        .expect("can sync durable catalog updates");
+    let mut tx = storage
+        .transaction()
+        .await
+        .expect("can start collection metadata deletion transaction");
     assert_eq!(
         tx.delete_collection_metadata(BTreeSet::from([id])),
         vec![(id, shard)]
     );
     let _ = tx.get_and_commit_op_updates();
     let ts = tx.upper();
-    tx.commit(ts).await.unwrap();
-    follower.sync_to_current_updates().await.unwrap();
+    tx.commit(ts)
+        .await
+        .expect("can commit collection metadata deletion");
+    follower
+        .sync_to_current_updates()
+        .await
+        .expect("follower can observe collection metadata deletion");
     let metadata = follower.state().storage_metadata();
     assert!(!metadata.collection_metadata.contains_key(&id));
     assert!(!metadata.compaction_bounds.contains_key(&id));
@@ -722,7 +754,11 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             persist,
             storage,
             SYSTEM_TIME.clone(),
-            Some(format!("local-az1-{organization}-0").parse().unwrap()),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("valid test environment ID"),
+            ),
             &mz_build_info::DUMMY_BUILD_INFO,
             BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
             &test_bootstrap_args(),
@@ -797,18 +833,18 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             ))
             .expect("can create client incarnation");
         let [foreign_execution, alias_execution] = ["foreign_owner", "alias_owner"].map(|name| {
-            let id = tx.allocate_adapter_id().unwrap();
+            let id = tx.allocate_adapter_id().expect("can allocate adapter ID");
             tx.set_adapter_declaration(crate::durable::AdapterDeclaration {
                 id,
                 name: name.into(),
                 size: tx
                     .get_adapter_declaration(crate::durable::DEFAULT_ADAPTER_ID)
-                    .unwrap()
+                    .expect("default adapter declaration exists")
                     .size,
             })
-            .unwrap();
+            .expect("can set adapter declaration");
             tx.create_client_incarnation(crate::durable::ClientRealization::Adapter(id))
-                .unwrap()
+                .expect("can create client incarnation")
         });
         // Same SQL name in distinct sessions must not collide or become visible
         // locally. The foreign table's extra version also has a live alias.
@@ -1009,7 +1045,12 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     }
 
     // Silence and an unknown execution are not retirement authority.
-    let before = catalog.storage().await.snapshot().await.unwrap();
+    let before = catalog
+        .storage()
+        .await
+        .snapshot()
+        .await
+        .expect("can snapshot catalog before reclamation");
     let ts = catalog.current_upper().await;
     catalog
         .transact(
@@ -1023,7 +1064,15 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
         )
         .await
         .expect("live and unknown owners remain untouched");
-    assert_eq!(catalog.storage().await.snapshot().await.unwrap(), before);
+    assert_eq!(
+        catalog
+            .storage()
+            .await
+            .snapshot()
+            .await
+            .expect("can snapshot catalog after reclamation"),
+        before
+    );
     assert!(catalog.state().temporary_item_cleanup_batch(16).is_empty());
 
     // Dropping one alias must not retire the extra version. Only the durable
@@ -1055,7 +1104,13 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             // A new adapter reconstructs eligible work from the ordinary catalog
             // snapshot. No session registry or periodic scan supplies the queue.
             catalog.expire().await;
-            let storage = builder.clone().unwrap_build().await.join().await.unwrap();
+            let storage = builder
+                .clone()
+                .unwrap_build()
+                .await
+                .join()
+                .await
+                .expect("can rejoin durable catalog storage");
             catalog = open(persist.clone(), organization, storage).await;
             assert_eq!(
                 catalog.state().temporary_item_cleanup_batch(16),
@@ -1090,7 +1145,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 .await
                 .transaction()
                 .await
-                .unwrap()
+                .expect("can start transaction to inspect reclaimed item")
                 .get_item(&item)
                 .is_none()
         );
@@ -1113,7 +1168,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 .await
                 .transaction()
                 .await
-                .unwrap()
+                .expect("can start transaction to inspect selected plan")
                 .get_written_plan(version, &plan_namespace),
             (!dropped).then_some(version_plan),
             "selected plans survive until the final durable alias is removed"

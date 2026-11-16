@@ -49,7 +49,7 @@ impl HostedOrchestrator {
 impl Orchestrator for HostedOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         if namespace == "adapter" {
-            self.adapters.clone()
+            Arc::<HostedAdapters>::clone(&self.adapters)
         } else {
             self.fallback.namespace(namespace)
         }

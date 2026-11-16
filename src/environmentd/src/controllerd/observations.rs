@@ -377,6 +377,10 @@ impl Observations {
         );
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "exclusive borrowing keeps this future Send despite Send-only probes"
+    )]
     pub(super) async fn publish(
         // The controller owns the Send-only probes exclusively across awaits.
         &mut self,

@@ -53,7 +53,7 @@ const COPY_FROM_STDIN_MAX_WORKERS: usize = 8;
 impl Coordinator {
     /// `catalog` is the captured planning snapshot, validated by the caller for
     /// native execution. It must not be replaced by a fresh sequencing snapshot.
-    pub(crate) async fn sequence_copy_from(
+    pub(crate) fn sequence_copy_from(
         &mut self,
         mut ctx: ExecuteContext,
         plan: plan::CopyFromPlan,

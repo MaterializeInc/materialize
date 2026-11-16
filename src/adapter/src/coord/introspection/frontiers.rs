@@ -91,7 +91,7 @@ impl Coordinator {
                 .resolve_builtin_table_updates(updates);
             // Progress piggybacks on the existing group commit. It does not
             // advance the write cadence or grant any execution authority.
-            let _ = self.builtin_table_update().background(updates);
+            drop(self.builtin_table_update().background(updates));
         }
     }
 

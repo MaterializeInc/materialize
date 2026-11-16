@@ -244,7 +244,13 @@ mod tests {
             );
             catalog.system_config().sync_dyncfgs();
             let shared = catalog.system_config().dyncfgs().clone();
-            assert_eq!(shared.entry(name).unwrap().scope(), ParameterScope::Replica);
+            assert_eq!(
+                shared
+                    .entry(name)
+                    .expect("replica parameter is registered")
+                    .scope(),
+                ParameterScope::Replica
+            );
             let shared_values = || {
                 shared
                     .entries()
@@ -376,7 +382,13 @@ mod tests {
 
             let shared = catalog.system_config().dyncfgs().clone();
             for name in [compression, expiration] {
-                assert_eq!(shared.entry(name).unwrap().scope(), ParameterScope::Replica);
+                assert_eq!(
+                    shared
+                        .entry(name)
+                        .expect("replica parameter is registered")
+                        .scope(),
+                    ParameterScope::Replica
+                );
             }
             let shared_values = || {
                 shared

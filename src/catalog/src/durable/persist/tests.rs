@@ -869,7 +869,12 @@ async fn test_retirement_reuses_raw_preparation_after_peer_and_own_writes() {
         .expect("open typed retirement writer");
     // Own empty advances can leave the existing listener behind the seed cut.
     let advanced = candidate.upper.step_forward();
-    assert!(candidate.try_advance_upper(advanced).await.unwrap());
+    assert!(
+        candidate
+            .try_advance_upper(advanced)
+            .await
+            .expect("can advance candidate upper")
+    );
     candidate
         .prepare_retirement_snapshot()
         .await
@@ -924,7 +929,7 @@ async fn test_retirement_reuses_raw_preparation_after_peer_and_own_writes() {
         peer.update_applier
             .deployment_admission
             .as_ref()
-            .unwrap()
+            .expect("deployment admission state exists after retirement")
             .retired
             .contains(&8)
     );
@@ -994,7 +999,7 @@ async fn test_prepared_retirement_revalidates_promotion() {
         after
             .fenceable_token
             .durable_token()
-            .unwrap()
+            .expect("promoted catalog has a durable fencing token")
             .deploy_generation,
         8
     );

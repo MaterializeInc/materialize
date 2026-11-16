@@ -743,6 +743,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use bytes::Bytes;
+    use itertools::Itertools;
     use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, IndexImport};
     use mz_durable_cache::DurableCacheCodec;
     use mz_dyncfg::ConfigSet;
@@ -1040,7 +1041,7 @@ mod tests {
     async fn cache_reads_do_not_reconcile_peer_entries() {
         let persist = PersistClient::new_for_tests().await;
         let shard_id = ShardId::new();
-        let build: Version = "0.1.0+writer".parse().unwrap();
+        let build: Version = "0.1.0+writer".parse().expect("valid writer build version");
         let id = GlobalId::User(1_000_000);
         let local = gen_local_expressions();
         let global = gen_global_expressions();
@@ -1053,7 +1054,7 @@ mod tests {
         writer
             .write_plans(vec![(id, revision, global.clone())])
             .await
-            .unwrap();
+            .expect("can write selected plan");
         let current = BTreeMap::from([(id, RelationVersion::root())]);
         for (reader_build, items) in [
             (build.clone(), BTreeMap::new()),
@@ -1061,7 +1062,10 @@ mod tests {
                 build.clone(),
                 BTreeMap::from([(id, RelationVersion::root().bump())]),
             ),
-            ("0.1.0+other".parse().unwrap(), current.clone()),
+            (
+                "0.1.0+other".parse().expect("valid foreign build version"),
+                current.clone(),
+            ),
         ] {
             let (_, locals) = ExpressionCacheHandle::open_plan_store_with_local_expressions(
                 reader_build,
@@ -1085,7 +1089,10 @@ mod tests {
         .await;
         assert_eq!(locals, BTreeMap::from([(id, local)]));
         assert_eq!(
-            reader.read_plans(vec![(id, revision)]).await.unwrap(),
+            reader
+                .read_plans(vec![(id, revision)])
+                .await
+                .expect("can read selected plan after cache invalidation"),
             BTreeMap::from([((id, revision), global)])
         );
     }
@@ -1361,8 +1368,8 @@ mod tests {
         let shard_id = ShardId::new();
         let id = GlobalId::System(1);
         let builds = [
-            Version::parse("0.1.0-dev.0+adapter").unwrap(),
-            Version::parse("0.1.0-dev.0+controller").unwrap(),
+            Version::parse("0.1.0-dev.0+adapter").expect("valid adapter build version"),
+            Version::parse("0.1.0-dev.0+controller").expect("valid controller build version"),
         ];
         let expressions = [gen_local_expressions(), gen_local_expressions()];
         let config = |build: &Version| ExpressionCacheConfig {
@@ -1378,7 +1385,7 @@ mod tests {
 
         // Both executables cache the same builtin ID, but neither can consume
         // the other's optimized expression or discard its namespace on open.
-        for (build, expression) in builds.iter().zip(&expressions) {
+        for (build, expression) in builds.iter().zip_eq(&expressions) {
             let (cache, local, global) =
                 ExpressionCacheHandle::spawn_expression_cache(config(build)).await;
             assert!(local.is_empty());
@@ -1387,7 +1394,7 @@ mod tests {
                 .update(vec![(id, expression.clone())], Vec::new(), BTreeSet::new())
                 .await;
         }
-        for (build, expression) in builds.iter().zip(&expressions) {
+        for (build, expression) in builds.iter().zip_eq(&expressions) {
             let (_cache, local, global) =
                 ExpressionCacheHandle::spawn_expression_cache(config(build)).await;
             assert_eq!(local, BTreeMap::from([(id, expression.clone())]));

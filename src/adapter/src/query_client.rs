@@ -2012,7 +2012,10 @@ mod tests {
         };
         if matches!(case, AcquisitionCase::DurableProgress) {
             assert_eq!(
-                client.write_frontier(&catalog, &bundle).await.unwrap(),
+                client
+                    .write_frontier(&catalog, &bundle)
+                    .await
+                    .expect("read initial durable upper"),
                 frontier(80)
             );
             // A completed prefix below the upper is immediately available. The
@@ -2020,7 +2023,7 @@ mod tests {
             client
                 .wait_for_progress(&catalog, &bundle, Timestamp::from(79))
                 .await
-                .unwrap();
+                .expect("completed prefix is readable");
             let mut wait =
                 Box::pin(client.wait_for_progress(&catalog, &bundle, Timestamp::from(80)));
             assert!(futures::poll!(&mut wait).is_pending());
@@ -2031,11 +2034,15 @@ mod tests {
                     frontier(81),
                 )
                 .await
-                .unwrap()
-                .unwrap();
-            wait.await.unwrap();
+                .expect("valid progress append")
+                .expect("upper matches before progress append");
+            wait.await
+                .expect("progress beyond the cutover unblocks wait");
             assert_eq!(
-                client.write_frontier(&catalog, &bundle).await.unwrap(),
+                client
+                    .write_frontier(&catalog, &bundle)
+                    .await
+                    .expect("read advanced durable upper"),
                 frontier(81)
             );
             // This fixture has no replica transport or controller frontier reports.

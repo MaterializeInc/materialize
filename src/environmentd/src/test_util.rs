@@ -1357,7 +1357,7 @@ impl TestDeploymentResources {
                     ._timestamp_oracle_clock
                     .as_ref()
                     .map(|clock| clock.path.clone()),
-                orchestrator: self.orchestrator.clone(),
+                orchestrator: Arc::<hosted_adapters::HostedOrchestrator>::clone(&self.orchestrator),
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 deploy_generation: config.deploy_generation,
@@ -1376,7 +1376,7 @@ impl TestDeploymentResources {
                 connection_context,
                 replica_http_locator: Default::default(),
             },
-            secrets_controller: self.secrets_controller.clone(),
+            secrets_controller: Arc::<ProcessOrchestrator>::clone(&self.secrets_controller),
             cloud_resource_controller: None,
             system_dyncfgs: Arc::clone(&persist_clients.cfg().configs),
             tls: config.tls,
@@ -2523,7 +2523,7 @@ mod native_serve_tests {
             "invalid://metadata-access-forbidden".parse().unwrap();
         let resources = TestDeploymentResources {
             orchestrator: Arc::new(hosted_adapters::HostedOrchestrator::new(
-                process.clone(),
+                Arc::<ProcessOrchestrator>::clone(&process),
                 Arc::clone(&hosted),
             )),
             hosted,

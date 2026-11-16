@@ -6067,14 +6067,16 @@ mod tests {
                         ).await.expect("apply upstream replacement");
                         state = next_state;
                         snapshot = Some(next_snapshot);
-                        let CatalogItem::MaterializedView(replacement) = state.get_entry(&id).item() else {
+                        let item = state.get_entry(&id).item();
+                        let CatalogItem::MaterializedView(replacement) = item else {
                             panic!("expected replacement MV");
                         };
                         let expected = BTreeSet::from([ids[if name == "rp" { "other" } else { "t" }].1]);
                         assert_eq!(replacement.raw_dependencies, expected,
                             "replacement takes the new query's inputs, not the target's dependencies");
                         assert_eq!(replacement.raw_dependencies, replacement.raw_expr.depends_on());
-                        assert_eq!(super::materialized_view_recovery_inputs(&state, replacement), expected);
+                        let inputs = super::materialized_view_recovery_inputs(&state, replacement);
+                        assert_eq!(inputs, expected);
                     }
                     _ => {}
                 }

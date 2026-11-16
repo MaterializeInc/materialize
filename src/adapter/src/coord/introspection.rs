@@ -363,7 +363,7 @@ impl Coordinator {
         )))
     }
 
-    async fn sequence_introspection_subscribe_finish(
+    fn sequence_introspection_subscribe_finish(
         &mut self,
         stage: IntrospectionSubscribeFinish,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
@@ -588,7 +588,7 @@ impl Staged for IntrospectionSubscribeStage {
                 // introspection stages. Box this edge to keep the future's size finite.
                 Box::pin(coord.sequence_introspection_subscribe_timestamp_optimize_lir(stage)).await
             }
-            Self::Finish(stage) => coord.sequence_introspection_subscribe_finish(stage).await,
+            Self::Finish(stage) => coord.sequence_introspection_subscribe_finish(stage),
         }
     }
 

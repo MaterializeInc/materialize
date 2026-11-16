@@ -118,9 +118,7 @@ impl Staged for PeekStage {
                 coord.peek_finish(ctx, stage, Some(explanation)).await
             }
             PeekStage::ExplainPlan(stage) => coord.peek_explain_plan(ctx.session(), stage).await,
-            PeekStage::ExplainPushdown(stage) => {
-                coord.peek_explain_pushdown(ctx.session(), stage).await
-            }
+            PeekStage::ExplainPushdown(stage) => coord.peek_explain_pushdown(ctx.session(), stage),
             PeekStage::CopyToPreflight(stage) => coord.peek_copy_to_preflight(stage).await,
             PeekStage::CopyToDataflow(stage) => coord.peek_copy_to_dataflow(ctx, stage).await,
         }
@@ -1135,7 +1133,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    async fn peek_explain_pushdown(
+    fn peek_explain_pushdown(
         &self,
         session: &Session,
         stage: PeekStageExplainPushdown,
@@ -1147,9 +1145,7 @@ impl Coordinator {
             .timestamp()
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
-        let fut = self
-            .explain_pushdown_future(session, as_of, mz_now, stage.imports)
-            .await;
+        let fut = self.explain_pushdown_future(session, as_of, mz_now, stage.imports);
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "peek explain pushdown",

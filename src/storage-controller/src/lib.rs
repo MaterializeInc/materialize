@@ -2591,14 +2591,14 @@ impl CollectionStateExtra {
     fn hydrated_on(&self) -> Option<&BTreeSet<ReplicaId>> {
         match self {
             Self::Native { hydrated_on, .. } => Some(hydrated_on),
-            _ => None,
+            Self::None => None,
         }
     }
 
     fn hydrated_on_mut(&mut self) -> Option<&mut BTreeSet<ReplicaId>> {
         match self {
             Self::Native { hydrated_on, .. } => Some(hydrated_on),
-            _ => None,
+            Self::None => None,
         }
     }
 }

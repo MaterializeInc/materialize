@@ -111,7 +111,11 @@ async fn temporary_view_replacement_dry_run() {
         persist,
         storage,
         mz_ore::now::SYSTEM_TIME.clone(),
-        Some(format!("local-az1-{organization}-0").parse().unwrap()),
+        Some(
+            format!("local-az1-{organization}-0")
+                .parse()
+                .expect("valid test environment ID"),
+        ),
         &mz_build_info::DUMMY_BUILD_INFO,
         BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
         &bootstrap,

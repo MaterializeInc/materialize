@@ -1408,7 +1408,7 @@ impl crate::coord::Coordinator {
         let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
         if let Some(ws) = watch_set {
             self.install_peek_watch_sets(conn_id.clone(), ws)
-                .map_err(|e| AdapterError::concurrent_dependency_drop_from_collection_missing(e))?;
+                .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?;
         }
 
         let source_arity = intermediate_result_type.arity();

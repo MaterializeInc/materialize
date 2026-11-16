@@ -230,6 +230,10 @@ pub async fn run(
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "exclusive borrowing keeps this future Send despite Send-only probes"
+)]
 async fn administer(
     catalog: &mut Catalog,
     launch: &AdapterProvisioningConfig,

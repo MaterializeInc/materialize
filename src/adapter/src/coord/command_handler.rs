@@ -410,7 +410,7 @@ impl Coordinator {
                 }
 
                 Command::Dump { tx } => {
-                    let _ = tx.send(self.dump().await);
+                    let _ = tx.send(self.dump());
                 }
 
                 Command::AcquireClientReadProtection {

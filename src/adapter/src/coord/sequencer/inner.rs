@@ -2482,7 +2482,7 @@ impl Coordinator {
                 self.sequence_staged(ctx, Span::current(), stage).await;
             }
             Explainee::MaterializedView(item_id) => {
-                self.explain_pushdown_materialized_view(ctx, item_id).await;
+                self.explain_pushdown_materialized_view(ctx, item_id);
             }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
@@ -2493,7 +2493,7 @@ impl Coordinator {
     }
 
     /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN.
-    async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
+    fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
         &self,
         session: &Session,
         as_of: Antichain<Timestamp>,
@@ -2511,7 +2511,6 @@ impl Coordinator {
             mz_now,
             imports,
         )
-        .await
     }
 
     #[instrument]

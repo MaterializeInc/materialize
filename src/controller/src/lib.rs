@@ -115,7 +115,7 @@ impl Controller {
     /// Returns the state of the [`Controller`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
