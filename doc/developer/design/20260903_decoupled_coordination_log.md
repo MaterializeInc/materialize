@@ -2,12 +2,12 @@
 
 ## Next action
 
-Diagnose the controller wait that blocks deployment retirement in zippy
-KafkaSources. After a late promotion the retirement POST stays outstanding and
-`/api/inventory` times out, while the adapter reports `IsLeader`. It reproduced
-on an unchanged rerun. Find the specific await that holds the controller's
-administrative loop and bound it. Do not rework controller concurrency or raise
-the runner's guard.
+Verify the bounded table-registration repair, then rerun zippy KafkaSources.
+Promotion was retrying registration indefinitely: it allocated a WAL timestamp
+before spending several seconds opening writers, so peer progress invalidated
+each attempt. The worktree moves allocation after preparation, revalidates table
+bindings and returns definitive contention to the controller tick. Regression
+checks and runtime verification are pending. Do not raise the runner's guard.
 
 Then, in order:
 
@@ -83,6 +83,12 @@ Evidence lives in
 detailed pointers to binaries, receipts, runners and individual runs are in
 `handoff-before-cleanup.md` and `handoff-before-ingest-verification.md` there.
 Historical passes are not acceptance of the latest binary.
+
+The registration-starvation evidence is in
+`controller-table-stage-live-tail.log` and
+`zippy-controller-table-stage-evidence.tar.gz`. Current repair checks use
+`build_controller_registration.py` and `controller-registration-build.log` on
+the worker. These are not successful verification receipts until the checks finish.
 
 Leave the untracked
 `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`
