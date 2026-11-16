@@ -14,10 +14,14 @@ Cluster-level panels split into two families with different label names for the 
 
 | Family | Cluster label | Replica label |
 |---|---|---|
-| Controller, protocol, peeks, and `v2_mz_*` replica metrics | `instance_id` | `replica_id` |
-| `mz_arrangement_*`, `mz_dataflow_replica_*`, `mz_subscribe_*`, `mz_cluster_*`, `mz_compute_replica_history_*` | `cluster_environmentd_materialize_cloud_cluster_id` | `cluster_environmentd_materialize_cloud_replica_id` |
+| `v2_mz_*` replica metrics | `instance_id` | `replica_id` |
+| `mz_arrangement_*`, `mz_dataflow_replica_*`, `mz_subscribe_*`, `mz_cluster_*`, `mz_compute_collection_count`, `mz_index_peek_*`, `mz_persist_peek_*` | `cluster_environmentd_materialize_cloud_cluster_id` | `cluster_environmentd_materialize_cloud_replica_id` |
 
-The second family is everything scraped from `clusterd`, so membership follows which process exports the metric rather than the panel row it appears under. `mz_compute_replica_history_command_count` sits there despite its `mz_compute_` prefix and its neighbours on the `[history]` panels, because the replica keeps that history itself. Writing its system-cluster filter as `instance_id=~"s[0-9]+"` matches nothing and the sweep reads the empty result as a healthy zero.
+The second family is scraped from `clusterd`, so selectors follow the exporting
+process rather than the dashboard row. Filtering these metrics by
+`instance_id=~"s[0-9]+"` matches nothing. An empty result must not be read as a
+healthy zero. Adapter query and subscription metrics describe adapter activity,
+not replica inventory, and do not share these cluster selectors.
 
 System clusters are `s` followed by digits in either family, and `.*cluster-s[0-9]+-replica-.*` in the pod name.
 
@@ -45,15 +49,9 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 
 | Metric | Type | Notes |
 |---|---|---|
-| `mz_compute_controller_replica_count`, `mz_compute_controller_collection_count`, `_peek_count`, `_subscribe_count` | gauge | Controller-side inventory. Collection count tracks catalog growth, so a slow rise is expected. |
-| `mz_compute_controller_command_queue_size` | gauge | Sustained depth means the controller is not draining. |
-| `mz_compute_controller_response_send_count`, `_recv_count` | counter | Response queue depth, as the difference of the two. There is no depth gauge, because the response channel is an `instrumented_unbounded_channel` (`src/ore/src/channel.rs`), which takes a send and a receive counter and exports nothing else. Contrast `command_queue_size`, a real gauge that the command path increments and decrements directly. |
-| `mz_compute_commands_total`, `mz_compute_responses_total` | counter | Protocol volume. Doubles for one bucket during a zero-downtime upgrade. |
-| `mz_compute_command_message_bytes_total`, `mz_compute_response_message_bytes_total` | counter | Protocol bytes. Worth checking when a change touches command encoding. |
-| `mz_compute_controller_history_command_count`, `_history_dataflow_count` | gauge | Controller-side command history, which should be reduced and not grow without bound. |
-| `mz_compute_replica_history_command_count`, `_history_dataflow_count` | gauge | Replica-side equivalent, on the `cluster_environmentd_*` labels. Both carry `worker_id`, and the command count also carries `command_type`, so any sum is worker-weighted and moves with worker count. |
-| `mz_compute_peeks_total` | counter | Label `result`. Successes are `rows` and `rows_stashed`; anything else is an error or a cancellation. |
-| `mz_compute_peek_duration_seconds_bucket` | histogram | Quantiles need `sum by (le)` after any namespace join. |
+| `mz_compute_collection_count` | gauge | Replica-owned maintained collections, labeled by `worker_id`, `type` and `hydrated`. Counts are worker-weighted, not distinct catalog objects. |
+| `mz_index_peek_total_seconds_bucket` | histogram | Replica-side index peek work. Not end-to-end SQL latency. Aggregate buckets by `le` after applying replica selectors. |
+| `mz_persist_peek_seconds_bucket` | histogram | Replica-side Persist peek work, separate from index peeks. |
 | `v2_mz_dataflow_elapsed_seconds_total` | counter | Compute time. Strongly workload-shaped, and often the noisiest series on the dashboard. |
 | `mz_arrangement_maintenance_seconds_total` | counter | Merge and compaction work. Uses the `cluster_environmentd_*` labels. |
 | `v2_mz_compute_replica_park_duration_seconds_total` | counter | Time parked, so a fall here alongside a CPU rise localizes new work to the dataflow loop. |
@@ -89,7 +87,10 @@ Each entry states a property that holds at any fleet size, followed by the measu
 
 **Compute time and park time are complementary.** A CPU rise with a park fall localizes new work to the dataflow loop, while a CPU rise with park flat points outside it.
 
-**Response queue depth is a difference of two counters, so it only holds while neither has reset.** Both reset when a pod is replaced, which every upgrade does, and a scrape that catches one reset and not the other yields a wild value. Staging us-east-1 read -761 in one bucket and +5371 in another over a window where every other bucket sat within one of zero. Read a single implausible bucket as a reset artifact, and judge the panel by whether it returns to zero rather than by any one sample.
+**Legacy controller inventory, replay-history and controller protocol panels have
+no native execution producer.** Empty panels do not demonstrate healthy queues
+or zero workload. Use replica-owned collection/hydration and execution metrics
+above. They are not one-for-one replacements for the removed controller metrics.
 
 ## Known noise classes
 

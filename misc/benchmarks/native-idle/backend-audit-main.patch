@@ -1,3 +1,12 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
 diff --git a/src/persist-client/src/batch.rs b/src/persist-client/src/batch.rs
 index a2d7ac2a18..2cfdf7dd2f 100644
 --- a/src/persist-client/src/batch.rs

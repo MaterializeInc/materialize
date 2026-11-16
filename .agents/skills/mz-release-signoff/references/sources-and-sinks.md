@@ -77,17 +77,13 @@ Label naming is not consistent: the rate panels filter `parent_source_id` while 
 
 `mz_shard_finalization_outstanding` and `mz_shard_finalization_pending_commit` are gauges; `mz_shard_finalization_op_started`, `_op_succeeded`, and `_op_failed` are counters. The started and succeeded panels wrap `rate` in `max by (namespace, pod)`, which is unusual but harmless.
 
-### Controller protocol
+### Execution ownership
 
-The two panels each carry an `or` fallback that straddles a metric rename:
-
-```promql
-sum by (namespace) (rate(mz_storage_messages_sent_bytes_count{...}[...]))
-or
-sum by (namespace) (rate(mz_storage_commands_total{...}[...]))
-```
-
-Only the second arm resolves today. `mz_storage_messages_sent_bytes_count`, `_received_bytes_count`, `_sent_bytes_sum`, and `_received_bytes_sum` no longer exist. The live names are `mz_storage_commands_total`, `mz_storage_responses_total`, `mz_storage_command_message_bytes_total`, and `mz_storage_response_message_bytes_total`. Do not read the `or` as a bug; it is a deliberate hedge so the panel keeps working across the version boundary, and it is worth imitating.
+Native source and sink execution follows committed catalog ownership at replicas.
+Legacy controller-command and response panels no longer have producers. An empty
+protocol panel is not a healthy-zero signal. Inspect source progress and stalls,
+sink staged/committed work, and replica resource metrics instead of relying on
+fallbacks between obsolete protocol metric names.
 
 ### Basic health
 
