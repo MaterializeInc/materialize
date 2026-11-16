@@ -7,9 +7,13 @@ menu:
 ---
 
 `SHOW SECRETS` lists the names of the secrets securely stored in Materialize's
-secret management system. There is no way to show the contents of an existing
-secret, though you can override it using the [`ALTER SECRET`](../alter-secret)
-statement.
+secret management system. No SQL statement displays the contents of an
+existing secret, though you can override it using the
+[`ALTER SECRET`](../alter-secret) statement.
+
+{{< warning >}}
+{{% include-headless "/headless/rbac-cloud/secret-usage-consideration" %}}
+{{</ warning >}}
 
 ## Syntax
 

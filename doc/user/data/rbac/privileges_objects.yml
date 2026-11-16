@@ -54,6 +54,11 @@ rows:
     Description: |
       <a name="privilege-usage"></a>
       Permission to use or reference an object (e.g., schema/type lookup).
+
+      {{< warning >}}
+      {{% include-headless "/headless/rbac-cloud/secret-usage-consideration" %}}
+      {{</ warning >}}
+
     Abbreviation: "`U`"
     Applies to: |
       - `CLUSTER`
