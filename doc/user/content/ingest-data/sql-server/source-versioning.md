@@ -1,6 +1,6 @@
 ---
 title: "Handle upstream schema changes"
-description: "How to add a column, or drop a column, from your source SQL Server database, without any downtime in Materialize"
+description: "How to add a column, drop a column, or change the key constraint of a table in your source SQL Server database, without any downtime in Materialize"
 
 menu:
   main:
@@ -19,6 +19,8 @@ table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
+- Dropping the `PRIMARY KEY` or `UNIQUE` constraint that the capture instance
+  uses.
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
@@ -234,6 +236,138 @@ Dropping the column `b` in SQL Server will not affect `v3.t1` (or on `v1.t1`) in
 Materialize. However, the drop affects `v2.t1` and `v2.matview` from our earlier
 examples. When the user attempts to read from either, Materialize will report an
 error that the source table schema has been altered.
+
+## Handle upstream constraint changes
+
+Materialize ignores foreign key and `CHECK` constraints, and adding a `PRIMARY
+KEY` or `UNIQUE` constraint does not affect ingestion. Materialize records as a
+key only the `PRIMARY KEY` or `UNIQUE` constraint that the capture instance
+uses to identify rows (see [Unique keys](/ingest-data/sql-server/#unique-keys)).
+For tables created in v26.49 or later, dropping any other `PRIMARY KEY` or
+`UNIQUE` constraint does not affect ingestion either.
+
+{{< warning >}}
+Tables created in Materialize before v26.49 record every `PRIMARY KEY` and
+`UNIQUE` constraint that existed when the table was created. Dropping one of
+those upstream is not detected and leaves the table with a key that SQL Server
+no longer enforces, and queries that rely on the key can return wrong results.
+Before dropping such a constraint, re-create the table in Materialize.
+{{< /warning >}}
+
+{{< note >}}
+SQL Server sources do not support the `EXCLUDE CONSTRAINTS`, `EXCLUDE ALL NOT
+NULL CONSTRAINTS`, or `EXCLUDE ALL CONSTRAINTS` options. Adding or removing a
+`NOT NULL` constraint requires an upstream `ALTER COLUMN`, which puts the
+table into an error state. Re-create the table in Materialize afterwards.
+{{< /note >}}
+
+To drop the constraint that the capture instance uses, move the capture
+instance to a different unique index first. This example uses a table `t2`
+whose capture instance `dbo_t2` uses the primary key `t2_pkey`, and which also
+has a `UNIQUE` constraint `t2_email_key`:
+
+```sql
+CREATE TABLE t2 (
+    id INT NOT NULL CONSTRAINT t2_pkey PRIMARY KEY,
+    email NVARCHAR(255) NOT NULL CONSTRAINT t2_email_key UNIQUE
+);
+
+EXEC sys.sp_cdc_enable_table
+  @source_schema = 'dbo',
+  @source_name = 't2',
+  @role_name = 'materialize_role',
+  @capture_instance = 'dbo_t2',
+  @supports_net_changes = 0;
+GO -- The GO terminator may be unsupported or unnecessary for your client.
+```
+
+```mzsql
+CREATE TABLE v1.t2
+    FROM SOURCE my_source(REFERENCE dbo.t2);
+```
+
+### A. Create a capture instance on a different index
+
+In your upstream SQL Server database, create a new capture instance that uses
+`t2_email_key` through
+[`@index_name`](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-table-transact-sql#----index_name):
+
+```sql
+EXEC sys.sp_cdc_enable_table
+  @source_schema = 'dbo',
+  @source_name = 't2',
+  @role_name = 'materialize_role',
+  @capture_instance = 'dbo_t2_v2', -- MUST BE SPECIFIED
+  @index_name = 't2_email_key',
+  @supports_net_changes = 0;
+GO -- The GO terminator may be unsupported or unnecessary for your client.
+```
+
+SQL Server allows at most two capture instances per table. If the table already
+has two, [disable the one that is not in
+use](#disable-unused-capture-instance) first.
+
+If the table has no other `PRIMARY KEY` or `UNIQUE` constraint, add one first,
+on columns that are `NOT NULL`. SQL Server does not accept a `UNIQUE`
+constraint over nullable columns as a capture instance index. If `@index_name` names an index created with `CREATE UNIQUE INDEX`, the new
+Materialize table has no key.
+
+{{< warning >}}
+From this point on, SQL Server no longer prevents dropping `t2_pkey`. Dropping
+it before you complete step C leaves `v1.t2` with a key that SQL Server no
+longer enforces, and queries that rely on the key can return wrong results.
+{{< /warning >}}
+
+### B. Create a new table from the source in Materialize
+
+Re-create the table in a new schema. Materialize uses the most [recently created
+capture instance](/ingest-data/sql-server/#capture-instance-selection), so
+`v4.t2` records `t2_email_key` as its key:
+
+```mzsql
+CREATE SCHEMA v4;
+
+CREATE TABLE v4.t2
+    FROM SOURCE my_source(REFERENCE dbo.t2);
+```
+
+{{< note >}}
+
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+
+{{< /note >}}
+
+Queries over `v4.t2` can no longer rely on `t2_pkey` as a key, so their plans
+can differ from those over `v1.t2`. Before moving your views and queries to
+`v4.t2`, compare their plans with [`EXPLAIN PLAN`](/sql/explain-plan/).
+
+### C. Drop the old table in Materialize
+
+Once `v4.t2` has finished snapshotting and you have moved your views and queries
+to it, drop `v1.t2` and any objects that depend on it:
+
+```mzsql
+DROP TABLE v1.t2 CASCADE;
+```
+
+### D. Drop the constraint in your upstream SQL Server database
+
+In your upstream SQL Server database, [disable the old capture
+instance](#disable-unused-capture-instance) `dbo_t2`, then drop the
+constraint. Ensure that no other source tables or applications still use
+`dbo_t2`; otherwise, they will break.
+
+```sql
+EXEC sys.sp_cdc_disable_table
+    @source_schema = 'dbo',
+    @source_name = 't2',
+    @capture_instance = 'dbo_t2';
+
+ALTER TABLE t2 DROP CONSTRAINT t2_pkey;
+GO -- The GO terminator may be unsupported or unnecessary for your client.
+```
+
+Dropping `t2_pkey` has no effect on `v4.t2`.
 
 ## Optional
 
