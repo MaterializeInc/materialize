@@ -962,6 +962,38 @@ def workflow_endpoints(c: Composition) -> None:
             "hydrated_replica_count": 0,
         }, f"expected zero-replica hydration, got: {hydration}"
 
+    with c.test_case("agent_get_data_product_details_hidden_index_cluster"):
+        # DEX-71: the only index sits on a zero-replica cluster the user has
+        # no USAGE on, so reads fall back to persist and hydration must follow
+        # the MV's own cluster, eventually reporting hydrated=true.
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.test_hydration_hidden_mv;
+            DROP CLUSTER IF EXISTS test_hydration_hidden;
+            CREATE CLUSTER test_hydration_hidden REPLICAS ();
+            CREATE MATERIALIZED VIEW public.test_hydration_hidden_mv IN CLUSTER quickstart
+                AS SELECT 1::int AS id;
+            CREATE INDEX test_hydration_hidden_idx IN CLUSTER test_hydration_hidden
+                ON public.test_hydration_hidden_mv (id);
+            GRANT SELECT ON public.test_hydration_hidden_mv TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        object_name = '"materialize"."public"."test_hydration_hidden_mv"'
+        deadline = time.monotonic() + 30
+        last = {}
+        while time.monotonic() < deadline:
+            last = hydration_for(object_name)
+            if last["hydrated"]:
+                break
+            time.sleep(0.5)
+        assert (
+            last.get("hydrated") is True and last["replica_count"] >= 1
+        ), f"expected the MV cluster's hydration within 30s, last: {last}"
+
     with c.test_case("agent_mcp_data_product_details_view_sql"):
         # The hydration column should also be queryable directly via SQL,
         # not just through MCP. This locks in the catalog surface so users
