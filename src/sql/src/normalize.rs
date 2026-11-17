@@ -25,9 +25,9 @@ use mz_sql_parser::ast::{
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
-    ViewDefinition,
+    FunctionArgs, Ident, IfExistsBehavior, MaterializedViewColumns, MutRecBlock, Op, Query,
+    Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName,
+    Value, Version, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -431,7 +431,7 @@ pub fn create_statement(
         Statement::CreateMaterializedView(CreateMaterializedViewStatement {
             if_exists,
             name,
-            columns: _,
+            columns,
             replacement_for: _,
             in_cluster: _,
             in_cluster_replica: _,
@@ -442,6 +442,11 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             {
                 let mut normalizer = QueryNormalizer::new();
+                if let MaterializedViewColumns::Definitions { columns, .. } = columns {
+                    for c in columns {
+                        normalizer.visit_column_def_mut(c);
+                    }
+                }
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);

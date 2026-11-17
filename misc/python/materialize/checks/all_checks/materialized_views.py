@@ -420,3 +420,54 @@ class MaterializedViewReplacementDropInput(Check):
                 > SELECT name FROM mz_materialized_views WHERE name LIKE 'mv_repl_drop_input_%'
                 mv_repl_drop_input_mv
             """))
+
+
+class MaterializedViewDeclaredSchema(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v26.46.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE mv_declared_table (a INT, b TEXT)
+                > INSERT INTO mv_declared_table VALUES (1, 'x'), (2, NULL)
+                > CREATE MATERIALIZED VIEW mv_declared_schema1 (k int8 NOT NULL, n int8) AS SELECT a, count(*) FROM mv_declared_table WHERE a IS NOT NULL GROUP BY a
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO mv_declared_table VALUES (3, 'z')
+                > CREATE MATERIALIZED VIEW mv_declared_schema2 (a int4 NOT NULL, b text) AS SELECT a, b FROM mv_declared_table
+                """,
+                """
+                > INSERT INTO mv_declared_table VALUES (4, 'w')
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_declared_replacement (k int8 NOT NULL, n int8) FOR mv_declared_schema1 AS SELECT a, count(*) * 10 FROM mv_declared_table WHERE a IS NOT NULL GROUP BY a
+                > ALTER MATERIALIZED VIEW mv_declared_schema1 APPLY REPLACEMENT mv_declared_replacement
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT * FROM mv_declared_schema1
+                1 10
+                2 10
+                3 10
+                4 10
+
+                > SELECT * FROM mv_declared_schema2
+                1 x
+                2 <null>
+                3 z
+                4 w
+
+                > SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv_declared_schema1)
+                k false bigint
+                n true bigint
+
+                > SELECT name, nullable, type FROM (SHOW COLUMNS FROM mv_declared_schema2)
+                a false integer
+                b true text
+            """))

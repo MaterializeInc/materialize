@@ -507,6 +507,40 @@ mod run_tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn run_typechecks_declared_materialized_view_schema() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_sql(
+            root,
+            "models/materialize/storage/t1.sql",
+            "CREATE TABLE t1 (a int)",
+        );
+        write_sql(
+            root,
+            "models/materialize/public/mv1.sql",
+            "CREATE MATERIALIZED VIEW mv1 (x int8 NOT NULL) IN CLUSTER quickstart AS SELECT a FROM materialize.storage.t1",
+        );
+
+        let fs = crate::fs::FileSystem::new();
+        let project = compile_sync(&fs, root, None, None, &BTreeMap::new()).unwrap();
+        let (merged, _stats) = run(
+            root,
+            "default",
+            None,
+            &BTreeMap::new(),
+            &project,
+            Types::default(),
+        )
+        .unwrap();
+
+        let columns = &merged.tables[&"materialize.public.mv1".parse::<ObjectId>().unwrap()];
+        let x = &columns["x"];
+        assert_eq!(x.r#type, DataType::Named("int8".into()));
+        assert!(!x.nullable, "declared NOT NULL column is non-nullable");
+    }
+
     /// Needs three objects: `sum()` types as `Numeric { max_scale: Some(0) }`,
     /// but that type only has to survive SQL round-tripping once a dependent
     /// forces the aggregate to be stubbed.
