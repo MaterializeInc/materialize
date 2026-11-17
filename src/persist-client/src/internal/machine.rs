@@ -9,6 +9,7 @@
 
 //! Implementation of the persist state machine.
 
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ use crate::internal::state::{
     HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr,
     StateCollections,
 };
+use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
@@ -475,18 +477,6 @@ where
         //   correct, so pass it up.
         // - Otherwise, any result other than an expected upper mismatch is
         //   guaranteed to be correct, so just pass it up.
-        // - Otherwise examine the writer's most recent upper and break it into
-        //   two cases:
-        // - Case 1 `expected_upper.less_than(writer_most_recent_upper)`: it's
-        //   impossible that we committed on a previous iteration because the
-        //   overall upper of the shard is less_than what this call would have
-        //   advanced it to. Pass up the expectation mismatch.
-        // - Case 2 `!Case1`: First note that this means our IdempotencyToken
-        //   didn't match, otherwise we would have gotten `AlreadyCommitted`. It
-        //   also means some previous write from _this writer_ has committed an
-        //   upper that is beyond the one in this call, which is a weird usage
-        //   (NB can't be a future write because that would mean someone is
-        //   still polling us, but `&mut self` prevents that).
         //
         // TODO: If this technique works in practice (leads to zero panics),
         // then commit to it and remove the Indeterminate from
@@ -498,11 +488,16 @@ where
             .compare_and_append_idempotent
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         let mut writer_was_present = false;
+        let mut attempt_seqno = SeqNo::minimum();
+        // The seqnos at which an attempt that got an Indeterminate error would
+        // have committed.
+        let mut indeterminate_seqnos = BTreeSet::new();
         loop {
             let cmd_res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, cfg, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |seqno, cfg, state| {
                     writer_was_present = state.writers.contains_key(writer_id);
+                    attempt_seqno = seqno;
                     state.compare_and_append(
                         batch,
                         writer_id,
@@ -537,6 +532,7 @@ where
                     if indeterminate.is_none() {
                         indeterminate = Some(err);
                     }
+                    indeterminate_seqnos.insert(attempt_seqno);
                     retry = retry.sleep().await;
                     continue;
                 }
@@ -609,7 +605,13 @@ where
                         writer_upper,
                         shard_upper
                     );
-                    if PartialOrder::less_than(&writer_upper, batch.desc.upper()) {
+                    // A missing writer would mean writer_upper is a
+                    // placeholder. A previous attempt may have committed and then
+                    // had its writer expired by another process's commit, so it
+                    // would say nothing about what we wrote.
+                    if writer_was_present
+                        && PartialOrder::less_than(&writer_upper, batch.desc.upper())
+                    {
                         // No way this could have committed in some previous
                         // attempt of this loop: the upper of the writer is
                         // strictly less than the proposed new upper.
@@ -622,9 +624,36 @@ where
                         // loop).
                         return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
                     }
+                    match self
+                        .committed_at_any(writer_id, idempotency_token, &indeterminate_seqnos)
+                        .await
+                    {
+                        Some(true) => {
+                            info!(
+                                "compare_and_append found its indeterminate attempt committed in consensus history"
+                            );
+                            self.applier.metrics.cmds.compare_and_append_noop.inc();
+                            return CompareAndAppendRes::Success(
+                                seqno,
+                                WriterMaintenance::default(),
+                            );
+                        }
+                        Some(false) => {
+                            return CompareAndAppendRes::UpperMismatch(seqno, shard_upper);
+                        }
+                        None => {}
+                    }
                     // This is the bad case. We can't distinguish if some
                     // previous attempt that got an Indeterminate error
-                    // succeeded or not. This should be sufficiently rare in
+                    // succeeded or not, because consensus has truncated the
+                    // history that would tell us. Either the writer is missing (see
+                    // above), or our IdempotencyToken didn't match (otherwise
+                    // we would have gotten `AlreadyCommitted`) and some
+                    // previous write from _this writer_ has committed an upper
+                    // that is beyond the one in this call, which is a weird
+                    // usage (NB can't be a future write because that would mean
+                    // someone is still polling us, but `&mut self` prevents
+                    // that). This should be sufficiently rare in
                     // practice (hopefully ~never) that we give up and let
                     // process restart fix things. See the big comment above for
                     // more context.
@@ -645,6 +674,45 @@ where
                 }
             };
         }
+    }
+
+    /// Returns whether the diff at one of `seqnos` set `writer_id`'s most
+    /// recent write token to `idempotency_token`, or `None` if none of the
+    /// diffs still held by consensus did and it has truncated at least one.
+    async fn committed_at_any(
+        &self,
+        writer_id: &WriterId,
+        idempotency_token: &IdempotencyToken,
+        seqnos: &BTreeSet<SeqNo>,
+    ) -> Option<bool> {
+        let mut truncated = false;
+        for seqno in seqnos {
+            let diffs = self
+                .applier
+                .state_versions
+                .fetch_live_diffs(&self.shard_id(), *seqno, 1)
+                .await;
+            let Some(data) = diffs.into_iter().next().filter(|x| x.seqno == *seqno) else {
+                truncated = true;
+                continue;
+            };
+            let diff = StateDiff::<T>::decode(&self.applier.cfg.build_version, data.data);
+            let committed = diff.writers.iter().any(|x| {
+                x.key == *writer_id
+                    && match &x.val {
+                        StateFieldValDiff::Insert(w) | StateFieldValDiff::Update(_, w) => {
+                            w.most_recent_write_token == *idempotency_token
+                        }
+                        // Another process expiring our writer, which carries
+                        // our token in the old value.
+                        StateFieldValDiff::Delete(_) => false,
+                    }
+            });
+            if committed {
+                return Some(true);
+            }
+        }
+        (!truncated).then_some(false)
     }
 
     /// Downgrades the reader's since capability, also heartbeating its lease.
