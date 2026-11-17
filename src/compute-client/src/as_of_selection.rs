@@ -333,6 +333,28 @@ struct Collection<'a> {
     is_index: bool,
 }
 
+/// The frontier up to which the inputs of a collection count as complete.
+struct InputFrontier {
+    frontier: Antichain<Timestamp>,
+    /// The storage write frontier that `frontier` stands in for, if the inputs are not readable
+    /// at the collection's lower as-of bound.
+    substituted_for: Option<Antichain<Timestamp>>,
+}
+
+impl InputFrontier {
+    /// Describes the substitution, if any, for constraint reasons.
+    fn substitution_note(&self) -> String {
+        match &self.substituted_for {
+            Some(write_frontier) => format!(
+                " (current time, substituted for storage write frontier {:?} at which the inputs \
+                 are not readable)",
+                write_frontier.elements()
+            ),
+            None => String::new(),
+        }
+    }
+}
+
 /// The as-of selection context.
 struct Context<'a> {
     collections: BTreeMap<GlobalId, Collection<'a>>,
@@ -523,18 +545,17 @@ impl<'a> Context<'a> {
     /// hydrate immediately, but it will be able to hydrate once its inputs have sufficiently
     /// advanced.
     fn apply_warmup_constraints(&self) {
-        let write_frontiers = self.transitive_storage_write_frontiers();
-
         // Apply the warmup constraint.
-        for (id, write_frontier) in write_frontiers {
-            let upper = step_back_frontier(&write_frontier);
+        for (id, input) in self.input_frontiers() {
+            let upper = step_back_frontier(&input.frontier);
             let constraint = Constraint {
                 type_: ConstraintType::Soft,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
                 reason: &format!(
-                    "warmup frontier derived from storage write frontier {:?}",
-                    write_frontier.elements()
+                    "warmup frontier derived from storage write frontier {:?}{}",
+                    input.frontier.elements(),
+                    input.substitution_note(),
                 ),
             };
             self.apply_constraint(id, constraint);
@@ -554,16 +575,16 @@ impl<'a> Context<'a> {
     /// historical times for its entire compaction window initially, but will do so once sufficient
     /// time has passed.
     fn apply_index_read_policy_constraints(&self) {
-        // For the write frontier of an index, we'll use the least write frontier of its
-        // (transitive) storage inputs. This is an upper bound for the write frontier the index
-        // could have had before the restart. For indexes without storage inputs we use the current
-        // time.
-        let mut write_frontiers = self.transitive_storage_write_frontiers();
+        // For the write frontier of an index, we'll use the frontier of its inputs. This is an
+        // upper bound for the write frontier the index could have had before the restart. For
+        // indexes without storage inputs we use the current time.
+        let mut input_frontiers = self.input_frontiers();
 
         // Apply the read policy constraint to indexes.
         for (id, collection) in &self.collections {
             if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
-                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
+                let input = input_frontiers.remove(id).expect("inserted above");
+                let mut write_frontier = input.frontier.clone();
                 if write_frontier.is_empty() {
                     write_frontier = Antichain::from_elem(self.current_time.clone());
                 }
@@ -573,8 +594,9 @@ impl<'a> Context<'a> {
                     bound_type: BoundType::Upper,
                     frontier: &upper,
                     reason: &format!(
-                        "read policy applied to write frontier {:?}",
-                        write_frontier.elements()
+                        "read policy applied to write frontier {:?}{}",
+                        write_frontier.elements(),
+                        input.substitution_note(),
                     ),
                 };
                 self.apply_constraint(*id, constraint);
@@ -586,8 +608,7 @@ impl<'a> Context<'a> {
     }
 
     /// Returns, for each collection, the meet of the write frontiers of its transitive storage
-    /// inputs, or the frontier after the current time if that meet is not beyond the collection's
-    /// lower as-of bound.
+    /// inputs.
     fn transitive_storage_write_frontiers(&self) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
         // Collect write frontiers from storage inputs.
         let mut write_frontiers = BTreeMap::new();
@@ -617,6 +638,14 @@ impl<'a> Context<'a> {
             }
         });
 
+        write_frontiers
+    }
+
+    /// Returns, for each collection, the frontier up to which its inputs count as complete when
+    /// deriving soft upper bounds.
+    ///
+    /// The lower as-of bounds must be final when this is called.
+    fn input_frontiers(&self) -> BTreeMap<GlobalId, InputFrontier> {
         // NOTE: An input without readable data at the lower bound, for example an MV that never
         // ran, holds the write frontier at or below that bound. The collection can't hydrate at
         // any as-of we could select until that input advances. Constraining the upper bound by
@@ -629,14 +658,24 @@ impl<'a> Context<'a> {
             .current_time
             .checked_add(1)
             .map_or_else(Antichain::new, Antichain::from_elem);
-        for (id, write_frontier) in &mut write_frontiers {
-            let bounds = self.expect_collection(*id).bounds.borrow();
-            if PartialOrder::less_equal(&*write_frontier, &bounds.lower) {
-                write_frontier.clone_from(&after_current_time);
-            }
-        }
-
-        write_frontiers
+        self.transitive_storage_write_frontiers()
+            .into_iter()
+            .map(|(id, write_frontier)| {
+                let bounds = self.expect_collection(id).bounds.borrow();
+                let input = if PartialOrder::less_equal(&write_frontier, &bounds.lower) {
+                    InputFrontier {
+                        frontier: after_current_time.clone(),
+                        substituted_for: Some(write_frontier),
+                    }
+                } else {
+                    InputFrontier {
+                        frontier: write_frontier,
+                        substituted_for: None,
+                    }
+                };
+                (id, input)
+            })
+            .collect()
     }
 
     /// Apply as-of constraints to ensure indexes are immediately readable.
