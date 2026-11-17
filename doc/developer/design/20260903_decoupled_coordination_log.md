@@ -7,13 +7,18 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-Run optimized KafkaSources with the CI shape: `--actions=10000
---max-execution-time=20m`, seed 42, and a 60-minute job cap. Preserve the existing
-CPU and memory caps. Build pinned upstream base `d9a2c5dc` with the same profile
-and run it once with the same arguments. Report time to ready per generation side
-by side. Acceptance requires completed final validation. This scenario includes
-backup/restore followed by validation, so verify those stages actually complete.
-The proposed 90-minute cap was rejected.
+Native optimized KafkaSources completed with the CI shape: `--actions=10000
+--max-execution-time=20m`, seed 42, unchanged resource caps and a 60-minute job cap.
+Final validation, backup/restore and postrestore validation passed in 23m17s.
+The crash audit found retired-generation controller panics. No OOM kills were
+observed, but memory-limit pressure remained. This is not crash-free or broad CI
+acceptance. Detailed work counts, readiness timings and failures are in
+`native-optimized-kafka-audit.md` and `.json`.
+
+The pinned upstream base `d9a2c5dc` is building with the same optimized profile.
+Run it once with the same arguments, then report time to ready per generation
+side by side. Distinguish the configured action limit from the work completed
+before the time budget. The proposed 90-minute cap was rejected.
 
 Complete the separate 60s four-index run and current version-pair rebuild before
 further readiness tuning. Debug builds remain required for the local demo and
@@ -46,13 +51,14 @@ change was made.
 The unchanged KafkaSources comparison did not demonstrate a speedup. Parent CPU
 changed by less than one percent, both runs approached the aggregate memory cap,
 and neither had a new OOM. The new timing probe stopped when readiness ended,
-before its second sample. Final validation and backup/restore remain unverified.
+before its second sample. That debug comparison ended before final validation.
 Those debug runtimes, probes and owned Docker resources were cleaned up. The
 small query/plan fixtures are not acceptance.
 
 ## Remaining acceptance and repairs
 
-1. Finish KafkaSources, including final validation and backup/restore.
+1. Complete the matching upstream optimized run and readiness comparison.
+   Keep the native retirement panics visible despite completed finalization.
 2. Run the separate 60s four-index publication acceptance case and report actual
    commit rates. The 18-publisher, 1s variant is stress, not an acceptance gate.
 3. Rebuild the accepted 26.46/26.47 pair from current source. Rerun lifecycle, DDL,
@@ -123,7 +129,8 @@ Use build receipts and hashes, not image labels or historical manifests, for ide
 The debug fixture's ancillary binaries are preserved older artifacts. All seven
 optimized executables, including helpers, are now built and pinned in
 `upsert-oom-investigation/native-ci-optimized-candidate/`. The CI-shaped native
-KafkaSources run is active. The baseline optimized build/run remains pending.
+KafkaSources run completed and its owned resources were cleaned up. The baseline
+optimized build is active. See `base-optimized-build-driver.log`.
 See `native-optimized-tools-root-fixed-driver.log` and
 `native-optimized-pinning.log` for build and identity receipts.
 
@@ -134,7 +141,9 @@ See `native-optimized-tools-root-fixed-driver.log` and
   Rewrite verification: `frontier-static-key-verification.md`,
   `frontier-semantic-evidence.tar.gz`, `frontier-plan-capture-evidence.tar.gz`,
   `frontier-plan-recheck-driver.log`, and `source-review-frontier-static-keys.md`.
-  Runtime outcome: `frontier-rewrite-runtime-comparison.md`,
+  Optimized acceptance: `native-optimized-kafka-evidence.tar.gz`,
+  `native-optimized-kafka-audit.md`, and `native-optimized-kafka-audit.json`.
+  Earlier debug outcome: `frontier-rewrite-runtime-comparison.md`,
   `frontier-rewrite-kafka-evidence.tar.gz`, and
   `frontier-rewrite-timings-evidence.tar.gz`. The probe has no valid timing pair.
 - Dependency and producer analysis: `readiness-dependency-findings.md`,
