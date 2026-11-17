@@ -200,6 +200,8 @@ pub struct ExplainConfig {
     pub timing: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
+    /// Show the schema of each dataflow export as column definitions.
+    pub schema: bool,
 
     /// Optimizer feature flags.
     pub features: OptimizerFeatureOverrides,
@@ -225,6 +227,7 @@ impl Default for ExplainConfig {
             raw_plans: true,
             raw_syntax: false,
             verbose_syntax: false,
+            schema: false,
             subtree_size: false,
             timing: false,
             types: false,
@@ -1041,6 +1044,7 @@ mod tests {
             raw_plans: false,
             raw_syntax: false,
             verbose_syntax: true,
+            schema: false,
             subtree_size: false,
             equivalences: false,
             timing: true,
