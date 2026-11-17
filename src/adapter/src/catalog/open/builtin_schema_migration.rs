@@ -582,19 +582,19 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         // row schemas are unchanged, but their SQL fingerprints change, requiring
         // explicit migrations for `update_fingerprints` to accept the upgrade.
         MigrationStep::replacement(
-            "26.51.0-dev.0",
+            "26.52.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
         MigrationStep::replacement(
-            "26.51.0-dev.0",
+            "26.52.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_default_privileges",
         ),
         MigrationStep::replacement(
-            "26.51.0-dev.0",
+            "26.52.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
             "mz_comments",
