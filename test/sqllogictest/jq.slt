@@ -235,3 +235,20 @@ CREATE SOURCE jq_webhook FROM WEBHOOK
 
 statement error jq in a RETURNING clause not yet supported
 INSERT INTO docs VALUES ('{"name": "dee"}', '.name') RETURNING jq(doc, '.name')
+
+# Equivalence propagation prunes constant rows by evaluating the filter on
+# them, and must leave a jq call out of that.
+# TODO: Make this a transform spec test once specs support such expressions.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM (VALUES ('{"a": 1}'::jsonb), ('{"a": 2}'::jsonb)) AS t (x) WHERE jq(x, '.a') = '1'
+----
+Explained Query:
+  Filter (1 = jq[".a"](#0{x}))
+    Constant
+      - ({a: 1})
+      - ({a: 2})
+
+Target cluster: quickstart
+
+EOF
