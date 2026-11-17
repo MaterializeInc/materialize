@@ -31,7 +31,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{IntoRowIterator, RelationDesc, Row};
+use mz_repr::{IntoRowIterator, RelationDesc};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
@@ -57,8 +57,8 @@ use crate::metrics::Metrics;
 use crate::peek_registry::{ConnectionPeeks, RegisterError, RegisteredPeek};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
-    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
+    PreparedStatementLoggingInfo, StatementLog, StatementLoggingFrontend, StatementLoggingId,
+    WatchSetCreation,
 };
 use crate::{
     AdapterError, AdapterNotice, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging,
@@ -741,33 +741,20 @@ impl PeekClient {
 
         let id = result.map(
             |(logging_id, began_execution, mseh_update, prepared_statement)| {
-                self.log_began_execution(began_execution, mseh_update, prepared_statement);
+                self.statement_logging_frontend.log.begin_execution(
+                    began_execution,
+                    mseh_update,
+                    prepared_statement,
+                );
                 logging_id
             },
         );
 
         StatementLoggingGuard {
             id,
-            coordinator_client: self.coordinator_client.clone(),
+            log: Arc::clone(&self.statement_logging_frontend.log),
             now: self.statement_logging_frontend.now.clone(),
         }
-    }
-
-    /// Log the beginning of statement execution.
-    pub(crate) fn log_began_execution(
-        &self,
-        record: statement_logging::StatementBeganExecutionRecord,
-        mseh_update: Row,
-        prepared_statement: Option<PreparedStatementEvent>,
-    ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::BeganExecution {
-                    record,
-                    mseh_update,
-                    prepared_statement,
-                },
-            ));
     }
 
     /// Log cluster selection for a statement.
@@ -777,22 +764,16 @@ impl PeekClient {
         cluster_id: mz_controller_types::ClusterId,
         cluster_name: String,
     ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetCluster {
-                    id,
-                    cluster_id,
-                    cluster_name,
-                },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_cluster(id, cluster_id, cluster_name);
     }
 
     /// Log timestamp determination for a statement.
     pub(crate) fn log_set_timestamp(&self, id: StatementLoggingId, timestamp: mz_repr::Timestamp) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetTimestamp { id, timestamp },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_timestamp(id, timestamp);
     }
 
     /// Log transient index ID for a statement.
@@ -801,13 +782,9 @@ impl PeekClient {
         id: StatementLoggingId,
         transient_index_id: mz_repr::GlobalId,
     ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetTransientIndex {
-                    id,
-                    transient_index_id,
-                },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_transient_index(id, transient_index_id);
     }
 
     /// Log a statement lifecycle event.
@@ -817,10 +794,9 @@ impl PeekClient {
         event: statement_logging::StatementLifecycleEvent,
     ) {
         let when = (self.statement_logging_frontend.now)();
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::Lifecycle { id, event, when },
-            ));
+        self.statement_logging_frontend
+            .log
+            .record_lifecycle_event(id, &event, when);
     }
 }
 
@@ -883,13 +859,12 @@ impl Drop for PeekHandle {
 ///
 /// Unless logging responsibility is handed off via
 /// [`defuse`](StatementLoggingGuard::defuse), the guard ensures that every
-/// statement for which `BeganExecution` was logged also receives a
-/// corresponding `EndedExecution`, even on early-return, panic, or mid-flight
+/// statement whose beginning was logged also has its end logged, even on early-return, panic, or mid-flight
 /// drop of the enclosing future: if the guard is dropped without being defused,
 /// it emits `StatementEndedExecutionReason::Aborted`.
 ///
 /// When the guard is `defuse`d, some other component (e.g. the protocol layer,
-/// for subscribe responses) takes over and logs `EndedExecution` itself.
+/// for subscribe responses) takes over and logs the end itself.
 ///
 /// For non-sampled statements the guard still exists but carries no id, and
 /// retirement / drop are no-ops.
@@ -898,7 +873,7 @@ impl Drop for PeekHandle {
 struct StatementLoggingGuard {
     /// `None` if the statement was not sampled for logging.
     id: Option<StatementLoggingId>,
-    coordinator_client: CoordinatorClient,
+    log: Arc<StatementLog>,
     now: mz_ore::now::NowFn,
 }
 
@@ -908,7 +883,7 @@ impl StatementLoggingGuard {
     fn adopt(outer: ExecuteContextGuard, peek_client: &PeekClient) -> Self {
         Self {
             id: outer.defuse().retire(),
-            coordinator_client: peek_client.coordinator_client.clone(),
+            log: Arc::clone(&peek_client.statement_logging_frontend.log),
             now: peek_client.statement_logging_frontend.now.clone(),
         }
     }
@@ -942,19 +917,7 @@ impl StatementLoggingGuard {
             return;
         };
         let ended_at = (self.now)();
-        let record = statement_logging::StatementEndedExecutionRecord {
-            id: id.0,
-            reason,
-            ended_at,
-        };
-        // A guard can outlive the coordinator during shutdown. Failing to send
-        // costs us one end event, panicking in `Drop` would cost the whole
-        // connection.
-        let _ = self
-            .coordinator_client
-            .try_send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::EndedExecution(record),
-            ));
+        self.log.end_execution(id, reason, ended_at);
     }
 }
 

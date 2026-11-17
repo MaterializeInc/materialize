@@ -78,7 +78,7 @@ mod inner;
 impl Coordinator {
     /// Selects and records the execution cluster, checking its restrictions.
     pub(super) fn prepare_plan_execution(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan: &Plan,
     ) -> Result<(TargetCluster, Option<mz_controller_types::ClusterId>), AdapterError> {
