@@ -101,6 +101,18 @@ Ordinary contention must not halt a process or fail startup. Fix the surveyed
 sites at their existing boundaries without a general retry framework, and keep
 the ordering guarantees each conditional write provides.
 
+KafkaSources acceptance uses optimized builds with `--actions=10000
+--max-execution-time=20m` and a 60-minute job timeout, preserving the agreed CPU
+and memory limits. Run the pinned upstream base once with the same optimized
+profile and scenario. Require completed final validation and verify backup/restore
+coverage, running restore separately if absent. Report time to ready per generation
+for both. Debug candidate readiness belongs to startup measurement, not the Zippy
+acceptance gate. Complete the 60s four-index run and version-pair rebuild before
+further readiness tuning. Before more operator profiling, report the lagging
+source-statistics shard's since, the candidate dataflow's starting timestamp and
+whether lag tracks environment age. If the candidate replays full history, find
+what holds compaction back.
+
 Startup and restart latency is an M3 outcome. Measure adapter restart, whole
 environment restart and promotion to serving on the default debug build, then
 remove waste: work over all objects where a few are needed, repeated catalog

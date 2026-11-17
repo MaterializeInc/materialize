@@ -7,12 +7,20 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-Obtain approval for a full KafkaSources acceptance run beyond the scratch
-wrapper's 30-minute diagnostic cap, keeping repository operation deadlines,
-workload and resource limits unchanged. Both before and after the frontier rewrite,
-the cap interrupted the same action while a candidate awaited readiness. It did
-not establish a repository operation timeout. Do not repeat that capped run or
-choose another optimization from the inconclusive comparison.
+Run optimized KafkaSources with the CI shape: `--actions=10000
+--max-execution-time=20m`, seed 42, and a 60-minute job cap. Preserve the existing
+CPU and memory caps. Build pinned upstream base `d9a2c5dc` with the same profile
+and run it once with the same arguments. Report time to ready per generation side
+by side. Acceptance requires completed final validation. This scenario includes
+backup/restore followed by validation, so verify those stages actually complete.
+The proposed 90-minute cap was rejected.
+
+Complete the separate 60s four-index run and current version-pair rebuild before
+further readiness tuning. Debug builds remain required for the local demo and
+startup measurements, including candidate readiness. Before further operator
+profiling, establish the source-statistics shard's since, the candidate dataflow's
+starting timestamp, and whether lag tracks environment age. If it replays full
+history, identify the compaction holder rather than tuning the replay blindly.
 
 The replica-frontier rewrite is committed and pushed. Execution keys derive from
 catalog ClientIncarnation records rather than changing frontier rows. Its
@@ -95,7 +103,7 @@ outcomes and older evidence links are in the
 ## Worker and evidence
 
 Worker: `i-02f17d8a7d9534f5e`, 16 CPUs, 61 GiB RAM. Shutdown is
-2026-11-17 19:25 UTC, tag expiry 19:27. Runtime caps are eight CPUs/40 GiB aggregate,
+2026-11-18 02:32 UTC, tag expiry 02:37. Runtime caps are eight CPUs/40 GiB aggregate,
 four CPUs/6 GiB per deployment. Builds use one job, four CPUs/32 GiB. Never overlap
 builds and runtimes. Keep heavy work off the local VM. Extension within these caps
 needs no approval.
