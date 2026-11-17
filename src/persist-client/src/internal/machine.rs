@@ -3116,10 +3116,12 @@ pub mod tests {
             inner: Arc::new(MemConsensus::default()),
             armed: Arc::clone(&armed),
         };
-        let cfg = PersistConfig::new_for_tests();
+        let mut cfg = PersistConfig::new_for_tests();
         dyncfgs.apply(&cfg);
+        // Setup maintenance must not race the lost-response assertions below.
+        cfg.compaction_enabled = false;
         cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
-        cfg.set_config(&ROLLUP_THRESHOLD, 3);
+        cfg.set_config(&ROLLUP_THRESHOLD, 100);
         // Finalize keeping old rollups, so turning this on leaves a removal.
         cfg.set_config(&GC_REMOVE_FINALIZED_ROLLUPS, false);
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
