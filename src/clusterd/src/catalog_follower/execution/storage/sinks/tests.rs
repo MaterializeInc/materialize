@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_catalog::catalog::{Op, test_support};
+use mz_catalog::catalog::{Op, ReplicaCreateDropReason, test_support};
 use mz_catalog::durable::ClientRealization;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_client::client::TimelyConfig;
@@ -28,7 +28,7 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::{KafkaBroker, KafkaConnection, Tunnel};
 use mz_storage_types::sinks::{
     KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
-    KafkaSinkFormatType, SinkEnvelope,
+    KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::{SourceData, kafka::KAFKA_PROGRESS_DESC};
 use mz_txn_wal::operator::TxnsContext;
@@ -137,10 +137,21 @@ async fn sink_recovery_retains_inputs_until_execution_completion() {
     sink_harness(SinkCase::Recovery).await;
 }
 
+#[mz_ore::test(tokio::test)]
+async fn kafka_and_iceberg_sinks_follow_minimum_catalog_replica() {
+    sink_harness(SinkCase::Placement { selected: false }).await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn selected_replica_admits_kafka_and_iceberg_sinks() {
+    sink_harness(SinkCase::Placement { selected: true }).await;
+}
+
 #[derive(Clone, Copy)]
 enum SinkCase {
     Completion,
     Recovery,
+    Placement { selected: bool },
 }
 
 async fn sink_harness(case: SinkCase) {
@@ -150,6 +161,12 @@ async fn sink_harness(case: SinkCase) {
         }
         SinkCase::Recovery => {
             "catalog_follower::execution::storage::sinks::tests::sink_recovery_retains_inputs_until_execution_completion"
+        }
+        SinkCase::Placement { selected: false } => {
+            "catalog_follower::execution::storage::sinks::tests::kafka_and_iceberg_sinks_follow_minimum_catalog_replica"
+        }
+        SinkCase::Placement { selected: true } => {
+            "catalog_follower::execution::storage::sinks::tests::selected_replica_admits_kafka_and_iceberg_sinks"
         }
     };
     if !in_child(
@@ -174,8 +191,29 @@ async fn sink_harness(case: SinkCase) {
     let mut catalog = debug_catalog(&persist, Some(wal)).await;
     catalog.initialize_storage_metadata().await.unwrap();
     let cluster = catalog.user_clusters().next().unwrap();
-    let replica = cluster.replicas().next().unwrap().replica_id;
+    let original_replica = cluster.replicas().next().unwrap().clone();
+    let mut replica = original_replica.replica_id;
     let cluster = cluster.id;
+    if matches!(case, SinkCase::Placement { .. }) {
+        let ts = catalog.current_upper().await;
+        replica = catalog.allocate_user_replica_ids(1, ts).await.unwrap()[0];
+        assert!(original_replica.replica_id < replica);
+        transact(
+            &mut catalog,
+            vec![Op::CreateClusterReplica {
+                cluster_id: cluster,
+                replica_id: replica,
+                name: "sink_peer".into(),
+                config: original_replica.config.clone(),
+                owner_id: original_replica.owner_id,
+                reason: ReplicaCreateDropReason::Manual,
+            }],
+        )
+        .await;
+        if matches!(case, SinkCase::Placement { selected: true }) {
+            replica = original_replica.replica_id;
+        }
+    }
     let deployment = catalog.state().deployment_generation();
     assert_eq!(
         catalog.state().active_deployment_generation(),
@@ -198,7 +236,7 @@ async fn sink_harness(case: SinkCase) {
         .created_client_incarnations[0];
 
     let mut ids = Vec::new();
-    for (item_name, sql) in [
+    let mut items = vec![
         ("input", "CREATE TABLE materialize.public.input (a bigint)"),
         (
             "connection",
@@ -208,7 +246,20 @@ async fn sink_harness(case: SinkCase) {
             "sink",
             "CREATE SINK materialize.public.sink IN CLUSTER quickstart FROM materialize.public.input INTO KAFKA CONNECTION materialize.public.connection (TOPIC 'completed-health') FORMAT JSON ENVELOPE DEBEZIUM",
         ),
-    ] {
+    ];
+    if matches!(case, SinkCase::Placement { .. }) {
+        items.extend([
+            (
+                "iceberg_connection",
+                "CREATE CONNECTION materialize.public.iceberg_connection TO ICEBERG CATALOG (CATALOG TYPE 'REST', URL 'http://localhost:8181/api/catalog', CREDENTIAL 'root:root', WAREHOUSE 'default_catalog', SCOPE 'PRINCIPAL_ROLE:ALL')",
+            ),
+            (
+                "iceberg_sink",
+                "CREATE SINK materialize.public.iceberg_sink IN CLUSTER quickstart FROM materialize.public.input INTO ICEBERG CATALOG CONNECTION materialize.public.iceberg_connection (NAMESPACE 'default_namespace', TABLE 'sink_placement') MODE APPEND WITH (COMMIT INTERVAL '2s')",
+            ),
+        ]);
+    }
+    for (item_name, sql) in items {
         let (id, global_id) = catalog.allocate_user_id_for_test().await.unwrap();
         let item = test_support::parse_item(
             &mut catalog.state().clone(),
@@ -323,6 +374,78 @@ async fn sink_harness(case: SinkCase) {
     driver
         .configure_status_history(&catalog, persist.clone(), deployment)
         .unwrap();
+
+    if let SinkCase::Placement { selected } = case {
+        let iceberg = ids[4].1;
+        let expected: BTreeMap<_, _> = [sink, iceberg]
+            .into_iter()
+            .map(|id| (id, current_sink_definition(&catalog, cluster, id).unwrap()))
+            .collect();
+        assert!(matches!(
+            expected[&sink].connection,
+            StorageSinkConnection::Kafka(_)
+        ));
+        assert!(matches!(
+            expected[&iceberg].connection,
+            StorageSinkConnection::Iceberg(_)
+        ));
+
+        // Exercise admission with real catalog definitions, without RunSink:
+        // placement must not require Kafka or Iceberg to be reachable.
+        let peer = catalog
+            .get_cluster(cluster)
+            .replicas()
+            .map(|r| r.replica_id)
+            .max()
+            .unwrap();
+        for phase in 0..if selected { 1 } else { 3 } {
+            if phase == 1 {
+                transact(
+                    &mut catalog,
+                    vec![Op::DropClusterReplicaRealization {
+                        cluster_id: cluster,
+                        replica_id: original_replica.replica_id,
+                    }],
+                )
+                .await;
+            } else if phase == 2 {
+                transact(
+                    &mut catalog,
+                    vec![Op::CreateClusterReplicaRealization {
+                        cluster_id: cluster,
+                        replica_id: original_replica.replica_id,
+                        name: original_replica.name.clone(),
+                        config: original_replica.config.clone(),
+                        owner_id: original_replica.owner_id,
+                        carryover_from: None,
+                    }],
+                )
+                .await;
+            }
+            let members: BTreeSet<_> = catalog
+                .get_cluster(cluster)
+                .replicas()
+                .map(|replica| replica.replica_id)
+                .collect();
+            assert_eq!(
+                members,
+                if phase == 1 {
+                    BTreeSet::from([replica])
+                } else {
+                    BTreeSet::from([original_replica.replica_id, peer])
+                }
+            );
+            driver.ensure_live(&catalog).unwrap();
+            assert!(driver.has_output_write_authority(&catalog));
+            let desired = driver.desired_sinks(&catalog, cluster);
+            if selected || phase == 1 {
+                assert_eq!(desired, expected);
+            } else {
+                assert!(desired.is_empty(), "phase {phase}: {desired:?}");
+            }
+        }
+        std::process::exit(0);
+    }
 
     if matches!(case, SinkCase::Recovery) {
         let recovery = catalog.state().maintained_read_requirements()[&sink]

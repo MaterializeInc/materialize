@@ -14,7 +14,7 @@ use mz_controller_types::ClusterId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{RunSinkCommand, StorageCommand};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
+use mz_storage_types::sinks::StorageSinkDesc;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 
@@ -77,7 +77,9 @@ impl ReplicaEnactment {
         refreshed
     }
 
-    fn kafka_eligible(&self, catalog: &Catalog, cluster: ClusterId) -> bool {
+    // External sinks use one catalog-selected replica. Commit conflict recovery
+    // does not stop unselected replicas from repeatedly competing for output.
+    fn sink_eligible(&self, catalog: &Catalog, cluster: ClusterId) -> bool {
         catalog
             .get_cluster(cluster)
             .replicas()
@@ -94,10 +96,9 @@ impl ReplicaEnactment {
         // External sink startup can write metadata or fence a transactional
         // producer before consuming input. Catalog membership alone cannot
         // authorize those effects in a prewarming deployment.
-        if !self.has_output_write_authority(catalog) {
+        if !self.has_output_write_authority(catalog) || !self.sink_eligible(catalog, cluster) {
             return BTreeMap::new();
         }
-        let kafka_eligible = self.kafka_eligible(catalog, cluster);
         catalog
             .entries()
             .filter_map(|entry| {
@@ -110,11 +111,6 @@ impl ReplicaEnactment {
                 let (definition, _) = catalog
                     .state()
                     .storage_sink_description(sink, Antichain::from_elem(Timestamp::MIN));
-                if matches!(definition.connection, StorageSinkConnection::Kafka(_))
-                    && !kafka_eligible
-                {
-                    return None;
-                }
                 Some((entry.latest_global_id(), definition))
             })
             .collect()
@@ -206,8 +202,7 @@ impl ReplicaEnactment {
                 // observe completion for the still-desired definition and shard.
                 if !self.has_output_write_authority(catalog)
                     || current_sink_definition(catalog, cluster, id).as_ref() != Some(&definition)
-                    || (matches!(definition.connection, StorageSinkConnection::Kafka(_))
-                        && !self.kafka_eligible(catalog, cluster))
+                    || !self.sink_eligible(catalog, cluster)
                     || catalog
                         .state()
                         .storage_metadata()
@@ -258,8 +253,7 @@ impl ReplicaEnactment {
             let current = current_sink_definition(catalog, cluster, id);
             if !self.has_output_write_authority(catalog)
                 || current.as_ref() != Some(&definition)
-                || (matches!(definition.connection, StorageSinkConnection::Kafka(_))
-                    && !self.kafka_eligible(catalog, cluster))
+                || !self.sink_eligible(catalog, cluster)
                 || catalog
                     .state()
                     .storage_metadata()

@@ -6,8 +6,8 @@ Finish native-only M3 under the current [prompt](20260903_decoupled_coordination
 Preserve compatible full writers, explicit retirement, protection and adapter-owned
 policy. Do not restore legacy execution paths or weaken validation.
 
-Resolve the Iceberg replica-placement decision below, then continue readiness
-attribution before choosing a performance change. The current debug workload hit
+Rebuild debug binaries with the all-sink replica selector and rerun the unchanged
+KafkaSources workload, then continue readiness attribution. The preceding debug workload hit
 its unchanged deadline at action 400 after nine promotions. Final validation and
 backup/restore remain unverified. Its runtimes are cleaned up, with no recorded
 OOM events. Scoped Python/Rust checks, catalog oracle regressions and the fresh
@@ -37,6 +37,13 @@ After resolving the concrete blockers:
 5. Resolve current-head CI failures and obtain broad current-binary coverage.
 
 ## Verified outcomes and limits
+
+All external sinks now use the existing catalog-derived replica selector, matching
+baseline's all-sink scheduling policy. Iceberg no longer bypasses it. Deployment,
+incarnation and post-acquisition checks remain. A red/green regression covers
+Kafka/Iceberg selection and catalog membership changes. Sink tests, all-target
+clusterd Clippy and independent review passed. Runtime contention and workload
+impact remain unverified. Source placement is unchanged.
 
 Controllerd owns processes, replica followers own maintained execution, and
 adapters keep policy, transactions, protection and transient queries. Native
@@ -72,11 +79,9 @@ source status, metrics and HTTP proxy coverage. These are not latest-build accep
 
 ## Live blockers and decisions
 
-- Iceberg lacks Kafka's catalog-derived replica selector. Two replicas in the
-  active deployment repeatedly conflict and restart the same sinks. Applying the
-  existing selector to Iceberg awaits user approval because it changes placement.
-  Commit conflict checks must remain. The evidence does not establish duplicate
-  committed output or quantify this contention's share of CPU.
+- Verify the approved Iceberg placement repair against actual multi-replica output.
+  The preceding capture showed repeated competing executions, not duplicate
+  committed output. Its share of CPU remains unquantified.
 - Readiness/hydration remains the largest measured Kafka phase. Map the remaining
   system-cluster blockers and attribute their work or input waits before tuning.
 - One pre-cache run had a recovered promoted-adapter storage-initialization
@@ -139,6 +144,10 @@ processes. The root observer attached late, not at the start of readiness.
 `sink-execution-contention-survey.md` traces the separate Iceberg placement gap.
 The post-promotion replica SIGKILLs were intentional workload action 324, not a
 promotion failure.
+
+`sink-placement-red-3-driver.log` records the regression failing on unselected
+Iceberg admission. `sink-placement-green-driver.log` records successful sink tests
+and all-target Clippy. `sink-placement-inputs.json` records the checked source.
 
 - Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
