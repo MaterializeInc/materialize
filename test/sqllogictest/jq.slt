@@ -252,3 +252,15 @@ Explained Query:
 Target cluster: quickstart
 
 EOF
+
+# INSERT fills in an omitted column's default on a cluster, so a jq default works there.
+statement ok
+CREATE TABLE jq_default (a int, b jsonb DEFAULT jq('{"x": 1}', '.x'))
+
+statement ok
+INSERT INTO jq_default (a) VALUES (1)
+
+query IT
+SELECT a, b FROM jq_default
+----
+1  1
