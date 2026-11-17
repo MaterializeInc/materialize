@@ -41,6 +41,25 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
+    let target = catalog_server_target(catalog, session, plan);
+    if matches!(target, TargetCluster::CatalogServer) {
+        let intros_cluster = catalog
+            .state()
+            .resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+        tracing::debug!("Running on '{}' cluster", MZ_CATALOG_SERVER_CLUSTER.name);
+        if intros_cluster.name != session.vars().cluster() {
+            session.add_notice(AdapterNotice::AutoRunOnCatalogServerCluster);
+        }
+    }
+    target
+}
+
+/// Chooses catalog routing without emitting notices for a speculative plan.
+pub(crate) fn catalog_server_target(
+    catalog: &ConnCatalog<'_>,
+    session: &Session,
+    plan: &Plan,
+) -> TargetCluster {
     let inspect_subscribe = |plan: &SubscribePlan| {
         (
             plan.from.depends_on(),
@@ -199,15 +218,6 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        let intros_cluster = catalog
-            .state()
-            .resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
-        tracing::debug!("Running on '{}' cluster", MZ_CATALOG_SERVER_CLUSTER.name);
-
-        // If we're running on a different cluster than the active one, notify the user.
-        if intros_cluster.name != session.vars().cluster() {
-            session.add_notice(AdapterNotice::AutoRunOnCatalogServerCluster);
-        }
         TargetCluster::CatalogServer
     } else {
         TargetCluster::Active
