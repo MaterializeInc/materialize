@@ -25,5 +25,8 @@ CREATE TABLE build_job (
     agent_type TEXT -- will eventually be changed to not null
 );
 
+CREATE INDEX IN CLUSTER test_analytics ON build_job (build_job_id);
+CREATE INDEX IN CLUSTER test_analytics ON build_job (build_id);
+
 ALTER TABLE build_job OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE build_job TO "hetzner-ci";
