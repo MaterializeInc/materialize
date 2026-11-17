@@ -421,12 +421,13 @@ impl Coordinator {
             // as the commands that hand statements to the coordinator, so the
             // coordinator never ends a statement before processing its begin.
             //
-            // Duplicate ends are legitimate, if rare. Ownership of the end is
-            // handed from the frontend to the coordinator while a statement is
-            // dispatched, and async cancellation can strike mid-handoff: if a
-            // client disconnect drops the frontend future after the
-            // coordinator registered a peek but before the frontend defused
-            // its logging guard, both sides own the end and both emit one.
+            // Duplicate ends are legitimate, if rare. Ownership of a
+            // subscribe's end is handed from the frontend to the coordinator
+            // while the subscribe is dispatched, and async cancellation can
+            // strike mid-handoff: if a client disconnect drops the frontend
+            // future after the coordinator created its guard but before the
+            // frontend defused its own, both sides own the end and both emit
+            // one. A peek's end stays with its lifecycle and has one owner.
             tracing::warn!(
                 statement_uuid = %uuid,
                 reason = ?ended_record.reason,

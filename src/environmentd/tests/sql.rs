@@ -4932,3 +4932,99 @@ fn test_drop_index_read_by_in_flight_subscribe_notice() {
 
     subscribe_client.batch_execute("COMMIT").unwrap();
 }
+
+/// What a statement that is expected to park at a failpoint did.
+#[derive(Debug, PartialEq)]
+enum ParkEvent {
+    Parked,
+    /// The statement returned. Seeing this first means it never reached the failpoint.
+    Exited,
+}
+
+/// Parks the first arrival at `failpoint` until the returned sender is dropped. Later arrivals
+/// pass.
+///
+/// The failpoint is process-global, so arm it after all setup statements ran.
+fn park_first_arrival(
+    failpoint: &'static str,
+    events: std::sync::mpsc::Sender<ParkEvent>,
+) -> std::sync::mpsc::Sender<()> {
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let slot = Mutex::new(Some((events, resume_rx)));
+    fail::cfg_callback(failpoint, move || {
+        let Some((events, resume_rx)) = slot.lock().expect("not poisoned").take() else {
+            return;
+        };
+        let _ = events.send(ParkEvent::Parked);
+        // NOTE: The arrival can be a runtime worker. `block_in_place` hands its queue to
+        // another thread before parking.
+        tokio::task::block_in_place(|| {
+            let _ = resume_rx.recv();
+        });
+    })
+    .unwrap();
+    resume_tx
+}
+
+/// The server's message for `err`, or the client-side error if there is none.
+fn db_message(err: &postgres::Error) -> String {
+    match err.as_db_error() {
+        Some(db_error) => db_error.message().to_string(),
+        None => err.to_string(),
+    }
+}
+
+/// Runs `sql` on its own thread and reports when it returns.
+fn spawn_statement(
+    mut client: postgres::Client,
+    sql: &'static str,
+    events: std::sync::mpsc::Sender<ParkEvent>,
+) -> thread::JoinHandle<(postgres::Client, Result<Vec<Row>, postgres::Error>)> {
+    thread::spawn(move || {
+        let result = client.query(sql, &[]);
+        let _ = events.send(ParkEvent::Exited);
+        (client, result)
+    })
+}
+
+// A cancel request that arrives while a SELECT is being optimized ends the SELECT, although no
+// peek is registered yet that the coordinator could cancel.
+//
+// The failpoint is process-global, so this test relies on running in its own process, as nextest
+// runs it.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_cancel_select_during_optimization() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client.query("SELECT a + 1 FROM t", &[]).unwrap();
+    let cancel_token = client.cancel_token();
+
+    let (events_tx, events_rx) = std::sync::mpsc::channel();
+    let resume = park_first_arrival("optimize_mir_local", events_tx.clone());
+    let select = spawn_statement(client, "SELECT a + 1 FROM t", events_tx);
+    assert_eq!(events_rx.recv().unwrap(), ParkEvent::Parked);
+
+    cancel_token.cancel_query(postgres::NoTls).unwrap();
+
+    // The optimizer stays parked, so only the cancel can end the statement. The timeout
+    // bounds the hang of a build that ignores the cancel.
+    let event = events_rx.recv_timeout(Duration::from_secs(30));
+    fail::remove("optimize_mir_local");
+    drop(resume);
+    let (mut client, result) = select.join().unwrap();
+    assert_eq!(
+        event,
+        Ok(ParkEvent::Exited),
+        "SELECT ignored the cancel while it was being optimized, and then returned {result:?}"
+    );
+    let err = result.expect_err("canceled SELECT returned rows");
+    assert_eq!(err.code(), Some(&SqlState::QUERY_CANCELED), "{err:?}");
+    assert_contains!(db_message(&err), "canceling statement due to user request");
+
+    let rows = client.query("SELECT a + 1 FROM t", &[]).unwrap();
+    assert_eq!(rows.len(), 1, "the session works after the cancel");
+}

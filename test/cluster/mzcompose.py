@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from typing import Literal
 
 import psycopg
 import requests
@@ -4897,14 +4898,14 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     exactly once.
 
     A bare scan of a table with no usable index becomes a `standard` slow-path
-    peek (`ExecuteSlowPathPeek`) registered with the coordinator; a constant
+    peek (`ExecuteSlowPathPeek`) registered in the peek registry; a constant
     query like `SELECT 1` (exercised by `workflow_test_drop_cluster_during_peeks`)
     is handled inline and never registered. When a concurrent `DROP CLUSTER`
-    makes the peek fail, the frontend owns the error end of statement logging
-    and the coordinator must defuse its own guard instead of emitting
-    `Aborted`. Two ends for one statement historically panicked and aborted
-    environmentd; today the duplicate is dropped at the sink with the warning
-    we assert on below.
+    makes the peek fail, its lifecycle owns the end of statement logging,
+    whether the registry's invalidation or the failed issue gets there first.
+    Two ends for one statement historically panicked and aborted environmentd;
+    today a duplicate is dropped at the sink with the warning we assert on
+    below.
 
     The fast-path variant of this race has a sub-millisecond window that brute
     force can't hit;
@@ -5018,24 +5019,28 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
 def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     c: Composition,
 ) -> None:
-    """Deterministically exercise the *fast-path* variant of the registered-peek
-    teardown race (slow-path variant:
-    `workflow_test_drop_cluster_during_registered_peeks`).
+    """DROP between frontend registration and issue must retire exactly once."""
+    registered_fast_peek_during_ddl(c, "drop-cluster")
 
-    A `PeekExisting` fast-path peek registers with the coordinator and only
-    *then* issues `client.peek()`; registration hands ownership of
-    end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
-    that window, the teardown retires the pending peek and logs its end,
-    `client.peek()` fails, and the frontend's `UnregisterPeek` must be
-    a no-op. Historically the frontend ended the statement itself here, and
-    the double end panicked and aborted environmentd.
 
-    The window is a sub-millisecond cross-thread gap, so we make it
-    deterministic with the `peek_after_register_before_issue` failpoint: pause
-    a peek right after it registers, drop its cluster while it's parked, then
-    resume so `client.peek()` fails. Assert that environmentd survives and
-    that no duplicate end was logged.
-    """
+def workflow_test_cancel_during_registered_peeks_fast_path(c: Composition) -> None:
+    """Cancellation before issue must prevent a later successful peek."""
+    registered_fast_peek_during_ddl(c, "cancel")
+
+
+def workflow_test_apply_replacement_during_registered_peeks_fast_path(
+    c: Composition,
+) -> None:
+    """Replacing a materialized view keeps its old collection readable, so a
+    registered peek on it must still return its rows."""
+    registered_fast_peek_during_ddl(c, "apply-replacement")
+
+
+def registered_fast_peek_during_ddl(
+    c: Composition, action: Literal["drop-cluster", "cancel", "apply-replacement"]
+) -> None:
+    """Parks a fast-path peek between registration and issue, runs `action`,
+    and resumes the peek. Only `apply-replacement` lets the peek succeed."""
 
     failpoint = "peek_after_register_before_issue"
 
@@ -5055,26 +5060,32 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         # The index makes `SELECT * FROM t` on `victim` a `PeekExisting` fast path
         # (without it the bare scan would be a `standard` slow-path dataflow).
         c.sql("CREATE INDEX victim_idx IN CLUSTER victim ON t (a)")
+        c.sql("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t")
+        c.sql("CREATE INDEX victim_mv_idx IN CLUSTER victim ON mv (a)")
+        relation = "mv" if action == "apply-replacement" else "t"
 
         peeker_ready = Event()
         failpoint_armed = Event()
         peek_outcome: list[str] = []
+        peeker_pid: list[int] = []
 
         def peeker() -> None:
             try:
                 with c.sql_cursor() as cur:
                     cur.execute("SET auto_route_catalog_queries = false")
                     cur.execute("SET cluster = victim")
+                    cur.execute("SELECT pg_backend_pid()")
+                    pid_row = cur.fetchone()
+                    assert pid_row is not None
+                    peeker_pid.append(pid_row[0])
                     # We connect and configure *before* the failpoint is armed so
                     # that connection-setup peeks aren't caught by it.
                     peeker_ready.set()
                     failpoint_armed.wait()
-                    # `PeekExisting` fast path: this registers with the
-                    # coordinator and then parks at the failpoint before issuing
-                    # `client.peek()`. It fails once `victim` is dropped.
-                    cur.execute("SELECT * FROM t")
-                    cur.fetchall()
-                    peek_outcome.append("ok")
+                    # The local registration is visible to teardown, but the
+                    # compute instance has not received a peek yet.
+                    cur.execute(f"SELECT * FROM {relation}".encode())
+                    peek_outcome.append(f"ok: {len(cur.fetchall())} rows")
             except Exception as e:
                 peek_outcome.append(f"error: {e}")
 
@@ -5090,25 +5101,35 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             control.execute(f"SET unsafe_failpoints = '{failpoint}=pause'")
             failpoint_armed.set()
             # Give the peeker time to issue its SELECT and park. It stays parked
-            # until we turn the failpoint off, so this only has to outlast plan +
-            # `RegisterPeek`, not race a narrow window.
+            # until we turn the failpoint off, so this only has to outlast
+            # planning and registration, not race a narrow window.
             time.sleep(5)
-            # Drop the cluster while the peek is parked: the coordinator retires
-            # the pending peek and logs its end of execution.
-            control.execute("DROP CLUSTER victim CASCADE")
-            # Resume the peek: `client.peek()` now fails (cluster gone) and the
-            # frontend asks the coordinator to retire the already-retired peek,
-            # which must be a no-op.
+            if action == "drop-cluster":
+                control.execute("DROP CLUSTER victim CASCADE")
+            elif action == "cancel":
+                control.execute("SELECT pg_cancel_backend(%s)", (peeker_pid[0],))
+                assert control.fetchone() == (True,)
+            else:
+                control.execute(
+                    "CREATE REPLACEMENT MATERIALIZED VIEW mv_r FOR mv AS SELECT a FROM t"
+                )
+                control.execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT mv_r")
+            # Retirement must prevent issue, and later cleanup must be a no-op.
             control.execute(f"SET unsafe_failpoints = '{failpoint}=off'")
 
         peek_thread.join(timeout=30)
 
-        # The parked peek must actually have failed on the dropped cluster;
-        # otherwise the race didn't happen and the test is silently vacuous.
         assert peek_outcome, "peeker thread did not finish"
-        assert peek_outcome[0].startswith(
-            "error"
-        ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
+        if action == "apply-replacement":
+            assert (
+                peek_outcome[0] == "ok: 10 rows"
+            ), f"expected the peek to survive the replacement, got: {peek_outcome[0]}"
+        else:
+            # The parked peek must actually have failed on teardown;
+            # otherwise the race didn't happen and the test is silently vacuous.
+            assert peek_outcome[0].startswith(
+                "error"
+            ), f"expected the peek to fail on teardown, got: {peek_outcome[0]}"
 
         # A panic on the coordinator thread aborts the entire environmentd
         # process (src/ore/src/panic.rs); with no restart policy the container
