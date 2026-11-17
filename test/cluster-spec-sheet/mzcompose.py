@@ -1960,16 +1960,35 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
-                for protocol in self.options.protocols:
-                    for concurrency in self.options.concurrencies:
-                        self.measure(
-                            runner,
-                            size,
-                            concurrency,
-                            protocol,
-                            disable_statement_logging,
-                        )
+            for var in (
+                "statement_logging_target_data_rate",
+                "statement_logging_max_data_credit",
+                "statement_logging_max_sample_rate",
+                "statement_logging_default_sample_rate",
+                "statement_logging_sample_rate",
+                "enable_prepared_query_reuse",
+                "enable_prepared_query_templates",
+                "enable_frontend_transaction_completion",
+            ):
+                try:
+                    value = runner.run_query(f"SHOW {var}", fetch=True)
+                except Exception as e:
+                    value = f"error: {e}"
+                print(json.dumps({"qps_system_setting": var, "value": str(value)}))
+            # Interleave the logging modes and repeat them, so that drift of
+            # the shared environment shows up as spread within a mode.
+            for repeat in range(3):
+                for disable_statement_logging in (False, True):
+                    for protocol in self.options.protocols:
+                        for concurrency in (128, 256, 512):
+                            self.measure(
+                                runner,
+                                size,
+                                concurrency,
+                                protocol,
+                                disable_statement_logging,
+                                repeat,
+                            )
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -1983,9 +2002,10 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         concurrency: int,
         protocol: str,
         disable_statement_logging: bool = False,
+        repeat: int = 0,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
-        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters_r{repeat}{suffix}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
@@ -2044,6 +2064,8 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             replica_cpu_samples=replica_samples,
             warnings=warnings,
             envd_cpus=runner.envd_cpus,
+            repeat=repeat,
+            statement_logging_disabled=disable_statement_logging,
             query_cluster_size=size,
             query=config["query"],
             expected_rows=config["expected_rows"],
@@ -3359,7 +3381,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+    ENVD_CPU_SCALES: list[int] = [32]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
@@ -3546,6 +3568,9 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
             "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
