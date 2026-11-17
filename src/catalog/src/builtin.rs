@@ -1571,7 +1571,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     // themselves. The real ones are built below.
     {
         let ontology_preview = ontology::generate_views(&builtin_items);
-        let builtin_reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let builtin_reporter_preview: Vec<_> =
+            builtin::builtins(&builtin_types, &builtin_items).collect();
         let generator_input: Vec<_> = builtin_types
             .iter()
             .chain(builtin_funcs.iter())
@@ -1598,7 +1599,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
 
     // Generate builtin relations reporting builtin objects last, since they need a complete view
     // of all other builtins.
-    let mut builtin_builtins = builtin::builtins(&builtin_items).collect();
+    let mut builtin_builtins = builtin::builtins(&builtin_types, &builtin_items).collect();
 
     // Construct the full list of builtins, retaining dependency order.
     let mut builtins = Vec::new();

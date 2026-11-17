@@ -1640,6 +1640,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_object_mappings -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_item_metadata -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_items -->
