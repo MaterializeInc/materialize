@@ -1561,57 +1561,49 @@ mz_internal.mz_current_replica_frontiers:
                           Filter: (#1) IS NOT NULL
                           Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), ((#0{data} -> "value") -> "extra_versions")
                             →Read l3
-    cte l5 =
-      →Differential Join %4:mz_catalog_deployment_authority[#0] » %0:mz_replica_frontier_observations[#2{deployment_generation}] » %3:mz_cluster_replicas[#0{id}] » %1:l0[#1{cluster_id}, #4{object_id}] » %2[#0, #1]
-        after %1:
-          Project: #1..=#8, #10, #11
-          Filter: ((#12{replica_name}) IS NULL OR (#12{replica_name} = #9{name}))
-        after %2:
-          Project: #1..=#9
-          Filter: (#9{compute_global} OR NOT(#10))
-        →Arrange (#2{deployment_generation})
-          →Stream mz_internal.mz_replica_frontier_observations
-        →Arrange (#1{cluster_id}, #4{object_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0..=#2, #4, #5
-            Filter: #3{replica_owned}
-              →Read l0
-        →Arrange (#0, #1)
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #0..=#2
-              Map: true
-                →Read l4
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: false
-                →Consolidating Union
-                  →Negate Diffs
-                    →Stream l4
-                  →Unarranged Raw Stream
-                    →Arranged l1
-        →Arranged mz_catalog.mz_cluster_replicas
-        →Arrange (#0)
-          →Read mz_internal.mz_catalog_deployment_authority
   →Return
-    →Differential Join %1[#0..=#2] » %0:l5[#1..=#3]
-      →Arrange (#1..=#3)
-        →Stream l5
+    →Differential Join %0:mz_replica_frontier_observations[#3{client_incarnation}, uint8_to_numeric(#2{deployment_generation}), #1{replica_id}] » %4[#0..=#2] » %3:mz_cluster_replicas[#0{id}] » %5:mz_catalog_deployment_authority[#0] » %1:l0[#1{cluster_id}, #4{object_id}] » %2[#0, #1]
+      after %1:
+        Project: #1..=#6, #8, #9
+        Filter: ((#10{replica_name}) IS NULL OR (#10{replica_name} = #7{name}))
+      after %2:
+        Project: #1..=#7
+        Filter: (#7{compute_global} OR NOT(#8))
+      →Arrange (#3{client_incarnation}, uint8_to_numeric(#2{deployment_generation}), #1{replica_id})
+        →Stream mz_internal.mz_replica_frontier_observations
+      →Arrange (#1{cluster_id}, #4{object_id})
+        →Fused with Child Map/Filter/Project
+          Project: #0..=#2, #4, #5
+          Filter: #3{replica_owned}
+            →Read l0
+      →Arrange (#0, #1)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#2
+            Map: true
+              →Read l4
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: false
+              →Consolidating Union
+                →Negate Diffs
+                  →Stream l4
+                →Unarranged Raw Stream
+                  →Arranged l1
+      →Arranged mz_catalog.mz_cluster_replicas
       →Distinct GroupAggregate
-        →Differential Join %1[parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0)] » %0[#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation})]
-          →Arrange (#0{replica_id}, #2{client_incarnation}, uint8_to_numeric(#1{deployment_generation}))
-            →Distinct GroupAggregate
-              →Fused with Child Map/Filter/Project
-                Project: #1..=#3
-                  →Read l5
-          →Arrange (parse_catalog_id((((#0{data} -> "value") -> "realization") -> "Replica")), text_to_uint8(((#0{data} -> "key") ->> "id")), coalesce(uint8_to_numeric(text_to_uint8(((#0{data} -> "value") ->> "deployment_generation"))), 0))
-            →Differential Join %1[#0] » %0:l2[(#0{data} ->> "kind")]
-              after %0:
-                Project: #1
-                Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
-              →Arranged l2
-              →Arrange (#0)
-                →Constant (1 row)
+        Key:
+          Project: #1, #3, #4
+          Map: text_to_uint8(((#0{data} -> "key") ->> "id")), (#0{data} -> "value"), coalesce(uint8_to_numeric(text_to_uint8((#2 ->> "deployment_generation"))), 0), parse_catalog_id(((#2 -> "realization") -> "Replica"))
+        →Differential Join %1[#0] » %0:l2[(#0{data} ->> "kind")]
+          after %0:
+            Project: #1
+            Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Replica")) IS NOT NULL
+          →Arranged l2
+          →Arrange (#0)
+            →Constant (1 row)
+      →Arrange (#0)
+        →Read mz_internal.mz_catalog_deployment_authority
 
 Source mz_internal.mz_catalog_deployment_authority
   project=(#0)

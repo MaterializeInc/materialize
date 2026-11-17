@@ -7,12 +7,12 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-Review and measure the scoped replica-frontier SQL rewrite before landing it.
-Actual stored plans derive execution keys from changing frontier rows and join
-those keys back to the same result. Deriving DISTINCT keys from catalog
-ClientIncarnation records alone removes two joins and one DISTINCT in the tested
-plan. A same-snapshot comparison in a populated native fixture found no differences.
-No production SQL change or workload speedup has been established.
+Measure the verified replica-frontier rewrite in the unchanged bounded
+KafkaSources workflow. Execution keys now derive from catalog ClientIncarnation
+records rather than changing frontier rows. The maintained plan removes two joins
+and one DISTINCT. No other catalog-plan expectation changed. Debug builds,
+indexed semantic regressions and the full catalog-plan check passed. Independent
+source review found no blocker. Workload speedup remains unverified.
 
 The timing probe obtained deltas and names for 64 unchanged operator/worker keys.
 Among sampled dataflow roots, current replica frontiers cost 1.42s, current storage
@@ -102,7 +102,11 @@ Ancillary binaries are preserved older artifacts, not newly rebuilt ones.
   `simple-timing-deltas.json`, `simple-timings-kafka-evidence.tar.gz`,
   `readiness-simple-timings-partial.tar.gz`,
   `frontier-plan-validation-evidence.tar.gz`, and `frontier-plan-validation-driver.log`.
-  Candidate SQL: `replica-frontiers-static-executions.sql`. Production remains unchanged.
+  Rewrite verification: `frontier-static-key-verification.md`,
+  `frontier-semantic-evidence.tar.gz`, `frontier-plan-capture-evidence.tar.gz`,
+  `frontier-plan-recheck-driver.log`, and `source-review-frontier-static-keys.md`.
+  New SQL binaries are in worker `target/debug`. The pinned workload directory
+  above still contains the preceding build and must be refreshed before measuring.
 - Dependency and producer analysis: `readiness-dependency-findings.md`,
   `readiness-dependency-timeline.json`, `source-statistics-replay-survey.md`.
 - Earlier probe and small-query validation: `operator-probe-partial-findings.md`,

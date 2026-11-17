@@ -1,0 +1,151 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# Validate the decoded-key semijoin used by current replica frontiers. DISTINCT
+# belongs on catalog keys, not observations or the final projected rows.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE execution_catalog (data jsonb)
+
+statement ok
+CREATE TABLE observations (object_id text, replica_id text, deployment_generation uint8, client_incarnation uint8, write_known bool, write_frontier mz_timestamp)
+
+statement ok
+CREATE TABLE authority (generation uint8)
+
+statement ok
+INSERT INTO authority VALUES (0)
+
+statement ok
+INSERT INTO execution_catalog VALUES
+('{"kind":"ClientIncarnation","key":{"id":7},"value":{"realization":{"Replica":{"System":1}}}}'),
+('{"kind":"ClientIncarnation","key":{"id":7},"value":{"deployment_generation":0,"realization":{"Replica":{"System":1}}}}'),
+('{"kind":"ClientIncarnation","key":{"id":8},"value":{"deployment_generation":0,"realization":{"Replica":{"System":1}}}}'),
+('{"kind":"ClientIncarnation","key":{"id":9},"value":{"realization":{"Adapter":"a"}}}'),
+('{"kind":"ClientIncarnation","key":{"id":10},"value":{"deployment_generation":1,"realization":{"Replica":{"System":1}}}}'),
+('{"kind":"StorageCollectionMetadata","key":{"id":{"User":1}},"value":{}}')
+
+statement ok
+INSERT INTO observations VALUES
+('a', 's1', 0, 7, true, NULL),
+('a', 's1', 0, 7, true, NULL),
+('a', 's1', 0, 8, true, NULL),
+('b', 's1', 0, 8, false, NULL),
+('wrong-replica', 's2', 0, 7, true, 10),
+('wrong-generation', 's1', 1, 7, true, 10),
+('adapter', 's1', 0, 9, true, 10),
+('missing', 's1', 0, 99, true, 10),
+('candidate', 's1', 1, 10, true, 20)
+
+statement ok
+CREATE VIEW expected_frontiers AS
+SELECT o.object_id, o.write_known, o.write_frontier
+FROM observations o
+WHERE o.deployment_generation = (SELECT generation FROM authority)
+AND EXISTS (
+    SELECT 1 FROM execution_catalog c
+    WHERE c.data->>'kind' = 'ClientIncarnation'
+      AND (c.data->'key'->>'id')::uint8 = o.client_incarnation
+      AND COALESCE((c.data->'value'->>'deployment_generation')::uint8, 0) = o.deployment_generation
+      AND mz_internal.parse_catalog_id(c.data->'value'->'realization'->'Replica') = o.replica_id
+)
+
+statement ok
+CREATE VIEW current_frontiers AS
+WITH live_executions AS (
+    SELECT DISTINCT (data->'key'->>'id')::uint8 AS client_incarnation,
+           COALESCE((data->'value'->>'deployment_generation')::uint8, 0) AS deployment_generation,
+           mz_internal.parse_catalog_id(data->'value'->'realization'->'Replica') AS replica_id
+    FROM execution_catalog
+    WHERE data->>'kind' = 'ClientIncarnation'
+)
+SELECT o.object_id, o.write_known, o.write_frontier
+FROM observations o
+JOIN live_executions e ON e.client_incarnation = o.client_incarnation
+    AND e.deployment_generation = o.deployment_generation AND e.replica_id = o.replica_id
+WHERE o.deployment_generation = (SELECT generation FROM authority)
+
+statement ok
+CREATE VIEW differences AS
+(SELECT * FROM expected_frontiers EXCEPT ALL SELECT * FROM current_frontiers)
+UNION ALL
+(SELECT * FROM current_frontiers EXCEPT ALL SELECT * FROM expected_frontiers)
+
+query TTTI rowsort
+SELECT object_id, write_known::text, write_frontier::text, count(*) FROM current_frontiers GROUP BY 1, 2, 3
+----
+a true NULL 3
+b false NULL 1
+
+query I
+SELECT count(*) FROM differences
+----
+0
+
+# Exercise maintained execution and selective predicate pushdown too.
+statement ok
+CREATE INDEX current_frontiers_idx ON current_frontiers (object_id)
+
+query I
+SELECT count(*) FROM current_frontiers WHERE object_id = 'a' AND write_known
+----
+3
+
+# Retiring an execution removes its observations without deleting the raw rows.
+statement ok
+DELETE FROM execution_catalog WHERE data->>'kind' = 'ClientIncarnation' AND data->'key'->>'id' = '7'
+
+statement ok
+INSERT INTO execution_catalog VALUES ('{"kind":"ClientIncarnation","key":{"id":11},"value":{"realization":{"Replica":{"System":1}}}}')
+
+statement ok
+INSERT INTO observations VALUES ('successor', 's1', 0, 11, true, 5)
+
+query TTTI rowsort
+SELECT object_id, write_known::text, write_frontier::text, count(*) FROM current_frontiers GROUP BY 1, 2, 3
+----
+a true NULL 1
+b false NULL 1
+successor true 5 1
+
+query I
+SELECT count(*) FROM differences
+----
+0
+
+statement ok
+UPDATE authority SET generation = 1
+
+query TTT rowsort
+SELECT object_id, write_known::text, write_frontier::text FROM current_frontiers
+----
+candidate true 20
+
+query I
+SELECT count(*) FROM differences
+----
+0
+
+statement ok
+DELETE FROM authority
+
+query II
+SELECT (SELECT count(*) FROM current_frontiers), (SELECT count(*) FROM differences)
+----
+0 0
+
+statement ok
+DROP TABLE execution_catalog, observations, authority CASCADE

@@ -3175,21 +3175,26 @@ pub static MZ_CURRENT_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
+-- Deduplicate catalog execution keys independently of changing observations.
+-- Joining these keys preserves observation multiplicity, including duplicates.
+WITH live_executions AS (
+    SELECT DISTINCT (data->'key'->>'id')::uint8 AS client_incarnation,
+           COALESCE((data->'value'->>'deployment_generation')::uint8, 0) AS deployment_generation,
+           mz_internal.parse_catalog_id(data->'value'->'realization'->'Replica') AS replica_id
+    FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'ClientIncarnation'
+)
 SELECT o.object_id, o.replica_id, o.read_known, o.read_frontier,
        o.write_known, o.write_frontier, p.compute_global
 FROM mz_internal.mz_replica_frontier_observations o
 JOIN mz_internal.mz_frontier_object_placement p ON p.object_id = o.object_id
 JOIN mz_catalog.mz_cluster_replicas r ON r.id = o.replica_id AND r.cluster_id = p.cluster_id
+JOIN live_executions e ON e.client_incarnation = o.client_incarnation
+    AND e.deployment_generation = o.deployment_generation AND e.replica_id = o.replica_id
 WHERE p.replica_owned AND (p.replica_name IS NULL OR p.replica_name = r.name)
   AND o.deployment_generation = (
     SELECT active_deployment_generation
     FROM mz_internal.mz_catalog_deployment_authority
-) AND EXISTS (
-    SELECT 1 FROM mz_internal.mz_catalog_shared c
-    WHERE c.data->>'kind' = 'ClientIncarnation'
-      AND (c.data->'key'->>'id')::uint8 = o.client_incarnation
-      AND COALESCE((c.data->'value'->>'deployment_generation')::uint8, 0) = o.deployment_generation
-      AND mz_internal.parse_catalog_id(c.data->'value'->'realization'->'Replica') = o.replica_id
 )",
     access: vec![PUBLIC_SELECT],
     ontology: None,
