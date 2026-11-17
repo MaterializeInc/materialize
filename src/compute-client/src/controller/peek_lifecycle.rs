@@ -14,14 +14,11 @@ use std::sync::Mutex;
 use crate::controller::PeekNotification;
 use crate::protocol::response::PeekResponse;
 
-type Retire = Box<dyn FnOnce(PeekNotification) + Send>;
-type Cancel = Box<dyn FnOnce(PeekResponse) + Send>;
-
 enum State {
     /// `cancel` is set once compute work is issued.
     Pending {
-        retire: Retire,
-        cancel: Option<Cancel>,
+        retire: Box<dyn FnOnce(PeekNotification) + Send>,
+        cancel: Option<Box<dyn FnOnce(PeekResponse) + Send>>,
     },
     /// Holds the response for an issue attempt that arrives after retirement.
     Retired(PeekResponse),
