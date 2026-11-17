@@ -85,10 +85,12 @@ const PUBLISHED_SCHEME: &str = "https";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
 /// Path-suffixed aliases of [`PROTECTED_RESOURCE_METADATA_PATH`] per
-/// RFC 9728 §3.1. All MCP endpoints serve an identical metadata
-/// document, so the same handler is mounted at every path; the aliases
-/// exist so strict clients that always probe with a path suffix do not
-/// have to fall back to the bare URI.
+/// RFC 9728 §3.1. Every path serves the same document, whose `resource`
+/// is `/api/mcp`.
+///
+/// NOTE: only the `/api/mcp` alias matches that `resource` as §3.3
+/// requires. A strict client that probes the agent or developer alias
+/// rejects the document.
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_UNIFIED: &str =
     "/.well-known/oauth-protected-resource/api/mcp";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
