@@ -6,17 +6,23 @@ Finish native-only M3 under the current [prompt](20260903_decoupled_coordination
 Preserve compatible full writers, explicit retirement, protection and adapter-owned
 policy. Do not restore legacy execution paths or weaken validation.
 
-Attribute readiness CPU with a bounded stack capture before choosing another
-performance change. The all-sink selector removed observed Iceberg competition,
-but the unchanged KafkaSources workload still hit its deadline, at action 409
-after nine promotions. Final validation and backup/restore remain unverified.
-That run is cleaned up, with no recorded OOM events. The new stack diagnostic is
-`aj-native-parallel-c4d197b0`, using the same debug binaries and workload limits.
+Identify the catalog-server dataflows' costly operators or input waits before
+choosing another performance change. The completed stack diagnostic
+`aj-native-parallel-c4d197b0` again reached action 409 and nine promotions before
+the unchanged deadline. Final validation and backup/restore remain unverified.
+Its runtimes and profilers are stopped, with no workload OOM recorded.
 
-The late generation-8 capture found both catalog-server processes using about one
+During the sampled readiness window, s2 used 30.61 CPU seconds over 30.40 seconds.
+Its compute worker accounted for 77% of its sampled user CPU. Only s2 blocked
+readiness in the corresponding polls, with unhydrated collections falling from
+135 to 19. Most stacks could not unwind, so this identifies the busy execution
+thread, not the responsible operator. Do not repeat the full workload merely to
+collect the same CPU evidence.
+
+The earlier late generation-8 capture found both catalog-server processes using about one
 CPU under a saturated eight-CPU budget. Candidate source-statistics inputs were
 already near wall clock. Readiness logs identify source-status and public-frontier
-indexes as the final blockers in this run. Trace those inputs from the start of
+indexes as the final blockers in that run. Trace those inputs from the start of
 readiness. Neither these late samples nor earlier leaf profiles identify the
 full readiness critical path.
 
@@ -156,9 +162,12 @@ frontier. Replica reconstruction uses the deployment-supplied plan build, so the
 unchanged controller binary's earlier embedded SHA does not split its cache
 namespace from the rebuilt clusterd. Exact binary hashes remain in the receipts.
 
-`stack-profile-kafka-driver.log` and `readiness-stacks-driver.log` track the new
-diagnostic. It records one 30s, 49Hz user-stack window, with no SQL probes or
-changed workload limits. Decode without Rust demangling after the workload.
+`readiness-stack-evidence.tar.gz`, `readiness-stack-analysis.md` and
+`stack-run-outcome.md` preserve the completed diagnostic and time-aligned readiness
+census. `readiness-leaves.txt` recovers all sampled instructions independently of
+failed unwinds. Offline decoding required 4 GiB peak memory, after the workload
+stopped. Its initial 2 GiB decoder OOMs are not workload OOMs. Workload limits
+remain unchanged.
 
 - Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
