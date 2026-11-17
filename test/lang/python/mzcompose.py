@@ -20,6 +20,7 @@ SERVICES = [
     Service(
         name="python",
         config={
+            # renovate: datasource=docker depName=python versioning=docker
             "image": "python:3.14.7-trixie",
             "volumes": [
                 "../../../:/workdir",

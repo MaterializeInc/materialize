@@ -11,4 +11,5 @@
 # pyright-version.sh — specifies version of Pyright typechecker we use
 # as a string printed to stdout, for use from other tools
 
+# renovate: datasource=npm depName=pyright
 printf "1.1.407"

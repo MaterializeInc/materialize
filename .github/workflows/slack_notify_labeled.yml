@@ -81,7 +81,7 @@ jobs:
               'message',
               `\`release-blocker\` label has been added to "${pr.title}" (${pr.html_url}) (assigned to: ${assignee}).`,
             );
-      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
+      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a # v1.1.0
         if: steps.pr.outputs.message
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}

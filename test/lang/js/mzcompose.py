@@ -20,6 +20,7 @@ SERVICES = [
     Service(
         name="js",
         config={
+            # renovate: datasource=docker depName=node versioning=docker
             "image": "node:24",
             "volumes": [
                 "../../../:/workdir",

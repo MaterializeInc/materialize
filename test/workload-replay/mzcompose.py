@@ -134,6 +134,7 @@ SERVICES = [
     ServiceDefinition(
         name="console-k6",
         config={
+            # renovate: datasource=docker depName=grafana/k6 versioning=docker
             "image": "grafana/k6:1.6.0",
             "volumes": [f"{MZ_ROOT}:/workdir"],
             "working_dir": "/workdir/console/e2e-tests/k6",

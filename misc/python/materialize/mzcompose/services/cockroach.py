@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 
 class Cockroach(Service):
+    # renovate: datasource=docker depName=cockroachdb/cockroach versioning=docker
     DEFAULT_COCKROACH_TAG = "v25.4.10"
 
     def __init__(

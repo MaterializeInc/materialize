@@ -27,12 +27,15 @@ RUN apt-get update \
 
 COPY mysql.asc .
 
+# renovate: datasource=github-tags depName=mysql/mysql-connector-odbc
+ARG MYSQL_ODBC_VERSION=9.6.0
+
 RUN arch_mysql=$(echo "$ARCH_GCC" | sed -e "s/x86_64/x86-64bit/") \
-    && archive="mysql-connector-odbc-9.6.0-linux-glibc2.28-$arch_mysql.tar.gz" \
+    && archive="mysql-connector-odbc-$MYSQL_ODBC_VERSION-linux-glibc2.28-$arch_mysql.tar.gz" \
     && directory=${archive%.tar.gz} \
     && gpg --import mysql.asc \
     && echo "trusted-key B7B3B788A8D3785C" >> ~/.gnupg/gpg.conf \
-    && curl -fsSL "https://dev.mysql.com/get/Downloads/Connector-ODBC/9.6/$archive" > mysql-odbc.tar.gz \
+    && curl -fsSL "https://dev.mysql.com/get/Downloads/Connector-ODBC/${MYSQL_ODBC_VERSION%.*}/$archive" > mysql-odbc.tar.gz \
     && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=$archive&p=10" > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && mkdir /mysql-connector-odbc \

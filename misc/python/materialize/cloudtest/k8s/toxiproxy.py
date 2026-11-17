@@ -29,6 +29,7 @@ from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.util.common import retry
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
+# renovate: datasource=docker depName=jauderho/toxiproxy versioning=docker
 TOXIPROXY_IMAGE = "jauderho/toxiproxy:v2.8.0"
 
 TOXIPROXY_ADMIN_PORT = 8474

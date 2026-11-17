@@ -45,6 +45,7 @@ SERVICES = [
     ServiceDefinition(
         name="console-runner",
         config={
+            # renovate: datasource=docker depName=node versioning=docker
             "image": "node:22-alpine",
             "volumes": [
                 f"{MZ_ROOT}:/workdir",

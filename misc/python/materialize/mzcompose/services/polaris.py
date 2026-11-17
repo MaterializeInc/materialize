@@ -18,6 +18,7 @@ class PolarisBootstrap(Service):
         self,
         name: str = "polaris-bootstrap",
         image: str = "apache/polaris-admin-tool",
+        # renovate: datasource=docker depName=apache/polaris-admin-tool versioning=docker
         tag: str = "1.7.0",
         environment: list[str] = [
             "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,root",
@@ -52,6 +53,7 @@ class Polaris(Service):
         image: str = "apache/polaris",
         # Fails with 1.1.0-incubating. Releases from 1.4.0 on drop the
         # `-incubating` suffix, so keep this tag in sync with the admin tool's.
+        # renovate: datasource=docker depName=apache/polaris versioning=docker
         tag: str = "1.7.0",
         # 8181: api port, 8182: management port
         ports: list[str | int] = [8181, 8182],

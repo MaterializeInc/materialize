@@ -17,9 +17,11 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
+# renovate: datasource=github-releases depName=zizmorcore/zizmor
+zizmor_version=1.30.1
 if ! zizmor --version >/dev/null 2>/dev/null; then
   echo "lint: zizmor is not installed"
-  echo "hint: Install with \`cargo install --locked zizmor@1.30.1\`"
+  echo "hint: Install with \`cargo install --locked zizmor@$zizmor_version\`"
   exit 1
 fi
 

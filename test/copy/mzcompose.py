@@ -55,6 +55,7 @@ SERVICES = [
     DockerService(
         name="redirect-server",
         config={
+            # renovate: datasource=docker depName=python versioning=docker
             "image": "python:3.12-slim",
             "volumes": ["./redirect_server.py:/app/redirect_server.py"],
             "command": ["python3", "-u", "/app/redirect_server.py"],
