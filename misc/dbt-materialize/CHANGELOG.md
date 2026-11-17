@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* Fix installing with pip 26.3 or later, which failed with `Distributions
+  from PyPI cannot declare direct URL dependencies`. The package declared a
+  test-only `dev` extra that pointed at a git URL. The extra is removed.
+
 * Quote the cluster name in `drop_cluster`, matching `create_cluster` and
   `deploy_cleanup`. A cluster whose name needs quoting, such as one with
   uppercase letters, was left in place while the operation reported it as

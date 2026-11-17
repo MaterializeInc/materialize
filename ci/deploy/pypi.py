@@ -78,7 +78,6 @@ def build_package_setup_py(path: Path) -> None:
     spawn.runv(
         [sys.executable, "setup.py", "build", "sdist"],
         cwd=path,
-        env={**os.environ, "RELEASE_BUILD": "1"},
     )
 
 
