@@ -471,6 +471,9 @@ def get_variable_system_parameters(
             "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
         ),
         VariableSystemParameter(
+            "kafka_source_rdkafka_metrics", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
         # Low default so small tables exercise partitioning.

@@ -272,6 +272,7 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2 true
 # per-worker metrics must survive that.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
+ALTER SYSTEM SET kafka_source_rdkafka_metrics = false
 
 > CREATE CLUSTER rerender_cluster SIZE 'scale=1,workers=1'
 
@@ -296,6 +297,15 @@ SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${rerender
   OR (metric_name = 'mz_storage_upsert_inserts_total' AND labels->'source_id' = '${rerender-tbl-id}')
 mz_source_row_inserts
 mz_storage_upsert_inserts_total
+
+# Kafka clients created while `kafka_source_rdkafka_metrics` is off export no
+# librdkafka statistics. The re-render below creates new clients.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name LIKE 'mz_source_rdkafka_%'
+0
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_source_rdkafka_metrics = true
 
 > CREATE TABLE rerender_tbl2 FROM SOURCE rerender_source (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

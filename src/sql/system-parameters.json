@@ -2111,6 +2111,15 @@
       "dyncfg": false
     },
     {
+      "name": "kafka_source_rdkafka_metrics",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Kafka sources export librdkafka statistics as metrics. A running source picks up a change when its dataflow is next rendered.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "kafka_transaction_timeout",
       "typeName": "duration",
       "default": "10 min",

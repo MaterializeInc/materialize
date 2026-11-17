@@ -334,9 +334,12 @@ fn render_reader<'scope>(
             );
 
             let notificator = Arc::new(Notify::new());
+            let rdkafka_metrics = mz_storage_types::dyncfgs::KAFKA_SOURCE_RDKAFKA_METRICS
+                .get(config.config.config_set());
 
             let consumer_setup = ReaderConsumerSetup {
                 config: config.clone(),
+                rdkafka_metrics,
                 connection,
                 topic: topic.clone(),
                 topic_metadata_refresh_interval,
@@ -429,7 +432,7 @@ fn render_reader<'scope>(
                 tokio::select! {
                     _ = &mut start_signal => break,
                     _ = callback_interval.tick() => {
-                        if let Some(consumer) = consumer.get() {
+                        if rdkafka_metrics && let Some(consumer) = consumer.get() {
                             poll_callbacks(consumer.client());
                         }
                     }
@@ -1360,13 +1363,23 @@ impl PartitionConsumer {
 /// wakes up the reader.
 struct GlueConsumerContext {
     notificator: Arc<Notify>,
-    metrics: Mutex<KafkaSourceMetrics>,
+    /// `None` if the client emits no statistics.
+    metrics: Option<Mutex<KafkaSourceMetrics>>,
     inner: MzClientContext,
+}
+
+impl GlueConsumerContext {
+    /// The value of `statistics.interval.ms`, where 0 turns statistics off.
+    fn statistics_interval_ms(rdkafka_metrics: bool) -> &'static str {
+        if rdkafka_metrics { "1000" } else { "0" }
+    }
 }
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {
-        self.metrics.lock().expect("poisoned").update(&statistics);
+        if let Some(metrics) = &self.metrics {
+            metrics.lock().expect("poisoned").update(&statistics);
+        }
     }
 
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
@@ -1406,6 +1419,8 @@ type HealthOutput =
 /// failures to the operator's outputs.
 struct ReaderConsumerSetup {
     config: RawSourceCreationConfig,
+    /// Whether the consumer emits statistics.
+    rdkafka_metrics: bool,
     connection: KafkaConnection,
     topic: String,
     topic_metadata_refresh_interval: Duration,
@@ -1462,16 +1477,19 @@ impl ReaderConsumerSetup {
                 &self.config.config,
                 GlueConsumerContext {
                     notificator: Arc::clone(&self.notificator),
-                    metrics: Mutex::new(self.config.metrics.get_kafka_source_metrics(
-                        self.topic.clone(),
-                        self.config.id,
-                        self.config.worker_id,
-                        KafkaSourceClient::Reader,
-                    )),
+                    metrics: self.rdkafka_metrics.then(|| {
+                        Mutex::new(self.config.metrics.get_kafka_source_metrics(
+                            self.topic.clone(),
+                            self.config.id,
+                            self.config.worker_id,
+                            KafkaSourceClient::Reader,
+                        ))
+                    }),
                     inner: MzClientContext::default(),
                 },
                 &btreemap! {
-                    "statistics.interval.ms" => "1000".into(),
+                    "statistics.interval.ms" =>
+                        GlueConsumerContext::statistics_interval_ms(self.rdkafka_metrics).into(),
                     // Disable Kafka auto commit. We manually commit offsets
                     // to Kafka once we have reclocked those offsets, so
                     // that users can use standard Kafka tools for progress
@@ -1899,22 +1917,27 @@ fn render_metadata_fetcher<'scope>(
             ..
         } = connection;
 
+        let rdkafka_metrics =
+            mz_storage_types::dyncfgs::KAFKA_SOURCE_RDKAFKA_METRICS.get(config.config.config_set());
         let consumer: Result<BaseConsumer<_>, _> = connection
             .create_with_context(
                 &config.config,
                 GlueConsumerContext {
                     // This client has no partition queues, so nothing waits on the notificator.
                     notificator: Arc::default(),
-                    metrics: Mutex::new(config.metrics.get_kafka_source_metrics(
-                        topic.clone(),
-                        config.id,
-                        config.worker_id,
-                        KafkaSourceClient::Metadata,
-                    )),
+                    metrics: rdkafka_metrics.then(|| {
+                        Mutex::new(config.metrics.get_kafka_source_metrics(
+                            topic.clone(),
+                            config.id,
+                            config.worker_id,
+                            KafkaSourceClient::Metadata,
+                        ))
+                    }),
                     inner: MzClientContext::default(),
                 },
                 &btreemap! {
-                    "statistics.interval.ms" => "1000".into(),
+                    "statistics.interval.ms" =>
+                        GlueConsumerContext::statistics_interval_ms(rdkafka_metrics).into(),
                     // Use the user-configured topic metadata refresh
                     // interval.
                     "topic.metadata.refresh.interval.ms" =>
@@ -1954,7 +1977,7 @@ fn render_metadata_fetcher<'scope>(
         };
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        spawn_metadata_thread(config, consumer, topic, tx);
+        spawn_metadata_thread(config, consumer, topic, rdkafka_metrics, tx);
 
         let mut prev_upstream_frontier = resume_upper;
 
@@ -2003,6 +2026,7 @@ fn spawn_metadata_thread<C: ConsumerContext>(
     config: RawSourceCreationConfig,
     consumer: BaseConsumer<TunnelingClientContext<C>>,
     topic: String,
+    rdkafka_metrics: bool,
     tx: mpsc::UnboundedSender<(mz_repr::Timestamp, MetadataUpdate)>,
 ) {
     // Linux thread names are limited to 15 characters. Use a truncated ID to fit the name.
@@ -2023,7 +2047,9 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 let probe_ts = ticker.tick_blocking();
                 // NOTE: librdkafka only delivers statistics when the client's callbacks are
                 // served, and queues them without bound until then.
-                poll_callbacks(consumer.client());
+                if rdkafka_metrics {
+                    poll_callbacks(consumer.client());
+                }
                 let result = fetch_partition_info(
                     &consumer,
                     &topic,
