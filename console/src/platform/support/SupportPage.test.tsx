@@ -1262,6 +1262,12 @@ describe("SupportPage", () => {
       expect(
         within(sent).getByRole("link", { name: "View in Help Center ↗" }),
       ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+      expect(sent).toHaveTextContent(
+        "Replies arrive by email and in the Messenger.",
+      );
+      expect(
+        within(sent).getByRole("link", { name: "Help Center" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
     });
 
     it("keeps a new ticket in the list before the search catches up", async () => {
@@ -1380,10 +1386,13 @@ describe("SupportPage", () => {
       // It starts on the signed-in organization and region.
       expect(choice).toHaveValue(`org_id ${defaultRegionId}`);
 
+      expect(
+        screen.getByText(
+          "Response times vary by organization\u2019s support agreement.",
+        ),
+      ).toBeVisible();
+
       await user.selectOptions(choice, "Sandbox \u00b7 aws/eu-west-1");
-      const context = screen.getByTestId("support-ticket-context");
-      expect(context).toHaveTextContent("aws/eu-west-1");
-      expect(context).toHaveTextContent("v26.47.0");
       await fillTicketForm(user);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
@@ -1422,19 +1431,15 @@ describe("SupportPage", () => {
       });
       // It starts on the signed-in organization and the current region.
       expect(organization).toHaveValue(`org_id ${defaultRegionId}`);
-      const context = screen.getByTestId("support-ticket-context");
-      expect(context).toHaveTextContent(defaultRegionId);
 
       await user.selectOptions(organization, "Sandbox");
-      // The console only knows the signed-in organization's region.
-      expect(context).toHaveTextContent("Sandbox");
-      expect(context).not.toHaveTextContent(defaultRegionId);
       await fillTicketForm(user);
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
       const sent = await screen.findByTestId("support-ticket-sent");
       expect(sent).toHaveTextContent("Sandbox");
       expect(createdWith).toMatchObject({ organizationId: "sandbox-org" });
+      // The console only knows the signed-in organization's region.
       expect(createdWith).not.toHaveProperty("region");
       expect(createdWith).not.toHaveProperty("environmentVersion");
     });

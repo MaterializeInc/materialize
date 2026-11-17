@@ -19,6 +19,7 @@ import {
   Flex,
   FormControl,
   FormErrorMessage,
+  FormHelperText,
   FormLabel,
   Grid,
   HStack,
@@ -144,9 +145,6 @@ const SeverityCard = ({
   );
 };
 
-/** One button of a segmented control, backed by a native radio input. */
-type TicketDetails = { label: string; value: React.ReactNode }[];
-
 const NewTicketForm = ({
   organizationId,
   organizationName,
@@ -192,40 +190,6 @@ const NewTicketForm = ({
     targets.find(({ key }) => key === targetKey) ??
     defaultTicketTarget(targets, signedIn);
 
-  // The global API always adds the org ID (and the user's email).
-  const sentDetails: TicketDetails = [];
-  if (target) {
-    sentDetails.push({
-      label: "Organization",
-      value: (
-        <>
-          {target.organizationName}{" "}
-          <Text
-            as="span"
-            textStyle="monospace"
-            fontSize="xs"
-            color={colors.foreground.secondary}
-          >
-            {target.organizationId}
-          </Text>
-        </>
-      ),
-    });
-    if (target.region) {
-      sentDetails.push({ label: "Region", value: target.region });
-    }
-    if (target.environmentVersion) {
-      sentDetails.push({
-        label: "Version",
-        value: (
-          <Text as="span" textStyle="monospace" fontSize="xs">
-            {target.environmentVersion}
-          </Text>
-        ),
-      });
-    }
-  }
-
   const onSubmit = (values: TicketFormValues) =>
     submit.mutate(
       buildCreateTicketRequest(
@@ -243,7 +207,10 @@ const NewTicketForm = ({
       onSubmit={handleSubmit(onSubmit)}
       noValidate
       direction="column"
-      height="100%"
+      // Fills what the header leaves, so the body scrolls and the footer
+      // stays in view. With height="100%" the footer sits below the viewport.
+      flex="1"
+      minHeight="0"
     >
       <DrawerBody px="5" py="4">
         <VStack spacing="4" align="stretch">
@@ -323,6 +290,11 @@ const NewTicketForm = ({
                   </option>
                 ))}
               </SimpleSelect>
+              <FormHelperText>
+                {
+                  "Response times vary by organization\u2019s support agreement."
+                }
+              </FormHelperText>
             </FormControl>
           )}
 
@@ -345,7 +317,7 @@ const NewTicketForm = ({
           )}
 
           <Box as="fieldset">
-            <FieldLabel>Environment</FieldLabel>
+            <FieldLabel>Workload type</FieldLabel>
             {isOutage ? (
               // Anyone reporting an outage is reporting it in production.
               <Text
@@ -423,42 +395,6 @@ const NewTicketForm = ({
                 How to run mz-debug ↗
               </TextLink>
             </Text>
-          )}
-
-          {sentDetails.length > 0 && (
-            <Box
-              as="section"
-              aria-label="Sent with your ticket"
-              borderWidth="1px"
-              borderColor={colors.border.primary}
-              borderRadius="lg"
-              bg={colors.background.secondary}
-            >
-              <Text textStyle="text-ui-med" fontWeight="600" px="3" py="2.5">
-                Sent with your ticket
-              </Text>
-              <Grid
-                as="dl"
-                templateColumns="132px minmax(0, 1fr)"
-                columnGap="3"
-                rowGap="1.5"
-                px="3"
-                pb="3"
-                textStyle="text-small"
-                data-testid="support-ticket-context"
-              >
-                {sentDetails.map((detail) => (
-                  <React.Fragment key={detail.label}>
-                    <Text as="dt" color={colors.foreground.secondary}>
-                      {detail.label}
-                    </Text>
-                    <Text as="dd" minWidth="0" overflowWrap="anywhere">
-                      {detail.value}
-                    </Text>
-                  </React.Fragment>
-                ))}
-              </Grid>
-            </Box>
           )}
         </VStack>
       </DrawerBody>
@@ -586,7 +522,15 @@ const TicketSent = ({
                     request.severity,
                   )} response target in your support plan.`}
             </ListItem>
-            <ListItem>Replies arrive by email and in Help Center.</ListItem>
+            <ListItem>
+              Replies arrive by email and in the Messenger. You can also reply
+              to tickets, track their status, and view tickets from others in
+              your organization in the{" "}
+              <TextLink href={HELP_CENTER_TICKETS_URL} isExternal>
+                Help Center
+              </TextLink>
+              .
+            </ListItem>
           </OrderedList>
         </VStack>
 
