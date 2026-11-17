@@ -593,11 +593,8 @@ impl StatementLoggingFrontend {
     /// - Creates statement logging records
     /// - Attends to metrics.
     ///
-    /// Returns None if the statement should not be logged (due to sampling or throttling), or the
-    /// info required to proceed with statement logging.
-    /// The `Row` is the pre-packed row for `mz_statement_execution_history`.
-    /// The `Option<PreparedStatementEvent>` is None when we have already logged the prepared
-    /// statement before, and this is just a subsequent execution.
+    /// Returns `None` if the statement is not logged (due to sampling or throttling). Otherwise
+    /// the execution has begun in the log, and the caller owes it an end.
     pub fn begin_statement_execution(
         &self,
         session: &mut Session,
@@ -605,12 +602,7 @@ impl StatementLoggingFrontend {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         system_config: &SystemVars,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
-    ) -> Option<(
-        StatementLoggingId,
-        StatementBeganExecutionRecord,
-        Row,
-        Option<PreparedStatementEvent>,
-    )> {
+    ) -> Option<StatementLoggingId> {
         // Skip logging for internal users unless explicitly enabled
         let enable_internal_statement_logging = system_config.enable_internal_statement_logging();
         if session.user().is_internal() && !enable_internal_statement_logging {
@@ -747,12 +739,9 @@ impl StatementLoggingFrontend {
             self.throttling_state.reset_throttled_count();
         }
 
-        Some((
-            StatementLoggingId(execution_uuid),
-            began_execution,
-            mseh_update,
-            prepared_statement_event,
-        ))
+        self.log
+            .begin_execution(began_execution, prepared_statement_event);
+        Some(StatementLoggingId(execution_uuid))
     }
 }
 
@@ -887,12 +876,25 @@ pub(crate) struct PendingStatementLog {
     pub(crate) statement_lifecycle_events: Vec<(Row, Diff)>,
 }
 
+/// An execution that has begun and not ended.
+///
+/// Its `mz_statement_execution_history` row is packed when the log is drained.
+/// An execution that begins and ends between two drains is therefore written
+/// once, as its final row.
+#[derive(Debug)]
+struct BegunExecution {
+    record: StatementBeganExecutionRecord,
+    /// The row that was last drained for this execution, which is retracted
+    /// when a newer one replaces it.
+    drained: Option<Row>,
+    /// Whether `record` has changed since `drained` was packed from it.
+    dirty: bool,
+}
+
 #[derive(Debug, Default)]
 struct StatementLogState {
-    /// Executions that have begun and not ended. The record is what the last
-    /// row written for the execution was packed from, so that the row can be
-    /// retracted when the execution changes or ends.
-    executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+    /// Executions that have begun and not ended.
+    executions_begun: BTreeMap<Uuid, BegunExecution>,
     /// Sessions that have started and are not yet in `mz_session_history`.
     /// A session is logged with the first prepared statement logged for it.
     unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
@@ -929,8 +931,7 @@ impl StatementLog {
         self.state.lock().expect("statement log lock poisoned")
     }
 
-    /// Records that the execution described by `record` began. `mseh_update` is
-    /// the `mz_statement_execution_history` row packed from `record`.
+    /// Records that the execution described by `record` began.
     ///
     /// `prepared_statement` is set if this is the first logged execution of
     /// its prepared statement, which is then logged too, together with its
@@ -938,7 +939,6 @@ impl StatementLog {
     pub(crate) fn begin_execution(
         &self,
         record: StatementBeganExecutionRecord,
-        mseh_update: Row,
         prepared_statement: Option<PreparedStatementEvent>,
     ) {
         let lifecycle_update = self.pack_lifecycle_event(
@@ -950,13 +950,16 @@ impl StatementLog {
         let mut state = self.state();
         state
             .pending
-            .statement_executions
-            .push((mseh_update, Diff::ONE));
-        state
-            .pending
             .statement_lifecycle_events
             .extend(lifecycle_update);
-        state.executions_begun.insert(record.id, record);
+        state.executions_begun.insert(
+            record.id,
+            BegunExecution {
+                record,
+                drained: None,
+                dirty: true,
+            },
+        );
 
         if let Some(PreparedStatementEvent {
             prepared_statement,
@@ -1029,20 +1032,11 @@ impl StatementLog {
         F: FnOnce(&mut StatementBeganExecutionRecord),
     {
         let mut state = self.state();
-        let StatementLogState {
-            executions_begun,
-            pending,
-            ..
-        } = &mut *state;
-        let Some(record) = executions_begun.get_mut(&id) else {
+        let Some(execution) = state.executions_begun.get_mut(&id) else {
             return false;
         };
-        let retraction = pack_statement_began_execution_update(record);
-        f(record);
-        let update = pack_statement_began_execution_update(record);
-        pending
-            .statement_executions
-            .extend([(retraction, Diff::MINUS_ONE), (update, Diff::ONE)]);
+        f(&mut execution.record);
+        execution.dirty = true;
         true
     }
 
@@ -1055,8 +1049,13 @@ impl StatementLog {
         reason: StatementEndedExecutionReason,
         ended_at: EpochMillis,
     ) {
-        let began_record = self.state().executions_begun.remove(&id.0);
-        let Some(began_record) = began_record else {
+        let execution = self.state().executions_begun.remove(&id.0);
+        let Some(BegunExecution {
+            record: began_record,
+            drained,
+            dirty: _,
+        }) = execution
+        else {
             // The statement was already ended; the first end wins.
             //
             // A missing entry can only mean a duplicate end, never an end that
@@ -1082,12 +1081,14 @@ impl StatementLog {
             reason,
             ended_at,
         };
-        let updates = pack_statement_ended_execution_updates(&began_record, &ended_record);
+        let update = pack_full_statement_execution_update(&began_record, &ended_record);
         let lifecycle_update =
             self.pack_lifecycle_event(id, &StatementLifecycleEvent::ExecutionFinished, ended_at);
 
         let mut state = self.state();
-        state.pending.statement_executions.extend(updates);
+        let executions = &mut state.pending.statement_executions;
+        executions.extend(drained.map(|row| (row, Diff::MINUS_ONE)));
+        executions.push((update, Diff::ONE));
         state
             .pending
             .statement_lifecycle_events
@@ -1142,7 +1143,24 @@ impl StatementLog {
 
     /// Takes the updates recorded since the last call.
     pub(crate) fn drain(&self) -> PendingStatementLog {
-        std::mem::take(&mut self.state().pending)
+        let mut state = self.state();
+        let StatementLogState {
+            executions_begun,
+            pending,
+            ..
+        } = &mut *state;
+        // NOTE: This packs under the lock, once per execution that is in
+        // flight and has changed, which is bounded by the number of
+        // concurrently executing statements.
+        for execution in executions_begun.values_mut().filter(|e| e.dirty) {
+            let update = pack_statement_began_execution_update(&execution.record);
+            let retraction = execution.drained.replace(update.clone());
+            let executions = &mut pending.statement_executions;
+            executions.extend(retraction.map(|row| (row, Diff::MINUS_ONE)));
+            executions.push((update, Diff::ONE));
+            execution.dirty = false;
+        }
+        std::mem::take(pending)
     }
 }
 
@@ -1196,15 +1214,6 @@ fn pack_full_statement_execution_update(
         execution_strategy.into(),
     ]);
     row
-}
-
-fn pack_statement_ended_execution_updates(
-    began_record: &StatementBeganExecutionRecord,
-    ended_record: &StatementEndedExecutionRecord,
-) -> [(Row, Diff); 2] {
-    let retraction = pack_statement_began_execution_update(began_record);
-    let new = pack_full_statement_execution_update(began_record, ended_record);
-    [(retraction, Diff::MINUS_ONE), (new, Diff::ONE)]
 }
 
 fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
@@ -1390,10 +1399,72 @@ impl WatchSetCreation {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, Row, SqlScalarType};
+    use differential_dataflow::consolidation::consolidate;
+    use mz_dyncfg::ConfigSet;
+    use mz_ore::now::to_datetime;
+    use mz_repr::{Datum, Diff, Row, SqlScalarType, Timestamp};
     use mz_sql::plan::Params;
+    use uuid::Uuid;
 
-    use super::serialize_params;
+    use super::{
+        StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementLog,
+        StatementLoggingId, serialize_params,
+    };
+
+    #[mz_ore::test]
+    fn execution_changing_across_drains_leaves_one_final_row() {
+        let dyncfgs = ConfigSet::default()
+            .add(&mz_adapter_types::dyncfgs::ENABLE_STATEMENT_LIFECYCLE_LOGGING);
+        let log = StatementLog::new(&dyncfgs);
+        let id = Uuid::from_u128(1);
+        let record = StatementBeganExecutionRecord {
+            id,
+            prepared_statement_id: Uuid::from_u128(2),
+            sample_rate: 1.0,
+            params: vec![],
+            began_at: 1,
+            cluster_id: None,
+            cluster_name: None,
+            database_name: "materialize".into(),
+            search_path: vec![],
+            application_name: "test".into(),
+            transaction_isolation: "strict serializable".into(),
+            execution_timestamp: None,
+            transaction_id: 1,
+            transient_index_id: None,
+            mz_version: "test".into(),
+            kind: None,
+        };
+        let id = StatementLoggingId(id);
+        let mut written = vec![];
+
+        log.begin_execution(record, None);
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "in-flight execution is visible");
+        let in_flight = written[0].clone();
+
+        // An unchanged execution is not written again.
+        assert!(log.drain().statement_executions.is_empty());
+
+        log.set_execution_timestamp(id, Timestamp::from(7));
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "changed row replaces the drained one");
+        assert_ne!(written[0], in_flight);
+
+        log.end_execution(id, StatementEndedExecutionReason::Canceled, 2);
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "final row replaces the drained one");
+        let (row, diff) = &written[0];
+        assert_eq!(*diff, Diff::ONE);
+        let finished_at = Datum::TimestampTz(to_datetime(2).try_into().expect("must fit"));
+        assert!(row.iter().any(|datum| datum == Datum::String("canceled")));
+        assert!(row.iter().any(|datum| datum == finished_at));
+
+        assert!(log.drain().statement_executions.is_empty());
+    }
 
     /// A `"char"` param whose byte is `>= 0x80` used to panic
     /// `String::from_utf8` on the statement-logging path. It should now
