@@ -4898,14 +4898,14 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     exactly once.
 
     A bare scan of a table with no usable index becomes a `standard` slow-path
-    peek (`ExecuteSlowPathPeek`) registered with the coordinator; a constant
+    peek (`ExecuteSlowPathPeek`) registered in the peek registry; a constant
     query like `SELECT 1` (exercised by `workflow_test_drop_cluster_during_peeks`)
     is handled inline and never registered. When a concurrent `DROP CLUSTER`
-    makes the peek fail, the frontend owns the error end of statement logging
-    and the coordinator must defuse its own guard instead of emitting
-    `Aborted`. Two ends for one statement historically panicked and aborted
-    environmentd; today the duplicate is dropped at the sink with the warning
-    we assert on below.
+    makes the peek fail, its lifecycle owns the end of statement logging,
+    whether the registry's invalidation or the failed issue gets there first.
+    Two ends for one statement historically panicked and aborted environmentd;
+    today a duplicate is dropped at the sink with the warning we assert on
+    below.
 
     The fast-path variant of this race has a sub-millisecond window that brute
     force can't hit;

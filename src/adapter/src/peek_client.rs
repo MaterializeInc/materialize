@@ -161,6 +161,11 @@ impl PeekClient {
         &self.connection_peeks
     }
 
+    /// Registers a peek with the connection's partition and creates its
+    /// lifecycle.
+    ///
+    /// The lifecycle takes over the statement's end of execution from `logging`
+    /// on every path, including the errors this returns.
     pub(crate) async fn register_peek(
         &mut self,
         cluster_id: ComputeInstanceId,
@@ -173,7 +178,7 @@ impl PeekClient {
         let connection = Arc::clone(&self.connection_peeks);
         let uuid = Uuid::new_v4();
         let retired = Arc::clone(&connection);
-        let logging = logging.guard.take();
+        let logging = logging.hand_off();
         let lifecycle = Arc::new(PeekLifecycle::new(move |notification| {
             retired.remove(&uuid);
             if let Some(logging) = logging {
@@ -883,9 +888,8 @@ impl Drop for PeekHandle {
 /// drop of the enclosing future: if the guard is dropped without being defused,
 /// it emits `StatementEndedExecutionReason::Aborted`.
 ///
-/// When the guard is `defuse`d, some other component (e.g. the coordinator, for
-/// streaming peek / subscribe responses) takes over and logs `EndedExecution`
-/// itself.
+/// When the guard is `defuse`d, some other component (e.g. the protocol layer,
+/// for subscribe responses) takes over and logs `EndedExecution` itself.
 ///
 /// For non-sampled statements the guard still exists but carries no id, and
 /// retirement / drop are no-ops.
@@ -964,16 +968,19 @@ impl Drop for StatementLoggingGuard {
 
 /// The session task's slot for the end-of-execution obligation of the statement
 /// it is running. One slot is held for the whole `SessionClient::execute` call
-/// and there is exactly one retirement site.
+/// and the session task retires it at exactly one site.
 ///
 /// An empty slot means no log entry exists for this execution, so a fallback to
 /// the coordinator lets it begin its own. An occupied slot means the session
 /// task owes an end event: [`Self::retire`] pays it, [`Self::release`] transfers
-/// it to the coordinator. [`Self::id`] returning `None` covers both "not
-/// sampled" and "the end is logged elsewhere", which want identical treatment
-/// everywhere.
+/// it to the coordinator, [`Self::hand_off`] transfers it to a peek lifecycle.
+/// [`Self::id`] returning `None` covers both "not sampled" and "the end is
+/// logged elsewhere", which want identical treatment everywhere.
 pub(crate) struct ExecutionLogging {
     guard: Option<StatementLoggingGuard>,
+    /// Whether [`Self::hand_off`] moved the guard out. A log entry exists then,
+    /// although `guard` is empty.
+    handed_off: bool,
     /// Whether the coordinator must not run this statement, because the session
     /// task has already counted it in the metrics `Coordinator::handle_execute`
     /// maintains. Handing it over afterwards would count it twice.
@@ -1002,6 +1009,7 @@ impl ExecutionLogging {
     pub(crate) fn adopt(outer: Option<ExecuteContextGuard>, peek_client: &PeekClient) -> Self {
         Self {
             guard: outer.map(|outer| StatementLoggingGuard::adopt(outer, peek_client)),
+            handed_off: false,
             coordinator_must_not_run: false,
         }
     }
@@ -1080,6 +1088,9 @@ impl ExecutionLogging {
                  its per-statement metrics are counted twice"
             );
         }
+        if self.handed_off {
+            return Some(ExecuteContextExtra::new(None));
+        }
         self.guard.take().map(|guard| guard.release())
     }
 
@@ -1098,11 +1109,20 @@ impl ExecutionLogging {
     }
 
     /// Leaves the slot inert, for dispatch sites that hand the end of execution
-    /// to the coordinator or the protocol layer (registered peeks, subscribes).
+    /// to the protocol layer (subscribes).
     pub(crate) fn defuse(&mut self) {
         if let Some(guard) = self.guard.as_mut() {
             guard.defuse();
         }
+    }
+
+    /// Moves the end-of-execution obligation into the returned guard, for a
+    /// peek whose lifecycle logs the end. Afterwards the slot behaves as after
+    /// [`Self::defuse`]. Returns `None` if no log entry exists.
+    fn hand_off(&mut self) -> Option<StatementLoggingGuard> {
+        let guard = self.guard.take();
+        self.handed_off = guard.is_some();
+        guard
     }
 }
 
