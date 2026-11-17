@@ -78,8 +78,8 @@ pub enum InternalStorageCommand {
     Suspend {
         /// The id of the dataflow that should be suspended.
         id: GlobalId,
-        /// The incarnation of the dataflow that asked for this. A later one keeps running.
-        incarnation: u64,
+        /// The epoch of the rendering that asked for this. A later rendering keeps running.
+        epoch: u64,
         /// The reason for the suspend request.
         reason: String,
     },

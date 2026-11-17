@@ -240,6 +240,7 @@ pub fn build_ingestion_dataflow(
 ) {
     let worker_id = timely_worker.index();
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
+    let epoch = storage_state.next_dataflow_epoch(primary_source_id);
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
@@ -457,7 +458,7 @@ pub fn build_ingestion_dataflow(
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
-                    incarnation: storage_state.next_dataflow_incarnation(primary_source_id),
+                    epoch,
                 },
                 storage_state
                     .storage_configuration
@@ -483,6 +484,7 @@ pub fn build_export_dataflow(
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
+    let epoch = storage_state.next_dataflow_epoch(id);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
@@ -505,7 +507,7 @@ pub fn build_export_dataflow(
             crate::healthcheck::DefaultWriter {
                 command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),
-                incarnation: storage_state.next_dataflow_incarnation(id),
+                epoch,
             },
             storage_state
                 .storage_configuration

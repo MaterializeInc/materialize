@@ -269,7 +269,8 @@ impl StorageState {
             persist_clients,
             txns_ctx,
             sink_tokens: BTreeMap::new(),
-            dataflow_incarnations: BTreeMap::new(),
+            rendered_dataflows: 0,
+            dataflow_epochs: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
@@ -338,9 +339,11 @@ pub struct StorageState {
     /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
     /// to prevent usage of custom shutdown tokens that are tricky to get right.
     pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
-    /// How often each dataflow was rendered. Equal on all workers, because they render in the
+    /// The number of dataflows rendered so far, equal on all workers because they render in the
     /// order of the sequenced internal commands.
-    pub dataflow_incarnations: BTreeMap<GlobalId, u64>,
+    pub rendered_dataflows: u64,
+    /// The epoch of the current rendering of each dataflow.
+    pub dataflow_epochs: BTreeMap<GlobalId, u64>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -408,11 +411,11 @@ pub struct StorageState {
 }
 
 impl StorageState {
-    /// Records that the dataflow for `id` is being rendered and returns its incarnation.
-    pub fn next_dataflow_incarnation(&mut self, id: GlobalId) -> u64 {
-        let incarnation = self.dataflow_incarnations.entry(id).or_default();
-        *incarnation += 1;
-        *incarnation
+    /// Starts the epoch of a new rendering of the dataflow for `id` and returns it.
+    pub fn next_dataflow_epoch(&mut self, id: GlobalId) -> u64 {
+        self.rendered_dataflows += 1;
+        self.dataflow_epochs.insert(id, self.rendered_dataflows);
+        self.rendered_dataflows
     }
 
     /// Return an error handler that triggers a suspend and restart of the corresponding storage
@@ -726,16 +729,12 @@ impl<'w> Worker<'w> {
                     );
                 }
             }
-            InternalStorageCommand::Suspend {
-                id,
-                incarnation,
-                reason,
-            } => {
-                // NOTE: a dataflow rendered after the command was sent has not hit the error, and
-                // nothing would bring it back.
-                if self.storage_state.dataflow_incarnations.get(&id) != Some(&incarnation) {
+            InternalStorageCommand::Suspend { id, epoch, reason } => {
+                // NOTE: a stale `Suspend` must not stop a newer rendering of this dataflow, because
+                // that rendering would be torn down and never restarted.
+                if self.storage_state.dataflow_epochs.get(&id) != Some(&epoch) {
                     info!(
-                        "worker {}/{} ignoring suspend for {id} from incarnation {incarnation}",
+                        "worker {}/{} ignoring suspend for {id} from stale epoch {epoch}",
                         self.timely_worker.index(),
                         self.timely_worker.peers(),
                     );
@@ -912,7 +911,7 @@ impl<'w> Worker<'w> {
 
                     self.storage_state.sink_tokens.remove(id);
                     self.storage_state.sink_write_frontiers.remove(id);
-                    self.storage_state.dataflow_incarnations.remove(id);
+                    self.storage_state.dataflow_epochs.remove(id);
 
                     self.storage_state.aggregated_statistics.deinitialize(*id);
                 }
