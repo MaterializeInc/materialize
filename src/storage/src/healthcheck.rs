@@ -263,6 +263,7 @@ pub trait HealthOperator {
         write_namespaced_map: bool,
     );
     fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
+    fn send_suspend(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
 
     /// Optionally override the chosen worker index. Default is semi-random.
     /// Only useful for tests.
@@ -314,6 +315,13 @@ impl HealthOperator for DefaultWriter {
                 id,
                 reason: format!("{:?}", error),
             });
+    }
+
+    fn send_suspend(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
+        self.command_tx.send(InternalStorageCommand::Suspend {
+            id,
+            reason: format!("{:?}", error),
+        });
     }
 }
 
@@ -445,7 +453,7 @@ where
                         )
                     }
 
-                    if health_event.should_halt() {
+                    if health_event.stall_action() != StallAction::Continue {
                         *halt_with = Some((ns.clone(), health_event.clone()));
                     }
 
@@ -504,13 +512,19 @@ where
                         halting_id
                     );
 
-                    info!(
-                        "Broadcasting suspend-and-restart \
-                        command because of {:?} after {:?} delay",
-                        halt_with, suspend_and_restart_delay
-                    );
-                    tokio::time::sleep(suspend_and_restart_delay).await;
-                    health_operator_impl.send_halt(id, halt_with);
+                    let action = halt_with.as_ref().map(|(_, update)| update.stall_action());
+                    if action == Some(StallAction::Suspend) {
+                        info!("Broadcasting suspend command because of {:?}", halt_with);
+                        health_operator_impl.send_suspend(id, halt_with);
+                    } else {
+                        info!(
+                            "Broadcasting suspend-and-restart \
+                            command because of {:?} after {:?} delay",
+                            halt_with, suspend_and_restart_delay
+                        );
+                        tokio::time::sleep(suspend_and_restart_delay).await;
+                        health_operator_impl.send_halt(id, halt_with);
+                    }
                 }
             }
         }
@@ -530,11 +544,32 @@ pub enum HealthStatusUpdate {
     Stalled {
         error: String,
         hint: Option<String>,
-        should_halt: bool,
+        action: StallAction,
     },
     Ceased {
         error: String,
     },
+}
+
+/// What the health operator does to a dataflow after recording its stall.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
+pub enum StallAction {
+    /// The dataflow keeps running and can report a recovery.
+    Continue,
+    /// The dataflow is torn down and rendered again.
+    Restart,
+    /// The dataflow is torn down and stays down until its run command is issued again.
+    Suspend,
 }
 
 impl HealthStatusUpdate {
@@ -548,7 +583,7 @@ impl HealthStatusUpdate {
         HealthStatusUpdate::Stalled {
             error,
             hint,
-            should_halt: false,
+            action: StallAction::Continue,
         }
     }
 
@@ -557,7 +592,20 @@ impl HealthStatusUpdate {
         HealthStatusUpdate::Stalled {
             error,
             hint,
-            should_halt: true,
+            action: StallAction::Restart,
+        }
+    }
+
+    /// Generates a suspending [`HealthStatusUpdate`] with `update`, for an error that a restart
+    /// cannot fix.
+    ///
+    /// NOTE: an operator that only wedges after such an error keeps buffering its input, so the
+    /// dataflow has to be torn down to bound its memory.
+    pub(crate) fn suspending(error: String, hint: Option<String>) -> Self {
+        HealthStatusUpdate::Stalled {
+            error,
+            hint,
+            action: StallAction::Suspend,
         }
     }
 
@@ -567,16 +615,16 @@ impl HealthStatusUpdate {
     //     HealthStatusUpdate::Ceased { error }
     // }
 
-    /// Whether or not we should halt the dataflow instances and restart it.
-    pub(crate) fn should_halt(&self) -> bool {
+    /// What should happen to the dataflow instance once this update is recorded.
+    pub(crate) fn stall_action(&self) -> StallAction {
         match self {
             HealthStatusUpdate::Running |
             // HealthStatusUpdate::Ceased should never halt because it can occur
             // at the subsource level and should not cause the entire dataflow
             // to halt. Instead, the dataflow itself should handle shutting
             // itself down if need be.
-            HealthStatusUpdate::Ceased { .. } => false,
-            HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
+            HealthStatusUpdate::Ceased { .. } => StallAction::Continue,
+            HealthStatusUpdate::Stalled { action, .. } => *action,
         }
     }
 }
@@ -1052,6 +1100,15 @@ mod tests {
         }
 
         fn send_halt(&self, _id: GlobalId, _error: Option<(StatusNamespace, HealthStatusUpdate)>) {
+            // Not yet unit-tested
+            unimplemented!()
+        }
+
+        fn send_suspend(
+            &self,
+            _id: GlobalId,
+            _error: Option<(StatusNamespace, HealthStatusUpdate)>,
+        ) {
             // Not yet unit-tested
             unimplemented!()
         }

@@ -715,6 +715,16 @@ impl<'w> Worker<'w> {
                     );
                 }
             }
+            InternalStorageCommand::Suspend { id, reason } => {
+                // Nothing brings the dataflow back on its own, so this is louder than a restart.
+                warn!(
+                    "worker {}/{} suspending {id} because of: {reason}",
+                    self.timely_worker.index(),
+                    self.timely_worker.peers(),
+                );
+                self.storage_state.source_tokens.remove(&id);
+                self.storage_state.sink_tokens.remove(&id);
+            }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 mut ingestion_description,

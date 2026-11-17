@@ -1578,7 +1578,7 @@ fn mint_batch_descriptions<'scope>(
         let message = format!("{}", error.display_with_causes());
         let update = if error.is::<SchemaMismatchError>() {
             // A restart would load the same table and fail the same way.
-            HealthStatusUpdate::stalled(message, None)
+            HealthStatusUpdate::suspending(message, None)
         } else {
             HealthStatusUpdate::halting(message, None)
         };
