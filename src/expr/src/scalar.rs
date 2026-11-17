@@ -1149,6 +1149,26 @@ impl MirScalarExpr {
         contains
     }
 
+    /// Evaluates an expression that references no columns and contains no
+    /// [unfoldable](Self::contains_unfoldable) call.
+    ///
+    /// The two conditions are independent and fail differently:
+    /// - A column reference panics if evaluation reaches it.
+    /// - An unfoldable call, anywhere in the expression, returns an error that
+    ///   shows its function, without evaluating anything.
+    pub fn eval_constant_foldable<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
+        if let Some(func) = self.unfoldable_func() {
+            return Err(EvalError::Unsupported {
+                feature: format!("{func} in a constant expression").into(),
+                discussion_no: None,
+            });
+        }
+        self.eval(&[], temp_storage)
+    }
+
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {

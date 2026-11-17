@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Secret};
-use mz_expr::{Eval, MirScalarExpr};
+use mz_expr::MirScalarExpr;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::catalog::{CatalogError, ObjectType};
@@ -160,7 +160,7 @@ impl Coordinator {
             .prep_scalar_expr(secret_as)
             .map_err(|_| secret_eval_err())?;
         let evaled = secret_as
-            .eval(&[], &temp_storage)
+            .eval_constant_foldable(&temp_storage)
             .map_err(|_| secret_eval_err())?;
 
         if evaled == Datum::Null {
