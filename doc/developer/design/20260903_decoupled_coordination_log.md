@@ -6,12 +6,12 @@ Finish native-only M3 under the current [prompt](20260903_decoupled_coordination
 Preserve compatible full writers, explicit retirement, protection and adapter-owned
 policy. Do not restore legacy execution paths or weaken validation.
 
-Rebuild debug binaries with the all-sink replica selector and rerun the unchanged
-KafkaSources workload, then continue readiness attribution. The preceding debug workload hit
-its unchanged deadline at action 400 after nine promotions. Final validation and
-backup/restore remain unverified. Its runtimes are cleaned up, with no recorded
-OOM events. Scoped Python/Rust checks, catalog oracle regressions and the fresh
-debug build passed. Runtime acceptance remains open.
+Attribute readiness CPU with a bounded stack capture before choosing another
+performance change. The all-sink selector removed observed Iceberg competition,
+but the unchanged KafkaSources workload still hit its deadline, at action 409
+after nine promotions. Final validation and backup/restore remain unverified.
+That run is cleaned up, with no recorded OOM events. The new stack diagnostic is
+`aj-native-parallel-c4d197b0`, using the same debug binaries and workload limits.
 
 The late generation-8 capture found both catalog-server processes using about one
 CPU under a saturated eight-CPU budget. Candidate source-statistics inputs were
@@ -42,8 +42,10 @@ All external sinks now use the existing catalog-derived replica selector, matchi
 baseline's all-sink scheduling policy. Iceberg no longer bypasses it. Deployment,
 incarnation and post-acquisition checks remain. A red/green regression covers
 Kafka/Iceberg selection and catalog membership changes. Sink tests, all-target
-clusterd Clippy and independent review passed. Runtime contention and workload
-impact remain unverified. Source placement is unchanged.
+clusterd Clippy and independent review passed. Runtime logs show competing-writer
+failures disappearing while all Iceberg tables continue receiving successful
+catalog updates. This is not external row-equivalence or full workload acceptance.
+Readiness timings did not improve uniformly. Source placement is unchanged.
 
 Controllerd owns processes, replica followers own maintained execution, and
 adapters keep policy, transactions, protection and transient queries. Native
@@ -79,9 +81,6 @@ source status, metrics and HTTP proxy coverage. These are not latest-build accep
 
 ## Live blockers and decisions
 
-- Verify the approved Iceberg placement repair against actual multi-replica output.
-  The preceding capture showed repeated competing executions, not duplicate
-  committed output. Its share of CPU remains unquantified.
 - Readiness/hydration remains the largest measured Kafka phase. Map the remaining
   system-cluster blockers and attribute their work or input waits before tuning.
 - One pre-cache run had a recovered promoted-adapter storage-initialization
@@ -148,6 +147,18 @@ promotion failure.
 `sink-placement-red-3-driver.log` records the regression failing on unselected
 Iceberg admission. `sink-placement-green-driver.log` records successful sink tests
 and all-target Clippy. `sink-placement-inputs.json` records the checked source.
+
+`sink-fixed-kafka-evidence.tar.gz` and `sink-placement-runtime-comparison.md`
+preserve the post-fix run and comparison. Its SQL observer obtained no input
+frontiers: the first attempt preceded replica startup, and the later live-side
+mapping query exceeded its observation deadline. Do not treat either as an empty
+frontier. Replica reconstruction uses the deployment-supplied plan build, so the
+unchanged controller binary's earlier embedded SHA does not split its cache
+namespace from the rebuilt clusterd. Exact binary hashes remain in the receipts.
+
+`stack-profile-kafka-driver.log` and `readiness-stacks-driver.log` track the new
+diagnostic. It records one 30s, 49Hz user-stack window, with no SQL probes or
+changed workload limits. Decode without Rust demangling after the workload.
 
 - Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
