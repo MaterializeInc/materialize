@@ -731,23 +731,12 @@ impl PeekClient {
         catalog: &Catalog,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> StatementLoggingGuard {
-        let result = self.statement_logging_frontend.begin_statement_execution(
+        let id = self.statement_logging_frontend.begin_statement_execution(
             session,
             params,
             logging,
             catalog.system_config(),
             lifecycle_timestamps,
-        );
-
-        let id = result.map(
-            |(logging_id, began_execution, mseh_update, prepared_statement)| {
-                self.statement_logging_frontend.log.begin_execution(
-                    began_execution,
-                    mseh_update,
-                    prepared_statement,
-                );
-                logging_id
-            },
         );
 
         StatementLoggingGuard {
