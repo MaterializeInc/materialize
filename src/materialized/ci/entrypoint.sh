@@ -272,7 +272,12 @@ export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILT
 export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR:-0}"
 export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR:-0}"
 
-export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0;memory_limiter_interval=0}"
+# Tick at 4 Hz (250ms) by default for fresher out-of-the-box results. Safe on
+# the emulator (small object counts); the tick-rate-vs-object-count scaling
+# limit gates Cloud/self-managed, not the emulator. default_timestamp_interval
+# drives both the coordinator tick and new sources' default TIMESTAMP INTERVAL;
+# min_timestamp_interval lowers the floor so explicit sub-second intervals work.
+export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0;memory_limiter_interval=0;default_timestamp_interval=250ms;min_timestamp_interval=250ms}"
 
 
 if ! is_truthy "${MZ_NO_TELEMETRY:-0}"; then
