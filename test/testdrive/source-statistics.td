@@ -310,3 +310,22 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
   OR (metric_name = 'mz_storage_upsert_inserts_total' AND labels->'source_id' = '${rerender-tbl-id}')
 mz_source_row_inserts
 mz_storage_upsert_inserts_total
+
+# Both of the source's Kafka clients export librdkafka statistics, including
+# the round-trip time of the brokers that have responded to them.
+$ set-from-sql var=rerender-source-id
+SELECT id FROM mz_sources WHERE name = 'rerender_source'
+
+> SELECT DISTINCT metric_name, labels->'client' FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name IN ('mz_source_rdkafka_rx', 'mz_source_rdkafka_broker_rtt_requests_total')
+  AND labels->'source_id' = '${rerender-source-id}' AND value > 0
+mz_source_rdkafka_broker_rtt_requests_total metadata
+mz_source_rdkafka_broker_rtt_requests_total reader
+mz_source_rdkafka_rx metadata
+mz_source_rdkafka_rx reader
+
+> DROP SOURCE rerender_source CASCADE
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name LIKE 'mz_source_rdkafka_%' AND labels->'source_id' = '${rerender-source-id}'
+0

@@ -12,7 +12,7 @@ use std::collections::btree_map::Entry;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::str::{self};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use itertools::Itertools;
 use maplit::btreemap;
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
+    poll_callbacks,
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -31,7 +32,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::errors::{
@@ -65,10 +66,10 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, OnceCell, mpsc};
-use tracing::{error, info, trace};
+use tracing::{info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::source::kafka::KafkaSourceMetrics;
+use crate::metrics::source::kafka::{KafkaSourceClient, KafkaSourceMetrics};
 use crate::source::types::{
     FuelSize, Probe, ResumeUppers, SignaledFuture, SourceRender, StackedCollection,
 };
@@ -128,10 +129,6 @@ pub struct KafkaSourceReader {
     last_offsets: BTreeMap<usize, BTreeMap<PartitionId, i64>>,
     /// The offset to start reading from for each partition.
     start_offsets: BTreeMap<PartitionId, u64>,
-    /// Channel to receive Kafka statistics JSON blobs from the stats callback.
-    stats_rx: crossbeam_channel::Receiver<Jsonb>,
-    /// A handle to the partition specific metrics
-    partition_metrics: KafkaSourceMetrics,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
 }
@@ -336,7 +333,6 @@ fn render_reader<'scope>(
                 "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
-            let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let notificator = Arc::new(Notify::new());
 
             let consumer_setup = ReaderConsumerSetup {
@@ -347,7 +343,6 @@ fn render_reader<'scope>(
                 group_id,
                 client_id,
                 notificator: Arc::clone(&notificator),
-                stats_tx,
                 outputs: outputs.iter().map(|o| (o.id, o.output_index)).collect(),
                 data_output: data_output.clone(),
                 health_output: health_output.clone(),
@@ -425,7 +420,21 @@ fn render_reader<'scope>(
             // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
             // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
             // `resume_upper`, which is necessary for this basic form of backpressure to work.
-            start_signal.await;
+            //
+            // NOTE: librdkafka queues a statistics event every second until its callbacks are
+            // served, which the reader loop below only does once it runs.
+            tokio::pin!(start_signal);
+            let mut callback_interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = &mut start_signal => break,
+                    _ = callback_interval.tick() => {
+                        if let Some(consumer) = consumer.get() {
+                            poll_callbacks(consumer.client());
+                        }
+                    }
+                }
+            }
             info!(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
@@ -433,7 +442,6 @@ fn render_reader<'scope>(
                 "kafka worker noticed rehydration is finished, starting partition queues..."
             );
 
-            let partition_ids = start_offsets.keys().copied().collect();
             let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
 
             let mut reader = KafkaSourceReader {
@@ -449,12 +457,6 @@ fn render_reader<'scope>(
                     .map(|output| (output.output_index, BTreeMap::new()))
                     .collect(),
                 start_offsets,
-                stats_rx,
-                partition_metrics: config.metrics.get_kafka_source_metrics(
-                    partition_ids,
-                    topic.clone(),
-                    config.id,
-                ),
                 partition_capabilities,
             };
 
@@ -800,8 +802,6 @@ fn render_reader<'scope>(
                     }
                 }
 
-                reader.update_stats();
-
                 // Take the consumers temporarily to get around borrow checker errors
                 let mut consumers = std::mem::take(&mut reader.partition_consumers);
                 for consumer in consumers.iter_mut() {
@@ -1141,29 +1141,6 @@ impl KafkaSourceReader {
         );
     }
 
-    /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
-    fn update_stats(&mut self) {
-        while let Ok(stats) = self.stats_rx.try_recv() {
-            match serde_json::from_str::<Statistics>(&stats.to_string()) {
-                Ok(statistics) => {
-                    let topic = statistics.topics.get(&self.topic_name);
-                    match topic {
-                        Some(topic) => {
-                            for (id, partition) in &topic.partitions {
-                                self.partition_metrics
-                                    .set_offset_max(*id, partition.hi_offset);
-                            }
-                        }
-                        None => error!("No stats found for topic: {}", &self.topic_name),
-                    }
-                }
-                Err(e) => {
-                    error!("failed decoding librdkafka statistics JSON: {}", e);
-                }
-            }
-        }
-    }
-
     /// Checks if the given message is viable for emission. This checks if the message offset is
     /// past the expected offset and returns None if it is not.
     fn handle_message(
@@ -1379,25 +1356,17 @@ impl PartitionConsumer {
     }
 }
 
-/// An implementation of [`ConsumerContext`] that forwards statistics to the
-/// worker
+/// An implementation of [`ConsumerContext`] that exports the client's statistics as metrics and
+/// wakes up the reader.
 struct GlueConsumerContext {
     notificator: Arc<Notify>,
-    stats_tx: crossbeam_channel::Sender<Jsonb>,
+    metrics: Mutex<KafkaSourceMetrics>,
     inner: MzClientContext,
 }
 
 impl ClientContext for GlueConsumerContext {
-    fn stats_raw(&self, statistics: &[u8]) {
-        match Jsonb::from_slice(statistics) {
-            Ok(statistics) => {
-                self.stats_tx
-                    .send(statistics)
-                    .expect("timely operator hung up while Kafka source active");
-                self.activate();
-            }
-            Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
-        };
+    fn stats(&self, statistics: Statistics) {
+        self.metrics.lock().expect("poisoned").update(&statistics);
     }
 
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
@@ -1443,7 +1412,6 @@ struct ReaderConsumerSetup {
     group_id: String,
     client_id: String,
     notificator: Arc<Notify>,
-    stats_tx: crossbeam_channel::Sender<Jsonb>,
     /// `(id, output_index)` of each source export.
     outputs: Vec<(GlobalId, usize)>,
     data_output: DataOutput,
@@ -1494,10 +1462,16 @@ impl ReaderConsumerSetup {
                 &self.config.config,
                 GlueConsumerContext {
                     notificator: Arc::clone(&self.notificator),
-                    stats_tx: self.stats_tx.clone(),
+                    metrics: Mutex::new(self.config.metrics.get_kafka_source_metrics(
+                        self.topic.clone(),
+                        self.config.id,
+                        self.config.worker_id,
+                        KafkaSourceClient::Reader,
+                    )),
                     inner: MzClientContext::default(),
                 },
                 &btreemap! {
+                    "statistics.interval.ms" => "1000".into(),
                     // Disable Kafka auto commit. We manually commit offsets
                     // to Kafka once we have reclocked those offsets, so
                     // that users can use standard Kafka tools for progress
@@ -1928,8 +1902,19 @@ fn render_metadata_fetcher<'scope>(
         let consumer: Result<BaseConsumer<_>, _> = connection
             .create_with_context(
                 &config.config,
-                MzClientContext::default(),
+                GlueConsumerContext {
+                    // This client has no partition queues, so nothing waits on the notificator.
+                    notificator: Arc::default(),
+                    metrics: Mutex::new(config.metrics.get_kafka_source_metrics(
+                        topic.clone(),
+                        config.id,
+                        config.worker_id,
+                        KafkaSourceClient::Metadata,
+                    )),
+                    inner: MzClientContext::default(),
+                },
                 &btreemap! {
+                    "statistics.interval.ms" => "1000".into(),
                     // Use the user-configured topic metadata refresh
                     // interval.
                     "topic.metadata.refresh.interval.ms" =>
@@ -2036,6 +2021,9 @@ fn spawn_metadata_thread<C: ConsumerContext>(
 
             loop {
                 let probe_ts = ticker.tick_blocking();
+                // NOTE: librdkafka only delivers statistics when the client's callbacks are
+                // served, and queues them without bound until then.
+                poll_callbacks(consumer.client());
                 let result = fetch_partition_info(
                     &consumer,
                     &topic,
