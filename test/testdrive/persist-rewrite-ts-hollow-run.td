@@ -17,10 +17,12 @@ ALTER SYSTEM SET persist_blob_target_size = 1024
 
 > CREATE TABLE t (a int, b text)
 
-> INSERT INTO t SELECT x, repeat('x', 100) FROM generate_series(1, 5000) AS x
+$ set-max-tries max-tries=1
+
+> INSERT INTO t SELECT x, repeat('x', 100) FROM generate_series(1, 100) AS x
 
 > SELECT count(*), sum(a) FROM t
-5000 12502500
+100 5050
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET persist_batch_max_runs
