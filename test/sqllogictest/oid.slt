@@ -1270,3 +1270,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17141  parse_catalog_view_joins
 17142  mz_inferred_relationships
 17143  mz_inferred_relationships_ind
+17144  mz_mcp_relationships

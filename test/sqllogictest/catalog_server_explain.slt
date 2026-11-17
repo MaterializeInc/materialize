@@ -4949,7 +4949,7 @@ mz_catalog.mz_columns:
           Project: #6, #0..=#3, #7, #4, #5
           Map: null
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1945 rows)
+          →Constant (1951 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -5762,7 +5762,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (198 rows)
+        →Constant (199 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -6249,7 +6249,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1101 rows)
+            →Constant (1107 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8815,7 +8815,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1945 rows)
+  →Constant (1951 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8885,7 +8885,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (198 rows)
+  →Constant (199 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10836,7 +10836,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1101 rows)
+            →Constant (1107 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

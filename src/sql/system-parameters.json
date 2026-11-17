@@ -1184,15 +1184,6 @@
       "dyncfg": false
     },
     {
-      "name": "enable_inferred_relationships",
-      "typeName": "boolean",
-      "default": "off",
-      "description": "Whether inferring relationships between relations from view definitions is allowed (Materialize).",
-      "scope": "environment",
-      "userVisible": false,
-      "dyncfg": false
-    },
-    {
       "name": "enable_internal_statement_logging",
       "typeName": "boolean",
       "default": "off",

@@ -933,6 +933,29 @@ subsource or table and the corresponding upstream PostgreSQL table being ingeste
 | `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
+## `mz_mcp_relationships`
+
+The `mz_mcp_relationships` view lists the relationships between relations
+that the current role can read, shaped like an
+[ontology table](/transform-data/patterns/ontology/), so agents can look up
+how to join two relations without one. It lists the `join` and `key` rows of
+[`mz_inferred_relationships`](#mz_inferred_relationships), and `derived`
+references: a column that holds the same values as a referencing column,
+through a chain of views passing it, references the same key.
+
+The view lists only relations the role holds `SELECT` on, and sessions with
+`restrict_to_user_objects` can read it.
+
+<!-- RELATION_SPEC mz_internal.mz_mcp_relationships -->
+| Field                | Type           | Meaning  |
+| -------------------- | -------------- | -------- |
+| `table_name`         | [`text`]       | Fully qualified name of the relation holding the referencing columns. |
+| `columns`            | [`text array`] | The referencing columns. |
+| `referenced_table`   | [`text`]       | Fully qualified name of the relation holding the referenced columns. |
+| `referenced_columns` | [`text array`] | The referenced columns, paired by position with `columns`. |
+| `kind`               | [`text`]       | `join` when a view joins the columns, `key` when a view passes the referenced key through, and `derived` when the referencing column holds the same values as a column that references the key. |
+| `is_directed`        | [`boolean`]    | Whether a key decides which side references the other. When false, the columns are only known to be joined. |
+
 ## `mz_mysql_source_tables`
 
 The `mz_mysql_source_tables` table contains the mapping between each Materialize

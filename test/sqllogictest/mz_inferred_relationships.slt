@@ -14,11 +14,6 @@ mode cockroach
 
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_inferred_relationships = on
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE organizations (id int, name text)
 
@@ -145,17 +140,52 @@ FROM mz_views WHERE name = 'seller_performance'
 ----
 [{"column":"seller_id","source_column":"id","source_id":"u2"}]
 
+# mz_mcp_relationships lists references shaped like an ontology table,
+# including those derived through columns views pass through:
+# winning_bids.buyer passes bids.buyer and joins users.id, so bids.buyer
+# references users.id too.
+query TTTTT
+SELECT table_name, columns::text, referenced_table, referenced_columns::text, kind
+FROM mz_internal.mz_mcp_relationships
+WHERE kind = 'derived'
+ORDER BY 1, 2
+----
+"materialize"."public"."auctions"  {seller}  "materialize"."public"."users"  {id}  derived
+"materialize"."public"."bids"  {buyer}  "materialize"."public"."users"  {id}  derived
+
+# A session restricted to user objects reads it, and sees only the relations
+# its role can read: here users and winning_bids, not bids or auctions.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_inferred_relationships = off
+CREATE ROLE agent LOGIN
 ----
 COMPLETE 0
 
-query error inferring relationships between relations from view definitions is not available
-SELECT mz_internal.parse_catalog_view_joins(create_sql) FROM mz_views
-
-# The builtin is maintained regardless, it does not call the function at
-# query time.
-query B
-SELECT count(*) > 0 FROM mz_internal.mz_inferred_relationships
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO agent
 ----
-true
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON materialize.public.users, materialize.public.winning_bids TO agent
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent SET restrict_to_user_objects = true
+----
+COMPLETE 0
+
+simple conn=agent,user=agent
+SELECT table_name, columns::text, referenced_table, referenced_columns::text, kind
+FROM mz_internal.mz_mcp_relationships
+ORDER BY 1, 2
+----
+"materialize"."public"."winning_bids",{buyer},"materialize"."public"."users",{id},join
+"materialize"."public"."winning_bids",{seller},"materialize"."public"."users",{id},join
+COMPLETE 2
+
+simple conn=agent,user=agent
+SELECT count(*) FROM mz_internal.mz_inferred_relationships
+----
+db error: ERROR: access to system object mz_inferred_relationships is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.

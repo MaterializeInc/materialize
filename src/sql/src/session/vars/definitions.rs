@@ -1937,12 +1937,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_inferred_relationships,
-        desc: "inferring relationships between relations from view definitions",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,

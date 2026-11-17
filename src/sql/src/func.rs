@@ -5369,12 +5369,8 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
         },
         "parse_catalog_view_joins" => Scalar {
-            params!(String) => Operation::unary(|ecx, create_sql| {
-                ecx.require_feature_flag(&vars::ENABLE_INFERRED_RELATIONSHIPS)?;
-                Ok(create_sql.call_unary(UnaryFunc::ParseCatalogViewJoins(
-                    func::ParseCatalogViewJoins,
-                )))
-            }) => Jsonb, oid::FUNC_PARSE_CATALOG_VIEW_JOINS_OID;
+            params!(String) => UnaryFunc::ParseCatalogViewJoins(func::ParseCatalogViewJoins)
+                => Jsonb, oid::FUNC_PARSE_CATALOG_VIEW_JOINS_OID;
         },
         "parse_kafka_source_details" => Scalar {
             params!(String) => UnaryFunc::ParseKafkaSourceDetails(

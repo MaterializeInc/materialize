@@ -475,6 +475,16 @@ schema_name  text  The␠schema␠of␠the␠upstream␠table␠being␠ingested
 table_name  text  The␠name␠of␠the␠upstream␠table␠being␠ingested.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_relationships' ORDER BY position
+----
+table_name  text  Fully␠qualified␠name␠of␠the␠relation␠holding␠the␠referencing␠columns.
+columns  text[]  The␠referencing␠columns.
+referenced_table  text  Fully␠qualified␠name␠of␠the␠relation␠holding␠the␠referenced␠columns.
+referenced_columns  text[]  The␠referenced␠columns,␠paired␠by␠position␠with␠`columns`.
+kind  text  `join`␠when␠a␠view␠joins␠the␠columns,␠`key`␠when␠a␠view␠passes␠the␠referenced␠key␠through,␠and␠`derived`␠when␠the␠referencing␠column␠holds␠the␠same␠values␠as␠a␠column␠that␠references␠the␠key.
+is_directed  boolean  Whether␠a␠key␠decides␠which␠side␠references␠the␠other.␠When␠false,␠the␠columns␠are␠only␠known␠to␠be␠joined.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mysql_source_tables' ORDER BY position
 ----
 id  text  The␠ID␠of␠the␠subsource␠or␠table.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`.
@@ -871,6 +881,7 @@ mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mcp_data_product_details
 mz_mcp_data_products
+mz_mcp_relationships
 mz_metric_sinks
 mz_mysql_source_tables
 mz_network_policies

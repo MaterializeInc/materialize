@@ -16,7 +16,7 @@ use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
 
-use super::{BuiltinIndex, BuiltinMaterializedView, PUBLIC_SELECT};
+use super::{BuiltinIndex, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
 
 /// Relationships between user relations that their views' definitions imply,
 /// with no declared keys.
@@ -231,3 +231,142 @@ pub const MZ_INFERRED_RELATIONSHIPS_IND: BuiltinIndex = BuiltinIndex {
 ON mz_internal.mz_inferred_relationships (source_id)",
     is_retained_metrics_object: false,
 };
+
+/// The relationships between relations the session's role can read, shaped
+/// like an ontology table (`/docs/transform-data/patterns/ontology/`), for
+/// agents.
+///
+/// Besides the `join` and `key` rows of `mz_inferred_relationships`, it lists
+/// `derived` references: a column holding the same values as a referencing
+/// column, through a chain of views passing it, references the same key. The
+/// chains are walked here, on read, rather than maintained in
+/// `mz_inferred_relationships`. Maintaining them was measured at 3 to 5.5
+/// times that view's cost per replaced view on a one-worker catalog server,
+/// against about 150 ms per read here with 4,000 views.
+///
+/// Rows are limited to relations the role holds SELECT on, so the view can be
+/// read from a session with `restrict_to_user_objects` without describing
+/// relations the role cannot see.
+pub static MZ_MCP_RELATIONSHIPS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_mcp_relationships",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MCP_RELATIONSHIPS_OID,
+    desc: RelationDesc::builder()
+        .with_column("table_name", SqlScalarType::String.nullable(false))
+        .with_column(
+            "columns",
+            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+        )
+        .with_column("referenced_table", SqlScalarType::String.nullable(false))
+        .with_column(
+            "referenced_columns",
+            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+        )
+        .with_column("kind", SqlScalarType::String.nullable(false))
+        .with_column("is_directed", SqlScalarType::Bool.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "table_name",
+            "Fully qualified name of the relation holding the referencing columns.",
+        ),
+        ("columns", "The referencing columns."),
+        (
+            "referenced_table",
+            "Fully qualified name of the relation holding the referenced columns.",
+        ),
+        (
+            "referenced_columns",
+            "The referenced columns, paired by position with `columns`.",
+        ),
+        (
+            "kind",
+            "`join` when a view joins the columns, `key` when a view passes the referenced key through, and `derived` when the referencing column holds the same values as a column that references the key.",
+        ),
+        (
+            "is_directed",
+            "Whether a key decides which side references the other. When false, the columns are only known to be joined.",
+        ),
+    ]),
+    sql: r#"
+WITH MUTUALLY RECURSIVE
+    -- Each passed-through column's root, by pointer doubling: a pointer jumps
+    -- to where the pointer it lands on points.
+    pointers (child_id text, child_column text, root_id text, root_column text) AS (
+        SELECT
+            s.child_id,
+            s.child_column,
+            COALESCE(jump.root_id, up.target_id, s.at_id),
+            COALESCE(jump.root_column, up.target_column, s.at_column)
+        FROM (
+            SELECT
+                e.source_id AS child_id,
+                e.source_column AS child_column,
+                COALESCE(p.root_id, e.target_id) AS at_id,
+                COALESCE(p.root_column, e.target_column) AS at_column
+            FROM mz_internal.mz_inferred_relationships e
+            LEFT JOIN pointers p
+                ON p.child_id = e.source_id AND p.child_column = e.source_column
+            WHERE e.kind = 'same_values'
+        ) s
+        LEFT JOIN pointers jump
+            ON jump.child_id = s.at_id AND jump.child_column = s.at_column
+        LEFT JOIN mz_internal.mz_inferred_relationships up
+            ON up.kind = 'same_values'
+            AND up.source_id = s.at_id AND up.source_column = s.at_column
+    ),
+    members (id text, name text, root_id text, root_column text) AS (
+        SELECT child_id, child_column, root_id, root_column FROM pointers
+        UNION
+        SELECT root_id, root_column, root_id, root_column FROM pointers
+    )
+SELECT
+    src.qualified_name AS table_name,
+    ARRAY[r.source_column] AS columns,
+    tgt.qualified_name AS referenced_table,
+    ARRAY[r.target_column] AS referenced_columns,
+    r.kind,
+    r.is_directed
+FROM (
+    SELECT source_id, source_column, target_id, target_column, kind, is_directed
+    FROM mz_internal.mz_inferred_relationships
+    WHERE kind IN ('join', 'key')
+    UNION ALL
+    SELECT DISTINCT m2.id, m2.name, r.target_id, r.target_column, 'derived', true
+    FROM mz_internal.mz_inferred_relationships r
+    JOIN members m1 ON m1.id = r.source_id AND m1.name = r.source_column
+    JOIN members m2 ON m2.root_id = m1.root_id AND m2.root_column = m1.root_column
+    WHERE r.kind IN ('join', 'key') AND r.is_directed
+        AND NOT (m2.id = r.source_id AND m2.name = r.source_column)
+        AND m2.id <> r.target_id
+        AND NOT EXISTS (
+            SELECT 1 FROM mz_internal.mz_inferred_relationships d
+            WHERE d.kind IN ('join', 'key')
+                AND d.source_id = m2.id AND d.source_column = m2.name
+                AND d.target_id = r.target_id AND d.target_column = r.target_column
+        )
+) r
+JOIN (
+    SELECT DISTINCT
+        o.id,
+        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS qualified_name
+    FROM mz_internal.mz_show_my_object_privileges op
+    JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
+    JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
+    JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
+    WHERE op.privilege_type = 'SELECT'
+) src ON src.id = r.source_id
+JOIN (
+    SELECT DISTINCT
+        o.id,
+        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS qualified_name
+    FROM mz_internal.mz_show_my_object_privileges op
+    JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
+    JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
+    JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
+    WHERE op.privilege_type = 'SELECT'
+) tgt ON tgt.id = r.target_id
+"#,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
