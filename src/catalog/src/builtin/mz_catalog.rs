@@ -2109,10 +2109,10 @@ SELECT * FROM builtin_mvs").into_boxed_str()),
         }),
     }
 });
-pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_TYPES_OID,
+    oid: oid::VIEW_MZ_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -2126,8 +2126,6 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         )
         .with_column("create_sql", SqlScalarType::String.nullable(true))
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-        .with_key(vec![0])
-        .with_key(vec![1])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the type."),
@@ -2149,7 +2147,47 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The redacted `CREATE` SQL statement for the type.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: Box::leak(
+        format!(
+            "
+WITH
+    user_types AS (
+        SELECT
+            id,
+            oid,
+            schema_id,
+            name,
+            COALESCE(details->>'category', '') AS category,
+            owner_id,
+            privileges,
+            create_sql,
+            redacted_create_sql
+        FROM mz_internal.mz_catalog_items
+        WHERE type = 'type'
+    ),
+    builtin_types AS (
+        SELECT
+            m.id,
+            t.oid,
+            s.id AS schema_id,
+            t.name,
+            t.category,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            t.privileges,
+            NULL::text AS create_sql,
+            NULL::text AS redacted_create_sql
+        FROM mz_internal.mz_builtin_types t
+        JOIN mz_internal.mz_builtin_object_mappings m
+            ON m.schema_name = t.schema_name AND m.name = t.name AND m.object_type = {object_type}
+        JOIN mz_catalog.mz_schemas s ON s.name = t.schema_name AND s.database_id IS NULL
+    )
+SELECT * FROM user_types
+UNION ALL
+SELECT * FROM builtin_types",
+            object_type = gid_mapping_object_type(CatalogItemType::Type),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "type",
@@ -2180,10 +2218,11 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         },
     }),
 });
-pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_ARRAY_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ARRAY_TYPES_OID,
+    oid: oid::VIEW_MZ_ARRAY_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("element_id", SqlScalarType::String.nullable(false))
@@ -2192,7 +2231,20 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         ("id", "The ID of the array type."),
         ("element_id", "The ID of the array's element type."),
     ]),
-    is_retained_metrics_object: false,
+    sql: Box::leak(
+        format!(
+            "
+SELECT m.id, e.id AS element_id
+FROM mz_internal.mz_builtin_types t
+JOIN mz_internal.mz_builtin_object_mappings m
+    ON m.schema_name = t.schema_name AND m.name = t.name AND m.object_type = {object_type}
+JOIN mz_internal.mz_builtin_object_mappings e
+    ON e.schema_name = t.element_schema_name AND e.name = t.element_name AND e.object_type = {object_type}
+WHERE t.type_kind = 'array'",
+            object_type = gid_mapping_object_type(CatalogItemType::Type),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "array_type",
@@ -2218,16 +2270,36 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
             ]
         },
     }),
+}
 });
-pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_BASE_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_BASE_TYPES_OID,
+    oid: oid::VIEW_MZ_BASE_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([("id", "The ID of the type.")]),
-    is_retained_metrics_object: false,
+    sql: Box::leak(
+        format!(
+            "
+WITH
+    user_types AS (
+        SELECT id, details
+        FROM mz_internal.mz_catalog_item_metadata
+        WHERE type = 'type'
+    )
+SELECT m.id
+FROM mz_internal.mz_builtin_types t
+JOIN mz_internal.mz_builtin_object_mappings m
+    ON m.schema_name = t.schema_name AND m.name = t.name AND m.object_type = {object_type}
+WHERE t.type_kind = 'base'
+UNION ALL
+SELECT id FROM user_types WHERE details->>'type_kind' = 'record'",
+            object_type = gid_mapping_object_type(CatalogItemType::Type),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "base_type",
@@ -2236,10 +2308,10 @@ pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_LIST_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_LIST_TYPES_OID,
+    oid: oid::VIEW_MZ_LIST_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("element_id", SqlScalarType::String.nullable(false))
@@ -2260,7 +2332,19 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
             "The element type modifiers, or `NULL` if none.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "
+WITH
+    user_types AS (
+        SELECT id, details
+        FROM mz_internal.mz_catalog_item_metadata
+        WHERE type = 'type'
+    )
+SELECT
+    id,
+    COALESCE(details->>'element_id', '') AS element_id,
+    (details->>'element_modifiers')::bigint list AS element_modifiers
+FROM user_types
+WHERE details->>'type_kind' = 'list'",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "list_type",
@@ -2287,10 +2371,10 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
         },
     }),
 });
-pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_MAP_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_MAP_TYPES_OID,
+    oid: oid::VIEW_MZ_MAP_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("key_id", SqlScalarType::String.nullable(false))
@@ -2325,7 +2409,21 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
             "The value type modifiers, or `NULL` if none.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "
+WITH
+    user_types AS (
+        SELECT id, details
+        FROM mz_internal.mz_catalog_item_metadata
+        WHERE type = 'type'
+    )
+SELECT
+    id,
+    COALESCE(details->>'key_id', '') AS key_id,
+    COALESCE(details->>'value_id', '') AS value_id,
+    (details->>'key_modifiers')::bigint list AS key_modifiers,
+    (details->>'value_modifiers')::bigint list AS value_modifiers
+FROM user_types
+WHERE details->>'type_kind' = 'map'",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "map_type",
@@ -2595,15 +2693,26 @@ pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
     ontology: None,
 });
-pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_PSEUDO_TYPES_OID,
+    oid: oid::VIEW_MZ_PSEUDO_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([("id", "The ID of the type.")]),
-    is_retained_metrics_object: false,
+    sql: Box::leak(
+        format!(
+            "
+SELECT m.id
+FROM mz_internal.mz_builtin_types t
+JOIN mz_internal.mz_builtin_object_mappings m
+    ON m.schema_name = t.schema_name AND m.name = t.name AND m.object_type = {object_type}
+WHERE t.type_kind = 'pseudo'",
+            object_type = gid_mapping_object_type(CatalogItemType::Type),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "pseudo_type",
