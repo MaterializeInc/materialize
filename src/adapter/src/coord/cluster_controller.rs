@@ -828,7 +828,10 @@ impl Coordinator {
             }
         }
         if !drops.is_empty() {
-            mutations.push(Op::DropObjects(drops));
+            mutations.push(Op::DropObjects {
+                objects: drops,
+                cascade: false,
+            });
         }
         Some(mutations)
     }

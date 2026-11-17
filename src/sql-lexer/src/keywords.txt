@@ -121,6 +121,7 @@ Create
 Createcluster
 Createdb
 Createnetworkpolicy
+Createquerypolicy
 Createrole
 Creation
 Credential

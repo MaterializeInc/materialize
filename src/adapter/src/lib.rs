@@ -48,6 +48,7 @@ mod notice;
 mod optimize;
 mod peek_registry;
 mod peek_sequencing;
+mod query_policy;
 mod util;
 
 pub mod catalog;

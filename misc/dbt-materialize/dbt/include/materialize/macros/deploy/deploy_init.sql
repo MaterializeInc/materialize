@@ -138,6 +138,7 @@
                 schedule_type=schedule_type,
                 refresh_hydration_time_estimate=refresh_hydration_time_estimate,
                 auto_scaling_strategy=auto_scaling_strategy,
+                query_policy=internal_get_cluster_query_policy(origin_cluster),
                 ignore_existing_objects=ignore_existing_objects,
                 force_deploy_suffix=True
             ) %}
