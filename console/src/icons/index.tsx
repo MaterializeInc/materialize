@@ -62,6 +62,7 @@ export { default as MsftLogoIcon } from "~/icon/MsftLogoIcon.svg?react";
 export { default as MySqlLogoIcon } from "~/icon/MySqlLogoIcon.svg?react";
 export { default as NoIcon } from "~/icon/NoIcon.svg?react";
 export { default as OverflowMenuIcon } from "~/icon/OverflowMenuIcon.svg?react";
+export { default as PaperclipIcon } from "~/icon/PaperclipIcon.svg?react";
 export { default as PauseIcon } from "~/icon/PauseIcon.svg?react";
 export { default as PaymentIcon } from "~/icon/PaymentIcon.svg?react";
 export { default as PlayIcon } from "~/icon/PlayIcon.svg?react";

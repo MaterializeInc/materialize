@@ -14,21 +14,20 @@ import { ToastComponent } from "~/components/Toast";
 
 const TOAST_DURATION = 2_000;
 
+/** How the app's toasts look and behave unless a call says otherwise. */
+export const TOAST_DEFAULTS: UseToastOptions = {
+  position: "bottom-right",
+  duration: TOAST_DURATION,
+  render: ToastComponent,
+  status: "success",
+};
+
 /**
  * Wraps Chakra's useToast to use a custom render function and expose our own API
  */
 export const useToast = (options?: UseToastOptions) => {
   const toast = useChakraToast(
-    useMemo(
-      () => ({
-        position: "bottom-right" as const,
-        duration: TOAST_DURATION,
-        render: ToastComponent,
-        status: "success",
-        ...options,
-      }),
-      [options],
-    ),
+    useMemo(() => ({ ...TOAST_DEFAULTS, ...options }), [options]),
   );
 
   return toast;
