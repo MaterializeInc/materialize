@@ -123,6 +123,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     APP_PASSWORD = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
 
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
+    parser.add_argument(
+        "--recovery-timeout",
+        default=30,
+        type=int,
+        help="Maximum seconds after a connection error to complete a successful validation",
+    )
     args = parser.parse_args()
 
     start_time = time.time()
@@ -148,11 +154,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         failures: list[TestFailureDetails] = []
         connection_failures: list[tuple[str, str]] = []
+        recovery_deadline: float | None = None
         boot: tuple[str, datetime.datetime] | None = None
 
         try:
             count_chunk = 0
             while time.time() - start_time < args.runtime:
+                if (
+                    recovery_deadline is not None
+                    and time.monotonic() >= recovery_deadline
+                ):
+                    break
                 count_chunk = count_chunk + 1
                 try:
                     c.testdrive(dedent("""
@@ -199,6 +211,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             i,
                             webhook_sender,
                         )
+                        if (
+                            recovery_deadline is not None
+                            and time.monotonic() >= recovery_deadline
+                        ):
+                            break
+                        recovery_deadline = None
                         i += 1
 
                     close_connection_and_cursor(
@@ -214,6 +232,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ) as e:
                     error_msg_str = str(e)
                     if is_connection_error(error_msg_str):
+                        if recovery_deadline is None:
+                            recovery_deadline = time.monotonic() + args.recovery_timeout
                         now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, error_msg_str))
                         print(f"Connection failure at {now}: {e}; retrying")
@@ -227,6 +247,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             continue
                         # testdrive puts the actual error in details.
                         if is_connection_error(f"{error.message}\n{error.details}"):
+                            if recovery_deadline is None:
+                                recovery_deadline = (
+                                    time.monotonic() + args.recovery_timeout
+                                )
                             now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                             connection_failures.append((now, error.message))
                             print(
@@ -244,6 +268,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     if "Non-positive multiplicity in DistinctBy" in msg:
                         continue
                     if is_connection_error(msg):
+                        if recovery_deadline is None:
+                            recovery_deadline = time.monotonic() + args.recovery_timeout
                         now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, msg))
                         print(f"Connection failure at {now}: {msg}; continuing.")
@@ -255,6 +281,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(TestFailureDetails(message=msg, details=None))
         finally:
             webhook_sender.stop()
+
+        if recovery_deadline is not None:
+            failures.append(
+                TestFailureDetails(
+                    message="No successful validation after connection errors",
+                    details=f"Recovery must complete within {args.recovery_timeout}s and before the run ends.",
+                )
+            )
 
         if connection_failures:
             print("\n--- Connection failure summary ---")
