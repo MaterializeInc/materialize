@@ -17,10 +17,9 @@ The proposed 90-minute cap was rejected.
 
 Complete the separate 60s four-index run and current version-pair rebuild before
 further readiness tuning. Debug builds remain required for the local demo and
-startup measurements, including candidate readiness. Before further operator
-profiling, establish the source-statistics shard's since, the candidate dataflow's
-starting timestamp, and whether lag tracks environment age. If it replays full
-history, identify the compaction holder rather than tuning the replay blindly.
+startup measurements, including candidate readiness. The statistics replay span
+and physical compaction holders are now measured below. Do not resume operator
+profiling or readiness tuning before the outstanding acceptance work.
 
 The replica-frontier rewrite is committed and pushed. Execution keys derive from
 catalog ClientIncarnation records rather than changing frontier rows. Its
@@ -33,17 +32,23 @@ Among sampled dataflow roots, current replica frontiers cost 1.42s, current stor
 frontiers 0.83s, and public frontiers 0.65s. These are scheduling durations, not CPU
 samples or a complete census. Address lookup timed out. Do not sum nested scopes.
 
-Historical source statistics also gates readiness through current statistics,
-hydration status and replica display. Its raw-input probe lagged while catalog
-inputs were current, but that probe follows logical backpressure. It does not
-isolate Persist from downstream work. Keep these two findings distinct.
+Historical source statistics gates readiness through current statistics,
+hydration status and replica display. A live read-only capture found its Persist
+upper current, physical since zero with three zero-holding leased readers, and
+an independent critical-reader bound 30 days behind wall clock. Removing the zero
+leases would not compact away this short run's history. Candidates kept the
+historical index's as-of near environment creation, so its reconstruction span
+grew to 14 minutes by generation 10. This explains the replay span, not its CPU
+cost or the native/upstream readiness difference. See
+`source-statistics-physical-since.md` and its raw evidence. No retention or Persist
+change was made.
 
 The unchanged KafkaSources comparison did not demonstrate a speedup. Parent CPU
 changed by less than one percent, both runs approached the aggregate memory cap,
 and neither had a new OOM. The new timing probe stopped when readiness ended,
 before its second sample. Final validation and backup/restore remain unverified.
-Runtimes, probes and owned Docker resources are cleaned up. The small query/plan
-fixtures are not acceptance.
+Those debug runtimes, probes and owned Docker resources were cleaned up. The
+small query/plan fixtures are not acceptance.
 
 ## Remaining acceptance and repairs
 
@@ -115,7 +120,12 @@ frontier rewrite. Worker source is base `59a59d89` plus the recorded scoped over
 The preceding binaries and manifests are preserved in
 `upsert-oom-investigation/preserved-59a59d89-frontier-baseline/`.
 Use build receipts and hashes, not image labels or historical manifests, for identity.
-Ancillary binaries are preserved older artifacts, not newly rebuilt ones.
+The debug fixture's ancillary binaries are preserved older artifacts. All seven
+optimized executables, including helpers, are now built and pinned in
+`upsert-oom-investigation/native-ci-optimized-candidate/`. The CI-shaped native
+KafkaSources run is active. The baseline optimized build/run remains pending.
+See `native-optimized-tools-root-fixed-driver.log` and
+`native-optimized-pinning.log` for build and identity receipts.
 
 - Current timing and plan evidence: `simple-timing-findings.md`,
   `simple-timing-deltas.json`, `simple-timings-kafka-evidence.tar.gz`,
@@ -129,6 +139,8 @@ Ancillary binaries are preserved older artifacts, not newly rebuilt ones.
   `frontier-rewrite-timings-evidence.tar.gz`. The probe has no valid timing pair.
 - Dependency and producer analysis: `readiness-dependency-findings.md`,
   `readiness-dependency-timeline.json`, `source-statistics-replay-survey.md`.
+  Physical-state evidence: `source-statistics-physical-since.md`,
+  `source-statistics-live-evidence.tar.gz`, `source-statistics-current-asofs.log`.
 - Earlier probe and small-query validation: `operator-probe-partial-findings.md`,
   `operator-probe-kafka-evidence.tar.gz`, `operator-query-validation-evidence.tar.gz`.
 - CPU evidence: `readiness-stack-analysis.md`, `readiness-stack-evidence.tar.gz`,
