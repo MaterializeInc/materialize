@@ -2,6 +2,7 @@
 name = "mz-arrow-util"
 description = "Arrow / Parquet utility library."
 version = "0.1.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

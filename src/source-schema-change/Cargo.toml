@@ -2,6 +2,7 @@
 name = "mz-source-schema-change"
 description = "Upstream schema changes that Materialize sources cannot follow."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

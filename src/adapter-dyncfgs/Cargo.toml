@@ -2,6 +2,7 @@
 name = "mz-adapter-dyncfgs"
 description = "Dynamic configuration and lightweight types for Materialize's adapter layer."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

@@ -2,6 +2,7 @@
 name = "mz-orchestrator-tracing"
 description = "Service orchestration for tracing-aware services."
 version = "0.0.0"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
