@@ -6,8 +6,9 @@ Finish native-only M3 under the current [prompt](20260903_decoupled_coordination
 Preserve compatible full writers, explicit retirement, protection and adapter-owned
 policy. Do not restore legacy execution paths or weaken validation.
 
-Measure the historical source-statistics input and aggregation before choosing
-another performance change. The completed stack diagnostic
+Use the validated single-relation timing queries to distinguish historical
+source-statistics replay from aggregation before choosing a performance change.
+The completed stack diagnostic
 `aj-native-parallel-c4d197b0` again reached action 409 and nine promotions before
 the unchanged deadline. Final validation and backup/restore remain unverified.
 Its runtimes and profilers are stopped, with no workload OOM recorded.
@@ -23,9 +24,17 @@ The final dependency census narrows this run's tail to historical source
 statistics feeding current statistics, hydration status and replica display.
 All four share one lagging frontier in the penultimate poll. Their other compute
 imports and the public-frontier indexes are Ready. Raw statistics input progress
-was not captured. The new `aj-native-parallel-f6e23a91` diagnostic takes two bounded
-candidate-side SQL observations of import frontiers and operator scheduling, with
-unchanged workload limits and no new CPU profile.
+was not captured in that run. The subsequent `aj-native-parallel-f6e23a91` probe
+captured raw-statistics import progress about 15 minutes behind wall clock while
+catalog inputs were current. The probe sits after logical backpressure, enabled
+by the test defaults, so this does not isolate Persist from downstream work.
+Its timing query timed out and the observer stopped without retrying. The full
+workload hit its unchanged deadline at action 373. All runtimes are stopped.
+
+A small fresh fixture validated simpler scheduling-counter and separate identity
+queries within the same query deadlines. This is query validation, not readiness
+or KafkaSources acceptance. Use that approach rather than repeating the failed
+multi-join timing query. No production change follows from these samples yet.
 
 The earlier late generation-8 capture found both catalog-server processes using about one
 CPU under a saturated eight-CPU budget. Candidate source-statistics inputs were
@@ -180,8 +189,13 @@ remain unchanged.
 `readiness-dependency-findings.md` and `readiness-dependency-timeline.json` record
 the final blocker chain and AS OF crossing. `source-statistics-replay-survey.md`
 separates intended retained history from unmeasured publication/cleanup concerns.
-The current diagnostic logs are `readiness-operators-driver.log` and
-`operator-probe-kafka-driver.log`. Failed or missing observations remain unknown.
+`operator-probe-kafka-evidence.tar.gz` and `operator-probe-partial-findings.md`
+preserve the completed probe, workload failure and backpressure caveat.
+`operator-query-validation-evidence.tar.gz` and
+`operator-query-validation-owner-driver.log` preserve the small fixture's query
+results and cleanup. Its first setup attempt failed under root's Git ownership
+checks, reproduced without SUDO_UID, before any containers started. Running as
+the repository owner resolved that setup error. Failed observations remain unknown.
 
 - Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
