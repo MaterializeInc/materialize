@@ -94,7 +94,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    AsyncOutputHandle, ButtonHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton, sole_capability,
 };
 use mz_timely_util::columnar::chunk::{ChunkChunker, StorageSpill};
@@ -144,6 +144,9 @@ type UpsertOutputHandle<T> =
 ///   1. **Source input** — upsert commands from the external source.
 ///   2. **Persist input** — feedback of the operator's own output, read back
 ///      from persist.  Arranged into a trace for prior-value lookups.
+///
+/// Source statistics stop once `stats_shutdown` reports its button pressed
+/// on this worker. The caller holds that button with the ingestion's tokens.
 #[allow(clippy::disallowed_methods)]
 pub fn upsert_inner<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
@@ -154,6 +157,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
+    stats_shutdown: ButtonHandle,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -174,6 +178,7 @@ where
         persist_err,
         key_indices,
         source_config.source_statistics.clone(),
+        stats_shutdown,
     );
     // Chains and sealed batches alike are `FeedbackChunk`s whose bodies spill
     // to the buffer pool, behind the same storage spill gate as the source

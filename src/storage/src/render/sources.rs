@@ -30,7 +30,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
-use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::builder_async::{PressOnDropButton, button};
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -355,6 +355,8 @@ where
                         && storage_state.instance_context.swap_available;
                     let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
                     {
+                        let (stats_shutdown, stats_button) = button(scope, scope.addr());
+                        needed_tokens.push(stats_button.press_on_drop());
                         crate::upsert::upsert_v2(
                             upsert_input.enter(scope),
                             upsert_envelope.clone(),
@@ -364,6 +366,7 @@ where
                             previous_token,
                             export_config,
                             backpressure_metrics,
+                            stats_shutdown,
                         )
                     } else {
                         crate::upsert::upsert(
