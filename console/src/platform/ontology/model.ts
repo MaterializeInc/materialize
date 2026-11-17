@@ -19,6 +19,8 @@
 export const JOIN_EDGE_KIND = "join";
 /** A join some view or materialized view already makes. */
 export const INFERRED_JOIN_EDGE_KIND = "inferred_join";
+/** A view passing a non-key column through: the two hold the same values. */
+export const SAME_VALUES_EDGE_KIND = "same_values";
 /** A derived object reading from another, from `mz_object_graph_edges`. */
 export const LINEAGE_EDGE_KIND = "lineage";
 
@@ -29,6 +31,7 @@ export const LINEAGE_EDGE_KIND = "lineage";
 export type OntologyEdgeKind =
   | typeof JOIN_EDGE_KIND
   | typeof INFERRED_JOIN_EDGE_KIND
+  | typeof SAME_VALUES_EDGE_KIND
   | typeof LINEAGE_EDGE_KIND
   | "foreign_key"
   | "maps_to"

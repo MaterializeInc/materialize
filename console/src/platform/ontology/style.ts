@@ -55,6 +55,13 @@ function kindStyle(
         color: colors.accent.purple,
         dash: "7 4",
       };
+    case "same_values":
+      return {
+        label: "Same values",
+        description: "A view passes the column through unchanged",
+        color: colors.accent.purple,
+        dash: "1.5 4",
+      };
     case "lineage":
       return {
         label: "Lineage",

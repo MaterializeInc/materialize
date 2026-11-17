@@ -88,7 +88,7 @@ function homeFor(
 
 /**
  * Groups to open on: every group for a small environment, otherwise the
- * groups holding the ontology table and the relations joins connect.
+ * groups holding the ontology table and the relations its joins connect.
  */
 function defaultGroups(
   graph: OntologyGraph,
@@ -99,16 +99,25 @@ function defaultGroups(
   const groups = new Set(ontologyTables.map(groupName));
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
   for (const edge of graph.edges) {
-    if (edge.kind !== JOIN_EDGE_KIND && edge.kind !== INFERRED_JOIN_EDGE_KIND) {
-      continue;
-    }
+    if (edge.kind !== JOIN_EDGE_KIND) continue;
     for (const id of [edge.source, edge.target]) {
       const node = nodesById.get(id);
       if (node) groups.add(node.group);
     }
   }
-  if (groups.size === 0 && allGroups.length > 0) groups.add(allGroups[0]);
-  return groups;
+  if (groups.size > 0) return groups;
+  // Inferred joins reach most schemas of a large environment, so with
+  // nothing declared, open on the one schema that has the most of them.
+  const inferredPerGroup = new Map<string, number>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== INFERRED_JOIN_EDGE_KIND) continue;
+    const group = nodesById.get(edge.source)?.group;
+    if (group) {
+      inferredPerGroup.set(group, (inferredPerGroup.get(group) ?? 0) + 1);
+    }
+  }
+  const busiest = [...inferredPerGroup].sort((a, b) => b[1] - a[1])[0];
+  return new Set(busiest ? [busiest[0]] : allGroups.slice(0, 1));
 }
 
 /** Group names never contain a newline, so they join into a stable key. */

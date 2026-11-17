@@ -152,7 +152,7 @@ describe("inferred joins", () => {
     const [edge] = graph.edges;
     expect(edge.kind).toBe("inferred_join");
     expect(edge.cardinality).toBeNull();
-    expect(edge.note).toMatch(/direction is a guess/);
+    expect(edge.note).toMatch(/direction is arbitrary/);
     expect(graph.nodes.find((n) => n.id === edge.target)?.primaryKey).toEqual(
       [],
     );
@@ -235,8 +235,12 @@ describe("inferred joins", () => {
 describe("columns views pass through", () => {
   const ORG_SPEND = relation("u4", "org_spend", "view");
   const TOP_ORGS = relation("u5", "top_orgs", "view");
+  const passes = (output: string, objectId: string, sourceColumn: string) => ({
+    column: output,
+    source: { objectId, column: sourceColumn },
+  });
 
-  it("follows a passed-through key, and a passed-through reference", () => {
+  it("makes a passed key a reference, and anything else same values", () => {
     const graph = build({
       relations: [ORDERS, CUSTOMERS, SUMMARY, ORG_SPEND],
       columns: new Map([
@@ -249,13 +253,7 @@ describe("columns views pass through", () => {
           "u3",
           {
             ...SUMMARY_JOINS,
-            // order_summary.customer_id is orders.customer_id.
-            outputs: [
-              {
-                column: "customer_id",
-                source: { objectId: "u1", column: "customer_id" },
-              },
-            ],
+            outputs: [passes("customer_id", "u1", "customer_id")],
           },
         ],
         [
@@ -263,62 +261,25 @@ describe("columns views pass through", () => {
           {
             pairs: [],
             usingJoins: [],
-            // org_spend.customer_key is customers.id.
-            outputs: [
-              {
-                column: "customer_key",
-                source: { objectId: "u2", column: "id" },
-              },
-            ],
+            outputs: [passes("customer_key", "u2", "id")],
           },
         ],
       ]),
     });
     expect(joins(graph.edges)).toEqual([
       "inferred_join: u1.customer_id -> u2.id",
-      "inferred_join: u3.customer_id -> u2.id",
       "inferred_join: u4.customer_key -> u2.id",
+      "same_values: u3.customer_id -> u1.customer_id",
     ]);
     const passed = graph.edges.find((e) => e.source === "u4")!;
     expect(passed.note).toBe(
       "org_spend.customer_key is customers.id, passed through.",
     );
-    expect(passed.inferredFrom).toEqual(["materialize.shop.org_spend"]);
   });
 
-  it("carries a reference back to the input column a view passes", () => {
-    // order_summary passes orders.cust_ref, and joins its own output on it.
-    const graph = build({
-      columns: new Map([
-        ["u1", [column("id"), column("cust_ref")]],
-        ["u2", [column("id")]],
-        ["u3", [column("cust_ref")]],
-      ]),
-      viewJoins: new Map([
-        [
-          "u3",
-          {
-            pairs: [
-              {
-                left: { objectId: "u3", column: "cust_ref" },
-                right: { objectId: "u2", column: "id" },
-              },
-            ],
-            usingJoins: [],
-            outputs: [
-              {
-                column: "cust_ref",
-                source: { objectId: "u1", column: "cust_ref" },
-              },
-            ],
-          },
-        ],
-      ]),
-    });
-    expect(joins(graph.edges)).toContain("inferred_join: u1.cust_ref -> u2.id");
-  });
-
-  it("follows references through views over views", () => {
+  it("derives nothing across views, leaving a path of direct edges", () => {
+    // top_orgs.cust passes order_summary.customer_id, which passes
+    // orders.customer_id, which order_summary joins to customers.id.
     const graph = build({
       relations: [ORDERS, CUSTOMERS, SUMMARY, TOP_ORGS],
       columns: new Map([...COLUMNS, ["u5", [column("cust")]]]),
@@ -327,12 +288,7 @@ describe("columns views pass through", () => {
           "u3",
           {
             ...SUMMARY_JOINS,
-            outputs: [
-              {
-                column: "customer_id",
-                source: { objectId: "u1", column: "customer_id" },
-              },
-            ],
+            outputs: [passes("customer_id", "u1", "customer_id")],
           },
         ],
         [
@@ -340,74 +296,80 @@ describe("columns views pass through", () => {
           {
             pairs: [],
             usingJoins: [],
-            outputs: [
-              {
-                column: "cust",
-                source: { objectId: "u3", column: "customer_id" },
-              },
-            ],
-          },
-        ],
-      ]),
-    });
-    expect(joins(graph.edges)).toContain("inferred_join: u5.cust -> u2.id");
-  });
-
-  it("gives a passed key only its direct reference, not the closure", () => {
-    // top_orgs.cust passes order_summary.id, a key that itself passes orders.id.
-    const graph = build({
-      relations: [ORDERS, CUSTOMERS, SUMMARY, TOP_ORGS],
-      columns: new Map([
-        ["u1", [column("id")]],
-        ["u2", [column("id")]],
-        ["u3", [column("id")]],
-        ["u5", [column("id")]],
-      ]),
-      viewJoins: new Map([
-        [
-          "u3",
-          {
-            pairs: [],
-            usingJoins: [],
-            outputs: [
-              { column: "id", source: { objectId: "u1", column: "id" } },
-            ],
-          },
-        ],
-        [
-          "u5",
-          {
-            pairs: [],
-            usingJoins: [],
-            outputs: [
-              { column: "id", source: { objectId: "u3", column: "id" } },
-            ],
+            outputs: [passes("cust", "u3", "customer_id")],
           },
         ],
       ]),
     });
     expect(joins(graph.edges)).toEqual([
-      "inferred_join: u3.id -> u1.id",
-      "inferred_join: u5.id -> u3.id",
+      "inferred_join: u1.customer_id -> u2.id",
+      "same_values: u3.customer_id -> u1.customer_id",
+      "same_values: u5.cust -> u3.customer_id",
     ]);
   });
 
-  it("ignores passed-through columns that are neither key nor reference", () => {
+  it("confirms a declared join through a path of inferred edges", () => {
+    const graph = build({
+      ...declaring(["customer_id"], ["id"]),
+      relations: [ORDERS, CUSTOMERS, SUMMARY, TOP_ORGS],
+      columns: new Map([
+        ["u1", [column("customer_id")]],
+        ["u2", [column("id")]],
+        ["u3", [column("customer_id")]],
+        ["u5", []],
+      ]),
+      viewJoins: new Map([
+        [
+          "u3",
+          {
+            // order_summary passes orders.customer_id, and top_orgs joins
+            // that to customers.id: the declared pair is two edges apart.
+            pairs: [],
+            usingJoins: [],
+            outputs: [passes("customer_id", "u1", "customer_id")],
+          },
+        ],
+        [
+          "u5",
+          {
+            pairs: [
+              {
+                left: { objectId: "u3", column: "customer_id" },
+                right: { objectId: "u2", column: "id" },
+              },
+            ],
+            usingJoins: [],
+            outputs: [],
+          },
+        ],
+      ]),
+    });
+    const declared = graph.edges.find((e) => e.kind === "join")!;
+    expect(declared.issues).toEqual([]);
+    expect(declared.inferredFrom).toEqual([
+      "materialize.shop.order_summary",
+      "materialize.shop.top_orgs",
+    ]);
+  });
+
+  it("draws only same-values edges on a path to a join", () => {
     const graph = build({
       viewJoins: new Map([
         [
           "u3",
           {
-            pairs: [],
-            usingJoins: [],
+            ...SUMMARY_JOINS,
             outputs: [
-              { column: "total", source: { objectId: "u1", column: "total" } },
+              passes("customer_id", "u1", "customer_id"),
+              passes("total", "u1", "total"),
             ],
           },
         ],
       ]),
     });
-    expect(joins(graph.edges)).toEqual([]);
+    expect(
+      joins(graph.edges).filter((e) => e.startsWith("same_values")),
+    ).toEqual(["same_values: u3.customer_id -> u1.customer_id"]);
   });
 });
 

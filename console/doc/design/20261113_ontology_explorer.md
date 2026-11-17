@@ -83,24 +83,32 @@ this shape.
   what the agent MCP server lists.
 - **Inferred relationships** (`viewJoins.ts`, `inferredJoins.ts`). They come
   only from definitions and index keys, never from declared joins, so they
-  stand alone as an independent reading. Two kinds of evidence count:
+  stand alone as an independent reading. Every edge comes from a single
+  view's definition, the same rules `mz_internal.mz_inferred_relationships`
+  applies in the catalog:
   - A join: two relations' columns a view equates, in `ON`, `WHERE`,
     `USING` or `IN (SELECT ...)`. The direction points at a column that
     alone keys an index, then a column named `id`, then away from a column
-    named `*_id`. When nothing settles it, the edge says it is a guess.
-  - A passed-through column: a view's output column that is an input key,
-    as in `"o"."id" AS "org_id"`, references that key. An output column and
-    the input column it passes hold the same values, so a reference either
-    one has, the other gets too. This repeats through views over views to a
-    fixed point. It is a claim about the columns' domain, not their data: a
-    view may filter.
+    named `*_id`. When nothing settles it, the edge says it is arbitrary.
+  - A passed key: a view's output column that is an input key, as in
+    `"o"."id" AS "org_id"`, references that key.
+  - Same values: a view's output column that is any other input column.
+    It describes the columns' domain, not their data: a view may filter.
 
-  On the auction demo, inference alone recovers 9 of the 11 declared joins
-  that resolve, missing only those on a table no view reads, and finds 3
-  nobody declared. An inferred join a declared one matches is drawn beside
-  it, names the ontology table, and the declared join lists the views that
-  confirm it. Each other inferred join offers the INSERT that declares it,
-  creating the chosen table when it does not exist.
+  Relationships across several views are paths through these edges, and
+  nothing is derived. An earlier version propagated references to a fixed
+  point instead. In the catalog that cost about twice the maintenance per
+  replaced view, and the derived edges added no information the paths lack.
+  A view passes every column it selects through, so only same-values edges
+  on a path to a join are drawn.
+
+  On the auction demo, every declared join that resolves (11 of 11) is
+  connected by a path of inferred edges, 7 of them by a single edge, and
+  inference finds 3 joins nobody declared. A declared join is confirmed
+  when such a path exists, and lists the views along it. An inferred join
+  with exactly the declared columns names the ontology table. Each other
+  inferred join offers the INSERT that declares it, creating the chosen
+  table when it does not exist.
   Joins are read from `create_sql`, which the catalog prints from the
   resolved AST: relations appear as `[u4 AS "db"."schema"."name"]` with
   their catalog ids, and every identifier is quoted. That regular form lets
@@ -163,6 +171,12 @@ Cards list their key columns by default, ER diagram style, so a join reads
 as a line from one column's row to another's, without a text label. The
 join kinds share a color, and the line says how sure the join is: solid
 when declared, dashed when inferred.
+
+Above 500 entities the canvas is not drawn, and the page asks for fewer
+schemas or a focused entity instead: dagre's recursive ranking overflowed
+the stack on a chain of about 3,000 views. A large environment opens on the
+ontology table's schemas, or else the one schema with the most inferred
+joins.
 
 Hiding a relationship kind only stops drawing it. Every kind still shapes
 the layout and decides which entities are isolated, so toggling between

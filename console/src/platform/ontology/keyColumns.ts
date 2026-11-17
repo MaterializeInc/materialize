@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { OntologyEdge, OntologyNode } from "./model";
+import { OntologyEdge, OntologyNode, SAME_VALUES_EDGE_KIND } from "./model";
 
 /**
  * `pk` marks a column other relations join to, `fk` a column that joins to
  * another relation. Materialize declares neither, so both are read from the
  * ontology: the primary keys it records and the column pairs of its
- * relationships.
+ * relationships. `same` marks a column that is neither, but holds the same
+ * values as a column of another relation, which a path to a join runs
+ * through.
  */
-export type KeyRole = "pk" | "fk" | "pkfk";
+export type KeyRole = "pk" | "fk" | "pkfk" | "same";
 
 export interface KeyColumn {
   name: string;
@@ -51,8 +53,16 @@ export function keyColumns(
   if (node.isUnresolved) return [];
   const pk = new Set(node.primaryKey);
   const fk = new Set<string>();
+  const same = new Set<string>();
   for (const edge of edges) {
     if (!pairsColumns(edge)) continue;
+    if (edge.kind === SAME_VALUES_EDGE_KIND) {
+      if (edge.source === node.id)
+        edge.sourceColumns.forEach((c) => same.add(c));
+      if (edge.target === node.id)
+        edge.targetColumns.forEach((c) => same.add(c));
+      continue;
+    }
     if (edge.source === node.id) {
       for (const column of edge.sourceColumns) fk.add(column);
     }
@@ -64,16 +74,25 @@ export function keyColumns(
     (node.columns ?? []).map((column, i) => [column.name, i]),
   );
   const columnsKnown = node.columns !== undefined && node.columns.length > 0;
-  const keys: KeyColumn[] = [...new Set([...pk, ...fk])].map((name) => {
-    const column = node.columns?.find((c) => c.name === name);
-    return {
-      name,
-      type: column?.type ?? null,
-      role: pk.has(name) ? (fk.has(name) ? "pkfk" : "pk") : "fk",
-      missing: columnsKnown && !column,
-    };
-  });
-  const rank = (key: KeyColumn) => (key.role === "fk" ? 1 : 0);
+  const keys: KeyColumn[] = [...new Set([...pk, ...fk, ...same])].map(
+    (name) => {
+      const column = node.columns?.find((c) => c.name === name);
+      return {
+        name,
+        type: column?.type ?? null,
+        role: pk.has(name)
+          ? fk.has(name)
+            ? "pkfk"
+            : "pk"
+          : fk.has(name)
+            ? "fk"
+            : "same",
+        missing: columnsKnown && !column,
+      };
+    },
+  );
+  const rank = (key: KeyColumn) =>
+    key.role === "same" ? 2 : key.role === "fk" ? 1 : 0;
   return keys.sort(
     (a, b) =>
       rank(a) - rank(b) ||

@@ -1,21 +1,32 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 /**
  * @module
  * Relationships the environment's definitions imply, with no ontology table.
  * They come only from view and materialized view definitions and index keys,
- * never from declared joins, so they stand as an independent reading that
- * declared joins can be checked against (`compareWithDeclared`).
+ * never from declared joins, so declared joins can be checked against them
+ * (`compareWithDeclared`). These are the rules of
+ * `mz_internal.mz_inferred_relationships`, applied in the browser.
  *
- * Two kinds of evidence make an inferred relationship:
+ * Every edge comes from a single view's definition:
  *
- * 1. A join: two relations' columns equated in a view.
- * 2. A passed-through column: a view's output column that is an input key,
- *    as in `"o"."id" AS "org_id"`, references that key. An output column and
- *    the input column it passes through hold the same values, so what either
- *    references, the other does too. This repeats through views over views.
+ * - A join: two relations' columns a view equates.
+ * - A passed key: a view's output column that is an input key unchanged, as
+ *   in `"o"."id" AS "org_id"`, which references that key.
+ * - Same values: a view's output column that is any other input column
+ *   unchanged.
  *
- * Reading the second as a reference is a claim about the columns' domain,
- * not their data: a view may filter, so the input column can hold values the
- * output never shows.
+ * Relationships across several views are the paths through these edges, so
+ * none are derived here. Same-values edges claim a shared domain, not shared
+ * data: a view may filter, so its input column can hold values its output
+ * never shows.
  */
 
 import { displayName } from "./dataProductGraph";
@@ -25,6 +36,7 @@ import {
   OntologyEdge,
   OntologyIssue,
   OntologyNode,
+  SAME_VALUES_EDGE_KIND,
 } from "./model";
 import { ColumnRef, ViewJoins } from "./viewJoins";
 
@@ -39,6 +51,14 @@ export interface InferenceInput {
 const refKey = (ref: ColumnRef) => `${ref.objectId}.${ref.column}`;
 const pairKey = (a: ColumnRef, b: ColumnRef) =>
   [refKey(a), refKey(b)].sort().join("=");
+const sourceRef = (edge: OntologyEdge) => ({
+  objectId: edge.source,
+  column: edge.sourceColumns[0],
+});
+const targetRef = (edge: OntologyEdge) => ({
+  objectId: edge.target,
+  column: edge.targetColumns[0],
+});
 
 function nodeName(node: OntologyNode) {
   return node.schemaName
@@ -64,9 +84,10 @@ function hasColumn(nodes: Map<string, OntologyNode>, ref: ColumnRef) {
 }
 
 interface Finding {
+  kind: typeof INFERRED_JOIN_EDGE_KIND | typeof SAME_VALUES_EDGE_KIND;
   source: ColumnRef;
   target: ColumnRef;
-  /** False when neither side is a known key, and the order is a guess. */
+  /** False when neither side is a known key, and the order is arbitrary. */
   directed: boolean;
   views: Set<string>;
   notes: Set<string>;
@@ -74,59 +95,44 @@ interface Finding {
 
 export function inferJoinEdges(input: InferenceInput): OntologyEdge[] {
   const { nodes } = input;
-  const isKey = (ref: ColumnRef) =>
-    ref.column === "id" ||
+  const isIndexKey = (ref: ColumnRef) =>
     (input.indexKeys.get(ref.objectId) ?? []).some(
       (key) => key.length === 1 && key[0] === ref.column,
     );
   // An index key outranks a column merely named `id`.
   const keyScore = (ref: ColumnRef) =>
-    (input.indexKeys.get(ref.objectId) ?? []).some(
-      (key) => key.length === 1 && key[0] === ref.column,
-    )
-      ? 2
-      : ref.column === "id"
-        ? 1
-        : 0;
+    isIndexKey(ref) ? 2 : ref.column === "id" ? 1 : 0;
   // A column named for what it references, `org_id`, is the referencing side.
   const isReference = (ref: ColumnRef) => /.+_id$/.test(ref.column);
 
   const findings = new Map<string, Finding>();
   const add = (
+    kind: Finding["kind"],
     source: ColumnRef,
     target: ColumnRef,
     directed: boolean,
     viewId: string,
     note: string | null,
   ) => {
-    if (source.objectId === target.objectId) return false;
-    if (!hasColumn(nodes, source) || !hasColumn(nodes, target)) return false;
-    const key = pairKey(source, target);
-    let finding = findings.get(key);
-    // Whether this adds a reference the pass-through rounds have not seen.
-    let changed = false;
-    if (!finding) {
-      finding = {
-        source,
-        target,
-        directed,
-        views: new Set(),
-        notes: new Set(),
-      };
-      findings.set(key, finding);
-      changed = directed;
-    } else if (directed && !finding.directed) {
-      Object.assign(finding, { source, target, directed });
-      changed = true;
-    }
+    if (source.objectId === target.objectId) return;
+    if (!hasColumn(nodes, source) || !hasColumn(nodes, target)) return;
+    const key = `${kind}|${pairKey(source, target)}`;
+    const finding = findings.get(key) ?? {
+      kind,
+      source,
+      target,
+      directed,
+      views: new Set<string>(),
+      notes: new Set<string>(),
+    };
     finding.views.add(nodeName(nodes.get(viewId)!));
     if (note) finding.notes.add(note);
-    return changed;
+    findings.set(key, finding);
   };
 
-  // Joins between a view's inputs.
   for (const [viewId, joins] of input.viewJoins) {
-    if (!nodes.has(viewId)) continue;
+    const view = nodes.get(viewId);
+    if (!view) continue;
     const pairs = [...joins.pairs];
     for (const using of joins.usingJoins) {
       for (const column of using.columns) {
@@ -148,58 +154,42 @@ export function inferJoinEdges(input: InferenceInput): OntologyEdge[] {
         }
       }
     }
+    // Direction depends only on the two columns, so a pair is directed the
+    // same way in every view that joins it.
     for (const { left, right } of pairs) {
       const difference =
         keyScore(right) - keyScore(left) ||
         Number(isReference(left)) - Number(isReference(right));
       const [source, target] = difference >= 0 ? [left, right] : [right, left];
-      add(source, target, difference !== 0, viewId, null);
+      add(
+        INFERRED_JOIN_EDGE_KIND,
+        source,
+        target,
+        difference !== 0,
+        viewId,
+        null,
+      );
     }
-  }
-
-  // Columns views pass through, to a fixed point so views over views count.
-  // A round continues only after adding a directed finding, and there are
-  // finitely many column pairs, so this terminates.
-  for (let changed = true; changed;) {
-    changed = false;
-    const references = new Map<string, ColumnRef[]>();
-    for (const finding of findings.values()) {
-      if (!finding.directed) continue;
-      const list = references.get(refKey(finding.source)) ?? [];
-      list.push(finding.target);
-      references.set(refKey(finding.source), list);
-    }
-    for (const [viewId, joins] of input.viewJoins) {
-      const view = nodes.get(viewId);
-      if (!view) continue;
-      for (const { column, source } of joins.outputs) {
-        const output = { objectId: viewId, column };
-        const from = nodes.get(source.objectId);
-        if (!from) continue;
-        const passed = `${view.label}.${column} is ${from.label}.${source.column}, passed through.`;
-        // A passed key references its source directly. Propagating through
-        // it too would add every key it reaches transitively, which grows
-        // with the square of a view stack's depth.
-        if (isKey(source)) {
-          changed = add(output, source, true, viewId, passed) || changed;
-          continue;
-        }
-        for (const target of references.get(refKey(source)) ?? []) {
-          changed = add(output, target, true, viewId, passed) || changed;
-        }
-        // The two columns hold the same values, so what the output references
-        // its input column does too.
-        for (const target of references.get(refKey(output)) ?? []) {
-          changed = add(source, target, true, viewId, passed) || changed;
-        }
-      }
+    for (const { column, source } of joins.outputs) {
+      const from = nodes.get(source.objectId);
+      if (!from) continue;
+      const passed = `${view.label}.${column} is ${from.label}.${source.column}, passed through.`;
+      const isKey = source.column === "id" || isIndexKey(source);
+      add(
+        isKey ? INFERRED_JOIN_EDGE_KIND : SAME_VALUES_EDGE_KIND,
+        { objectId: viewId, column },
+        source,
+        true,
+        viewId,
+        passed,
+      );
     }
   }
 
   return [...findings.values()].map(
-    ({ source, target, directed, views, notes }) => ({
+    ({ kind, source, target, directed, views, notes }) => ({
       id: [
-        INFERRED_JOIN_EDGE_KIND,
+        kind,
         source.objectId,
         source.column,
         target.objectId,
@@ -207,19 +197,22 @@ export function inferJoinEdges(input: InferenceInput): OntologyEdge[] {
       ].join("|"),
       source: source.objectId,
       target: target.objectId,
-      kind: INFERRED_JOIN_EDGE_KIND,
+      kind,
       name: null,
       sourceColumns: [source.column],
       targetColumns: [target.column],
       description: null,
-      cardinality: directed ? "many_to_one" : null,
+      cardinality:
+        kind === INFERRED_JOIN_EDGE_KIND && directed ? "many_to_one" : null,
       via: null,
       note:
         [
           ...notes,
           ...(directed
             ? []
-            : ["Neither column is a known key, so the direction is a guess."]),
+            : [
+                "Neither column is a known key, so the direction is arbitrary.",
+              ]),
         ].join(" ") || null,
       declaredIn: null,
       inferredFrom: [...views].sort(),
@@ -229,11 +222,63 @@ export function inferJoinEdges(input: InferenceInput): OntologyEdge[] {
 }
 
 /**
- * Checks declared joins against inferred ones, in place. Each inferred join a
- * declared one also makes records where it is declared, and each declared
- * join records the views confirming it. A declared join between relations
- * that views relate only on other columns gets a warning, since one of the
- * two is likely wrong.
+ * The inferred edges between columns, both ways, for following paths. Each
+ * entry names the edge it came from.
+ */
+function columnGraph(edges: OntologyEdge[]) {
+  const adjacent = new Map<string, { column: string; edge: OntologyEdge }[]>();
+  const link = (a: string, b: string, edge: OntologyEdge) => {
+    const list = adjacent.get(a) ?? [];
+    list.push({ column: b, edge });
+    adjacent.set(a, list);
+  };
+  for (const edge of edges) {
+    const a = refKey(sourceRef(edge));
+    const b = refKey(targetRef(edge));
+    link(a, b, edge);
+    link(b, a, edge);
+  }
+  return adjacent;
+}
+
+/** The edges of a shortest path between two columns, or null for none. */
+function findPath(
+  adjacent: ReturnType<typeof columnGraph>,
+  from: string,
+  to: string,
+): OntologyEdge[] | null {
+  const via = new Map<string, { previous: string; edge: OntologyEdge }>();
+  const seen = new Set([from]);
+  let frontier = [from];
+  while (frontier.length > 0 && !seen.has(to)) {
+    const next: string[] = [];
+    for (const column of frontier) {
+      for (const step of adjacent.get(column) ?? []) {
+        if (seen.has(step.column)) continue;
+        seen.add(step.column);
+        via.set(step.column, { previous: column, edge: step.edge });
+        next.push(step.column);
+      }
+    }
+    frontier = next;
+  }
+  if (!seen.has(to)) return null;
+  const path: OntologyEdge[] = [];
+  for (let at = to; at !== from;) {
+    const step = via.get(at)!;
+    path.push(step.edge);
+    at = step.previous;
+  }
+  return path;
+}
+
+/**
+ * Checks declared joins against inferred edges, in place. A declared join
+ * is confirmed when a path of inferred edges connects its columns, and
+ * records the views along the shortest one. An inferred edge with exactly
+ * the declared columns records where it is declared. A declared join with
+ * no such path, between relations that inferred joins relate on other
+ * columns, gets a warning, since one of the two is likely wrong.
  */
 export function compareWithDeclared(
   declared: OntologyEdge[],
@@ -241,38 +286,35 @@ export function compareWithDeclared(
   nodes: Map<string, OntologyNode>,
 ): OntologyIssue[] {
   const issues: OntologyIssue[] = [];
-  const inferredByPair = new Map<string, OntologyEdge>();
-  for (const edge of inferred) {
-    inferredByPair.set(
-      pairKey(
-        { objectId: edge.source, column: edge.sourceColumns[0] },
-        { objectId: edge.target, column: edge.targetColumns[0] },
-      ),
-      edge,
-    );
-  }
+  const adjacent = columnGraph(inferred);
+  const byPair = new Map(
+    inferred
+      .filter((edge) => edge.kind === INFERRED_JOIN_EDGE_KIND)
+      .map((edge) => [pairKey(sourceRef(edge), targetRef(edge)), edge]),
+  );
   for (const edge of declared) {
     if (edge.sourceColumns.length !== edge.targetColumns.length) continue;
-    const confirming = edge.sourceColumns.flatMap((column, i) => {
-      const match = inferredByPair.get(
-        pairKey(
-          { objectId: edge.source, column },
-          { objectId: edge.target, column: edge.targetColumns[i] },
-        ),
-      );
-      return match ? [match] : [];
+    const views = new Set<string>();
+    let confirmed = 0;
+    edge.sourceColumns.forEach((column, i) => {
+      const from = { objectId: edge.source, column };
+      const to = { objectId: edge.target, column: edge.targetColumns[i] };
+      const direct = byPair.get(pairKey(from, to));
+      if (direct) direct.declaredIn = edge.declaredIn;
+      const path = findPath(adjacent, refKey(from), refKey(to));
+      if (!path) return;
+      confirmed++;
+      for (const step of path) step.inferredFrom.forEach((v) => views.add(v));
     });
-    for (const match of confirming) match.declaredIn = edge.declaredIn;
-    edge.inferredFrom = [
-      ...new Set(confirming.flatMap((match) => match.inferredFrom)),
-    ].sort();
-    if (confirming.length > 0) continue;
+    edge.inferredFrom = [...views].sort();
+    if (confirmed > 0) continue;
 
     const used = inferred
       .filter(
         (other) =>
-          (other.source === edge.source && other.target === edge.target) ||
-          (other.source === edge.target && other.target === edge.source),
+          other.kind === INFERRED_JOIN_EDGE_KIND &&
+          ((other.source === edge.source && other.target === edge.target) ||
+            (other.source === edge.target && other.target === edge.source)),
       )
       .map((other) =>
         other.source === edge.source
@@ -291,4 +333,37 @@ export function compareWithDeclared(
     issues.push(issue);
   }
   return issues;
+}
+
+/**
+ * Same-values edges on a path to a join, inferred or declared. A view passes
+ * every column it selects through, so most same-values edges link columns no
+ * join uses, such as names and amounts, and drawing them would bury the
+ * relationships.
+ */
+export function sameValuesOnJoinPaths(
+  sameValues: OntologyEdge[],
+  joins: OntologyEdge[],
+): OntologyEdge[] {
+  const adjacent = columnGraph(sameValues);
+  const reached = new Set<string>();
+  const frontier: string[] = [];
+  for (const edge of joins) {
+    edge.sourceColumns.forEach((column) =>
+      frontier.push(refKey({ objectId: edge.source, column })),
+    );
+    edge.targetColumns.forEach((column) =>
+      frontier.push(refKey({ objectId: edge.target, column })),
+    );
+  }
+  frontier.forEach((column) => reached.add(column));
+  while (frontier.length > 0) {
+    const column = frontier.pop()!;
+    for (const step of adjacent.get(column) ?? []) {
+      if (reached.has(step.column)) continue;
+      reached.add(step.column);
+      frontier.push(step.column);
+    }
+  }
+  return sameValues.filter((edge) => reached.has(refKey(sourceRef(edge))));
 }

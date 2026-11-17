@@ -503,12 +503,14 @@ const ROLE_LABELS: Record<KeyRole, string> = {
   pk: "PK",
   fk: "FK",
   pkfk: "PK FK",
+  same: "≡",
 };
 
 const ROLE_TITLES: Record<KeyRole, string> = {
   pk: "Key: other relations join to this column",
   fk: "Foreign key: joins to another relation",
   pkfk: "Key and foreign key",
+  same: "Holds the same values as a column of another relation",
 };
 
 const KeyRows = ({
@@ -548,7 +550,11 @@ const KeyRows = ({
               fontSize={8.5}
               fontWeight={700}
               fill={
-                key.role === "fk" ? colors.accent.purple : colors.accent.orange
+                key.role === "fk"
+                  ? colors.accent.purple
+                  : key.role === "same"
+                    ? colors.foreground.secondary
+                    : colors.accent.orange
               }
             >
               {ROLE_LABELS[key.role]}

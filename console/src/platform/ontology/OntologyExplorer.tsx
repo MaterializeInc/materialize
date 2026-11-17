@@ -55,6 +55,12 @@ export interface OverviewContext {
   setHighlighted: (ids: ReadonlySet<string> | null) => void;
 }
 
+/**
+ * Above this many entities the canvas is not drawn. Observed: dagre's
+ * recursive ranking overflowed the stack on a chain of about 3,000 views.
+ */
+const MAX_DRAWN_ENTITIES = 500;
+
 export interface ToolbarControls {
   /** Draws a relationship kind the user may have hidden. */
   showEdgeKind: (kind: OntologyEdgeKind) => void;
@@ -262,9 +268,10 @@ export const OntologyExplorer = ({
         : "",
     [keyColumnsByNode],
   );
+  const tooManyToDraw = filtered.nodes.length > MAX_DRAWN_ENTITIES;
   const layout = React.useMemo(
     () =>
-      layoutGraph(filtered.nodes, filtered.layoutEdges, {
+      layoutGraph(tooManyToDraw ? [] : filtered.nodes, filtered.layoutEdges, {
         mode: layoutMode,
         showEdgeLabels,
         keyColumns: keyColumnsByNode,
@@ -272,7 +279,7 @@ export const OntologyExplorer = ({
     // `filtered` is keyed by `structureKey`, `keyColumnsByNode` by
     // `keyColumnsKey`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [structureKey, keyColumnsKey, layoutMode, showEdgeLabels],
+    [structureKey, keyColumnsKey, layoutMode, showEdgeLabels, tooManyToDraw],
   );
 
   const recentlyAdded = useRecentlyAdded(
@@ -588,7 +595,7 @@ export const OntologyExplorer = ({
       </HStack>
 
       <Box position="relative" flex={1} minHeight={0} overflow="hidden">
-        {filtered.nodes.length === 0 ? (
+        {filtered.nodes.length === 0 || tooManyToDraw ? (
           <Flex
             position="absolute"
             inset={0}
@@ -597,7 +604,9 @@ export const OntologyExplorer = ({
             justify="center"
           >
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              No entities match the current filters.
+              {tooManyToDraw
+                ? `${filtered.nodes.length} entities match, too many to draw. Pick fewer schemas, or focus on one entity.`
+                : "No entities match the current filters."}
             </Text>
           </Flex>
         ) : (

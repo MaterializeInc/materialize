@@ -8,7 +8,11 @@
 // by the Apache License, Version 2.0.
 
 import { IndexKey, tooWideIndexIssues } from "./indexFit";
-import { compareWithDeclared, inferJoinEdges } from "./inferredJoins";
+import {
+  compareWithDeclared,
+  inferJoinEdges,
+  sameValuesOnJoinPaths,
+} from "./inferredJoins";
 import {
   INFERRED_JOIN_EDGE_KIND,
   JOIN_EDGE_KIND,
@@ -18,6 +22,7 @@ import {
   OntologyGraph,
   OntologyIssue,
   OntologyNode,
+  SAME_VALUES_EDGE_KIND,
 } from "./model";
 import { ViewJoins } from "./viewJoins";
 
@@ -445,14 +450,18 @@ export function buildDataProductGraph(
     viewJoins: input.viewJoins,
     indexKeys: input.indexKeys,
   });
-  issues.push(
-    ...compareWithDeclared(
-      edges.filter((edge) => edge.kind === JOIN_EDGE_KIND),
-      inferred,
-      nodes,
+  const declared = edges.filter((edge) => edge.kind === JOIN_EDGE_KIND);
+  issues.push(...compareWithDeclared(declared, inferred, nodes));
+  const inferredJoins = inferred.filter(
+    (edge) => edge.kind === INFERRED_JOIN_EDGE_KIND,
+  );
+  edges.push(
+    ...inferredJoins,
+    ...sameValuesOnJoinPaths(
+      inferred.filter((edge) => edge.kind === SAME_VALUES_EDGE_KIND),
+      [...declared, ...inferredJoins],
     ),
   );
-  edges.push(...inferred);
 
   for (const issue of tooWideIndexIssues(edges, nodes, input.indexKeys)) {
     edges.find((edge) => edge.id === issue.edgeId)?.issues.push(issue);
