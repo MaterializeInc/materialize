@@ -1,4 +1,3 @@
 test-results/
 playwright-report/
 playwright-traces.tar.gz
-package-lock.json
