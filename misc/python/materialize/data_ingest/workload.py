@@ -27,6 +27,7 @@ from materialize.data_ingest.definition import (
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     PgExecutor,
+    PgRoundtripExecutor,
     PrintExecutor,
 )
 from materialize.data_ingest.field import Field
@@ -310,7 +311,9 @@ def execute_workload(
             mz_service=workload.mz_service,
             composition=composition,
             cluster=(
-                "quickstart" if executor_class == KafkaExecutor else "singlereplica"
+                "quickstart"
+                if executor_class in (KafkaExecutor, PgRoundtripExecutor)
+                else "singlereplica"
             ),
         )
         for executor_class in [PgExecutor] + executor_classes
@@ -352,6 +355,8 @@ def execute_workload(
         conn.autocommit = True
         with conn.cursor() as cur:
             try:
+                if isinstance(executor, PgRoundtripExecutor):
+                    executor.wait_for_sink(cur)
                 cur.execute("SET REAL_TIME_RECENCY TO TRUE")
                 cur.execute(
                     f"SELECT * FROM {executor.table} ORDER BY {order_str}".encode()
