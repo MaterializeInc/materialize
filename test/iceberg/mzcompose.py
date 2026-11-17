@@ -38,6 +38,7 @@ SERVICES = [
     ServiceDefinition(
         "polaris-proxy",
         {
+            # renovate: datasource=docker depName=python versioning=docker
             "image": "python:3.11-slim",
             "command": ["python", "-u", "polaris_proxy.py"],
             "working_dir": "/workdir",

@@ -22,9 +22,12 @@ COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
     && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
+# renovate: datasource=github-tags depName=minio/mc versioning=loose extractVersion=^RELEASE\.(?<version>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)$
+ARG MC_RELEASE=2025-08-13T08-35-41Z
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
-    && git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \
+    && git clone --depth=1 --branch RELEASE.$MC_RELEASE https://github.com/minio/mc.git \
     && cd mc \
     && CGO_ENABLED=0 go build -trimpath -o /out/mc .
 # Upstream's Makefile stamps a release version through ldflags; this build does

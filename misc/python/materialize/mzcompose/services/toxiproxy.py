@@ -19,6 +19,7 @@ class Toxiproxy(Service):
     def __init__(
         self,
         name: str = "toxiproxy",
+        # renovate: datasource=docker depName=jauderho/toxiproxy versioning=docker
         image: str = "jauderho/toxiproxy:v2.12.0",
         port: int = 8474,
         seed: int = random.randrange(2**63),

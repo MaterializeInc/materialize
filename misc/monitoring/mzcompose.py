@@ -15,6 +15,7 @@ SERVICES = [
     Service(
         "prometheus",
         {
+            # renovate: datasource=docker depName=prom/prometheus versioning=docker
             "image": "prom/prometheus:v2.46.0",
             "ports": ["9090:9090"],
             "volumes": [
@@ -32,6 +33,7 @@ SERVICES = [
     Service(
         "tempo",
         {
+            # renovate: datasource=docker depName=grafana/tempo versioning=docker
             "image": "grafana/tempo:2.2.0",
             "ports": ["4317:4317", "3200:3200"],
             "volumes": [
@@ -45,6 +47,7 @@ SERVICES = [
     Service(
         "grafana",
         {
+            # renovate: datasource=docker depName=grafana/grafana versioning=docker
             "image": "grafana/grafana:10.0.3",
             "ports": ["3000:3000"],
             "environment": [

@@ -18,17 +18,69 @@
   // comments. The Dependency Dashboard still offers migration on demand.
   "ignorePresets": [":configMigration"],
   "constraints": {"rust": "1.98.1"},
+  "customDatasources": {
+    "gcloud": {
+      "defaultRegistryUrlTemplate": "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json",
+      "transformTemplates": ["{\"releases\": [{\"version\": version}]}"]
+    },
+    "inspector-sbomgen": {
+      "defaultRegistryUrlTemplate": "https://docs.aws.amazon.com/inspector/latest/user/sbom-generator-versions.html",
+      "format": "html",
+      "transformTemplates": ["{\"releases\": [releases[$contains(version, 'amazon-inspector-sbomgen.s3.amazonaws.com/') and $contains(version, '/linux/amd64/') and $not($contains(version, '/latest/'))].{\"version\": $split(version, '/')[3]}]}"]
+    }
+  },
   "customManagers": [
     {
       "customType": "regex",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/^bin/bump-version$/",
         "/(^|/)Dockerfile[^/]*$/",
-        "/\\.sh$/"
+        "/\\.(sh|bash|py)$/"
       ],
       "matchStrings": [
-        "#[ \\t]*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: packageName=(?<packageName>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n[^\\n:=]*[:=][ \\t]*[\"']?(?:[^\\s\"'@]+:)?(?<currentValue>[^\\s\"'@]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"
-      ]
+        "#[ \\t]*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: packageName=(?<packageName>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n(?:[^\\n=]*?=|[^\\n:]*?:)[ \\t]*[\"']?(?:[^\\s\"'@]+:)?(?<currentValue>[^\\s\"'@,]+)(?:@(?<currentDigest>(?:sha256:)?[a-f0-9]+))?",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)[ \\t]*\\nprintf [\"'](?<currentValue>[^\"']+)"
+      ],
+      // Regex managers need a template to append a previously absent digest.
+      "autoReplaceStringTemplate": "{{{replace '[^\\s\\x27\"@:=]+(?:@(?:sha256:)?[a-f0-9]+)?$' '' replaceString}}}{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^ci/builder/Dockerfile$/"],
+      "matchStrings": [
+        "cargo install[^\\n]*?--version [\"'](?<currentValue>=[^\"']+)[\"'][^\\n]*? (?<depName>[a-z][a-z0-9-]*)(?:[; \\\\]|$)"
+      ],
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "cargo"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^misc/kind/[^/]+\\.yaml$/"],
+      "matchStrings": ["image: (?<depName>kindest/node):(?<currentValue>[^\\s@]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker",
+      "autoReplaceStringTemplate": "image: {{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^doc/user/layouts/.*\\.html$/"],
+      "matchStrings": ["https://(?:cdn\\.jsdelivr\\.net/npm/|esm\\.sh/)(?<depName>@[^/\\s\"'@]+/[^/@\\s\"']+|[^/@\\s\"']+)@(?<currentValue>[0-9][^/\\s\"'?#<>]*)"],
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^misc/lean/lean-toolchain$/"],
+      "matchStrings": ["leanprover/lean4:(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "leanprover/lean4",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile[^/]*$/"],
+      "matchStrings": ["# renovate: datasource=github-digest depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)[ \\t]*\\nARG [^=\\n]+=(?<currentDigest>[a-f0-9]{40})"],
+      "datasourceTemplate": "github-digest",
+      "versioningTemplate": "exact"
     }
   ],
   "ignorePaths": [
@@ -169,6 +221,111 @@
     {
       "matchManagers": ["github-actions"],
       "additionalBranchPrefix": "github-actions-"
+    },
+    {
+      // Keep every architecture's version and checksum in the same PR.
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["ci/builder/**", "misc/images/**", "misc/scratch/**", "bin/bump-version", "ci/test/lint-main/checks/check-zizmor.sh"],
+      "additionalBranchPrefix": "tools-",
+      "groupName": "{{depName}}"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["docker"],
+      "pinDigests": true
+    },
+    {
+      // This tag also selects ZooKeeper and Schema Registry images, whose
+      // digests differ from Kafka's.
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["misc/python/materialize/mzcompose/__init__.py"],
+      "matchPackageNames": ["confluentinc/cp-kafka"],
+      "pinDigests": false
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["misc/python/**", "misc/monitoring/**", "misc/kind/**", "test/**"],
+      "additionalBranchPrefix": "test-tools-",
+      "groupName": "{{depName}}"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["doc/user/layouts/**"],
+      "additionalBranchPrefix": "docs-cdn-",
+      "groupName": "{{depName}}"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["@docsearch/css", "@docsearch/js"],
+      "groupName": "docs DocSearch"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["mysql"],
+      "additionalBranchPrefix": "test-tools-",
+      "groupName": "MySQL image and defaults"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["apache/polaris", "apache/polaris-admin-tool"],
+      "groupName": "Polaris server and bootstrap"
+    },
+    {
+      // These runners use the bundled Yarn or Corepack, removed in Node 26
+      // and Node 25 respectively.
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["test/lang/js/mzcompose.py", "test/console/mzcompose.py"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<25"
+    },
+    {
+      // The driver test projects target net8.0.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["mcr.microsoft.com/dotnet/sdk"],
+      "allowedVersions": "<9"
+    },
+    {
+      // Keep the cluster minor aligned with the builder's held kubectl.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["kindest/node"],
+      "allowedVersions": ">=1.34.0 <1.35.0"
+    },
+    {
+      // The smoketest depends on the setup API described in services/metabase.py.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["metabase/metabase"],
+      "allowedVersions": "<0.42"
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["github-digest"],
+      "automerge": false
+    },
+    {
+      // Static Docker 29 is unstable, see moby/moby#51845.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["moby/moby"],
+      "allowedVersions": "<29"
+    },
+    {
+      // 1.4.0's default groupadd path unconditionally exits with an error,
+      // so a non-root builder fails before it can invoke the command.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["MaterializeInc/autouseradd"],
+      "allowedVersions": "!/^v?1\\.4\\.0$/"
+    },
+    {
+      // AWS integration tests fail with InvalidClientTokenId on newer releases.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["aws/aws-cli"],
+      "allowedVersions": "2.17.2"
+    },
+    {
+      // These upstreams publish binary checksums outside GitHub release assets.
+      // Keep the checked-in hashes until their updater can refresh them too.
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["kubernetes/kubernetes", "helm/helm", "hashicorp/terraform", "inspector-sbomgen"],
+      "enabled": false
     },
     {
       "matchManagers": ["pip_requirements", "pip_setup", "pep621"],

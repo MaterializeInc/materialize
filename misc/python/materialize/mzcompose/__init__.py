@@ -34,6 +34,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
+# renovate: datasource=docker depName=confluentinc/cp-kafka versioning=docker
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "8.2.0"
 
 DEFAULT_MZ_VOLUMES = [

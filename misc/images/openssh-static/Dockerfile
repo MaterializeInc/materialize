@@ -28,9 +28,11 @@
 # debian-base fetches apt sources over HTTPS.
 MZFROM debian-base AS builder
 
+# renovate: datasource=github-tags depName=aws/aws-lc extractVersion=^(?<version>v\d+\.\d+\.\d+)$
 ARG AWS_LC_VERSION=v1.54.0
 # OpenSSH >= 10.0 is required: it natively stubs BN_set_flags() for AWS-LC,
 # avoiding any need to hand-define the removed BN_FLG_CONSTTIME flag.
+# renovate: datasource=github-tags depName=openssh/openssh-portable versioning=regex:^V_(?<major>\d+)_(?<minor>\d+)_P(?<patch>\d+)$
 ARG OPENSSH_VERSION=V_10_3_P1
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

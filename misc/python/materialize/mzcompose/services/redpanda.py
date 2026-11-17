@@ -13,6 +13,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+# renovate: datasource=docker depName=redpandadata/redpanda versioning=docker
 REDPANDA_VERSION = "v26.1.8"
 
 

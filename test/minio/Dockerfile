@@ -16,10 +16,13 @@ COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
     && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
+# renovate: datasource=github-tags depName=minio/minio versioning=loose extractVersion=^RELEASE\.(?<version>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)$
+ARG MINIO_RELEASE=2025-10-15T17-29-55Z
+
 COPY no_fsync.patch /
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git patch \
-    && git clone --depth=1 --branch RELEASE.2025-10-15T17-29-55Z https://github.com/minio/minio.git \
+    && git clone --depth=1 --branch RELEASE.$MINIO_RELEASE https://github.com/minio/minio.git \
     && cd minio \
     && patch -p1 < /no_fsync.patch \
     && go build -o /out/minio .

@@ -26,6 +26,7 @@
 # debian-base fetches apt sources over HTTPS.
 MZFROM debian-base AS builder
 
+# renovate: datasource=github-releases depName=krallin/tini
 ARG TINI_VERSION=v0.19.0
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

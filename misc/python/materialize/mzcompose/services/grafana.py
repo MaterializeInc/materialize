@@ -19,6 +19,7 @@ class Grafana(Service):
         super().__init__(
             name=name,
             config={
+                # renovate: datasource=docker depName=grafana/grafana versioning=docker
                 "image": "grafana/grafana:13.0.1",
                 "ports": ["3000"],
                 "environment": [

@@ -36,6 +36,7 @@ PROJECTS_DIR = MZ_ROOT / "test" / "mz-deploy" / "projects"
 
 SERVICES = [
     Postgres(
+        # renovate: datasource=docker depName=postgres versioning=docker
         image="postgres:17",
         environment=[
             "POSTGRES_HOST_AUTH_METHOD=trust",

@@ -16,6 +16,7 @@ MZFROM debian-base AS fetch
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest minor
 # version in the release series, and minor versions have been known to introduce
 # breakage.
+# renovate: datasource=maven depName=io.debezium:debezium-connector-postgres versioning=maven
 ARG DEBEZIUM_VERSION="3.3.1.Final"
 
 RUN apt-get update \

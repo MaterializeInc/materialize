@@ -318,6 +318,7 @@ def stop_and_remove_container(container_name: str) -> None:
         pass
 
 
+# renovate: datasource=docker depName=registry versioning=docker
 REGISTRY_PROXY_IMAGE = "registry:2"
 
 
@@ -5923,6 +5924,7 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
 #      client_credentials grant.
 
 OIDC_HYDRA_NAMESPACE = "hydra"
+# renovate: datasource=docker depName=oryd/hydra versioning=docker
 OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0"
 OIDC_HYDRA_PUBLIC_PORT = 4444
 OIDC_HYDRA_ADMIN_PORT = 4445

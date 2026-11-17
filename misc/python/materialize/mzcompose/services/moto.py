@@ -23,6 +23,7 @@ class Moto(Service):
     def __init__(
         self,
         name: str = "moto",
+        # renovate: datasource=docker depName=motoserver/moto versioning=docker
         image: str = "motoserver/moto:5.2.1",
         port: int = 5000,
     ) -> None:

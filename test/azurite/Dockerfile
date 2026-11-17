@@ -13,7 +13,10 @@ FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21
 # TODO: Switch back to released version after https://github.com/Azure/Azurite/pull/2780 is in a release
 FROM node:26-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS azurite-build
 
-ADD https://github.com/Azure/Azurite/archive/9b08276a0b4c912e8d84d6e0a27a29f33ff950b3.tar.gz /azurite-src.tar.gz
+# renovate: datasource=github-digest depName=Azure/Azurite currentValue=main
+ARG AZURITE_REVISION=9b08276a0b4c912e8d84d6e0a27a29f33ff950b3
+
+ADD https://github.com/Azure/Azurite/archive/${AZURITE_REVISION}.tar.gz /azurite-src.tar.gz
 
 RUN mkdir /azurite \
     && tar -xzf /azurite-src.tar.gz -C /azurite --strip-components=1 \

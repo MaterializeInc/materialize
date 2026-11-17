@@ -22,6 +22,7 @@ class Metabase(Service):
                 # the bundled sample database, which breaks
                 # `test/metabase/smoketest`. Leaving at v0.41 until the
                 # smoketest is updated for the new API.
+                # renovate: datasource=docker depName=metabase/metabase versioning=docker
                 "image": "metabase/metabase:v0.41.4",
                 "ports": ["3000"],
                 "healthcheck": {

@@ -22,6 +22,7 @@ class Squid(Service):
     def __init__(
         self,
         name: str = "squid",
+        # renovate: datasource=docker depName=sameersbn/squid versioning=docker
         image: str = "sameersbn/squid:3.5.27-2",
         port: int = 3128,
         volumes: list[str] = ["./squid.conf:/etc/squid/squid.conf"],

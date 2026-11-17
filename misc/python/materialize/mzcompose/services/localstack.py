@@ -17,6 +17,7 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
+        # renovate: datasource=docker depName=localstack/localstack versioning=docker
         image: str = "localstack/localstack:4.14.0",
         port: int = 4566,
         environment: list[str] = ["LOCALSTACK_HOST=localstack"],
