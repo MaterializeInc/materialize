@@ -2304,7 +2304,7 @@ impl StorageController for Controller {
             match resp {
                 (_replica_id, StorageResponse::FrontierUpper(id, upper)) => {
                     if self.update_write_frontier(id, &upper) {
-                        progressed.insert(self.restart_group(id));
+                        progressed.extend(self.progressed_group(id));
                     }
                     updated_frontiers.insert(id, upper);
                 }
@@ -3475,8 +3475,8 @@ where
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
     ///
-    /// `progressed` holds the restart groups in which a collection advanced its
-    /// write frontier.
+    /// `progressed` holds the restart groups that a write frontier advance shows
+    /// are up, see [`Self::progressed_group`].
     fn record_status_updates(
         &mut self,
         updates: Vec<StatusUpdate>,
@@ -3537,6 +3537,22 @@ where
         match self.collections.get(&id).map(|c| &c.data_source) {
             Some(DataSource::IngestionExport { ingestion_id, .. }) => *ingestion_id,
             _ => id,
+        }
+    }
+
+    /// The restart group that an advance of `id`'s write frontier shows is up,
+    /// if any.
+    fn progressed_group(&self, id: GlobalId) -> Option<GlobalId> {
+        match self.collections.get(&id).map(|c| &c.data_source) {
+            // A remap collection advances on upstream probes, which MySQL takes on
+            // a separate connection that can succeed while replication fails. A
+            // source without exports has nothing else to go by.
+            Some(DataSource::Ingestion(desc))
+                if desc.remap_collection_id == id && !desc.source_exports.is_empty() =>
+            {
+                None
+            }
+            _ => Some(self.restart_group(id)),
         }
     }
 
