@@ -157,6 +157,41 @@ ALTER TABLE pgsink.agg_target REPLICA IDENTITY FULL;
 
 > DROP SINK pgsink_agg_snk
 
+> CREATE MATERIALIZED VIEW pgsink_global AS SELECT count(*) AS n FROM pgsink_t
+
+> CREATE SINK pgsink_global_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM pgsink_global
+  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA 'pgsink', TABLE 'global_target')
+
+> SELECT s.status, s.error, f.write_frontier > 0
+  FROM mz_internal.mz_sink_statuses s JOIN mz_internal.mz_frontiers f ON f.object_id = s.id
+  WHERE s.name = 'pgsink_global_snk'
+running <null> true
+
+> CREATE SOURCE pgsink_global_readback_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
+
+> CREATE TABLE pgsink_global_readback FROM SOURCE pgsink_global_readback_src (REFERENCE pgsink.global_target)
+
+> SELECT * FROM pgsink_global_readback
+2
+
+> INSERT INTO pgsink_t VALUES (4, NULL, NULL, NULL, NULL, NULL, NULL)
+
+> SELECT * FROM pgsink_global_readback
+3
+
+> DELETE FROM pgsink_t WHERE a = 4
+
+> SELECT * FROM pgsink_global_readback
+2
+
+> DROP SINK pgsink_global_snk
+
+> DROP SOURCE pgsink_global_readback_src CASCADE
+
 # A sink without a KEY matches retractions on every column and counts them, so
 # a genuine duplicate row survives retracting one copy of it. The view projects
 # away the id, which is the only way to retract one of two identical rows.

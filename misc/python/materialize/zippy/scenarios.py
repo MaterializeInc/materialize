@@ -64,7 +64,10 @@ from materialize.zippy.iceberg_actions import (
     CreateIcebergSinkParameterized,
     IcebergStart,
 )
-from materialize.zippy.sink_actions import CreateSinkParameterized
+from materialize.zippy.sink_actions import (
+    CreatePostgresSinkParameterized,
+    CreateSinkParameterized,
+)
 from materialize.zippy.source_actions import (
     AlterSourceConnectionParameterized,
     CreateSourceParameterized,
@@ -137,6 +140,7 @@ class KafkaSources(Scenario):
             CreateViewParameterized(max_inputs=2): 5,
             DropView: 5,
             CreateSinkParameterized(): 5,
+            CreatePostgresSinkParameterized(): 5,
             CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
@@ -160,6 +164,7 @@ class AlterConnectionWithKafkaSources(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreatePostgresSinkParameterized(): 5,
             CreateIcebergSinkParameterized(): 5,
             AlterSourceConnectionParameterized(): 5,
             ValidateView: 10,
@@ -190,6 +195,7 @@ class UserTables(Scenario):
             DropTable: 5,
             DropView: 5,
             CreateSinkParameterized(): 10,
+            CreatePostgresSinkParameterized(): 10,
             CreateIcebergSinkParameterized(): 5,
             ValidateTable: 20,
             ValidateView: 20,
@@ -310,6 +316,7 @@ class ClusterReplicas(Scenario):
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 20,
             CreateSinkParameterized(): 10,
+            CreatePostgresSinkParameterized(): 10,
             CreateIcebergSinkParameterized(): 5,
             ValidateView: 20,
             Ingest: 50,
@@ -350,6 +357,7 @@ class CrdbBlobStoreRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreatePostgresSinkParameterized(): 5,
             CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
@@ -374,6 +382,7 @@ class CrdbRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreatePostgresSinkParameterized(): 5,
             CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
@@ -399,6 +408,7 @@ class KafkaSourcesLarge(Scenario):
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
             CreateSinkParameterized(max_sinks=25): 10,
+            CreatePostgresSinkParameterized(max_sinks=25): 10,
             CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
@@ -435,6 +445,7 @@ class UserTablesLarge(Scenario):
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
             CreateSinkParameterized(max_sinks=10): 10,
+            CreatePostgresSinkParameterized(max_sinks=10): 10,
             CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             DML: 50,
