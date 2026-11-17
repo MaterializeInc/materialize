@@ -1738,6 +1738,15 @@ fn append_batches<'scope>(
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
                         }
 
+                        // NOTE: A sink that never wins an append, for example in read-only mode,
+                        // only learns the shard's upper here.
+                        let behind =
+                            PartialOrder::less_than(&*current_upper.borrow(), &mismatch.current);
+                        if behind {
+                            current_upper.borrow_mut().clone_from(&mismatch.current);
+                            upper_cap_set.downgrade(current_upper.borrow().iter());
+                        }
+
                         if bail_on_concurrent_modification {
                             tracing::warn!(
                                 "persist_sink({}): invalid upper! \
