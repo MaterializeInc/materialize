@@ -378,6 +378,14 @@ pub struct ManagedReplicaLocation {
     pub availability_zones: Vec<String>,
     /// See [`ReplicaLocation::pending`].
     pub pending: bool,
+    /// The anti-affinity slot the replica occupies, named after the replica
+    /// that first held it. `None` means the replica is its own slot.
+    ///
+    /// Replicas of one cluster are kept on separate nodes unless they share a
+    /// slot. A replica that stands in for another (a reconfiguration's
+    /// replacement, a hydration burst) inherits that replica's slot, so it may
+    /// be placed on the same node.
+    pub slot: Option<ReplicaId>,
 }
 
 impl ManagedReplicaLocation {
@@ -693,6 +701,7 @@ impl Controller {
             generation: self.deploy_generation,
         }
         .to_string();
+        let slot = location.slot.unwrap_or(replica_id);
         let role_label = match role {
             ClusterRole::SystemCritical => "system-critical",
             ClusterRole::System => "system",
@@ -869,6 +878,7 @@ impl Controller {
                 scale: location.allocation.scale,
                 labels: BTreeMap::from([
                     ("replica-id".into(), replica_id.to_string()),
+                    ("replica-slot".into(), slot.to_string()),
                     ("cluster-id".into(), cluster_id.to_string()),
                     ("generation".into(), self.deploy_generation.to_string()),
                     ("type".into(), "cluster".into()),
@@ -912,11 +922,11 @@ impl Controller {
                             value: cluster_id.to_string(),
                         },
                     },
-                    // Select other replicas (but not oneself)
+                    // Select the replicas in other slots.
                     LabelSelector {
-                        label_name: "replica-id".into(),
+                        label_name: "replica-slot".into(),
                         logic: LabelSelectionLogic::NotEq {
-                            value: replica_id.to_string(),
+                            value: slot.to_string(),
                         },
                     },
                     LabelSelector {

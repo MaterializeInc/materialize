@@ -39,7 +39,7 @@ pub mod strategy;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_adapter_types::dyncfgs::{DEFAULT_HYDRATION_BURST_LINGER, ENABLE_HYDRATION_BURST};
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 
@@ -567,16 +567,32 @@ fn reconcile_replicas(
 
     // Creates: for each desired shape, fill the gap below its desired count.
     for d in &desired {
-        let actual_count = actual_by_shape
+        let same_shape = actual_by_shape
             .iter()
             .find(|(s, _)| s.matches(&d.shape))
-            .map(|(_, replicas)| replicas.len())
-            .unwrap_or(0);
-        for _ in actual_count..d.count {
+            .map(|(_, replicas)| replicas.as_slice())
+            .unwrap_or(&[]);
+        // Replicas of one shape must occupy distinct slots: the steady set
+        // shares a shape, and two steady replicas in one slot could land on the
+        // same node, which would void the replication factor. A new replica
+        // inherits a slot held only by replicas of other shapes, which are the
+        // ones it overlaps with transiently (the set a reconfiguration
+        // replaces, or the steady set a burst accelerates), and opens its own
+        // slot once none is left.
+        let mut taken: BTreeSet<ReplicaId> = same_shape.iter().map(|r| r.slot).collect();
+        let inheritable: BTreeSet<ReplicaId> = actual_by_shape
+            .iter()
+            .filter(|(s, _)| !s.matches(&d.shape))
+            .flat_map(|(_, replicas)| replicas.iter().map(|r| r.slot))
+            .collect();
+        for _ in same_shape.len()..d.count {
+            let slot = inheritable.difference(&taken).next().copied();
+            taken.extend(slot);
             decisions.push(Decision::CreateReplica {
                 cluster_id: state.cluster_id,
                 name: name_gen.next_name(),
                 shape: d.shape.clone(),
+                slot,
                 // Multiple creates of one shape in a tick share the merged
                 // reason.
                 reason: d.reason.clone(),

@@ -727,7 +727,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
-        // of the same cluster on the same node. Pods from the _same_ replica are fine;
+        // of the same cluster on the same node. Pods from the _same_ replica are fine,
+        // as are pods of replicas the controller placed in the same slot;
         // pods from different clusters are also fine.
         //
         // The point is that if pods of two replicas are on the same node, that node

@@ -51,6 +51,9 @@ pub use mz_adapter_types::cluster_state::{
 pub struct ObservedReplica {
     pub replica_id: ReplicaId,
     pub name: String,
+    /// The anti-affinity slot the replica occupies: its own id unless it
+    /// inherited another replica's slot at creation.
+    pub slot: ReplicaId,
     /// `None` for a replica with an unmanaged location, which has no managed
     /// shape to reconcile against.
     pub shape: Option<ReplicaShape>,
@@ -360,6 +363,9 @@ pub enum Decision {
         cluster_id: ClusterId,
         name: String,
         shape: ReplicaShape,
+        /// The anti-affinity slot to inherit, or `None` for the replica to be
+        /// its own slot. Replicas sharing a slot may be placed on one node.
+        slot: Option<ReplicaId>,
         reason: CreateReason,
         expected: ExpectedClusterState,
     },

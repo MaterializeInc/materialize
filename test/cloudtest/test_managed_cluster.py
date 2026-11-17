@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import time
 from textwrap import dedent
 from typing import Any
@@ -580,3 +581,83 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
     assert_no_pending("source_reconfig")
+
+
+def test_reconfiguration_replicas_inherit_slots(mz: MaterializeApplication) -> None:
+    """A resize's replacement replicas take over their predecessors'
+    anti-affinity slots, so they may share a node with them, while the
+    replacements still repel each other."""
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+        port="internal",
+        user="mz_system",
+    )
+    mz.environmentd.sql(
+        "CREATE CLUSTER slots (SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2)"
+    )
+    cluster_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_clusters WHERE name = 'slots'"
+    )[0][0]
+
+    def replica_ids() -> set[str]:
+        return {
+            row[0]
+            for row in mz.environmentd.sql_query(
+                f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+            )
+        }
+
+    old_ids = replica_ids()
+    assert len(old_ids) == 2
+
+    mz.environmentd.sql("""
+        ALTER CLUSTER slots SET (SIZE = 'scale=1,workers=2')
+        WITH (WAIT UNTIL READY (TIMEOUT '5s', ON TIMEOUT 'COMMIT'))
+        """)
+    new_ids: set[str] = set()
+    for _ in range(240):
+        new_ids = replica_ids()
+        if len(new_ids) == 2 and not new_ids & old_ids:
+            break
+        time.sleep(0.25)
+    assert (
+        len(new_ids) == 2 and not new_ids & old_ids
+    ), f"expected two replacement replicas, found {new_ids} (old: {old_ids})"
+
+    prefix = "cluster.environmentd.materialize.cloud"
+    slots = set()
+    for replica_id in new_ids:
+        pods: list[dict[str, Any]] = []
+        for _ in range(240):
+            pods = json.loads(
+                mz.kubectl(
+                    "get",
+                    "pods",
+                    f"--selector={prefix}/cluster-id={cluster_id},{prefix}/replica-id={replica_id}",
+                    "-o",
+                    "json",
+                )
+            )["items"]
+            if pods:
+                break
+            time.sleep(0.25)
+        assert pods, f"no pod for replica {replica_id}"
+        slot = pods[0]["metadata"]["labels"][f"{prefix}/replica-slot"]
+        slots.add(slot)
+
+        anti_affinity = pods[0]["spec"]["affinity"]["podAntiAffinity"]
+        terms = anti_affinity.get("requiredDuringSchedulingIgnoredDuringExecution") or [
+            term["podAffinityTerm"]
+            for term in anti_affinity["preferredDuringSchedulingIgnoredDuringExecution"]
+        ]
+        exprs = terms[0]["labelSelector"]["matchExpressions"]
+        assert any(
+            e["key"] == f"{prefix}/replica-slot"
+            and e["operator"] == "NotIn"
+            and e["values"] == [slot]
+            for e in exprs
+        ), f"replica {replica_id} does not repel other slots: {exprs}"
+
+    assert slots == old_ids, f"expected inherited slots {old_ids}, found {slots}"
+
+    mz.environmentd.sql("DROP CLUSTER slots CASCADE")

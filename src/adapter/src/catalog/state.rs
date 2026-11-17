@@ -2858,6 +2858,7 @@ impl CatalogState {
                 billed_as,
                 internal,
                 pending,
+                slot,
             } => {
                 self.ensure_valid_replica_size(allowed_sizes, &size, allow_disabled)?;
                 let cluster_replica_sizes = &self.cluster_replica_sizes;
@@ -2876,6 +2877,7 @@ impl CatalogState {
                     billed_as,
                     internal,
                     pending,
+                    slot,
                 })
             }
         };
