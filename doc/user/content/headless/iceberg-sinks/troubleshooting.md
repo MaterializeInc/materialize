@@ -21,10 +21,12 @@ reports `stalled` with `schema does not match expected schema` and stops.
 Materialize does not retry this error.
 
 To recover, change the table's schema back without dropping the table, then
-restart the sink by changing its commit interval:
+restart the replicas of the cluster that hosts the sink. This also restarts
+every other object on that cluster. For a managed cluster:
 
 ```mzsql
-ALTER SINK <sink_name> SET (COMMIT INTERVAL = '<new_interval>');
+ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = 0);
+ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = <original replication factor>);
 ```
 
 ### Sink falls behind and does not catch up
