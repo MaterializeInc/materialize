@@ -840,45 +840,57 @@ pub(crate) fn durable_migrate(
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
     }
 
-    migrate_builtin_tables_to_mvs(tx)?;
+    migrate_builtin_item_types(tx)?;
 
     Ok(())
 }
 
-/// Update system object mappings for builtins whose type changed from table to materialized view.
+/// Update system object mappings for builtins whose type changed: from table
+/// to materialized view, or from table or materialized view to view.
 ///
 /// Required for the work of making builtin tables views over `mz_catalog_raw`.
-fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Error> {
-    // Collect `(schema, name)` of all builtin MVs.
+///
+/// Only the mapping changes. The builtin keeps its ids and its shard, which is
+/// left to the step registered for the new description in
+/// `builtin_schema_migration`: a `Replacement` gives a materialized view a new
+/// shard, a `Drop` leaves a view without one.
+fn migrate_builtin_item_types(tx: &mut Transaction) -> Result<(), anyhow::Error> {
     let expected_mvs: BTreeSet<_> = BUILTINS::materialized_views()
         .map(|mv| (mv.schema, mv.name))
         .collect();
+    let expected_views: BTreeSet<_> = BUILTINS::views().map(|v| (v.schema, v.name)).collect();
 
-    // Find persisted mappings for builtin tables that must be migrated.
+    // Find persisted mappings for builtin tables that must be migrated or builtin materialized
+    // views that must be dropped.
     let mut to_remove = BTreeSet::new();
     let mut to_add = Vec::new();
     for mapping in tx.get_system_object_mappings() {
         let desc = &mapping.description;
-        if desc.object_type != CatalogItemType::Table {
-            continue;
-        }
-
         let key = (&*desc.schema_name, &*desc.object_name);
-        if expected_mvs.contains(&key) {
-            info!(
-                "migrate: builtin {}.{} changed type from table to MV",
-                desc.schema_name, desc.object_name,
-            );
-            to_remove.insert(desc.clone());
-            to_add.push(SystemObjectMapping {
-                description: SystemObjectDescription {
-                    schema_name: desc.schema_name.clone(),
-                    object_type: CatalogItemType::MaterializedView,
-                    object_name: desc.object_name.clone(),
-                },
-                unique_identifier: mapping.unique_identifier,
-            });
-        }
+        let new_type = match desc.object_type {
+            CatalogItemType::Table if expected_mvs.contains(&key) => {
+                CatalogItemType::MaterializedView
+            }
+            CatalogItemType::Table | CatalogItemType::MaterializedView
+                if expected_views.contains(&key) =>
+            {
+                CatalogItemType::View
+            }
+            _ => continue,
+        };
+        info!(
+            "migrate: builtin {}.{} changed type from {} to {}",
+            desc.schema_name, desc.object_name, desc.object_type, new_type
+        );
+        to_remove.insert(desc.clone());
+        to_add.push(SystemObjectMapping {
+            description: SystemObjectDescription {
+                schema_name: desc.schema_name.clone(),
+                object_type: new_type,
+                object_name: desc.object_name.clone(),
+            },
+            unique_identifier: mapping.unique_identifier,
+        });
     }
 
     if !to_remove.is_empty() {
@@ -1308,6 +1320,7 @@ fn rewrite_interval_option_floor_1s(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::Catalog;
 
     fn strip(sql: &str) -> String {
         let mut stmt = mz_sql::parse::parse(sql)
@@ -1368,6 +1381,59 @@ mod tests {
             stmt.to_ast_string_stable(),
             r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."text"], "b" [s21 AS "pg_catalog"."int4"], "c" [s20 AS "pg_catalog"."text"] COLLATE "pg_catalog"."default" NOT NULL)"#,
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn builtin_converted_to_view_keeps_ids_and_shard() {
+        Catalog::with_debug(|catalog| async move {
+            {
+                let mut storage = catalog.storage().await;
+                let mut tx = storage.transaction().await.expect("transaction");
+
+                // Get some existing builtin view and register it as a builtin table. This means
+                // changing it's system mapping and creating a shard for it.
+                let view = tx
+                    .get_system_object_mappings()
+                    .find(|m| m.description.object_type == CatalogItemType::View)
+                    .expect("builtin views exist");
+                let global_id = view.unique_identifier.global_id;
+                let shard = ShardId::new();
+                tx.remove_system_object_mappings(btreeset! {view.description.clone()})
+                    .expect("mapping exists");
+                tx.set_system_object_mappings(vec![SystemObjectMapping {
+                    description: SystemObjectDescription {
+                        object_type: CatalogItemType::Table,
+                        ..view.description.clone()
+                    },
+                    unique_identifier: view.unique_identifier.clone(),
+                }])
+                .expect("mapping is unique");
+                tx.insert_collection_metadata([(global_id, shard)].into())
+                    .expect("a view has no shard");
+
+                migrate_builtin_item_types(&mut tx).expect("migration succeeds");
+                // After migrating, expect it to be registered as a view again
+                // in the system mappings but keep the shard around. This will
+                // be finalized in a builtin schema migration.
+                let mappings: Vec<_> = tx
+                    .get_system_object_mappings()
+                    .filter(|m| m.unique_identifier.global_id == global_id)
+                    .collect();
+                assert_eq!(
+                    mappings,
+                    vec![view],
+                    "the mapping must become a view under its ids"
+                );
+                assert_eq!(
+                    tx.get_collection_metadata().get(&global_id),
+                    Some(&shard),
+                    "the shard must be left for the `Drop` step"
+                );
+            }
+            catalog.expire().await;
+        })
+        .await;
     }
 
     fn add_doc_on_ids(
