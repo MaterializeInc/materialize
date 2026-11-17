@@ -2426,6 +2426,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_materialized_view_schema_freezing,
+        desc: "Write the inferred schema of a new materialized view into its definition as column definitions (requires enable_materialized_view_column_definitions)",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_cast_elimination,
         desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
         default: true,

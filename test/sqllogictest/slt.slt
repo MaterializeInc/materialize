@@ -66,17 +66,18 @@ query TT
 SHOW CREATE MATERIALIZED VIEW mv1;
 ----
 materialize.public.mv1
-CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    ("?column?" pg_catalog.int4 NOT NULL)⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
 
 query T
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    ("?column?" pg_catalog.int4 NOT NULL)⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
 
 simple multiline,conn=mz_catalog_server,user=mz_support
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    ("?column?" pg_catalog.int4 NOT NULL)
     IN CLUSTER quickstart
     WITH (REFRESH = ON COMMIT)
     AS SELECT 1;
@@ -104,17 +105,18 @@ EOF
 query TT
 SHOW CREATE MATERIALIZED VIEW mv1;
 ----
-materialize.public.mv1  CREATE␠MATERIALIZED␠VIEW␠materialize.public.mv1⏎␠␠␠␠IN␠CLUSTER␠quickstart⏎␠␠␠␠WITH␠(REFRESH␠=␠ON␠COMMIT)⏎␠␠␠␠AS␠SELECT␠1;
+materialize.public.mv1  CREATE␠MATERIALIZED␠VIEW␠materialize.public.mv1⏎␠␠␠␠("?column?"␠pg_catalog.int4␠NOT␠NULL)⏎␠␠␠␠IN␠CLUSTER␠quickstart⏎␠␠␠␠WITH␠(REFRESH␠=␠ON␠COMMIT)⏎␠␠␠␠AS␠SELECT␠1;
 
 query T
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    ("?column?" pg_catalog.int4 NOT NULL)⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
 
 simple multiline,conn=mz_catalog_server,user=mz_support
 SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
+    ("?column?" pg_catalog.int4 NOT NULL)
     IN CLUSTER quickstart
     WITH (REFRESH = ON COMMIT)
     AS SELECT 1;
