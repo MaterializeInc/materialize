@@ -3609,6 +3609,7 @@ name = "fivetran_destination"
 version = "0.0.0"
 dependencies = [
  "async-compression",
+ "aws-lc-rs",
  "bytes",
  "clap",
  "csv-async",
