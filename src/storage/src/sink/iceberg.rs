@@ -1095,6 +1095,14 @@ fn type_name(ty: &Type) -> String {
     }
 }
 
+/// An existing table has a schema the sink cannot write into.
+#[derive(Debug, thiserror::Error)]
+#[error("Iceberg table '{table_name}' schema does not match expected schema: {mismatch}")]
+struct SchemaMismatchError {
+    table_name: String,
+    mismatch: String,
+}
+
 /// Load an existing Iceberg table or create it if it doesn't exist.
 async fn load_or_create_table(
     catalog: &dyn Catalog,
@@ -1112,11 +1120,11 @@ async fn load_or_create_table(
             // TODO: Add proper schema evolution/validation to ensure compatibility
             let current_schema = table.metadata().current_schema();
             if let Some(mismatch) = schema_mismatch(current_schema, schema) {
-                anyhow::bail!(
-                    "Iceberg table '{}' schema does not match expected schema: {}",
+                return Err(SchemaMismatchError {
                     table_name,
-                    mismatch
-                );
+                    mismatch,
+                }
+                .into());
             }
             Ok(table)
         }
@@ -1566,10 +1574,19 @@ fn mint_batch_descriptions<'scope>(
         })
     });
 
-    let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
-        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
-        namespace: StatusNamespace::Iceberg,
+    let statuses = errors.map(|error| {
+        let message = format!("{}", error.display_with_causes());
+        let update = if error.is::<SchemaMismatchError>() {
+            // A restart would load the same table and fail the same way.
+            HealthStatusUpdate::suspending(message, None)
+        } else {
+            HealthStatusUpdate::halting(message, None)
+        };
+        HealthStatusMessage {
+            id: None,
+            update,
+            namespace: StatusNamespace::Iceberg,
+        }
     });
     (
         batch_desc_stream,
