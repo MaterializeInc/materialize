@@ -1113,17 +1113,38 @@ impl MirScalarExpr {
     }
 
     /// True iff the expression contains a call that constant folding must not
-    /// evaluate: an `UnmaterializableFunc`, or `jq`, whose programs can loop or
-    /// recurse without bound and would hang or abort the optimizing process.
+    /// evaluate: an `UnmaterializableFunc`, or a call to an
+    /// [unbounded](UnaryFunc::is_unbounded) function.
     pub fn contains_unfoldable(&self) -> bool {
+        self.unfoldable_func().is_some()
+    }
+
+    /// The function of an [unfoldable](Self::contains_unfoldable) call in the
+    /// expression, as printed by its `Display`, if there is one.
+    fn unfoldable_func(&self) -> Option<String> {
+        let mut found = None;
+        self.visit_pre(|e| {
+            if found.is_none() {
+                found = match e {
+                    MirScalarExpr::CallUnmaterializable(f) => Some(f.to_string()),
+                    MirScalarExpr::CallUnary { func, .. } if func.is_unbounded() => {
+                        Some(func.to_string())
+                    }
+                    _ => None,
+                };
+            }
+        });
+        found
+    }
+
+    /// True iff the expression contains a call to an
+    /// [unbounded](UnaryFunc::is_unbounded) function.
+    pub fn contains_unbounded(&self) -> bool {
         let mut contains = false;
-        self.visit_pre(|e| match e {
-            MirScalarExpr::CallUnmaterializable(_)
-            | MirScalarExpr::CallUnary {
-                func: UnaryFunc::Jq(_),
-                ..
-            } => contains = true,
-            _ => {}
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallUnary { func, .. } = e {
+                contains |= func.is_unbounded();
+            }
         });
         contains
     }
