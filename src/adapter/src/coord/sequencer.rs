@@ -78,11 +78,10 @@ mod inner;
 impl Coordinator {
     /// Selects and records the execution cluster, checking its restrictions.
     pub(super) fn prepare_plan_execution(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan: &Plan,
     ) -> Result<(TargetCluster, Option<mz_controller_types::ClusterId>), AdapterError> {
-        // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
         let target_cluster = match ctx.session().transaction().cluster() {
             // Use the current transaction's cluster.
             Some(cluster_id) => TargetCluster::Transaction(cluster_id),
