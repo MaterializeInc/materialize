@@ -13,6 +13,7 @@ version, no upgrade).
 """
 
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from textwrap import dedent
@@ -2999,6 +3000,43 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_unreadable_input_drags_as_of(c: Composition) -> None:
+    """Verify that an input without readable data doesn't drag index as-ofs back.
+
+    `mv` never ran, like a builtin MV replaced in an upgrade. `v_idx` can't hydrate before `mv`
+    advances, so it must not drag its input `t_idx` back to the since `mv` holds on `t`.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        """
+        CREATE CLUSTER paused SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER paused AS SELECT * FROM t;
+        CREATE INDEX t_idx IN CLUSTER test ON t (a);
+        CREATE VIEW v AS SELECT a FROM t JOIN mv USING (a);
+        CREATE INDEX v_idx IN CLUSTER test ON v (a);
+        """,
+        service="mz_old",
+    )
+    # Ages the since `mv` holds on `t`, which is what `t_idx` would get dragged back to.
+    time.sleep(30)
+
+    started = time.time()
+    c.up("mz_new")
+    as_ofs = []
+    for _ in range(60):
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        as_ofs = re.findall(r"dataflow name=\S+\.t_idx .* as_of=\[(\d+)\]", logs)
+        if as_ofs:
+            break
+        time.sleep(1)
+    assert as_ofs, "no `creating dataflow` log line for t_idx on mz_new"
+    lag = started - int(as_ofs[-1]) / 1000
+    assert lag < 15, f"t_idx starts {lag:.0f}s in the past on the read-only deployment"
 
 
 def workflow_caught_up_stability(c: Composition) -> None:

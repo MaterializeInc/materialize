@@ -333,6 +333,28 @@ struct Collection<'a> {
     is_index: bool,
 }
 
+/// The frontier up to which the inputs of a collection count as complete.
+struct InputFrontier {
+    frontier: Antichain<Timestamp>,
+    /// The storage write frontier that `frontier` stands in for, if the inputs are not readable
+    /// at the collection's lower as-of bound.
+    substituted_for: Option<Antichain<Timestamp>>,
+}
+
+impl InputFrontier {
+    /// Describes the substitution, if any, for constraint reasons.
+    fn substitution_note(&self) -> String {
+        match &self.substituted_for {
+            Some(write_frontier) => format!(
+                " (current time, substituted for storage write frontier {:?} at which the inputs \
+                 are not readable)",
+                write_frontier.elements()
+            ),
+            None => String::new(),
+        }
+    }
+}
+
 /// The as-of selection context.
 struct Context<'a> {
     collections: BTreeMap<GlobalId, Collection<'a>>,
@@ -523,44 +545,17 @@ impl<'a> Context<'a> {
     /// hydrate immediately, but it will be able to hydrate once its inputs have sufficiently
     /// advanced.
     fn apply_warmup_constraints(&self) {
-        // Collect write frontiers from storage inputs.
-        let mut write_frontiers = BTreeMap::new();
-        for (id, collection) in &self.collections {
-            let storage_frontiers = self
-                .storage_collections
-                .collections_frontiers(collection.storage_inputs.clone())
-                .expect("storage collections exist");
-
-            let mut write_frontier = Antichain::new();
-            for frontiers in storage_frontiers {
-                write_frontier.extend(frontiers.write_frontier);
-            }
-
-            write_frontiers.insert(*id, write_frontier);
-        }
-
-        // Propagate write frontiers through compute inputs.
-        fixpoint(|changed| {
-            for (id, collection) in &self.collections {
-                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
-                for input_id in &collection.compute_inputs {
-                    let frontier = &write_frontiers[input_id];
-                    *changed |= write_frontier.extend(frontier.iter().cloned());
-                }
-                write_frontiers.insert(*id, write_frontier);
-            }
-        });
-
         // Apply the warmup constraint.
-        for (id, write_frontier) in write_frontiers {
-            let upper = step_back_frontier(&write_frontier);
+        for (id, input) in self.input_frontiers() {
+            let upper = step_back_frontier(&input.frontier);
             let constraint = Constraint {
                 type_: ConstraintType::Soft,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
                 reason: &format!(
-                    "warmup frontier derived from storage write frontier {:?}",
-                    write_frontier.elements()
+                    "warmup frontier derived from storage write frontier {:?}{}",
+                    input.frontier.elements(),
+                    input.substitution_note(),
                 ),
             };
             self.apply_constraint(id, constraint);
@@ -580,11 +575,41 @@ impl<'a> Context<'a> {
     /// historical times for its entire compaction window initially, but will do so once sufficient
     /// time has passed.
     fn apply_index_read_policy_constraints(&self) {
-        // For the write frontier of an index, we'll use the least write frontier of its
-        // (transitive) storage inputs. This is an upper bound for the write frontier the index
-        // could have had before the restart. For indexes without storage inputs we use the current
-        // time.
+        // For the write frontier of an index, we'll use the frontier of its inputs. This is an
+        // upper bound for the write frontier the index could have had before the restart. For
+        // indexes without storage inputs we use the current time.
+        let mut input_frontiers = self.input_frontiers();
 
+        // Apply the read policy constraint to indexes.
+        for (id, collection) in &self.collections {
+            if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
+                let input = input_frontiers.remove(id).expect("inserted above");
+                let mut write_frontier = input.frontier.clone();
+                if write_frontier.is_empty() {
+                    write_frontier = Antichain::from_elem(self.current_time.clone());
+                }
+                let upper = read_policy.frontier(write_frontier.borrow());
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: &format!(
+                        "read policy applied to write frontier {:?}{}",
+                        write_frontier.elements(),
+                        input.substitution_note(),
+                    ),
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Restore `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Returns, for each collection, the meet of the write frontiers of its transitive storage
+    /// inputs.
+    fn transitive_storage_write_frontiers(&self) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
         // Collect write frontiers from storage inputs.
         let mut write_frontiers = BTreeMap::new();
         for (id, collection) in &self.collections {
@@ -613,29 +638,44 @@ impl<'a> Context<'a> {
             }
         });
 
-        // Apply the read policy constraint to indexes.
-        for (id, collection) in &self.collections {
-            if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
-                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
-                if write_frontier.is_empty() {
-                    write_frontier = Antichain::from_elem(self.current_time.clone());
-                }
-                let upper = read_policy.frontier(write_frontier.borrow());
-                let constraint = Constraint {
-                    type_: ConstraintType::Soft,
-                    bound_type: BoundType::Upper,
-                    frontier: &upper,
-                    reason: &format!(
-                        "read policy applied to write frontier {:?}",
-                        write_frontier.elements()
-                    ),
-                };
-                self.apply_constraint(*id, constraint);
-            }
-        }
+        write_frontiers
+    }
 
-        // Restore `AsOfBounds` invariant (2).
-        self.propagate_bounds_upstream(BoundType::Upper);
+    /// Returns, for each collection, the frontier up to which its inputs count as complete when
+    /// deriving soft upper bounds.
+    ///
+    /// The lower as-of bounds must be final when this is called.
+    fn input_frontiers(&self) -> BTreeMap<GlobalId, InputFrontier> {
+        // NOTE: An input without readable data at the lower bound, for example an MV that never
+        // ran, holds the write frontier at or below that bound. The collection can't hydrate at
+        // any as-of we could select until that input advances. Constraining the upper bound by
+        // that write frontier would seal the as-of at the lower bound, and invariant (2) would
+        // then drag every compute input back to it, making them replay history for no benefit.
+        // Instead we treat the inputs as complete up to the current time. The empty frontier
+        // would not do: it removes the warmup bound, and a dataflow no other constraint bounds,
+        // like a metric sink, would get an empty as-of and never be installed.
+        let after_current_time = self
+            .current_time
+            .checked_add(1)
+            .map_or_else(Antichain::new, Antichain::from_elem);
+        self.transitive_storage_write_frontiers()
+            .into_iter()
+            .map(|(id, write_frontier)| {
+                let bounds = self.expect_collection(id).bounds.borrow();
+                let input = if PartialOrder::less_equal(&write_frontier, &bounds.lower) {
+                    InputFrontier {
+                        frontier: after_current_time.clone(),
+                        substituted_for: Some(write_frontier),
+                    }
+                } else {
+                    InputFrontier {
+                        frontier: write_frontier,
+                        substituted_for: None,
+                    }
+                };
+                (id, input)
+            })
+            .collect()
     }
 
     /// Apply as-of constraints to ensure indexes are immediately readable.
@@ -865,6 +905,7 @@ mod tests {
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
     use mz_compute_types::sinks::MaterializedViewSinkConnection;
+    use mz_compute_types::sinks::MetricSinkConnection;
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -1074,6 +1115,7 @@ mod tests {
         export_id: &str,
         input_ids: &[&str],
         storage_ids: &BTreeSet<&str>,
+        metric_sink_ids: &BTreeSet<&str>,
     ) -> LirDataflowDescription {
         let source_imports = input_ids
             .iter()
@@ -1116,7 +1158,7 @@ mod tests {
             })
             .collect();
         let index_exports = std::iter::once(export_id)
-            .filter(|s| !storage_ids.contains(*s))
+            .filter(|s| !storage_ids.contains(*s) && !metric_sink_ids.contains(*s))
             .map(|sid| {
                 let id = sid.parse().unwrap();
                 let desc = IndexDesc {
@@ -1128,18 +1170,21 @@ mod tests {
             })
             .collect();
         let sink_exports = std::iter::once(export_id)
-            .filter(|s| storage_ids.contains(*s))
+            .filter(|s| storage_ids.contains(*s) || metric_sink_ids.contains(*s))
             .map(|sid| {
                 let id = sid.parse().unwrap();
+                let connection = if metric_sink_ids.contains(sid) {
+                    ComputeSinkConnection::MetricSink(MetricSinkConnection { label: sid.into() })
+                } else {
+                    ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
+                        value_desc: RelationDesc::empty(),
+                        storage_metadata: Default::default(),
+                    })
+                };
                 let desc = ComputeSinkDesc {
                     from: GlobalId::Transient(0),
                     from_desc: RelationDesc::empty(),
-                    connection: ComputeSinkConnection::MaterializedView(
-                        MaterializedViewSinkConnection {
-                            value_desc: RelationDesc::empty(),
-                            storage_metadata: Default::default(),
-                        },
-                    ),
+                    connection,
                     with_snapshot: Default::default(),
                     up_to: Default::default(),
                     non_null_assertions: Default::default(),
@@ -1173,10 +1218,12 @@ mod tests {
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
             $( read_only: $read_only:expr, )?
             $( pending_replacements: [ $( $replacement_id:literal, )* ], )?
+            $( metric_sinks: [ $( $metric_sink_id:literal, )* ], )?
         }) => {
             #[mz_ore::test]
             fn $name() {
                 let storage_ids = [$( $storage_id, )*].into();
+                let metric_sink_ids = [$($( $metric_sink_id, )*)?].into();
 
                 let storage_frontiers = StorageFrontiers(BTreeMap::from([
                     $(
@@ -1189,7 +1236,7 @@ mod tests {
 
                 let mut dataflows = [
                     $(
-                        dataflow($export_id, &$inputs, &storage_ids),
+                        dataflow($export_id, &$inputs, &storage_ids, &metric_sink_ids),
                     )*
                 ];
 
@@ -1357,6 +1404,66 @@ mod tests {
         ],
         current_time: 100,
         pending_replacements: ["u2", "u3",],
+    });
+
+    // `u1` is an empty MV that never ran, so its write frontier is stuck at its read frontier and
+    // `u3` can't hydrate before `u1` advances. `u3` must not drag its compute input `u2` back to
+    // `u1`'s frontier.
+    testcase!(stuck_input_without_readable_data, {
+        storage: {
+            "s1": (10, 100),
+            "u1": (10, 10),
+        },
+        dataflows: [
+            "u1" <- ["s1"]       => 10,
+            "u2" <- ["s1"]       => 99,
+            "u3" <- ["u2", "u1"] => 100,
+        ],
+        current_time: 100,
+    });
+
+    // Like `stuck_input_without_readable_data`, but `u2`'s compute input `u1` is a constant index,
+    // which only the current-time constraint bounds.
+    testcase!(stuck_input_constant_compute_input, {
+        storage: {
+            "s1": (10, 10),
+        },
+        dataflows: [
+            "u1" <- []           => 100,
+            "u2" <- ["s1", "u1"] => 100,
+        ],
+        current_time: 100,
+    });
+
+    // `u2` is a metric sink over an MV `u1` that never ran. No constraint other than warmup bounds
+    // a metric sink, so it must keep a finite as-of to get installed.
+    testcase!(stuck_input_metric_sink, {
+        storage: {
+            "s1": (10, 100),
+            "u1": (10, 10),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 10,
+            "u2" <- ["u1"] => 100,
+        ],
+        current_time: 100,
+        metric_sinks: ["u2",],
+    });
+
+    // `u1` is an MV that ran up to 8 and then stopped. Its read hold keeps `s1` at 7, so `u3` can
+    // hydrate at 7 and its compute input `u2` must follow. Before the restart, `u3` held `u2` back
+    // to the same time.
+    testcase!(stuck_input_with_readable_data, {
+        storage: {
+            "s1": (7, 100),
+            "u1": (5, 8),
+        },
+        dataflows: [
+            "u1" <- ["s1"]       => 7,
+            "u2" <- ["s1"]       => 7,
+            "u3" <- ["u2", "u1"] => 7,
+        ],
+        current_time: 100,
     });
 
     // Regression test for database-issues#9273.
