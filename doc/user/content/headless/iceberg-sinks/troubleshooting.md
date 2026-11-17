@@ -14,6 +14,32 @@ If another process modifies the Iceberg table while Materialize is committing,
 you may see commit conflict errors. Materialize will automatically retry, but
 if conflicts persist, ensure no other writers are modifying the same table.
 
+### Sink stalls on a table schema mismatch
+
+If the Iceberg table's schema stops matching the sink's input, for example
+because another writer adds, renames, or retypes a column, the sink reports
+`stalled` with an error containing `schema does not match expected schema`.
+Materialize does not retry this error. The sink stops and stays `stalled`
+until it is restarted.
+
+To recover:
+
+1. Change the table's schema back to what the sink expects. The error names
+   the first field that differs. Do not drop the table. Materialize would
+   create a new one, but would not write the data it has already committed
+   again.
+
+1. Restart the sink by changing its commit interval. Setting the interval to
+   its current value does not restart the sink.
+
+   ```mzsql
+   ALTER SINK <sink_name> SET (COMMIT INTERVAL = '<new_interval>');
+   ```
+
+   Alternatively, restart the replicas of the cluster that hosts the sink, as
+   described in [Sink falls behind and does not catch
+   up](#sink-falls-behind-and-does-not-catch-up).
+
 ### Sink falls behind and does not catch up
 
 An Iceberg sink can fall behind its input when each commit to the catalog takes
