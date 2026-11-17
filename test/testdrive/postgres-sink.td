@@ -65,6 +65,9 @@ SELECT id FROM mz_sinks WHERE name = 'pgsink_snk'
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
 running
 
+> SELECT write_frontier > 0 FROM mz_internal.mz_frontiers WHERE object_id = '${sink-id}'
+true
+
 # The target table mirrors the source relation with the key as its primary
 # key. Staging happens in a session temporary table, so it is the only table
 # the sink creates in the schema.
@@ -87,14 +90,21 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT (mz_frontier > 0 AND epoch > 0)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
 CALL pgsink.wait_for('SELECT string_agg(sink_id || '' '' || sink_schema || '' '' || sink_table, '', '') FROM materialize.sink_progress', '${sink-id} pgsink target');
 
-# Every column round-trips into the target, including NULLs and text with
-# tabs, newlines, backslashes and quotes.
+# Source the target before mutating the input to cover both snapshot and CDC.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>'') || ''|'' || coalesce(c::text, ''<NULL>'') || ''|'' || coalesce(d::text, ''<NULL>'') || ''|'' || coalesce(e::text, ''<NULL>'') || ''|'' || coalesce(f::text, ''<NULL>'') || ''|'' || coalesce(g::text, ''<NULL>''), '' ; '' ORDER BY a) FROM pgsink.target', '1|one|1.50|2024-01-01 00:00:00+00|{"k": 1}|00000000-0000-0000-0000-000000000001|{1,2} ; 2|tab<TAB>nl<NL>bs\ quote''s|-2.25|<NULL>|<NULL>|<NULL>|<NULL> ; 3|<NULL>|<NULL>|<NULL>|null|<NULL>|{}');
+ALTER TABLE pgsink.target REPLICA IDENTITY FULL;
 
-> SELECT write_frontier > 0 FROM mz_internal.mz_frontiers WHERE object_id = '${sink-id}'
-true
+> CREATE SOURCE pgsink_readback_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
+
+> CREATE TABLE pgsink_readback FROM SOURCE pgsink_readback_src (REFERENCE pgsink.target)
+
+> SELECT * FROM
+  ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_readback EXCEPT ALL SELECT * FROM pgsink_t))
 
 # An update replaces the row for its key and a delete removes it.
 
@@ -102,8 +112,10 @@ true
 
 > DELETE FROM pgsink_t WHERE a = 3
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target', '1|uno ; 2|tab<TAB>nl<NL>bs\ quote''s');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_readback EXCEPT ALL SELECT * FROM pgsink_t))
 
 # An update puts a retraction and an insertion for one key at the same
 # timestamp, so a single window holds both and the apply statement's ordering
@@ -111,8 +123,10 @@ CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b
 
 > UPDATE pgsink_t SET b = 'second' WHERE a = 1
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target WHERE a = 1', '1|second');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_readback EXCEPT ALL SELECT * FROM pgsink_t))
 
 # A relation with a natural unique key needs no NOT ENFORCED.
 
@@ -124,8 +138,22 @@ CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '
   INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'agg_target')
   KEY (a)
 
+> SELECT write_frontier > 0 FROM mz_internal.mz_frontiers
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink_agg_snk')
+true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || n, '' ; '' ORDER BY a) FROM pgsink.agg_target', '1|1 ; 2|1');
+ALTER TABLE pgsink.agg_target REPLICA IDENTITY FULL;
+
+> CREATE SOURCE pgsink_agg_readback_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
+
+> CREATE TABLE pgsink_agg_readback FROM SOURCE pgsink_agg_readback_src (REFERENCE pgsink.agg_target)
+
+> SELECT * FROM pgsink_agg_readback
+1 1
+2 1
 
 > DROP SINK pgsink_agg_snk
 
@@ -144,16 +172,28 @@ CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || n, '' ; '' ORDER BY a) FRO
   FROM pgsink_kl
   INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'keyless_target')
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(v, '' ; '' ORDER BY v) FROM pgsink.keyless_target', 'dup ; dup ; solo');
+> SELECT write_frontier > 0 FROM mz_internal.mz_frontiers
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink_kl_snk')
+true
+
+> CREATE SOURCE pgsink_kl_readback_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
+
+> CREATE TABLE pgsink_kl_readback FROM SOURCE pgsink_kl_readback_src (REFERENCE pgsink.keyless_target)
+
+> SELECT * FROM pgsink_kl_readback
+dup
+dup
+solo
 
 > DELETE FROM pgsink_kl_src WHERE id = 3
 
 # Retract one of the two identical rows. The other has to remain.
 > DELETE FROM pgsink_kl_src WHERE id = 1
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(v, '' ; '' ORDER BY v) FROM pgsink.keyless_target', 'dup');
+> SELECT * FROM pgsink_kl_readback
+dup
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_kl_snk'
 running
@@ -169,8 +209,12 @@ ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
 
 > INSERT INTO pgsink_t VALUES (5, 'after restart', NULL, NULL, NULL, NULL, NULL)
 
+> SELECT * FROM
+  ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_readback EXCEPT ALL SELECT * FROM pgsink_t))
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target WHERE a IN (1, 5)', '1|second ; 5|after restart');
 CALL pgsink.wait_for('SELECT (epoch > 1)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
@@ -196,8 +240,10 @@ running
 
 > INSERT INTO pgsink_t VALUES (6, 'after bump', NULL, NULL, NULL, NULL, NULL)
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target WHERE a = 6', '1');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_readback EXCEPT ALL SELECT * FROM pgsink_t))
 
 # A progress row claimed by a newer version of the sink fences this one off.
 

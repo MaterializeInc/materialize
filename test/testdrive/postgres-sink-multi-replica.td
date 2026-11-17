@@ -23,6 +23,7 @@
 # on its own line.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION IF EXISTS pgsink_mr_publication;
 DROP SCHEMA IF EXISTS pgsink_mr CASCADE;
 DROP SCHEMA IF EXISTS materialize CASCADE;
 CREATE SCHEMA pgsink_mr;
@@ -67,11 +68,34 @@ SELECT id FROM mz_sinks WHERE name = 'pgsink_mr_keyless'
 
 # The snapshot lands once, not once per replica.
 
+> SELECT count(*) FROM mz_internal.mz_frontiers
+  WHERE object_id IN ('${keyed-id}', '${keyless-id}') AND write_frontier > 0
+2
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyed', '1|one ; 2|two ; 3|three');
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyless', '1|one ; 2|two ; 3|three');
 CALL pgsink_mr.wait_for('SELECT string_agg(sink_id || '' '' || sink_schema || '' '' || sink_table, '', '' ORDER BY sink_table) FROM materialize.sink_progress', '${keyed-id} pgsink_mr keyed, ${keyless-id} pgsink_mr keyless');
 CALL pgsink_mr.wait_for('SELECT string_agg(tablename, '', '' ORDER BY tablename) FROM pg_tables WHERE schemaname = ''pgsink_mr''', 'keyed, keyless');
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE pgsink_mr.keyed REPLICA IDENTITY FULL;
+CREATE PUBLICATION pgsink_mr_publication FOR TABLE pgsink_mr.keyed, pgsink_mr.keyless;
+
+> CREATE SOURCE pgsink_mr_readback_src
+  FROM POSTGRES CONNECTION pgsink_mr_conn (PUBLICATION 'pgsink_mr_publication')
+
+> CREATE TABLE pgsink_mr_keyed_readback FROM SOURCE pgsink_mr_readback_src (REFERENCE pgsink_mr.keyed)
+
+> CREATE TABLE pgsink_mr_keyless_readback FROM SOURCE pgsink_mr_readback_src (REFERENCE pgsink_mr.keyless)
+
+> SELECT * FROM pgsink_mr_keyed_readback
+1 one
+2 two
+3 three
+
+> SELECT * FROM pgsink_mr_keyless_readback
+1 one
+2 two
+3 three
 
 > SELECT name, status FROM mz_internal.mz_sink_statuses WHERE name LIKE 'pgsink_mr_%'
 pgsink_mr_keyed running
@@ -88,11 +112,15 @@ pgsink_mr_keyless running
 > INSERT INTO pgsink_mr_t VALUES (6, 'six')
 > DELETE FROM pgsink_mr_t WHERE a BETWEEN 150 AND 159
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyed WHERE a < 100', '1|uno ; 3|three ; 4|four ; 5|five ; 6|six');
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyless WHERE a < 100', '1|uno ; 3|three ; 4|four ; 5|five ; 6|six');
-CALL pgsink_mr.wait_for('SELECT count(*) || '' '' || count(DISTINCT a) FROM pgsink_mr.keyed WHERE a >= 100', '90 90');
-CALL pgsink_mr.wait_for('SELECT count(*) || '' '' || count(DISTINCT a) FROM pgsink_mr.keyless WHERE a >= 100', '90 90');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyed_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyed_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
+
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyless_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyless_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
 
 # Replicas fighting over a sink fence each other off through the epoch in its
 # progress row, which shows up as a halt on some replica even when the target
@@ -107,8 +135,15 @@ CALL pgsink_mr.wait_for('SELECT count(*) || '' '' || count(DISTINCT a) FROM pgsi
 
 > INSERT INTO pgsink_mr_t VALUES (7, 'after drop')
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyless WHERE a = 7', '7|after drop');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyed_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyed_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
+
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyless_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyless_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
 
 # A replica joining a running sink must not re-apply windows the other replica
 # already committed, nor fence it off.
@@ -121,10 +156,15 @@ CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) 
 > INSERT INTO pgsink_mr_t VALUES (8, 'after add')
 > INSERT INTO pgsink_mr_t VALUES (9, 'after add 2')
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyless WHERE a < 100', '1|uno ; 3|three ; 4|four ; 5|five ; 6|six ; 7|after drop ; 8|after add ; 9|after add 2');
-CALL pgsink_mr.wait_for('SELECT count(*) || '' '' || count(DISTINCT a) FROM pgsink_mr.keyless WHERE a >= 100', '90 90');
-CALL pgsink_mr.wait_for('SELECT string_agg(a || ''|'' || b, '' ; '' ORDER BY a) FROM pgsink_mr.keyed WHERE a < 100', '1|uno ; 3|three ; 4|four ; 5|five ; 6|six ; 7|after drop ; 8|after add ; 9|after add 2');
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyed_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyed_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
+
+> SELECT * FROM
+  ((SELECT * FROM pgsink_mr_t EXCEPT ALL SELECT * FROM pgsink_mr_keyless_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_mr_keyless_readback EXCEPT ALL SELECT * FROM pgsink_mr_t))
 
 > SELECT name, status FROM mz_internal.mz_sink_statuses WHERE name LIKE 'pgsink_mr_%'
 pgsink_mr_keyed running
