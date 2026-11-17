@@ -7,12 +7,18 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-Measure the verified replica-frontier rewrite in the unchanged bounded
-KafkaSources workflow. Execution keys now derive from catalog ClientIncarnation
-records rather than changing frontier rows. The maintained plan removes two joins
-and one DISTINCT. No other catalog-plan expectation changed. Debug builds,
-indexed semantic regressions and the full catalog-plan check passed. Independent
-source review found no blocker. Workload speedup remains unverified.
+Obtain approval for a full KafkaSources acceptance run beyond the scratch
+wrapper's 30-minute diagnostic cap, keeping repository operation deadlines,
+workload and resource limits unchanged. Both before and after the frontier rewrite,
+the cap interrupted the same action while a candidate awaited readiness. It did
+not establish a repository operation timeout. Do not repeat that capped run or
+choose another optimization from the inconclusive comparison.
+
+The replica-frontier rewrite is committed and pushed. Execution keys derive from
+catalog ClientIncarnation records rather than changing frontier rows. Its
+maintained plan removes two joins and one DISTINCT. Debug builds, indexed semantic
+regressions and the full catalog-plan check passed. Independent source review
+found no blocker. No other catalog-plan expectation changed.
 
 The timing probe obtained deltas and names for 64 unchanged operator/worker keys.
 Among sampled dataflow roots, current replica frontiers cost 1.42s, current storage
@@ -24,10 +30,12 @@ hydration status and replica display. Its raw-input probe lagged while catalog
 inputs were current, but that probe follows logical backpressure. It does not
 isolate Persist from downstream work. Keep these two findings distinct.
 
-The latest unchanged KafkaSources workload again exhausted its 1800s diagnostic
-guard. Final validation and backup/restore remain unverified. Runtimes and probes
-are stopped. Do not repeat full runs merely to collect the same evidence or
-increase workload limits. The small query/plan fixtures are not acceptance.
+The unchanged KafkaSources comparison did not demonstrate a speedup. Parent CPU
+changed by less than one percent, both runs approached the aggregate memory cap,
+and neither had a new OOM. The new timing probe stopped when readiness ended,
+before its second sample. Final validation and backup/restore remain unverified.
+Runtimes, probes and owned Docker resources are cleaned up. The small query/plan
+fixtures are not acceptance.
 
 ## Remaining acceptance and repairs
 
@@ -94,7 +102,10 @@ needs no approval.
 
 Current evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses the worker. Debug runtime binaries are pinned in sibling
-`upsert-oom-investigation/native-expression-cache-candidate/`, from code `59a59d89`.
+`upsert-oom-investigation/native-expression-cache-candidate/`, with the tested
+frontier rewrite. Worker source is base `59a59d89` plus the recorded scoped overlay.
+The preceding binaries and manifests are preserved in
+`upsert-oom-investigation/preserved-59a59d89-frontier-baseline/`.
 Use build receipts and hashes, not image labels or historical manifests, for identity.
 Ancillary binaries are preserved older artifacts, not newly rebuilt ones.
 
@@ -105,8 +116,9 @@ Ancillary binaries are preserved older artifacts, not newly rebuilt ones.
   Rewrite verification: `frontier-static-key-verification.md`,
   `frontier-semantic-evidence.tar.gz`, `frontier-plan-capture-evidence.tar.gz`,
   `frontier-plan-recheck-driver.log`, and `source-review-frontier-static-keys.md`.
-  New SQL binaries are in worker `target/debug`. The pinned workload directory
-  above still contains the preceding build and must be refreshed before measuring.
+  Runtime outcome: `frontier-rewrite-runtime-comparison.md`,
+  `frontier-rewrite-kafka-evidence.tar.gz`, and
+  `frontier-rewrite-timings-evidence.tar.gz`. The probe has no valid timing pair.
 - Dependency and producer analysis: `readiness-dependency-findings.md`,
   `readiness-dependency-timeline.json`, `source-statistics-replay-survey.md`.
 - Earlier probe and small-query validation: `operator-probe-partial-findings.md`,
