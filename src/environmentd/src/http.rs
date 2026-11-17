@@ -561,11 +561,14 @@ impl HttpServer {
             // RFC 9728 §3.1 lets clients look up per-resource metadata
             // via a path-suffixed well-known URI before falling back to
             // the bare one. The MCP endpoints share an identical
-            // metadata view today, so we serve the same handler at all
-            // three paths.
+            // metadata view, so we serve the same handler at every path.
             let oauth_metadata_router = Router::new()
                 .route(
                     oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_UNIFIED,
                     routing::get(oauth_metadata::handle_protected_resource_metadata),
                 )
                 .route(
