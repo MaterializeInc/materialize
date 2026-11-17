@@ -83,6 +83,26 @@ lifetime. It must not claim withdrawal from rdkafka metric disappearance. See
 `native-compatible/verification.md` under the local evidence root and
 `src/storage/src/sink/kafka.rs`, `src/ore/src/metrics/delete_on_drop.rs`.
 
+## Retained source-statistics replay
+
+The native scraper retains baseline's change-only publication. Deployment-qualified
+rows can legitimately enlarge snapshots and retained update history. A completed
+debug readiness diagnostic ended with one dependency chain: historical source
+statistics, current statistics, hydration status, and replica display. Their
+matching lagging frontiers do not identify excess publication or an expensive
+operator. Input progress and operator scheduling measurements are still needed.
+
+Source review also found possible same-deployment reconciliation overlap and no
+statistics partition cleanup in the inspected retirement sweeper. Neither is a
+measured cause of this run's delay. Check actual publishers and retired rows
+before expanding ownership or cleanup scope. Preserve historical visibility and
+catalog-authorized retirement. Do not change retention, cadence or readiness to
+hide replay cost.
+
+Evidence: `source-statistics-replay-survey.md` and
+`readiness-dependency-findings.md` under
+`~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
+
 ## Singleton CDC-reader ownership across deployments
 
 The full native DDL fixture proves that two admitted deployments repeatedly steal
