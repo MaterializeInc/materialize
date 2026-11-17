@@ -21,19 +21,22 @@ use super::{BuiltinIndex, BuiltinMaterializedView, PUBLIC_SELECT};
 /// Relationships between user relations that their views' definitions imply,
 /// with no declared keys.
 ///
-/// Evidence is of two kinds, both read by `parse_catalog_view_joins`:
+/// Every row comes from a single view's definition, read by
+/// `parse_catalog_view_joins`, so the view stays linear in the number of
+/// views:
 ///
-/// 1. A join: two relations' columns a view equates. The referenced side is
-///    a column that alone keys an index, then a column named `id`, then the
-///    side not named `*_id`. A join neither settles is kept undirected.
-/// 2. A passed-through column: a view's output column that is an input
-///    column unchanged. An output that passes a key references that key.
-///    An output that passes any other column holds the same values as it, so
-///    a reference either has, the other has too. This runs to a fixed point,
-///    through views over views.
+/// - `join`: two relations' columns a view equates. The referenced side is a
+///   column that alone keys an index, then a column named `id`, then the side
+///   not named `*_id`. A join neither settles is undirected.
+/// - `key`: a view's output column that is an input key unchanged, which
+///   references that key.
+/// - `same_values`: a view's output column that is any other input column
+///   unchanged.
 ///
-/// The second is a claim about the columns' domain, not their data: a view
-/// may filter, so its input column can hold values its output never shows.
+/// Relationships across several views follow by chaining rows. Deriving them
+/// here was measured at about three times the maintenance cost of
+/// `mz_object_dependencies` per replaced view, nearly all of it the
+/// fixpoint, for no information the chained rows lack.
 pub static MZ_INFERRED_RELATIONSHIPS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_inferred_relationships",
@@ -44,12 +47,13 @@ pub static MZ_INFERRED_RELATIONSHIPS: LazyLock<BuiltinMaterializedView> = LazyLo
             .with_column("source_column", SqlScalarType::String.nullable(false))
             .with_column("target_id", SqlScalarType::String.nullable(false))
             .with_column("target_column", SqlScalarType::String.nullable(false))
+            .with_column("kind", SqlScalarType::String.nullable(false))
             .with_column("is_directed", SqlScalarType::Bool.nullable(false))
             .with_column(
                 "inferred_from",
                 SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
             )
-            .with_key(vec![0, 1, 2, 3])
+            .with_key(vec![0, 1, 2, 3, 4])
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -62,6 +66,10 @@ pub static MZ_INFERRED_RELATIONSHIPS: LazyLock<BuiltinMaterializedView> = LazyLo
                 "The ID of the relation holding the referenced column. Corresponds to `mz_objects.id`.",
             ),
             ("target_column", "The referenced column."),
+            (
+                "kind",
+                "`join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `same_values` when a view passes any other target column through as the source column.",
+            ),
             (
                 "is_directed",
                 "Whether a key decides which side references the other. When false, the two columns are only known to be joined, and their order is arbitrary.",
@@ -78,6 +86,7 @@ WITH (
     ASSERT NOT NULL source_column,
     ASSERT NOT NULL target_id,
     ASSERT NOT NULL target_column,
+    ASSERT NOT NULL kind,
     ASSERT NOT NULL is_directed,
     ASSERT NOT NULL inferred_from
 ) AS
@@ -143,8 +152,6 @@ WITH
                 AS a_over_b,
             (e.b_col ~ '.+_id$')::int - (e.a_col ~ '.+_id$')::int AS a_by_name
         FROM equated e
-        JOIN user_columns ca ON ca.id = e.a_id AND ca.name = e.a_col
-        JOIN user_columns cb ON cb.id = e.b_id AND cb.name = e.b_col
         LEFT JOIN index_keys ka ON ka.id = e.a_id AND ka.name = e.a_col
         LEFT JOIN index_keys kb ON kb.id = e.b_id AND kb.name = e.b_col
         WHERE e.a_id <> e.b_id
@@ -180,84 +187,36 @@ WITH
             o.e->>'source_column' AS source_column
         FROM parsed, jsonb_array_elements(j->'outputs') AS o(e)
     ),
-    passed_keys AS (
-        SELECT p.*
+    passed_columns AS (
+        SELECT
+            p.*,
+            p.source_column = 'id' OR k.id IS NOT NULL AS is_key
         FROM passed p
-        JOIN user_columns c ON c.id = p.source_id AND c.name = p.source_column
-        WHERE p.source_column = 'id' OR EXISTS (
-            SELECT 1 FROM index_keys k
-            WHERE k.id = p.source_id AND k.name = p.source_column
-        )
+        LEFT JOIN index_keys k ON k.id = p.source_id AND k.name = p.source_column
+        WHERE p.view_id <> p.source_id
     ),
-    -- Passed columns that are not keys. A passed key references its source
-    -- directly, and propagating through it too would add every key it
-    -- reaches transitively, which grows with the square of a view stack's
-    -- depth (a stack of 300 views passing `id` gave 45,150 rows).
-    passed_references AS (
-        SELECT p.*
-        FROM passed p
-        WHERE NOT EXISTS (
-            SELECT 1 FROM passed_keys k
-            WHERE k.view_id = p.view_id AND k.output_column = p.output_column
-        )
-    ),
-    directed AS (
-        WITH MUTUALLY RECURSIVE
-            refs (
-                view_id text,
-                source_id text,
-                source_column text,
-                target_id text,
-                target_column text
-            ) AS (
-                SELECT view_id, source_id, source_column, target_id, target_column
-                FROM joins WHERE is_directed
-                UNION
-                SELECT view_id, view_id, output_column, source_id, source_column
-                FROM passed_keys
-                WHERE view_id <> source_id
-                UNION
-                SELECT p.view_id, p.view_id, p.output_column, r.target_id, r.target_column
-                FROM passed_references p
-                JOIN refs r ON r.source_id = p.source_id AND r.source_column = p.source_column
-                WHERE p.view_id <> r.target_id
-                UNION
-                SELECT p.view_id, p.source_id, p.source_column, r.target_id, r.target_column
-                FROM passed_references p
-                JOIN refs r ON r.source_id = p.view_id AND r.source_column = p.output_column
-                WHERE p.source_id <> r.target_id
-            )
-        SELECT * FROM refs
-    ),
-    undirected AS (
-        SELECT j.view_id, j.source_id, j.source_column, j.target_id, j.target_column
-        FROM joins j
-        WHERE NOT j.is_directed AND NOT EXISTS (
-            SELECT 1 FROM directed d
-            WHERE (
-                d.source_id = j.source_id AND d.source_column = j.source_column
-                AND d.target_id = j.target_id AND d.target_column = j.target_column
-            ) OR (
-                d.source_id = j.target_id AND d.source_column = j.target_column
-                AND d.target_id = j.source_id AND d.target_column = j.source_column
-            )
-        )
-    ),
+    -- Direction depends only on the two columns, so a pair of columns is
+    -- directed in every view that joins it or in none, and appears once.
     evidence AS (
-        SELECT DISTINCT *, true AS is_directed FROM directed
+        SELECT view_id, source_id, source_column, target_id, target_column,
+            'join' AS kind, is_directed
+        FROM joins
         UNION ALL
-        SELECT DISTINCT *, false AS is_directed FROM undirected
+        SELECT view_id, view_id, output_column, source_id, source_column,
+            CASE WHEN is_key THEN 'key' ELSE 'same_values' END, true
+        FROM passed_columns
     )
 SELECT
     source_id,
     source_column,
     target_id,
     target_column,
+    kind,
     is_directed,
     array_agg(view_id ORDER BY view_id) AS inferred_from
-FROM evidence
+FROM (SELECT DISTINCT * FROM evidence)
 WHERE source_id LIKE 'u%' AND target_id LIKE 'u%'
-GROUP BY source_id, source_column, target_id, target_column, is_directed",
+GROUP BY source_id, source_column, target_id, target_column, kind, is_directed",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,

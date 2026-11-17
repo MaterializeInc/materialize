@@ -71,24 +71,27 @@ CREATE VIEW opaque AS
   UNION ALL
   SELECT a.item FROM auctions a JOIN (SELECT a.id FROM bids a) s ON s.id = a.id
 
-query TTTTB
-SELECT s.name, r.source_column, t.name, r.target_column, r.is_directed
+query TTTTTB
+SELECT r.kind, s.name, r.source_column, t.name, r.target_column, r.is_directed
 FROM mz_internal.mz_inferred_relationships r
 JOIN mz_objects s ON s.id = r.source_id
 JOIN mz_objects t ON t.id = r.target_id
-ORDER BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4, 5
 ----
-auctions  seller  users  id  true
-bids  auction_id  auctions  id  true
-bids  buyer  users  id  true
-org_spend  org_id  organizations  id  true
-seller_performance  seller_id  users  id  true
-users  org_id  accounts  org_id  false
-users  org_id  organizations  id  true
-winning_bids  auction_id  auctions  id  true
-winning_bids  bid_id  bids  id  true
-winning_bids  buyer  users  id  true
-winning_bids  seller  users  id  true
+join  bids  auction_id  auctions  id  true
+join  users  org_id  accounts  org_id  false
+join  users  org_id  organizations  id  true
+join  winning_bids  buyer  users  id  true
+join  winning_bids  seller  users  id  true
+key  org_spend  org_id  organizations  id  true
+key  seller_performance  seller_id  users  id  true
+key  winning_bids  auction_id  auctions  id  true
+key  winning_bids  bid_id  bids  id  true
+same_values  org_spend  name  organizations  name  true
+same_values  user_accounts  balance  accounts  balance  true
+same_values  user_accounts  name  users  name  true
+same_values  winning_bids  buyer  bids  buyer  true
+same_values  winning_bids  seller  auctions  seller  true
 
 # Evidence names the views that imply each relationship.
 query TT
@@ -97,9 +100,9 @@ FROM mz_internal.mz_inferred_relationships r
 JOIN mz_objects s ON s.id = r.source_id
 CROSS JOIN unnest(r.inferred_from) AS e(id)
 JOIN mz_objects v ON v.id = e.id
-WHERE s.name = 'bids' AND r.source_column = 'buyer'
+WHERE s.name = 'winning_bids' AND r.source_column = 'buyer' AND r.kind = 'join'
 ----
-buyer  winning_bids
+buyer  org_spend
 
 # A column that alone keys an index is the referenced side.
 statement ok
@@ -115,14 +118,14 @@ statement ok
 CREATE VIEW order_products AS
   SELECT p.name, o.quantity FROM order_lines o JOIN products p ON p.sku = o.sku
 
-query TTTTB
-SELECT s.name, r.source_column, t.name, r.target_column, r.is_directed
+query TTTTTB
+SELECT r.kind, s.name, r.source_column, t.name, r.target_column, r.is_directed
 FROM mz_internal.mz_inferred_relationships r
 JOIN mz_objects s ON s.id = r.source_id
 JOIN mz_objects t ON t.id = r.target_id
 WHERE s.name = 'order_lines'
 ----
-order_lines  sku  products  sku  true
+join  order_lines  sku  products  sku  true
 
 # Dropping the view retracts what it implied.
 statement ok

@@ -310,6 +310,7 @@ source_id  text  The␠ID␠of␠the␠relation␠holding␠the␠referencing␠
 source_column  text  The␠referencing␠column.
 target_id  text  The␠ID␠of␠the␠relation␠holding␠the␠referenced␠column.␠Corresponds␠to␠`mz_objects.id`.
 target_column  text  The␠referenced␠column.
+kind  text  `join`␠when␠a␠view␠joins␠the␠two␠columns,␠`key`␠when␠a␠view␠passes␠the␠target␠key␠through␠as␠the␠source␠column,␠and␠`same_values`␠when␠a␠view␠passes␠any␠other␠target␠column␠through␠as␠the␠source␠column.
 is_directed  boolean  Whether␠a␠key␠decides␠which␠side␠references␠the␠other.␠When␠false,␠the␠two␠columns␠are␠only␠known␠to␠be␠joined,␠and␠their␠order␠is␠arbitrary.
 inferred_from  text[]  The␠IDs␠of␠the␠views␠and␠materialized␠views␠whose␠definitions␠imply␠the␠relationship.
 

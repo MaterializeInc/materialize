@@ -548,6 +548,7 @@ mz_indexes  owner_id
 mz_indexes  redacted_create_sql
 mz_inferred_relationships  inferred_from
 mz_inferred_relationships  is_directed
+mz_inferred_relationships  kind
 mz_inferred_relationships  source_column
 mz_inferred_relationships  source_id
 mz_inferred_relationships  target_column
