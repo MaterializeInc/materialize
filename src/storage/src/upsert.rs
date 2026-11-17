@@ -33,7 +33,7 @@ use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    AsyncOutputHandle, ButtonHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton, sole_capability,
 };
 use serde::{Deserialize, Serialize};
@@ -637,6 +637,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<UpsertBackpressureMetrics>,
+    stats_shutdown: ButtonHandle,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -675,6 +676,7 @@ where
         previous_token,
         upsert_metrics,
         source_config,
+        stats_shutdown,
     )
 }
 

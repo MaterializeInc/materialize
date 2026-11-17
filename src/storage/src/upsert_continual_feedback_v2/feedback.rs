@@ -18,6 +18,7 @@ use mz_repr::{Datum, Diff, Row};
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
 use mz_storage_types::errors::{DataflowError, UpsertError};
+use mz_timely_util::builder_async::ButtonHandle;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::chunk::{ColumnChunk, StorageSpill};
@@ -136,6 +137,7 @@ pub(super) fn encode_feedback<'scope, T>(
     persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     key_indices: Vec<usize>,
     source_statistics: SourceStatistics,
+    stats_shutdown: ButtonHandle,
 ) -> Stream<'scope, T, Column<((UpsertKey, Row), T, Diff)>>
 where
     T: Timestamp + TotalOrder + Sync,
@@ -152,6 +154,14 @@ where
         .exchange(move |((key, _), _, _)| UpsertKey::hashed(key))
         .as_collection()
         .inspect(move |((_, row), _, diff)| {
+            // A restarting ingestion presses the button and resets the
+            // `source_statistics` it shares with its next incarnation in the
+            // same worker step, while this incarnation's feedback is still in
+            // flight to here. Counting that feedback adds it on top of the
+            // next incarnation's rehydration, overstating `records_indexed`.
+            if stats_shutdown.local_pressed() {
+                return;
+            }
             source_statistics.update_records_indexed_by(diff.into_inner());
             source_statistics.update_bytes_indexed_by(
                 row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),

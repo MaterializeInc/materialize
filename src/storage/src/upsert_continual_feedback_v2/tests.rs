@@ -17,6 +17,7 @@ use mz_repr::{Datum, Timestamp as MzTimestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::sources::SourceEnvelope;
 use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+use mz_timely_util::builder_async::button;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Input};
 use timely::progress::Timestamp;
@@ -108,6 +109,8 @@ macro_rules! upsert_test {
                                 source_statistics,
                             };
 
+                            let (stats_shutdown, _stats_button) =
+                                button(scope, scope.addr());
                             let (output, _, _, button) = upsert_inner(
                                 input.as_collection(),
                                 vec![0],
@@ -117,6 +120,7 @@ macro_rules! upsert_test {
                                 None,
                                 upsert_metrics,
                                 source_config,
+                                stats_shutdown,
                             );
                             std::mem::forget(button);
                             (input_handle, persist_handle, output.inner.capture())
@@ -1201,6 +1205,7 @@ fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, T
                         source_statistics,
                     };
 
+                    let (stats_shutdown, _stats_button) = button(scope, scope.addr());
                     let (output, _, _, button) = upsert_inner(
                         input.as_collection(),
                         vec![0],
@@ -1210,6 +1215,7 @@ fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, T
                         None,
                         upsert_metrics,
                         source_config,
+                        stats_shutdown,
                     );
                     std::mem::forget(button);
                     let (probe, stream) = output.inner.probe();
@@ -1243,4 +1249,96 @@ fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, T
         .collect();
     differential_dataflow::consolidation::consolidate_updates(&mut emitted);
     (frontier, emitted)
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn shutdown_stops_records_indexed() {
+    let stats_registry = MetricsRegistry::new();
+    let records_indexed = |registry: &MetricsRegistry| -> u64 {
+        registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "mz_source_records_indexed")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| u64::cast_lossy(metric.get_gauge().value()))
+            .sum()
+    };
+
+    let registry = stats_registry.clone();
+    timely::execute_directly(move |worker| {
+        let (mut persist, stats_token) = worker.dataflow::<MzTimestamp, _, _>(|scope| {
+            scope.scoped::<Ts, _, _>("upsert", |scope| {
+                let (_input_handle, input) = scope.new_input();
+                let (persist_handle, persist_input) = scope.new_input();
+                let (_persist_err_handle, persist_err_input) = scope.new_input();
+                let source_id = GlobalId::User(0);
+
+                let reg = MetricsRegistry::new();
+                let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+                let storage_metrics = StorageMetrics::register_with(&MetricsRegistry::new());
+
+                let stats_defs = SourceStatisticsMetricDefs::register_with(&registry);
+                let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                    source_arity: 2,
+                    style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                    key_indices: vec![0],
+                });
+                let source_statistics = SourceStatistics::new(
+                    source_id,
+                    0,
+                    &stats_defs,
+                    source_id,
+                    &ShardId::new(),
+                    envelope,
+                    Antichain::from_elem(Timestamp::minimum()),
+                    Antichain::from_elem(Timestamp::minimum()),
+                );
+                let source_config = SourceExportCreationConfig {
+                    id: source_id,
+                    worker_id: 0,
+                    metrics: storage_metrics,
+                    source_statistics,
+                };
+
+                let (stats_shutdown, stats_button) = button(scope, scope.addr());
+                let (_output, _, _, upsert_button) = upsert_inner::<_, i32>(
+                    input.as_collection(),
+                    vec![0],
+                    Antichain::from_elem(Timestamp::minimum()),
+                    persist_input.as_collection(),
+                    persist_err_input.as_collection(),
+                    None,
+                    upsert_metrics,
+                    source_config,
+                    stats_shutdown,
+                );
+                std::mem::forget(upsert_button);
+                (persist_handle, stats_button.press_on_drop())
+            })
+        });
+
+        persist.send((row(1, 1), new_ts(0), Diff::ONE));
+        persist.send((row(2, 1), new_ts(0), Diff::ONE));
+        persist.advance_to(new_ts(1));
+        for _ in 0..5 {
+            worker.step();
+        }
+        assert_eq!(records_indexed(&registry), 2);
+
+        // Feedback that arrives after the statistics button is pressed
+        // belongs to an incarnation whose statistics may already be reset.
+        drop(stats_token);
+        persist.send((row(3, 1), new_ts(1), Diff::ONE));
+        persist.advance_to(new_ts(2));
+        for _ in 0..5 {
+            worker.step();
+        }
+        assert_eq!(
+            records_indexed(&registry),
+            2,
+            "feedback after shutdown must not count toward records_indexed",
+        );
+    });
 }
