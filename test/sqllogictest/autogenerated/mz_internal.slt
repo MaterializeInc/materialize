@@ -817,10 +817,14 @@ mz_builtin_index_columns
 mz_builtin_indexes
 mz_builtin_log_indexes
 mz_builtin_materialized_views
+mz_builtin_object_mappings
 mz_builtin_sources
 mz_builtin_tables
 mz_builtin_views
+mz_catalog_item_metadata
+mz_catalog_items
 mz_catalog_raw
+mz_catalog_state
 mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
 mz_cluster_reconfigurations

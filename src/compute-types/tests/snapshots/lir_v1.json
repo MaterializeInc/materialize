@@ -3814,6 +3814,7 @@
       }
     }
   },
+  "TryDecodeCatalogCreateSql": "UNITSTRUCT",
   "TryParseMonotonicIso8601Timestamp": "UNITSTRUCT",
   "UnaryFunc": {
     "ENUM": {
@@ -5495,6 +5496,11 @@
       "TryCast": {
         "NEWTYPE": {
           "TYPENAME": "TryCast"
+        }
+      },
+      "TryDecodeCatalogCreateSql": {
+        "NEWTYPE": {
+          "TYPENAME": "TryDecodeCatalogCreateSql"
         }
       },
       "TryParseMonotonicIso8601Timestamp": {

@@ -1138,6 +1138,9 @@ mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
+mz_builtin_object_mappings  1
+mz_builtin_object_mappings  2
+mz_catalog_item_metadata  1
 mz_cluster_auto_scaling_strategies  1
 mz_cluster_deployment_lineage  1
 mz_cluster_prometheus_metrics  1
