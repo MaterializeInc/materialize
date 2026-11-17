@@ -578,6 +578,9 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_cluster_replica_sizes",
         ),
+        // These three MVs recognize query policies in their SQL definitions. Their
+        // row schemas are unchanged, but their SQL fingerprints change, requiring
+        // explicit migrations for `update_fingerprints` to accept the upgrade.
         MigrationStep::replacement(
             "26.51.0-dev.0",
             CatalogItemType::MaterializedView,

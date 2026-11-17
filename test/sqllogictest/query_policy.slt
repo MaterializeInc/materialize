@@ -24,6 +24,56 @@ ALTER SYSTEM SET persist_fast_path_limit = 1000;
 ----
 COMPLETE 0
 
+statement error MODE specified more than once
+CREATE QUERY POLICY invalid_policy (MODE='warn', MODE='enforce', RULES ());
+
+statement error query policy MODE must be
+CREATE QUERY POLICY invalid_policy (MODE='invalid', RULES ());
+
+statement error RULES specified more than once
+CREATE QUERY POLICY invalid_policy (RULES (), RULES ());
+
+statement error RULES must be specified when creating query policies
+CREATE QUERY POLICY invalid_policy (MODE='warn');
+
+statement error duplicate query policy rule name r
+CREATE QUERY POLICY invalid_policy (RULES (r (action='reject', metric='query_plan_includes', value='storage_read'), R (action='reject', metric='query_plan_includes', value='storage_read')));
+
+statement error ACTION, METRIC, and VALUE must be specified
+CREATE QUERY POLICY invalid_policy (RULES (r (metric='query_plan_includes', value='storage_read')));
+
+statement error ACTION, METRIC, and VALUE must be specified
+CREATE QUERY POLICY invalid_policy (RULES (r (action='reject', value='storage_read')));
+
+statement error ACTION, METRIC, and VALUE must be specified
+CREATE QUERY POLICY invalid_policy (RULES (r (action='reject', metric='query_plan_includes')));
+
+statement error unsupported query policy action
+CREATE QUERY POLICY invalid_policy (RULES (r (action='allow', metric='query_plan_includes', value='storage_read')));
+
+statement error unsupported query policy metric
+CREATE QUERY POLICY invalid_policy (RULES (r (action='reject', metric='duration', value='storage_read')));
+
+statement error unsupported query policy value
+CREATE QUERY POLICY invalid_policy (RULES (r (action='reject', metric='query_plan_includes', value='invalid')));
+
+statement ok
+CREATE QUERY POLICY validation_policy (RULES (keep (action='reject', metric='query_plan_includes', value='storage_read')));
+
+statement error duplicate query policy rule name r
+ALTER QUERY POLICY validation_policy SET (MODE='enforce', RULES (r (action='reject', metric='query_plan_includes', value='storage_read'), r (action='reject', metric='query_plan_includes', value='storage_read')));
+
+query TTT
+SELECT p.mode, r.name, r.value
+FROM mz_internal.mz_query_policies p
+JOIN mz_internal.mz_query_policy_rules r ON r.policy_id = p.id
+WHERE p.name = 'validation_policy';
+----
+warn keep storage_read
+
+statement ok
+DROP QUERY POLICY validation_policy;
+
 # Creation can be delegated without granting superuser or role-management powers.
 statement ok
 CREATE ROLE policy_creator;
