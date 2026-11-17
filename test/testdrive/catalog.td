@@ -510,27 +510,27 @@ mz_cluster_replica_frontiers                 source  <null>   ""
 > SHOW TABLES FROM mz_catalog
 name                           comment
 --------------------------------------
-mz_array_types                 ""
-mz_base_types                  ""
 mz_cluster_replica_sizes       ""
 mz_egress_ips                  ""
 mz_functions                   ""
-mz_list_types                  ""
-mz_map_types                   ""
 mz_operators                   ""
-mz_pseudo_types                ""
 mz_role_auth                   ""
-mz_types                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
 -----------------------------------
+mz_array_types             ""
+mz_base_types              ""
+mz_list_types              ""
+mz_map_types               ""
 mz_objects                 ""
+mz_pseudo_types            ""
 mz_relations               ""
 mz_recent_storage_usage    ""
 mz_storage_usage           ""
 mz_timezone_abbreviations  ""
 mz_timezone_names          ""
+mz_types                   ""
 
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                  cluster             comment
@@ -612,7 +612,6 @@ mz_replica_hydration_history             ""
 mz_sessions                              ""
 mz_storage_usage_by_shard                ""
 mz_subscriptions                         ""
-mz_type_pg_metadata                      ""
 mz_webhook_sources                       ""
 
 > SHOW VIEWS FROM mz_internal
@@ -627,6 +626,7 @@ mz_builtin_materialized_views            ""
 mz_builtin_object_mappings               ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
+mz_builtin_types                         ""
 mz_builtin_views                         ""
 mz_catalog_item_metadata                 ""
 mz_cluster_deployment_lineage            ""
@@ -708,6 +708,7 @@ mz_source_statuses                       ""
 mz_sql_text_redacted                     ""
 mz_aws_privatelink_connection_statuses   ""
 mz_statement_execution_history_redacted  ""
+mz_type_pg_metadata                      ""
 mz_wallclock_global_lag                  ""
 mz_wallclock_global_lag_histogram        ""
 mz_wallclock_global_lag_history          ""
@@ -850,7 +851,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-23
+16
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
