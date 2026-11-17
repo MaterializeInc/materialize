@@ -19,8 +19,6 @@
 export const JOIN_EDGE_KIND = "join";
 /** A join some view or materialized view already makes. */
 export const INFERRED_JOIN_EDGE_KIND = "inferred_join";
-/** A view passing a non-key column through: the two hold the same values. */
-export const SAME_VALUES_EDGE_KIND = "same_values";
 /** A derived object reading from another, from `mz_object_graph_edges`. */
 export const LINEAGE_EDGE_KIND = "lineage";
 
@@ -31,7 +29,6 @@ export const LINEAGE_EDGE_KIND = "lineage";
 export type OntologyEdgeKind =
   | typeof JOIN_EDGE_KIND
   | typeof INFERRED_JOIN_EDGE_KIND
-  | typeof SAME_VALUES_EDGE_KIND
   | typeof LINEAGE_EDGE_KIND
   | "foreign_key"
   | "maps_to"
@@ -97,10 +94,16 @@ export interface OntologyEdge {
    * On a declared join, those confirming it.
    */
   inferredFrom: string[];
+  /**
+   * Views whose definitions join exactly these columns, as opposed to
+   * passing a key through or deriving the relationship. Inferred joins only.
+   */
+  joinedIn?: string[];
   issues: OntologyIssue[];
 }
 
-export type OntologyIssueSeverity = "error" | "warning";
+/** A suggestion is an improvement, not something wrong. */
+export type OntologyIssueSeverity = "error" | "warning" | "suggestion";
 
 export interface OntologyIssue {
   severity: OntologyIssueSeverity;
@@ -108,6 +111,8 @@ export interface OntologyIssue {
   /** The ontology table that holds the offending row, fully qualified. */
   declaredIn: string | null;
   edgeId: string | null;
+  /** The entity to select for an issue that is about no single edge. */
+  nodeId?: string;
 }
 
 export interface OntologyGraph {
@@ -129,6 +134,10 @@ export function edgeLabel(edge: OntologyEdge): string {
     return edge.name ? `${edge.name}: ${columns}` : columns;
   }
   return edge.name ?? edge.kind;
+}
+
+export function isProblem(issue: OntologyIssue) {
+  return issue.severity !== "suggestion";
 }
 
 export function isErrorEdge(edge: OntologyEdge) {

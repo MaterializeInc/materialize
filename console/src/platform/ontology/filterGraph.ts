@@ -72,6 +72,7 @@ export function filterGraph(
   const drawnIds = new Set(nodes.map((node) => node.id));
   const edgesById = new Map(graph.edges.map((edge) => [edge.id, edge]));
   const issues = graph.issues.filter((issue) => {
+    if (issue.nodeId) return drawnIds.has(issue.nodeId);
     if (!issue.edgeId) return true;
     const edge = edgesById.get(issue.edgeId);
     return !edge || (drawnIds.has(edge.source) && drawnIds.has(edge.target));

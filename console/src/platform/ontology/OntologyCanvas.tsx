@@ -28,6 +28,16 @@ import { edgeKindStyle, groupColor, nodeKindLabel } from "./style";
 export type Selection =
   { type: "node"; id: string } | { type: "edge"; id: string } | null;
 
+/**
+ * Nodes and edges to bring forward while nothing is selected, drawn in
+ * `color` with everything else dimmed.
+ */
+export interface Spotlight {
+  nodeIds: ReadonlySet<string>;
+  edgeIds: ReadonlySet<string>;
+  color: string;
+}
+
 export interface OntologyCanvasProps {
   nodes: OntologyNode[];
   edges: OntologyEdge[];
@@ -37,6 +47,9 @@ export interface OntologyCanvasProps {
   onSelect: (selection: Selection) => void;
   /** Nodes to emphasize, from a search or a semantic type. Null for none. */
   highlighted: ReadonlySet<string> | null;
+  spotlight: Spotlight | null;
+  /** Fits the whole graph each time this changes. */
+  fitRequest: number;
   /** Nodes and edges that appeared after the first snapshot. */
   recentlyAdded: ReadonlySet<string>;
   showEdgeLabels: boolean;
@@ -66,6 +79,8 @@ export const OntologyCanvas = ({
   selection,
   onSelect,
   highlighted,
+  spotlight,
+  fitRequest,
   recentlyAdded,
   showEdgeLabels,
   keyColumns,
@@ -82,7 +97,7 @@ export const OntologyCanvas = ({
   );
   // What the selection touches stays bright and everything else recedes.
   const focus = React.useMemo(() => {
-    if (!selection) return null;
+    if (!selection) return spotlight ?? null;
     const nodeIds = new Set<string>();
     const edgeIds = new Set<string>();
     if (selection.type === "node") {
@@ -103,13 +118,14 @@ export const OntologyCanvas = ({
       }
     }
     return { nodeIds, edgeIds };
-  }, [selection, edges, edgesById]);
+  }, [selection, edges, edgesById, spotlight]);
 
   const edgeColors = React.useMemo(() => {
     const set = new Set<string>([colors.accent.red]);
+    if (spotlight) set.add(spotlight.color);
     for (const edge of edges) set.add(edgeKindStyle(edge.kind, colors).color);
     return [...set];
-  }, [edges, colors]);
+  }, [edges, colors, spotlight]);
 
   const selectedPosition =
     selection?.type === "node" ? layout.nodes.get(selection.id) : undefined;
@@ -141,6 +157,7 @@ export const OntologyCanvas = ({
       selectedNode={selectedNode}
       rightOffset={rightOffset}
       fitToContent
+      fitRequest={fitRequest}
     >
       <svg
         ref={svgRef}
@@ -220,7 +237,12 @@ export const OntologyCanvas = ({
           if (!position) return null;
           const style = edgeKindStyle(edge.kind, colors);
           const hasError = isErrorEdge(edge);
-          const color = hasError ? colors.accent.red : style.color;
+          const isSpotlit = !selection && spotlight?.edgeIds.has(edge.id);
+          const color = hasError
+            ? colors.accent.red
+            : isSpotlit
+              ? spotlight!.color
+              : style.color;
           const isFocused =
             focus?.edgeIds.has(edge.id) || hoveredEdge === edge.id;
           const isDimmed = focus !== null && !focus.edgeIds.has(edge.id);
@@ -324,7 +346,16 @@ export const OntologyCanvas = ({
                 selection?.type === "node" && selection.id === node.id
               }
               isDimmed={focus !== null && !focus.nodeIds.has(node.id)}
-              isHighlighted={highlighted?.has(node.id) ?? false}
+              isHighlighted={
+                (highlighted?.has(node.id) ||
+                  (!selection && spotlight?.nodeIds.has(node.id))) ??
+                false
+              }
+              highlightColor={
+                !selection && spotlight?.nodeIds.has(node.id)
+                  ? spotlight.color
+                  : undefined
+              }
               isNew={recentlyAdded.has(node.id)}
               freshness={getFreshness?.(node)}
               onClick={() => onSelect({ type: "node", id: node.id })}
@@ -347,6 +378,8 @@ interface OntologyNodeCardProps {
   isSelected: boolean;
   isDimmed: boolean;
   isHighlighted: boolean;
+  /** The border of a highlighted card, orange by default. */
+  highlightColor?: string;
   isNew: boolean;
   freshness: Freshness | undefined;
   onClick: () => void;
@@ -364,6 +397,7 @@ const OntologyNodeCard = React.memo(
     isSelected,
     isDimmed,
     isHighlighted,
+    highlightColor,
     isNew,
     freshness,
     onClick,
@@ -374,7 +408,7 @@ const OntologyNodeCard = React.memo(
       : isSelected
         ? colors.accent.brightPurple
         : isHighlighted
-          ? colors.accent.orange
+          ? (highlightColor ?? colors.accent.orange)
           : colors.border.secondary;
     return (
       <g
@@ -503,14 +537,12 @@ const ROLE_LABELS: Record<KeyRole, string> = {
   pk: "PK",
   fk: "FK",
   pkfk: "PK FK",
-  same: "≡",
 };
 
 const ROLE_TITLES: Record<KeyRole, string> = {
   pk: "Key: other relations join to this column",
   fk: "Foreign key: joins to another relation",
   pkfk: "Key and foreign key",
-  same: "Holds the same values as a column of another relation",
 };
 
 const KeyRows = ({
@@ -550,11 +582,7 @@ const KeyRows = ({
               fontSize={8.5}
               fontWeight={700}
               fill={
-                key.role === "fk"
-                  ? colors.accent.purple
-                  : key.role === "same"
-                    ? colors.foreground.secondary
-                    : colors.accent.orange
+                key.role === "fk" ? colors.accent.purple : colors.accent.orange
               }
             >
               {ROLE_LABELS[key.role]}

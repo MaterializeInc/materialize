@@ -83,28 +83,31 @@ this shape.
   what the agent MCP server lists.
 - **Inferred relationships** (`viewJoins.ts`, `inferredJoins.ts`). They come
   only from definitions and index keys, never from declared joins, so they
-  stand alone as an independent reading. Every edge comes from a single
-  view's definition, the same rules `mz_internal.mz_inferred_relationships`
-  applies in the catalog:
+  stand alone as an independent reading. They follow the rules of
+  `mz_internal.mz_mcp_relationships` in the catalog, and are all drawn as
+  inferred joins:
   - A join: two relations' columns a view equates, in `ON`, `WHERE`,
     `USING` or `IN (SELECT ...)`. The direction points at a column that
     alone keys an index, then a column named `id`, then away from a column
     named `*_id`. When nothing settles it, the edge says it is arbitrary.
   - A passed key: a view's output column that is an input key, as in
     `"o"."id" AS "org_id"`, references that key.
-  - Same values: a view's output column that is any other input column.
-    It describes the columns' domain, not their data: a view may filter.
+  - A derived reference: a column holding the same values as a
+    referencing column, through views passing other columns unchanged.
+    When a view passes `bids.buyer` through as `winning_bids.buyer`, and
+    another joins `winning_bids.buyer` to `users.id`, `bids.buyer`
+    references `users.id` too, though no view joins the two.
 
-  Relationships across several views are paths through these edges, and
-  nothing is derived. An earlier version propagated references to a fixed
-  point instead. In the catalog that cost about twice the maintenance per
-  replaced view, and the derived edges added no information the paths lack.
-  A view passes every column it selects through, so only same-values edges
-  on a path to a join are drawn.
+  A passed column that is not a key only claims the same domain, not the
+  same data, since a view may filter. On its own it relates nothing, so it
+  is never drawn, only followed to derive references. The catalog
+  maintains the direct edges and walks the chains on read: maintaining the
+  chains cost 3 to 5.5 times as much per replaced view.
 
   On the auction demo, every declared join that resolves (11 of 11) is
-  connected by a path of inferred edges, 7 of them by a single edge, and
-  inference finds 3 joins nobody declared. A declared join is confirmed
+  connected by a path of inferred joins, and the one declared on a missing
+  column, `bids.bidder_id`, gets a warning naming `bids.buyer`, the column
+  derived references join to `users.id`. A declared join is confirmed
   when such a path exists, and lists the views along it. An inferred join
   with exactly the declared columns names the ontology table. Each other
   inferred join offers the INSERT that declares it, creating the chosen
@@ -125,6 +128,15 @@ this shape.
   `(id, seller, item, end_time)` is read as a full scan by a join on `id`,
   and an index on `(id)` is not used by a join on `(id, seller)`. The
   default index of a relation with no known unique key is the usual cause.
+- **Index suggestions.** Listed apart from issues, since nothing is wrong.
+  Two cases get a suggested `CREATE INDEX`: columns that two or more views
+  join a relation on, with no index covering them, and a materialized view
+  listed as an MCP data product with no index. In the first case, each
+  view's dataflow arranges the relation itself, and an index on exactly
+  those columns lets work on its cluster share one arrangement. In the
+  second, agents read the data product from storage. A join only one view
+  makes gets no suggestion, since its dataflow arranges the relation once
+  either way.
 - **System catalog** (`catalogGraph.ts`). Entities, links and properties come
   from the `mz_ontology_*` views, with SQL types joined from `mz_columns`.
 

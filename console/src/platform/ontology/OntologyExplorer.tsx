@@ -39,8 +39,13 @@ import { filterGraph, GraphFilters, matchesSearch } from "./filterGraph";
 import { Freshness } from "./freshness";
 import { keyColumns } from "./keyColumns";
 import { layoutGraph, LayoutMode } from "./layout";
-import { OntologyEdgeKind, OntologyGraph, OntologyNode } from "./model";
-import { OntologyCanvas, Selection } from "./OntologyCanvas";
+import {
+  isProblem,
+  OntologyEdgeKind,
+  OntologyGraph,
+  OntologyNode,
+} from "./model";
+import { OntologyCanvas, Selection, Spotlight } from "./OntologyCanvas";
 import { OntologySidePanel, OntologySidePanelProps } from "./OntologySidePanel";
 import { edgeKindStyle, groupColor, SIDE_PANEL_WIDTH } from "./style";
 
@@ -53,6 +58,9 @@ export interface OverviewContext {
   drawn: { nodes: number; edges: number; isolated: number };
   select: (selection: Selection) => void;
   setHighlighted: (ids: ReadonlySet<string> | null) => void;
+  setSpotlight: (spotlight: Spotlight | null) => void;
+  hiddenEdgeKinds: ReadonlySet<OntologyEdgeKind>;
+  setHiddenEdgeKinds: (kinds: ReadonlySet<OntologyEdgeKind>) => void;
 }
 
 /**
@@ -190,6 +198,28 @@ export const OntologyExplorer = ({
     },
     [select],
   );
+  const [fitRequest, setFitRequest] = React.useState(0);
+  const backToOverview = React.useCallback(() => {
+    select(null);
+    setFitRequest((n) => n + 1);
+  }, [select]);
+  // Escape leaves a selection for the overview, unless it is meant for a
+  // field being typed in.
+  React.useEffect(() => {
+    if (!selection) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        event.key !== "Escape" ||
+        target?.closest("input, textarea, select, [contenteditable=true]")
+      ) {
+        return;
+      }
+      backToOverview();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selection, backToOverview]);
   const panelWidth = isPanelOpen ? SIDE_PANEL_WIDTH : 0;
   const [search, setSearch] = React.useState("");
   const [hiddenEdgeKinds, setHiddenEdgeKinds] = React.useState<
@@ -202,6 +232,7 @@ export const OntologyExplorer = ({
     defaultShowEdgeLabels,
   );
   const [showKeyColumns, setShowKeyColumns] = React.useState(true);
+  const [spotlight, setSpotlight] = React.useState<Spotlight | null>(null);
   const [highlighted, setHighlighted] =
     React.useState<ReadonlySet<string> | null>(null);
   const svgRef = React.useRef<SVGSVGElement>(null);
@@ -315,7 +346,7 @@ export const OntologyExplorer = ({
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [graph.edges]);
 
-  const issueCount = filtered.issues.length;
+  const issueCount = filtered.issues.filter(isProblem).length;
 
   const exportSvg = () => {
     const svg = svgRef.current;
@@ -618,6 +649,8 @@ export const OntologyExplorer = ({
             selection={selection}
             onSelect={selectAndShow}
             highlighted={searchMatches ?? highlighted}
+            spotlight={spotlight}
+            fitRequest={fitRequest}
             recentlyAdded={recentlyAdded}
             showEdgeLabels={showEdgeLabels}
             keyColumns={keyColumnsByNode}
@@ -630,6 +663,7 @@ export const OntologyExplorer = ({
           <OntologySidePanel
             selection={selection}
             onSelect={selectAndShow}
+            onBack={backToOverview}
             nodesById={nodesById}
             edges={graph.edges}
             focusedNodeId={focusId}
@@ -648,6 +682,9 @@ export const OntologyExplorer = ({
               },
               select: selectAndShow,
               setHighlighted,
+              setSpotlight,
+              hiddenEdgeKinds,
+              setHiddenEdgeKinds,
             })}
           />
         )}

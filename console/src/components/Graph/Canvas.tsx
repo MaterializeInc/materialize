@@ -40,6 +40,8 @@ export interface CanvasProps {
    * selected, and make the frame button fit instead of resetting the zoom.
    */
   fitToContent?: boolean;
+  /** Fits the whole graph each time this changes, selection or not. */
+  fitRequest?: number;
 }
 
 /**
@@ -58,6 +60,7 @@ export const Canvas = ({
   rightOffset = 0,
   controlsZIndex = 1,
   fitToContent = false,
+  fitRequest,
   children,
 }: React.PropsWithChildren<CanvasProps>) => {
   const {
@@ -115,6 +118,13 @@ export const Canvas = ({
     if (!fitToContent || hasSelectionRef.current || !width || !height) return;
     fitTo(width, height);
   }, [fitToContent, fitTo, width, height, viewportWidth]);
+
+  React.useEffect(() => {
+    if (fitRequest === undefined || !width || !height) return;
+    fitTo(width, height);
+    // Only a new request fits, not a resize.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
 
   return (
     <>

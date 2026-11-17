@@ -7,12 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { IndexKey, tooWideIndexIssues } from "./indexFit";
-import {
-  compareWithDeclared,
-  inferJoinEdges,
-  sameValuesOnJoinPaths,
-} from "./inferredJoins";
+import { IndexKey, indexSuggestions, tooWideIndexIssues } from "./indexFit";
+import { compareWithDeclared, inferJoinEdges } from "./inferredJoins";
 import {
   INFERRED_JOIN_EDGE_KIND,
   JOIN_EDGE_KIND,
@@ -22,7 +18,6 @@ import {
   OntologyGraph,
   OntologyIssue,
   OntologyNode,
-  SAME_VALUES_EDGE_KIND,
 } from "./model";
 import { ViewJoins } from "./viewJoins";
 
@@ -452,16 +447,7 @@ export function buildDataProductGraph(
   });
   const declared = edges.filter((edge) => edge.kind === JOIN_EDGE_KIND);
   issues.push(...compareWithDeclared(declared, inferred, nodes));
-  const inferredJoins = inferred.filter(
-    (edge) => edge.kind === INFERRED_JOIN_EDGE_KIND,
-  );
-  edges.push(
-    ...inferredJoins,
-    ...sameValuesOnJoinPaths(
-      inferred.filter((edge) => edge.kind === SAME_VALUES_EDGE_KIND),
-      [...declared, ...inferredJoins],
-    ),
-  );
+  edges.push(...inferred);
 
   for (const issue of tooWideIndexIssues(edges, nodes, input.indexKeys)) {
     edges.find((edge) => edge.id === issue.edgeId)?.issues.push(issue);
@@ -481,6 +467,12 @@ export function buildDataProductGraph(
     for (const column of edge.targetColumns) {
       if (!target.primaryKey.includes(column)) target.primaryKey.push(column);
     }
+  }
+
+  // After key columns settle, since a suggested index uses them.
+  for (const issue of indexSuggestions(edges, nodes, input.indexKeys)) {
+    edges.find((edge) => edge.id === issue.edgeId)?.issues.push(issue);
+    issues.push(issue);
   }
 
   return {

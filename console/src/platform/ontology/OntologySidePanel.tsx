@@ -49,6 +49,7 @@ import { LivePreview } from "./LivePreview";
 import {
   edgeLabel,
   INFERRED_JOIN_EDGE_KIND,
+  isProblem,
   OntologyEdge,
   OntologyNode,
 } from "./model";
@@ -60,6 +61,8 @@ import { useOpenInShell } from "./useOpenInShell";
 export interface OntologySidePanelProps {
   selection: Selection;
   onSelect: (selection: Selection) => void;
+  /** Leaves the selection for the overview of the whole graph. */
+  onBack: () => void;
   nodesById: Map<string, OntologyNode>;
   edges: OntologyEdge[];
   /** Shown while nothing is selected. */
@@ -82,6 +85,7 @@ export interface OntologySidePanelProps {
 export const OntologySidePanel = ({
   selection,
   onSelect,
+  onBack,
   nodesById,
   edges,
   overview,
@@ -120,6 +124,7 @@ export const OntologySidePanel = ({
           edges={edges}
           nodesById={nodesById}
           onSelect={onSelect}
+          onBack={onBack}
           isFocused={focusedNodeId === node.id}
           onFocus={onFocus}
           freshness={getFreshness?.(node)}
@@ -132,6 +137,7 @@ export const OntologySidePanel = ({
           source={nodesById.get(edge.source)}
           target={nodesById.get(edge.target)}
           onSelect={onSelect}
+          onBack={onBack}
           declareSql={declareSql}
         />
       ) : (
@@ -156,6 +162,18 @@ const PanelHeader = ({
     <VStack align="stretch" spacing={2} p={5} pb={3}>
       <HStack justify="space-between" align="start">
         <VStack align="start" spacing={0.5} minW={0}>
+          <HStack
+            as="nav"
+            aria-label="Breadcrumb"
+            spacing={1.5}
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+          >
+            <TextLink as="button" onClick={onClose}>
+              Ontology
+            </TextLink>
+            <Text as="span">›</Text>
+          </HStack>
           <Text textStyle="heading-sm" wordBreak="break-word">
             {title}
           </Text>
@@ -164,7 +182,7 @@ const PanelHeader = ({
           </Text>
         </VStack>
         <IconButton
-          aria-label="Close details"
+          aria-label="Back to the overview"
           icon={<CloseIcon />}
           variant="inline"
           size="sm"
@@ -181,6 +199,7 @@ const NodeDetails = ({
   edges,
   nodesById,
   onSelect,
+  onBack,
   isFocused,
   onFocus,
   freshness,
@@ -191,6 +210,7 @@ const NodeDetails = ({
   edges: OntologyEdge[];
   nodesById: Map<string, OntologyNode>;
   onSelect: (selection: Selection) => void;
+  onBack: () => void;
   isFocused: boolean;
   onFocus: (nodeId: string | null) => void;
   freshness: Freshness | undefined;
@@ -212,7 +232,7 @@ const NodeDetails = ({
       <PanelHeader
         title={node.label}
         subtitle={`${nodeKindLabel(node.kind)} in ${node.group}`}
-        onClose={() => onSelect(null)}
+        onClose={onBack}
       >
         <HStack spacing={2} flexWrap="wrap">
           {node.isDataProduct && (
@@ -459,7 +479,7 @@ const RelationshipList = ({
       </Text>
       {edges.map((edge) => {
         const style = edgeKindStyle(edge.kind, colors);
-        const hasIssues = edge.issues.length > 0;
+        const hasIssues = edge.issues.some(isProblem);
         return (
           <HStack
             key={edge.id}
@@ -503,12 +523,14 @@ const EdgeDetails = ({
   source,
   target,
   onSelect,
+  onBack,
   declareSql,
 }: {
   edge: OntologyEdge;
   source: OntologyNode | undefined;
   target: OntologyNode | undefined;
   onSelect: (selection: Selection) => void;
+  onBack: () => void;
   declareSql: OntologySidePanelProps["declareSql"];
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -552,7 +574,7 @@ const EdgeDetails = ({
           </HStack>
         }
         subtitle={`${style.label}${edge.name ? `: ${edge.name}` : ""}. ${style.description}.`}
-        onClose={() => onSelect(null)}
+        onClose={onBack}
       >
         <IssueList issues={edge.issues} />
         {edge.description && (

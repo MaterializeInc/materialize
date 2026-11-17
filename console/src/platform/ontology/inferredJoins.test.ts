@@ -240,7 +240,7 @@ describe("columns views pass through", () => {
     source: { objectId, column: sourceColumn },
   });
 
-  it("makes a passed key a reference, and anything else same values", () => {
+  it("makes a passed key a reference, and a passed column hold its references", () => {
     const graph = build({
       relations: [ORDERS, CUSTOMERS, SUMMARY, ORG_SPEND],
       columns: new Map([
@@ -268,8 +268,8 @@ describe("columns views pass through", () => {
     });
     expect(joins(graph.edges)).toEqual([
       "inferred_join: u1.customer_id -> u2.id",
+      "inferred_join: u3.customer_id -> u2.id",
       "inferred_join: u4.customer_key -> u2.id",
-      "same_values: u3.customer_id -> u1.customer_id",
     ]);
     const passed = graph.edges.find((e) => e.source === "u4")!;
     expect(passed.note).toBe(
@@ -277,7 +277,7 @@ describe("columns views pass through", () => {
     );
   });
 
-  it("derives nothing across views, leaving a path of direct edges", () => {
+  it("derives references through a chain of passing views", () => {
     // top_orgs.cust passes order_summary.customer_id, which passes
     // orders.customer_id, which order_summary joins to customers.id.
     const graph = build({
@@ -303,9 +303,17 @@ describe("columns views pass through", () => {
     });
     expect(joins(graph.edges)).toEqual([
       "inferred_join: u1.customer_id -> u2.id",
-      "same_values: u3.customer_id -> u1.customer_id",
-      "same_values: u5.cust -> u3.customer_id",
+      "inferred_join: u3.customer_id -> u2.id",
+      "inferred_join: u5.cust -> u2.id",
     ]);
+    const derived = graph.edges.find((e) => e.source === "u5")!;
+    expect(derived.inferredFrom).toEqual([
+      "materialize.shop.order_summary",
+      "materialize.shop.top_orgs",
+    ]);
+    expect(derived.note).toBe(
+      "top_orgs.cust holds the same values as orders.customer_id, which references customers.id.",
+    );
   });
 
   it("confirms a declared join through a path of inferred edges", () => {
@@ -352,24 +360,21 @@ describe("columns views pass through", () => {
     ]);
   });
 
-  it("draws only same-values edges on a path to a join", () => {
+  it("draws nothing for a passed column no reference uses", () => {
     const graph = build({
       viewJoins: new Map([
         [
           "u3",
           {
             ...SUMMARY_JOINS,
-            outputs: [
-              passes("customer_id", "u1", "customer_id"),
-              passes("total", "u1", "total"),
-            ],
+            outputs: [passes("total", "u1", "total")],
           },
         ],
       ]),
     });
-    expect(
-      joins(graph.edges).filter((e) => e.startsWith("same_values")),
-    ).toEqual(["same_values: u3.customer_id -> u1.customer_id"]);
+    expect(joins(graph.edges)).toEqual([
+      "inferred_join: u1.customer_id -> u2.id",
+    ]);
   });
 });
 
@@ -454,6 +459,63 @@ describe("too wide indexes", () => {
       indexKeys: new Map([["u2", [["name"]]]]),
     });
     expect(warnings(graph.edges)).toEqual([]);
+  });
+});
+
+describe("index suggestions", () => {
+  const REPORT = relation("u4", "order_report", "view");
+  const suggestions = (graph: ReturnType<typeof build>) =>
+    graph.issues
+      .filter((issue) => issue.severity === "suggestion")
+      .map((issue) => issue.message);
+  // order_summary and order_report both join orders.customer_id to
+  // customers.id.
+  const twoViews = {
+    relations: [ORDERS, CUSTOMERS, SUMMARY, REPORT],
+    viewJoins: new Map([
+      ["u3", SUMMARY_JOINS],
+      ["u4", SUMMARY_JOINS],
+    ]),
+  };
+
+  it("suggests an index on columns several views join on", () => {
+    expect(suggestions(build(twoViews))).toEqual([
+      'Views order_report, order_summary join orders on (customer_id), and each arranges orders by it. CREATE INDEX ON "materialize"."shop"."orders" ("customer_id") would let them share one arrangement on its cluster.',
+      'Views order_report, order_summary join customers on (id), and each arranges customers by it. CREATE INDEX ON "materialize"."shop"."customers" ("id") would let them share one arrangement on its cluster.',
+    ]);
+  });
+
+  it("suggests nothing for a join only one view makes", () => {
+    expect(suggestions(build())).toEqual([]);
+  });
+
+  it("leaves a covering index to the too-wide warning", () => {
+    const graph = build({
+      ...twoViews,
+      indexKeys: new Map([
+        ["u1", [["customer_id"]]],
+        ["u2", [["id", "name"]]],
+      ]),
+    });
+    expect(suggestions(graph)).toEqual([]);
+  });
+
+  it("suggests an index on an unindexed materialized view data product", () => {
+    const products = relation("u5", "products", "materialized-view");
+    const graph = build({
+      relations: [ORDERS, CUSTOMERS, SUMMARY, products],
+      dataProducts: new Set(['"materialize"."shop"."products"']),
+    });
+    expect(suggestions(graph)).toEqual([
+      'Agents read the data product products from storage, since no index holds it in memory. CREATE DEFAULT INDEX ON "materialize"."shop"."products" would serve their reads from memory.',
+    ]);
+    expect(graph.issues.find((i) => i.nodeId)?.nodeId).toBe("u5");
+    const indexed = build({
+      relations: [ORDERS, CUSTOMERS, SUMMARY, products],
+      dataProducts: new Set(['"materialize"."shop"."products"']),
+      indexKeys: new Map([["u5", [["id"]]]]),
+    });
+    expect(suggestions(indexed)).toEqual([]);
   });
 });
 
