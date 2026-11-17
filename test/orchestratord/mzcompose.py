@@ -4155,6 +4155,78 @@ def wait_for_rollout_complete() -> None:
     raise RuntimeError("Rollout never completed")
 
 
+def workflow_spec_change_during_promotion(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """A spec change made while a rollout is promoting must not disturb that
+    rollout, and must itself be rolled out right after it."""
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, False)
+    initial_generation = get_materialize_at_stored_version()["status"][
+        "activeGeneration"
+    ]
+
+    def request_rollout(env_name: str) -> str:
+        request = str(uuid.uuid4())
+        definition["materialize"]["spec"]["requestRollout"] = request
+        definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+            {"name": env_name, "value": "true"},
+        ]
+        apply_materialize(definition)
+        return request
+
+    first_request = request_rollout("SPEC_CHANGE_DURING_PROMOTION_1")
+
+    # Promotion is past the point of no return, and lasts at least one 5 to 10
+    # second retry while environmentd becomes the leader.
+    promoting = ("Promoting", "TearingDownPreviousGeneration")
+    for _ in range(9000):
+        status = get_materialize_status_at_stored_version() or {}
+        if status.get("phase") in promoting:
+            break
+        assert (
+            status.get("lastCompletedRolloutRequest") != first_request
+        ), "The first rollout completed before it was seen promoting"
+        time.sleep(0.1)
+    else:
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("The first rollout never started promoting")
+
+    second_request = request_rollout("SPEC_CHANGE_DURING_PROMOTION_2")
+
+    # The operator resyncs an idle resource after 30 minutes, which would roll
+    # the second change out eventually. It has to happen sooner than that.
+    for _ in range(900):
+        time.sleep(1)
+        status = get_materialize_status_at_stored_version() or {}
+        if status.get("lastCompletedRolloutRequest") == second_request:
+            break
+    else:
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("The second rollout never completed")
+
+    # The first rollout completed as its own generation, so the second one is
+    # two generations past the initial deployment.
+    assert status["activeGeneration"] == initial_generation + 2, status
+    condition = status["conditions"][0]
+    assert condition["status"] == "True" and condition["reason"] == "Applied", status
+
+
 def workflow_orchestratord_upgrade(
     c: Composition,
     parser: WorkflowArgumentParser,
