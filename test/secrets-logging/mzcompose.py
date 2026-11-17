@@ -85,3 +85,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     c.test_parts(files, process)
     c.sanity_restart_mz()
+    logs = c.invoke("logs", "materialized", capture=True).stdout
+    assert "pgsink-private-" not in logs, "Postgres sink leaked private data to logs"

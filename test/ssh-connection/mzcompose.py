@@ -122,10 +122,13 @@ def workflow_pg(c: Composition) -> None:
     )
 
     c.run_testdrive_files("--no-reset", "pg-source.td")
+    c.run_testdrive_files("--no-reset", "pg-sink.td")
     c.kill("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", "pg-sink-after-ssh-failure.td")
     c.run_testdrive_files("--no-reset", "pg-source-after-ssh-failure.td")
     c.up("ssh-bastion-host")
     c.run_testdrive_files("--no-reset", "pg-source-after-ssh-restart.td")
+    c.run_testdrive_files("--no-reset", "pg-sink-after-ssh-restart.td")
 
 
 def workflow_mysql(c: Composition) -> None:
@@ -656,6 +659,7 @@ def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
     )
 
     c.run_testdrive_files("--no-reset", "pg-source-ssl.td")
+    c.run_testdrive_files("--no-reset", "pg-sink.td")
 
 
 def workflow_ssh_key_after_restart(c: Composition) -> None:
