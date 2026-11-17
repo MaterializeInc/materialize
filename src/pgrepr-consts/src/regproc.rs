@@ -693,6 +693,7 @@ pub const NAMES: &[(u32, &str)] = &[
     (17131, "pg_catalog.max"),
     (17132, "pg_catalog.min"),
     (17138, "jq"),
+    (17141, "mz_internal.parse_catalog_view_joins"),
     // END GENERATED
 ];
 

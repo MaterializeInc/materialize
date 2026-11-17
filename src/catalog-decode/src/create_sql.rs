@@ -35,7 +35,7 @@ use serde_json::json;
 use crate::durable;
 
 /// Parses `sql`, which must contain exactly one statement.
-fn parse_single_statement(sql: &str) -> Result<Statement<Raw>, String> {
+pub(crate) fn parse_single_statement(sql: &str) -> Result<Statement<Raw>, String> {
     let mut stmts = mz_sql_parser::parser::parse_statements(sql)
         .map_err(|e| format!("failed to parse create_sql: {e}"))?;
     match stmts.len() {

@@ -539,6 +539,7 @@
     "parse_catalog_id": {"display":"parse_catalog_id","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_id<'a>(a: JsonbRef<'a>) -> Result<String, EvalError>","body_fingerprint":"3df74fa5b95ad2a3"},
     "parse_catalog_item_references": {"display":"parse_catalog_item_references","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_item_references<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"afac69531d801621"},
     "parse_catalog_privileges": {"display":"parse_catalog_privileges","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclItem>, EvalError>","body_fingerprint":"0189155db8d73f28"},
+    "parse_catalog_view_joins": {"display":"parse_catalog_view_joins","sqlfunc_decl":"#[sqlfunc] fn parse_catalog_view_joins<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"f23ae090959a87b8"},
     "parse_connection_details": {"display":"parse_connection_details","sqlfunc_decl":"#[sqlfunc] fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"479b90a7cbe943f6"},
     "parse_kafka_source_details": {"display":"parse_kafka_source_details","sqlfunc_decl":"#[sqlfunc] fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"8717ae9a730e89a0"},
     "parse_postgres_source_details": {"display":"parse_postgres_source_details","sqlfunc_decl":"#[sqlfunc] fn parse_postgres_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError>","body_fingerprint":"00a79828148946a7"},

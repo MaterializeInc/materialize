@@ -536,6 +536,34 @@ deploying the changes to production.
 | `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
 | `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](/sql/system-catalog/mz_catalog/#mz_objects). |
 
+## `mz_inferred_relationships`
+
+The `mz_inferred_relationships` view describes relationships between user
+relations that the definitions of views and materialized views imply, without
+declared keys. Each row comes from a single view's definition:
+
+- A `join`: the view joins the two columns. The referenced side is a column
+  that alone keys an index, then a column named `id`, then the side not named
+  `*_id`. A join that none of these settle is undirected.
+- A `key`: the view passes a key through unchanged, as in
+  `SELECT o.id AS org_id`, so its output column references that key.
+- `same_values`: the view passes any other column through unchanged.
+
+Relationships across several views are the paths through these rows. A
+`same_values` row describes the columns' domain, not their data: a view may
+filter, so its input column can hold values that its output never shows.
+
+<!-- RELATION_SPEC mz_internal.mz_inferred_relationships -->
+| Field           | Type           | Meaning  |
+| --------------- | -------------- | -------- |
+| `source_id`     | [`text`]       | The ID of the relation holding the referencing column. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| `source_column` | [`text`]       | The referencing column. |
+| `target_id`     | [`text`]       | The ID of the relation holding the referenced column. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| `target_column` | [`text`]       | The referenced column. |
+| `kind`          | [`text`]       | `join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `same_values` when a view passes any other target column through as the source column. |
+| `is_directed`   | [`boolean`]    | Whether a key decides which side references the other. When false, the two columns are only known to be joined, and their order is arbitrary. |
+| `inferred_from` | [`text array`] | The IDs of the views and materialized views whose definitions imply the relationship. |
+
 ## `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
@@ -904,6 +932,29 @@ subsource or table and the corresponding upstream PostgreSQL table being ingeste
 | `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
+
+## `mz_mcp_relationships`
+
+The `mz_mcp_relationships` view lists the relationships between relations
+that the current role can read, shaped like an
+[ontology table](/transform-data/patterns/ontology/), so agents can look up
+how to join two relations without one. It lists the `join` and `key` rows of
+[`mz_inferred_relationships`](#mz_inferred_relationships), and `derived`
+references: a column that holds the same values as a referencing column,
+through a chain of views passing it, references the same key.
+
+The view lists only relations the role holds `SELECT` on, and sessions with
+`restrict_to_user_objects` can read it.
+
+<!-- RELATION_SPEC mz_internal.mz_mcp_relationships -->
+| Field                | Type           | Meaning  |
+| -------------------- | -------------- | -------- |
+| `table_name`         | [`text`]       | Fully qualified name of the relation holding the referencing columns. |
+| `columns`            | [`text array`] | The referencing columns. |
+| `referenced_table`   | [`text`]       | Fully qualified name of the relation holding the referenced columns. |
+| `referenced_columns` | [`text array`] | The referenced columns, paired by position with `columns`. |
+| `kind`               | [`text`]       | `join` when a view joins the columns, `key` when a view passes the referenced key through, and `derived` when the referencing column holds the same values as a column that references the key. |
+| `is_directed`        | [`boolean`]    | Whether a key decides which side references the other. When false, the columns are only known to be joined. |
 
 ## `mz_mysql_source_tables`
 

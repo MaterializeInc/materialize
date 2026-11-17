@@ -5368,6 +5368,10 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
                 oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
         },
+        "parse_catalog_view_joins" => Scalar {
+            params!(String) => UnaryFunc::ParseCatalogViewJoins(func::ParseCatalogViewJoins)
+                => Jsonb, oid::FUNC_PARSE_CATALOG_VIEW_JOINS_OID;
+        },
         "parse_kafka_source_details" => Scalar {
             params!(String) => UnaryFunc::ParseKafkaSourceDetails(
                 func::ParseKafkaSourceDetails,

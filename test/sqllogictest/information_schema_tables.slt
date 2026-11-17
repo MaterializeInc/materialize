@@ -441,6 +441,10 @@ mz_index_advice
 VIEW
 materialize
 mz_internal
+mz_inferred_relationships
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_internal_cluster_replicas
 MATERIALIZED VIEW
 materialize
@@ -474,6 +478,10 @@ VIEW
 materialize
 mz_internal
 mz_mcp_data_products
+VIEW
+materialize
+mz_internal
+mz_mcp_relationships
 VIEW
 materialize
 mz_internal

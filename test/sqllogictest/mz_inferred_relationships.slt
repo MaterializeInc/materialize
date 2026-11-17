@@ -1,0 +1,191 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for mz_internal.mz_inferred_relationships and the function it reads
+# view definitions with, mz_internal.parse_catalog_view_joins.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE TABLE organizations (id int, name text)
+
+statement ok
+CREATE TABLE users (id int, org_id int, name text)
+
+statement ok
+CREATE TABLE accounts (id int, org_id int, balance int)
+
+statement ok
+CREATE TABLE auctions (id int, seller int, item text)
+
+statement ok
+CREATE TABLE bids (id int, buyer int, auction_id int, amount int)
+
+# Joins `bids.auction_id` to `auctions.id`, and passes `auctions.id`,
+# `bids.id`, `bids.buyer` and `auctions.seller` through.
+statement ok
+CREATE MATERIALIZED VIEW winning_bids AS
+  SELECT DISTINCT ON (a.id) b.id AS bid_id, a.id AS auction_id, b.buyer, a.seller
+  FROM auctions a JOIN bids b ON a.id = b.auction_id
+  ORDER BY a.id, b.amount DESC
+
+statement ok
+CREATE VIEW org_spend AS
+  SELECT o.id AS org_id, o.name
+  FROM organizations o
+  JOIN users u ON u.org_id = o.id
+  JOIN winning_bids w ON w.buyer = u.id
+
+statement ok
+CREATE VIEW seller_performance AS
+  SELECT u.id AS seller_id, count(*) AS sold
+  FROM users u JOIN winning_bids w ON w.seller = u.id
+  GROUP BY u.id
+
+# Neither column is a key, so the relationship stays undirected.
+statement ok
+CREATE VIEW user_accounts AS
+  SELECT users.name, a.balance FROM users JOIN accounts a USING (org_id)
+
+# Nothing here is attributable: a CTE, an expression, and an alias bound to
+# two relations.
+statement ok
+CREATE VIEW opaque AS
+  WITH x AS (SELECT seller FROM auctions)
+  SELECT u.name FROM x, users u WHERE u.id = x.seller
+  UNION ALL
+  SELECT a.item FROM auctions a JOIN bids b ON a.id + 0 = b.auction_id
+  UNION ALL
+  SELECT a.item FROM auctions a JOIN (SELECT a.id FROM bids a) s ON s.id = a.id
+
+query TTTTTB
+SELECT r.kind, s.name, r.source_column, t.name, r.target_column, r.is_directed
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+JOIN mz_objects t ON t.id = r.target_id
+ORDER BY 1, 2, 3, 4, 5
+----
+join  bids  auction_id  auctions  id  true
+join  users  org_id  accounts  org_id  false
+join  users  org_id  organizations  id  true
+join  winning_bids  buyer  users  id  true
+join  winning_bids  seller  users  id  true
+key  org_spend  org_id  organizations  id  true
+key  seller_performance  seller_id  users  id  true
+key  winning_bids  auction_id  auctions  id  true
+key  winning_bids  bid_id  bids  id  true
+same_values  org_spend  name  organizations  name  true
+same_values  user_accounts  balance  accounts  balance  true
+same_values  user_accounts  name  users  name  true
+same_values  winning_bids  buyer  bids  buyer  true
+same_values  winning_bids  seller  auctions  seller  true
+
+# Evidence names the views that imply each relationship.
+query TT
+SELECT r.source_column, v.name
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+CROSS JOIN unnest(r.inferred_from) AS e(id)
+JOIN mz_objects v ON v.id = e.id
+WHERE s.name = 'winning_bids' AND r.source_column = 'buyer' AND r.kind = 'join'
+----
+buyer  org_spend
+
+# A column that alone keys an index is the referenced side.
+statement ok
+CREATE TABLE products (sku text, name text)
+
+statement ok
+CREATE TABLE order_lines (sku text, quantity int)
+
+statement ok
+CREATE INDEX products_sku ON products (sku)
+
+statement ok
+CREATE VIEW order_products AS
+  SELECT p.name, o.quantity FROM order_lines o JOIN products p ON p.sku = o.sku
+
+query TTTTTB
+SELECT r.kind, s.name, r.source_column, t.name, r.target_column, r.is_directed
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+JOIN mz_objects t ON t.id = r.target_id
+WHERE s.name = 'order_lines'
+----
+join  order_lines  sku  products  sku  true
+
+# Dropping the view retracts what it implied.
+statement ok
+DROP VIEW order_products
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_inferred_relationships r
+JOIN mz_objects s ON s.id = r.source_id
+WHERE s.name = 'order_lines'
+----
+0
+
+query T
+SELECT mz_internal.parse_catalog_view_joins(create_sql)->'outputs'
+FROM mz_views WHERE name = 'seller_performance'
+----
+[{"column":"seller_id","source_column":"id","source_id":"u2"}]
+
+# mz_mcp_relationships lists references shaped like an ontology table,
+# including those derived through columns views pass through:
+# winning_bids.buyer passes bids.buyer and joins users.id, so bids.buyer
+# references users.id too.
+query TTTTT
+SELECT table_name, columns::text, referenced_table, referenced_columns::text, kind
+FROM mz_internal.mz_mcp_relationships
+WHERE kind = 'derived'
+ORDER BY 1, 2
+----
+"materialize"."public"."auctions"  {seller}  "materialize"."public"."users"  {id}  derived
+"materialize"."public"."bids"  {buyer}  "materialize"."public"."users"  {id}  derived
+
+# A session restricted to user objects reads it, and sees only the relations
+# its role can read: here users and winning_bids, not bids or auctions.
+simple conn=mz_system,user=mz_system
+CREATE ROLE agent LOGIN
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO agent
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON materialize.public.users, materialize.public.winning_bids TO agent
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent SET restrict_to_user_objects = true
+----
+COMPLETE 0
+
+simple conn=agent,user=agent
+SELECT table_name, columns::text, referenced_table, referenced_columns::text, kind
+FROM mz_internal.mz_mcp_relationships
+ORDER BY 1, 2
+----
+"materialize"."public"."winning_bids",{buyer},"materialize"."public"."users",{id},join
+"materialize"."public"."winning_bids",{seller},"materialize"."public"."users",{id},join
+COMPLETE 2
+
+simple conn=agent,user=agent
+SELECT count(*) FROM mz_internal.mz_inferred_relationships
+----
+db error: ERROR: access to system object mz_inferred_relationships is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.

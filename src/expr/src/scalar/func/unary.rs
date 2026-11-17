@@ -472,6 +472,7 @@ derive_unary!(
     ParseCatalogId,
     ParseCatalogItemReferences,
     ParseCatalogPrivileges,
+    ParseCatalogViewJoins,
     ParseConnectionDetails,
     ParseKafkaSourceDetails,
     ParsePostgresSourceDetails,
