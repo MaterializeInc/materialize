@@ -2529,6 +2529,22 @@ metrics:
   - step
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_gc_tombstone_deleted_blobs
+  help: >-
+    count of blobs GC deleted from dropped (tombstone) shards, by who requested the
+    GC
+  labels:
+  - caller
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_gc_tombstone_deleted_bytes
+  help: >-
+    total size of blobs GC deleted from dropped (tombstone) shards, by who
+    requested the GC
+  labels:
+  - caller
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_inline_part_commit_bytes
   help: total size of of inline parts committed to state
   source: src/persist-client/src/internal/metrics.rs
