@@ -27,6 +27,7 @@ INSERT INTO t1 VALUES (3);
   WHERE
       name
       IN (
-      SELECT name FROM mz_tables WHERE source_id IS NOT NULL
+      SELECT name FROM mz_tables
+      WHERE source_id = (SELECT id FROM mz_sources WHERE name = 'mz_source')
       );
 t1 table <null>

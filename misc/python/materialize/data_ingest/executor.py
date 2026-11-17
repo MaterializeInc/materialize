@@ -891,6 +891,101 @@ class PgExecutor(Executor):
         self.pg_conn.commit()
 
 
+class PgRoundtripExecutor(Executor):
+    def __init__(
+        self,
+        num: int,
+        ports: dict[str, int],
+        fields: list[Field],
+        database: str,
+        schema: str = "public",
+        cluster: str | None = None,
+        mz_service: str | None = None,
+        composition: Composition | None = None,
+    ):
+        super().__init__(
+            ports, fields, database, schema, cluster, mz_service, composition
+        )
+        self.num = num
+        self.table = f"pg_roundtrip{num}"
+
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
+        target = f"{self.table}_target"
+        source = f"{self.table}_source"
+        qualified_schema = f"{identifier(self.database)}.{identifier(self.schema)}"
+        keys = ", ".join(identifier(f.name) for f in self.fields if f.is_key)
+        key = f"KEY ({keys}) NOT ENFORCED" if random.choice([True, False]) else ""
+        with self.mz_conn.cursor() as cur:
+            self.execute(
+                cur,
+                f"""CREATE SINK {qualified_schema}.{self.table}_sink
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM {qualified_schema}.table{self.num}
+                    INTO POSTGRES CONNECTION pg{self.num} (SCHEMA 'public', TABLE '{target}')
+                    {key}""",
+            )
+
+        with psycopg.connect(
+            host="127.0.0.1",
+            user="postgres",
+            password="postgres",
+            port=self.ports["postgres"],
+            autocommit=True,
+        ) as pg_conn:
+            with pg_conn.cursor() as cur:
+                self.execute_with_retry_on_error(
+                    cur,
+                    f"""ALTER TABLE {target} REPLICA IDENTITY FULL;
+                        CREATE PUBLICATION {source} FOR TABLE {target}""",
+                    required_error_message_substrs=["does not exist"],
+                    max_tries=60,
+                )
+
+        with self.mz_conn.cursor() as cur:
+            self.execute(
+                cur,
+                f"""CREATE SOURCE {qualified_schema}.{source}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION '{source}')""",
+            )
+            self.execute(
+                cur,
+                f"""CREATE TABLE {qualified_schema}.{self.table}
+                    FROM SOURCE {qualified_schema}.{source} (REFERENCE public.{target})""",
+            )
+
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        # PgExecutor supplies the input to this sink.
+        pass
+
+    def wait_for_sink(self, cur: psycopg.Cursor) -> None:
+        # An empty readback can match before the sink processes any input.
+        cur.execute(
+            "SELECT write_frontier FROM mz_internal.mz_frontiers "
+            "WHERE object_id = (SELECT id FROM mz_tables WHERE name = %s)",
+            (f"table{self.num}",),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        frontier = row[0]
+        deadline = time.monotonic() + 60
+        while True:
+            cur.execute(
+                "SELECT write_frontier >= %s::mz_timestamp FROM mz_internal.mz_frontiers "
+                "WHERE object_id = (SELECT id FROM mz_sinks WHERE name = %s)",
+                (frontier, f"{self.table}_sink"),
+            )
+            row = cur.fetchone()
+            if row is not None and row[0]:
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"{self.table}_sink did not reach frontier {frontier}"
+                )
+            time.sleep(0.1)
+
+
 class KafkaRoundtripExecutor(Executor):
     table: str
     table_original: str

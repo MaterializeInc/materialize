@@ -126,6 +126,22 @@ class PgCdcScenario(Scenario):
         """)
 
 
+class PgSinkScenario(Scenario):
+    # Keep wide payloads out of EXCEPT ALL.
+    @staticmethod
+    def validate(retract_rows: int) -> str:
+        return dedent(f"""
+        > SELECT * FROM
+          ((SELECT key FROM pgsink_input EXCEPT ALL SELECT key FROM pgsink_readback)
+          UNION ALL
+          (SELECT key FROM pgsink_readback EXCEPT ALL SELECT key FROM pgsink_input)
+          UNION ALL
+          (SELECT key FROM pgsink_readback
+            WHERE pad IS DISTINCT FROM
+              repeat(CASE WHEN key <= {retract_rows} THEN 'y' ELSE 'x' END, {PAD_LEN}) || key::text))
+    """)
+
+
 class MySqlCdcScenario(Scenario):
     MYSQL_SETUP = dedent(f"""
         > CREATE SECRET mysqlpass AS '${{arg.mysql-root-password}}'
@@ -1240,6 +1256,66 @@ SCENARIOS = [
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
     ),
+    *[
+        PgSinkScenario(
+            name=f"postgres-sink-{'keyed' if keyed else 'keyless'}",
+            materialized_memory="4Gb",
+            clusterd_memory="2Gb",
+            pre_restart=dedent("""
+                > CREATE SECRET pgpass AS 'postgres'
+                > CREATE CONNECTION pg TO POSTGRES
+                  (HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass)
+                > CREATE TABLE pgsink_input (key int NOT NULL, pad text NOT NULL)
+            """)
+            + "\n".join(
+                f"> INSERT INTO pgsink_input SELECT i, repeat('x', {PAD_LEN}) || i::text "
+                f"FROM generate_series({batch * REPEAT + 1}, {(batch + 1) * REPEAT}) AS i"
+                for batch in range(16)
+            )
+            + dedent(f"""
+                > CREATE SINK pgsink IN CLUSTER clusterd FROM pgsink_input
+                  INTO POSTGRES CONNECTION pg (SCHEMA 'public', TABLE 'pgsink_target')
+                  {"KEY (key) NOT ENFORCED" if keyed else ""}
+                > SELECT write_frontier > 0 FROM mz_internal.mz_frontiers
+                  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink')
+                true
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                ALTER TABLE pgsink_target REPLICA IDENTITY FULL;
+                CREATE PUBLICATION pgsink_publication FOR TABLE pgsink_target;
+
+                # Keep readback outside the sink replica's memory budget.
+                > CREATE SOURCE pgsink_source IN CLUSTER quickstart
+                  FROM POSTGRES CONNECTION pg (PUBLICATION 'pgsink_publication')
+                > CREATE TABLE pgsink_readback FROM SOURCE pgsink_source (REFERENCE pgsink_target)
+                > SELECT count(*) FROM pgsink_readback
+                {REPEAT * 16}
+
+                $ postgres-connect name=pgsink_lock url=postgres://postgres:postgres@postgres
+                $ postgres-execute connection=pgsink_lock
+                BEGIN;
+                LOCK TABLE pgsink_target IN SHARE MODE;
+
+                > UPDATE pgsink_input SET pad = repeat('y', {PAD_LEN}) || key::text WHERE key <= {retract_rows}
+                > DELETE FROM pgsink_input WHERE key BETWEEN {retract_rows + 1} AND {retract_rows * 2}
+                > INSERT INTO pgsink_input SELECT i, repeat('x', {PAD_LEN}) || i::text
+                  FROM generate_series({REPEAT * 16 + 1}, {REPEAT * 17}) AS i
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DO $$ BEGIN FOR i IN 1..6000 LOOP IF EXISTS (SELECT 1 FROM pg_locks WHERE relation = 'pgsink_target'::regclass AND NOT granted) THEN RETURN; END IF; PERFORM pg_sleep(0.01); END LOOP; RAISE EXCEPTION 'sink did not reach the locked target'; END $$;
+
+                $ postgres-execute connection=pgsink_lock
+                COMMIT;
+            """)
+            + PgSinkScenario.validate(retract_rows),
+            post_restart=dedent(f"""
+                > DELETE FROM pgsink_input WHERE key = 1
+                > INSERT INTO pgsink_input VALUES ({REPEAT * 17 + 1}, repeat('x', {PAD_LEN}) || '{REPEAT * 17 + 1}')
+            """) + PgSinkScenario.validate(retract_rows),
+        )
+        # Bound the keyless scans while retaining the same snapshot and insert burst.
+        for keyed, retract_rows in [(True, REPEAT), (False, 16)]
+    ],
     Scenario(
         name="iceberg-sink",
         needs_iceberg=True,

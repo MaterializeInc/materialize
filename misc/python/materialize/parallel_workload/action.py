@@ -38,11 +38,15 @@ from materialize.data_ingest.data_type import (
     IntArray,
     IntList,
     Jsonb,
+    MzTimestamp,
     Oid,
     Text,
     TextTextMap,
     Timestamp,
     TimestampTz,
+    UInt2,
+    UInt4,
+    UInt8,
     VarChar,
 )
 from materialize.data_ingest.query_error import QueryError
@@ -69,6 +73,7 @@ from materialize.parallel_workload.database import (
     MAX_LOADGEN_SOURCES,
     MAX_MYSQL_SOURCES,
     MAX_NETWORK_POLICIES,
+    MAX_POSTGRES_SINKS,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_ROWS,
@@ -93,6 +98,7 @@ from materialize.parallel_workload.database import (
     MySqlSource,
     MzTempSchema,
     NetworkPolicy,
+    PostgresSink,
     PostgresSource,
     Role,
     S3Object,
@@ -217,6 +223,9 @@ def untrack_objects_in_schemas(exe: Executor, schemas: set[Schema]) -> None:
         ]
         exe.db.iceberg_sinks[:] = [
             s for s in exe.db.iceberg_sinks if s.schema not in schemas
+        ]
+        exe.db.postgres_sinks[:] = [
+            s for s in exe.db.postgres_sinks if s.schema not in schemas
         ]
         exe.db.types[:] = [t for t in exe.db.types if t.schema not in schemas]
 
@@ -1646,7 +1655,7 @@ class CommentAction(Action):
                 + exe.db.sql_server_sources
             )
             loadgen_sources = list(exe.db.loadgen_sources)
-            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks + exe.db.postgres_sinks
             indexes = list(exe.db.indexes)
             schemas = list(exe.db.schemas)
             dbs = list(exe.db.dbs)
@@ -1966,16 +1975,19 @@ class RenameIcebergSinkAction(Action):
         return True
 
 
-class RenameKafkaSinkAction(Action):
+class RenameSinkAction(Action):
+    sinks_attribute: str
+
     def applicable(self, exe: Executor) -> bool:
         return exe.db.scenario == Scenario.Rename
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if not exe.db.kafka_sinks:
+            sinks = getattr(exe.db, self.sinks_attribute)
+            if not sinks:
                 return False
             try:
-                sink = self.rng.choice(exe.db.kafka_sinks)
+                sink = self.rng.choice(sinks)
             except IndexError:
                 # We mostly prevent index errors, but we don't want to lock too
                 # much since that would reduce our chance of finding race
@@ -1983,7 +1995,7 @@ class RenameKafkaSinkAction(Action):
                 # we accidentally removed all objects.
                 return False
         with sink.lock:
-            if sink not in exe.db.kafka_sinks:
+            if sink not in sinks:
                 return False
 
             old_name = str(sink)
@@ -1997,6 +2009,14 @@ class RenameKafkaSinkAction(Action):
                 sink.rename -= 1
                 raise
         return True
+
+
+class RenameKafkaSinkAction(RenameSinkAction):
+    sinks_attribute = "kafka_sinks"
+
+
+class RenamePostgresSinkAction(RenameSinkAction):
+    sinks_attribute = "postgres_sinks"
 
 
 class CreateReplacementMaterializedViewAction(Action):
@@ -2350,17 +2370,20 @@ class SealedCollectionCheckAction(Action):
         return True
 
 
-class AlterIcebergSinkFromAction(Action):
+class AlterSinkFromAction(Action):
+    sinks_attribute: str
+
     def applicable(self, exe: Executor) -> bool:
         # Does not work reliably with kills, see database-issues#8421
         return exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if not exe.db.iceberg_sinks:
+            sinks = getattr(exe.db, self.sinks_attribute)
+            if not sinks:
                 return False
             try:
-                sink = self.rng.choice(exe.db.iceberg_sinks)
+                sink = self.rng.choice(sinks)
             except IndexError:
                 # We mostly prevent index errors, but we don't want to lock too
                 # much since that would reduce our chance of finding race
@@ -2368,13 +2391,11 @@ class AlterIcebergSinkFromAction(Action):
                 # we accidentally removed all objects.
                 return False
         with sink.lock, sink.base_object.lock:
-            if sink not in exe.db.iceberg_sinks:
+            if sink not in sinks:
                 return False
 
             old_object = sink.base_object
-            # Iceberg sinks always have a key, so only allow a conservative
-            # case: all names, types, and nullabilities match, which also
-            # guarantees the key columns exist in the new object.
+            # The new input must still fit the target table and its key.
             # TODO: Switch back when SS-344 is fixed to make sure it errors
             # instead of causing a stall
             objs = []
@@ -2406,6 +2427,14 @@ class AlterIcebergSinkFromAction(Action):
                 sink.base_object = old_object
                 raise
         return True
+
+
+class AlterIcebergSinkFromAction(AlterSinkFromAction):
+    sinks_attribute = "iceberg_sinks"
+
+
+class AlterPostgresSinkFromAction(AlterSinkFromAction):
+    sinks_attribute = "postgres_sinks"
 
 
 class AlterKafkaSinkFromAction(Action):
@@ -4357,7 +4386,7 @@ class AlterOwnerAction(Action):
                 + exe.db.sql_server_sources
             )
             loadgen_sources = list(exe.db.loadgen_sources)
-            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks + exe.db.postgres_sinks
             schemas = list(exe.db.schemas)
             dbs = list(exe.db.dbs)
             clusters = list(exe.db.clusters)
@@ -4598,7 +4627,9 @@ class ShowAction(Action):
                     + exe.db.sql_server_sources
                 )
                 loadgen_sources = list(exe.db.loadgen_sources)
-                sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+                sinks = (
+                    exe.db.kafka_sinks + exe.db.iceberg_sinks + exe.db.postgres_sinks
+                )
                 indexes = list(exe.db.indexes)
                 clusters = list(exe.db.clusters)
 
@@ -5814,18 +5845,23 @@ class DropIcebergSinkAction(Action):
         return True
 
 
-class CreateKafkaSinkAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "BYTES format with non-encodable type",
-        ] + super().errors_to_ignore(exe)
+class CreateSinkAction(Action):
+    sink_type: type[KafkaSink] | type[PostgresSink]
+    sinks_attribute: str
+    id_attribute: str
+    max_sinks: int
+
+    def base_objects(self, exe: Executor):
+        return exe.db.db_objects_for_sinks()
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if len(exe.db.kafka_sinks) >= MAX_KAFKA_SINKS:
+            sinks = getattr(exe.db, self.sinks_attribute)
+            objects = self.base_objects(exe)
+            if len(sinks) >= self.max_sinks or not objects:
                 return False
-            sink_id = exe.db.kafka_sink_id
-            exe.db.kafka_sink_id += 1
+            sink_id = getattr(exe.db, self.id_attribute)
+            setattr(exe.db, self.id_attribute, sink_id + 1)
             try:
                 cluster = self.rng.choice(exe.db.clusters)
                 schema = self.rng.choice(exe.db.schemas)
@@ -5841,19 +5877,48 @@ class CreateKafkaSinkAction(Action):
             if cluster not in exe.db.clusters:
                 return False
 
-            sink = KafkaSink(
+            sink = self.sink_type(
                 sink_id,
                 cluster,
                 schema,
-                self.rng.choice(exe.db.db_objects_for_sinks()),
+                self.rng.choice(objects),
                 self.rng,
             )
             sink.create(exe)
-            exe.db.kafka_sinks.append(sink)
+            sinks.append(sink)
         return True
 
 
-class DropKafkaSinkAction(Action):
+class CreateKafkaSinkAction(CreateSinkAction):
+    sink_type = KafkaSink
+    sinks_attribute = "kafka_sinks"
+    id_attribute = "kafka_sink_id"
+    max_sinks = MAX_KAFKA_SINKS
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "BYTES format with non-encodable type",
+        ] + super().errors_to_ignore(exe)
+
+
+class CreatePostgresSinkAction(CreateSinkAction):
+    sink_type = PostgresSink
+    sinks_attribute = "postgres_sinks"
+    id_attribute = "postgres_sink_id"
+    max_sinks = MAX_POSTGRES_SINKS
+
+    def base_objects(self, exe: Executor):
+        unsupported = {UInt2, UInt4, UInt8, IntList, TextTextMap, MzTimestamp}
+        return [
+            obj
+            for obj in super().base_objects(exe)
+            if all(c.data_type not in unsupported for c in obj.columns)
+        ]
+
+
+class DropSinkAction(Action):
+    sinks_attribute: str
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
@@ -5861,10 +5926,11 @@ class DropKafkaSinkAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if not exe.db.kafka_sinks:
+            sinks = getattr(exe.db, self.sinks_attribute)
+            if not sinks:
                 return False
             try:
-                sink = self.rng.choice(exe.db.kafka_sinks)
+                sink = self.rng.choice(sinks)
             except IndexError:
                 # We mostly prevent index errors, but we don't want to lock too
                 # much since that would reduce our chance of finding race
@@ -5873,13 +5939,21 @@ class DropKafkaSinkAction(Action):
                 return False
         with sink.lock:
             # Was dropped while we were acquiring lock
-            if sink not in exe.db.kafka_sinks:
+            if sink not in sinks:
                 return False
 
             query = f"DROP SINK {sink}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.kafka_sinks.remove(sink)
+            sinks.remove(sink)
         return True
+
+
+class DropKafkaSinkAction(DropSinkAction):
+    sinks_attribute = "kafka_sinks"
+
+
+class DropPostgresSinkAction(DropSinkAction):
+    sinks_attribute = "postgres_sinks"
 
 
 class HttpPostAction(Action):
@@ -6567,6 +6641,8 @@ ddl_action_list = ActionList(
         (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
         (DropKafkaSinkAction, 4),
+        (CreatePostgresSinkAction, 4),
+        (DropPostgresSinkAction, 4),
         (CreateIcebergSinkAction, 4),
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
@@ -6616,6 +6692,7 @@ ddl_action_list = ActionList(
         (RenameTableAction, 10),
         (RenameViewAction, 10),
         (RenameKafkaSinkAction, 10),
+        (RenamePostgresSinkAction, 10),
         (RenameIcebergSinkAction, 10),
         (SwapSchemaAction, 10),
         (CreateReplacementMaterializedViewAction, 10),
@@ -6633,6 +6710,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
         (AlterIcebergSinkFromAction, 8),
+        (AlterPostgresSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],

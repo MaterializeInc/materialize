@@ -422,7 +422,136 @@ class PgDisruption:
                 """))
 
 
+@dataclass
+class PgSinkDisruption(PgDisruption):
+    keyed: bool = False
+
+    def populate(self, c: Composition) -> None:
+        c.testdrive(dedent(f"""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            CREATE USER pgsink_user PASSWORD 'postgres';
+            GRANT CREATE ON DATABASE postgres TO pgsink_user;
+            CREATE SCHEMA pgsink AUTHORIZATION pgsink_user;
+
+            > CREATE SECRET pgpass AS 'postgres'
+            > CREATE CONNECTION pg_sink TO POSTGRES
+              (HOST postgres, DATABASE postgres, USER pgsink_user, PASSWORD SECRET pgpass)
+            > CREATE CONNECTION pg_readback TO POSTGRES
+              (HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass)
+            > CREATE CLUSTER pgsink_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
+            > CREATE TABLE pgsink_input (a int NOT NULL, b text)
+            > INSERT INTO pgsink_input VALUES (1, 'one'), (2, 'two')
+            > CREATE SINK pgsink IN CLUSTER pgsink_cluster FROM pgsink_input
+              INTO POSTGRES CONNECTION pg_sink (SCHEMA 'pgsink', TABLE 'target')
+              {"KEY (a) NOT ENFORCED" if self.keyed else ""}
+
+            > SELECT write_frontier > 0 FROM mz_internal.mz_frontiers
+              WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink')
+            true
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER TABLE pgsink.target REPLICA IDENTITY FULL;
+            CREATE PUBLICATION pgsink_publication FOR TABLE pgsink.target;
+
+            > CREATE SOURCE pgsink_source FROM POSTGRES CONNECTION pg_readback
+              (PUBLICATION 'pgsink_publication')
+            > CREATE TABLE pgsink_readback FROM SOURCE pgsink_source (REFERENCE pgsink.target)
+            > SELECT * FROM pgsink_readback
+            1 one
+            2 two
+        """))
+
+    def assert_error(self, c: Composition, error: str) -> None:
+        c.testdrive(dedent(f"""
+            > INSERT INTO pgsink_input VALUES (3, 'pending')
+            > UPDATE pgsink_input SET b = 'changed' WHERE a = 1
+            > DELETE FROM pgsink_input WHERE a = 2
+            > SELECT bool_or(error ~* '{error}'),
+                bool_or(details->'namespaced'->>'postgres' ~* '{error}')
+              FROM mz_internal.mz_sink_status_history
+              WHERE sink_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink')
+                AND status = 'stalled'
+            true true
+        """))
+
+    def assert_recovery(self, c: Composition) -> None:
+        # Postgres sink errors halt the dataflow until its replica restarts.
+        c.testdrive(dedent("""
+            > ALTER CLUSTER pgsink_cluster SET (REPLICATION FACTOR 0)
+            > ALTER CLUSTER pgsink_cluster SET (REPLICATION FACTOR 1)
+            > SELECT * FROM pgsink_readback
+            1 changed
+            3 pending
+            > SELECT status, error FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink'
+            running <null>
+        """))
+
+
 disruptions: list[Disruption] = [
+    *[
+        PgSinkDisruption(
+            name=f"pg-sink-{name}-{'keyed' if keyed else 'keyless'}",
+            breakage=breakage,
+            expected_error=error,
+            fixage=fixage,
+            keyed=keyed,
+        )
+        for keyed in [False, True]
+        for name, breakage, error, fixage in [
+            (
+                "disconnect",
+                lambda c, _: c.kill("postgres"),
+                "connection closed|error connecting|failed to lookup address",
+                lambda c, _: c.up("postgres"),
+            ),
+            (
+                "permission",
+                lambda c, _: c.exec(
+                    "postgres",
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-c",
+                    "REVOKE INSERT, UPDATE, DELETE ON pgsink.target FROM pgsink_user",
+                ),
+                "permission denied",
+                lambda c, _: c.exec(
+                    "postgres",
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-c",
+                    "GRANT INSERT, UPDATE, DELETE ON pgsink.target TO pgsink_user",
+                ),
+            ),
+            (
+                "drop-target",
+                lambda c, _: c.exec(
+                    "postgres",
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-c",
+                    "DROP TABLE pgsink.target",
+                ),
+                "does not exist",
+                None,
+            ),
+            (
+                "alter-target",
+                lambda c, _: c.exec(
+                    "postgres",
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-c",
+                    "ALTER TABLE pgsink.target DROP COLUMN b",
+                ),
+                "does not exist",
+                None,
+            ),
+        ]
+    ],
     KafkaSinkDisruption(
         name="delete-sink-topic-delete-progress-fix",
         breakage=lambda c, seed: delete_sink_topic(c, seed),

@@ -1416,7 +1416,9 @@ impl Sink {
     pub fn combined_format(&self) -> Option<Cow<'_, str>> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
-            StorageSinkConnection::Iceberg(_) => None,
+            // Neither writes an encoded payload: Iceberg writes Parquet and
+            // Postgres writes SQL, so there is no format to report.
+            StorageSinkConnection::Iceberg(_) | StorageSinkConnection::Postgres(_) => None,
         }
     }
 
@@ -1436,7 +1438,7 @@ impl Sink {
                 let value_format = connection.format.value_format.get_format_name();
                 Some((key_format, value_format))
             }
-            StorageSinkConnection::Iceberg(_) => None,
+            StorageSinkConnection::Iceberg(_) | StorageSinkConnection::Postgres(_) => None,
         }
     }
 

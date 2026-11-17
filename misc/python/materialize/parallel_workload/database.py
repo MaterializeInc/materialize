@@ -86,6 +86,7 @@ MAX_SQL_SERVER_SOURCES = 50
 MAX_POSTGRES_SOURCES = 50
 MAX_LOADGEN_SOURCES = 50
 MAX_KAFKA_SINKS = 50
+MAX_POSTGRES_SINKS = 50
 MAX_ICEBERG_SINKS = 50
 MAX_TYPES = 50
 MAX_NETWORK_POLICIES = 30
@@ -700,6 +701,42 @@ class IcebergSink(DBObject):
     def create(self, exe: Executor) -> None:
         query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE {self.mode} WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
+
+
+class PostgresSink(DBObject):
+    def __init__(
+        self,
+        sink_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        base_object: DBObject,
+        rng: random.Random,
+    ):
+        super().__init__()
+        self.sink_id = sink_id
+        self.cluster = cluster
+        self.schema = schema
+        self.base_object = base_object
+        self.rename = 0
+        self.table_name = f"pgsink_{sink_id}_{uuid.uuid4().hex[:8]}"
+        columns = [c for c in base_object.columns if not c.nullable]
+        self.key = ""
+        if columns and rng.choice([True, False]):
+            keys = rng.sample(columns, k=rng.randint(1, len(columns)))
+            self.key = f"KEY ({', '.join(c.name(True) for c in keys)}) NOT ENFORCED"
+
+    def name(self) -> str:
+        return naughtify(f"pgsink-{self.sink_id}-{self.rename}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(
+            f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} "
+            f"INTO POSTGRES CONNECTION materialize.public.postgres_conn "
+            f"(SCHEMA 'public', TABLE '{self.table_name}') {self.key}"
+        )
 
 
 class KafkaSink(DBObject):
@@ -1503,6 +1540,8 @@ class Database:
     iceberg_sink_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
+    postgres_sinks: list[PostgresSink]
+    postgres_sink_id: int
     types: list[Type]
     type_id: int
     network_policies: list[NetworkPolicy]
@@ -1620,6 +1659,7 @@ class Database:
         ]
         self.iceberg_sinks = []
         self.kafka_sinks = []
+        self.postgres_sinks = []
         self.s3_objects = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
@@ -1630,6 +1670,7 @@ class Database:
         self.multi_loadgen_source_id = 0
         self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
+        self.postgres_sink_id = 0
         self.read_then_write_counter = ReadThenWriteCounter()
         self.types = []
         self.type_id = 0

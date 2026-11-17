@@ -53,7 +53,7 @@ class CreateSinkParameterized(ActionFactory):
             )
 
             return [
-                CreateSink(
+                self.make_action(
                     sink=SinkExists(
                         name=new_sink_name,
                         source_view=source_view,
@@ -66,6 +66,14 @@ class CreateSinkParameterized(ActionFactory):
             ]
         else:
             return []
+
+    def make_action(self, sink: SinkExists, capabilities: Capabilities) -> Action:
+        return CreateSink(sink=sink, capabilities=capabilities)
+
+
+class CreatePostgresSinkParameterized(CreateSinkParameterized):
+    def make_action(self, sink: SinkExists, capabilities: Capabilities) -> Action:
+        return CreatePostgresSink(sink=sink, capabilities=capabilities)
 
 
 class CreateSink(Action):
@@ -138,3 +146,39 @@ class CreateSink(Action):
 
     def provides(self) -> list[Capability]:
         return [self.sink, self.sink.dest_view]
+
+
+class CreatePostgresSink(CreateSink):
+    def run(self, c: Composition, state: State) -> None:
+        c.up("postgres")
+        refresh = random.choice(
+            ["ON COMMIT", f"EVERY '{random.randint(1, 5)} seconds'"]
+        )
+        c.testdrive(
+            dedent(f"""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            CREATE SCHEMA IF NOT EXISTS zippy_sinks;
+
+            > CREATE SECRET IF NOT EXISTS zippy_pgsink_pass AS 'postgres'
+            > CREATE CONNECTION IF NOT EXISTS zippy_pgsink_conn TO POSTGRES
+              (HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET zippy_pgsink_pass)
+            > CREATE SINK {self.sink.name} IN CLUSTER {self.sink.cluster_name_out}
+              FROM {self.sink.source_view.name}
+              INTO POSTGRES CONNECTION zippy_pgsink_conn (SCHEMA 'zippy_sinks', TABLE '{self.sink.name}')
+            > SELECT s.status, s.error, f.write_frontier > 0
+              FROM mz_internal.mz_sink_statuses s JOIN mz_internal.mz_frontiers f ON f.object_id = s.id
+              WHERE s.name = '{self.sink.name}'
+            running <null> true
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            CREATE PUBLICATION {self.sink.name}_publication FOR TABLE zippy_sinks.{self.sink.name};
+
+            > CREATE SOURCE {self.sink.name}_source IN CLUSTER {self.sink.cluster_name_in}
+              FROM POSTGRES CONNECTION zippy_pgsink_conn (PUBLICATION '{self.sink.name}_publication')
+            > CREATE TABLE {self.sink.name}_source_tbl FROM SOURCE {self.sink.name}_source
+              (REFERENCE zippy_sinks.{self.sink.name})
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} WITH (REFRESH {refresh})
+              AS SELECT * FROM {self.sink.name}_source_tbl
+        """),
+            mz_service=state.mz_service,
+        )

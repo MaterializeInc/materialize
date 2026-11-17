@@ -20,6 +20,7 @@ from materialize.data_ingest import definition
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
+    PgRoundtripExecutor,
 )
 from materialize.data_ingest.workload import *  # noqa: F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
@@ -118,7 +119,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # TODO: Reenable KafkaRoundtripExecutor when https://linear.app/materializeinc/issue/SS-303 is fixed
     # TODO: Reenable SqlServerExecutor when https://linear.app/materializeinc/issue/SS-291 is fixed
-    executor_classes = [MySqlExecutor, KafkaExecutor]
+    executor_classes = [MySqlExecutor, KafkaExecutor, PgRoundtripExecutor]
 
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
