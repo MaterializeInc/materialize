@@ -15,8 +15,10 @@ functions. The diagnostic workload again reached action 409 before its unchanged
 deadline. Its runtimes are cleaned up. Scoped Python and Rust lint corrections
 are verified. All-target Clippy passed for storage-controller, catalog,
 clusterd-test-driver, adapter and environmentd with warnings denied. Catalog oracle
-tests are compiling on the replacement worker. Collect that result, then rebuild
-the debug binaries for the input-progress capture. Runtime acceptance remains open.
+regressions also passed. Fresh debug binaries from `e3094b50ed8f` built successfully.
+The unchanged KafkaSources diagnostic now runs with an input-frontier observer,
+under the original workload, resource limits and deadline. Runtime acceptance
+remains open.
 
 Both cache-repair comparison runs reached action 409 and exhausted the unchanged
 1800s guard during generation 10 readiness. Each completed nine promotions and
@@ -111,11 +113,21 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/upsert-oom-investigati
 
 Replacement setup and verification live in sibling `native-ci-recovery/`:
 `worker.json`, `remote.py`, `combined-driver.log`, and
-`combined-lint-inputs.json`. The checkout base is `7339c6def589`. The guarded
-check restores that base after verification. Do not confuse the original runtime
-binary manifests below with replacement binaries, which have not been built yet.
+`combined-lint-inputs.json`. `combined-check-evidence.tar.gz` preserves successful
+verification of the lint changes against base `7339c6def589`. The worker then
+synced clean commit `e3094b50ed8f`. `current-build-3-driver.log` records the successful
+debug build. `current-build-fixture-receipt.tar.gz` preserves verified source and
+binary provenance plus restored image identities. `kafka-runner-recovery.md`
+identifies the preserved ancillary binaries and exact fixture recipes. Do not use
+historical runtime manifests to authenticate replacement binaries.
 
-- Current binaries and checks: `expression-cache-build-evidence.tar.gz`.
+The current capture is `aj-native-parallel-f73b8d12`. Its launch and observer logs
+are `current-kafka-driver.log` and `current-input-observer.log` in the recovery
+directory. `watch_readiness_inputs.py` observes both deployments during generation
+8 readiness and stops on probe failure or execution replacement. Its local checks
+are not live acceptance evidence.
+
+- Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
   `watch_readiness_profile.py` and `profile_readiness_cpu.py`.
 - Matched phase evidence: `expression-cache-kafka-phase-analysis.md` and
