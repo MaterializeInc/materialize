@@ -150,7 +150,6 @@ use std::rc::Rc;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
 use itertools::Itertools;
 use mz_ore::cast::CastLossy;
@@ -660,21 +659,22 @@ fn sort_advanced<D: Data>(chains: Vec<Chain<D>>, since_ts: Timestamp, run_len: u
     let mut run = Vec::with_capacity(run_len);
     for chain in chains {
         for chunk in chain.chunks {
-            chunk.with_view(|view| {
-                for i in 0..chunk.len() {
-                    let (data, time, diff) = view.get(i);
-                    run.push((D::into_owned(data), std::cmp::max(time, since_ts), diff));
-                    if run.len() >= run_len {
-                        consolidate(&mut run);
-                        // A run that consolidation left at most half full keeps accumulating, so
-                        // updates that cancel within the heap cost no chunks, and each
-                        // consolidation either halves the run or mints it.
-                        if run.len() * 2 > run_len {
-                            push_run(&mut runs, mint_run(&mut run));
-                        }
+            // Taken rather than read with `Chunk::with_view`: minting a run inserts into the pool,
+            // which must not happen while the pool holds this chunk's lock.
+            let view = chunk.view();
+            for i in 0..chunk.len() {
+                let (data, time, diff) = view.get(i);
+                run.push((D::into_owned(data), std::cmp::max(time, since_ts), diff));
+                if run.len() >= run_len {
+                    consolidate(&mut run);
+                    // A run that consolidation left at most half full keeps accumulating, so
+                    // updates that cancel within the heap cost no chunks, and each
+                    // consolidation either halves the run or mints it.
+                    if run.len() * 2 > run_len {
+                        push_run(&mut runs, mint_run(&mut run));
                     }
                 }
-            });
+            }
         }
     }
     consolidate(&mut run);
@@ -1701,11 +1701,11 @@ struct Chunk<D: Data> {
     /// The body in the buffer pool, which may spill it.
     ///
     /// Empty when the body stays on the heap, which is what
-    /// [`mz_timely_util::columnar::chunk::try_spill_ref`] decides, and emptied again by
+    /// [`mz_timely_util::columnar::chunk::try_spill_typed`] decides, and emptied again by
     /// [`Chunk::body`]: a materialized chunk holds its body on the heap for the rest of its
     /// life, so keeping the pool's copy alive would only double the footprint and hold budget
-    /// the pool could give to a chunk that still needs it. [`Chunk::with_view`] reads a copy and
-    /// leaves the body here.
+    /// the pool could give to a chunk that still needs it. [`Chunk::with_view`] reads the body
+    /// and leaves it here.
     ///
     /// A `Mutex` (not `RefCell`) keeps the chunk `Sync`: cursors hold chunks behind a shared
     /// `Rc`, and the iterator returned by [`CorrectionV2::updates_before`] borrows them across
@@ -1746,10 +1746,9 @@ impl<D: Data> Chunk<D> {
     /// Mint a chunk from the given non-empty body, emptying it.
     ///
     /// Reads the metadata a resting chunk must answer (length, size, boundary times) while the
-    /// body is still in hand, then offers it to the buffer pool. A body the pool takes is
-    /// encoded straight into its slot, which leaves the typed allocation behind for the caller
-    /// to refill, and materializes lazily on first read. A body the pool declines is
-    /// serialized out of the typed allocation instead, because a resident chunk has to own it.
+    /// body is still in hand, then copies it into allocations that fit its contents and offers
+    /// the copy to the buffer pool, leaving the caller's allocation behind to refill. The pool
+    /// holds the copy typed until it evicts it. A copy the pool declines stays on the heap.
     ///
     /// # Panics
     ///
@@ -1764,22 +1763,18 @@ impl<D: Data> Chunk<D> {
         };
         let body_words = body.length_in_bytes() / std::mem::size_of::<u64>();
 
+        // The copy keeps the builder's growth slack out of a body held for the rest of the
+        // chunk's life. The pool charges a typed body only at its serialized length, so slack
+        // would be heap the budget cannot see.
+        let fitted = body.duplicate();
+        body.clear();
         // TODO: chunks resting in far-future buckets go untouched for longer than their merge
         // depth suggests, and could spill deeper still.
-        let (pooled, resident) = match chunk::try_spill_ref(body, depth) {
-            Some(handle) => {
-                body.clear();
-                (Mutex::new(Some(handle)), OnceLock::new())
-            }
-            None => {
-                // Serialize into an exactly sized vector, which leaves the typed allocation
-                // in place for the caller and keeps its spare capacity out of a body that is
-                // held for the rest of the chunk's life.
-                let mut words = Vec::with_capacity(body_words);
-                indexed::encode(&mut words, &body.borrow());
-                body.clear();
+        let (pooled, resident) = match chunk::try_spill_typed(fitted, depth) {
+            Ok(handle) => (Mutex::new(Some(handle)), OnceLock::new()),
+            Err(fitted) => {
                 let cell = OnceLock::new();
-                if cell.set(ColumnBody::Words(words)).is_err() {
+                if cell.set(fitted).is_err() {
                     unreachable!("cell is fresh");
                 }
                 (Mutex::new(None), cell)
@@ -1812,36 +1807,36 @@ impl<D: Data> Chunk<D> {
                 .expect("pool handle mutex poisoned")
                 .take()
                 .expect("a chunk the pool declined is materialized at construction");
-            let mut words = Vec::new();
-            handle.take(&mut words);
-            ColumnBody::Words(words)
+            chunk::take_spilled_body(handle)
         })
     }
 
     /// Call `f` with a view of the chunk's body, leaving the body where it is.
     ///
-    /// A materialized chunk is read in place. Otherwise the body is copied out of the pool for
-    /// the call and the copy dropped after it, so the pool keeps its slot and may still spill
-    /// the body.
+    /// A materialized chunk is read in place. Otherwise the pool's body is read for the call,
+    /// so the pool keeps its slot and may still spill the body afterwards.
+    ///
+    /// NOTE: `f` must neither read this chunk again nor mint chunks. Both the chunk's `pooled`
+    /// lock and the pool's lock on the body are held for the call, and
+    /// [`chunk::with_spilled_body`] forbids inserting under the latter.
     fn with_view<R>(&self, f: impl FnOnce(ChunkView<'_, D>) -> R) -> R {
         if let Some(body) = self.resident.get() {
             return f(body.borrow());
         }
-        let mut words = Vec::new();
-        {
-            let pooled = self.pooled.lock().expect("pool handle mutex poisoned");
-            match pooled.as_ref() {
-                Some(handle) => handle.read_into(&mut words),
-                // Materialized between the check above and the lock.
-                None => {
-                    drop(pooled);
-                    let body = self.resident.get().expect("a taken body is materialized");
-                    return f(body.borrow());
-                }
+        let pooled = self.pooled.lock().expect("pool handle mutex poisoned");
+        match pooled.as_ref() {
+            Some(handle) => {
+                chunk::with_spilled_body(handle, |body: &ColumnBody<(D, Timestamp, Diff)>| {
+                    f(body.borrow())
+                })
+            }
+            // Materialized between the check above and the lock.
+            None => {
+                drop(pooled);
+                let body = self.resident.get().expect("a taken body is materialized");
+                f(body.borrow())
             }
         }
-        let body = ColumnBody::<(D, Timestamp, Diff)>::Words(words);
-        f(body.borrow())
     }
 
     /// Return the number of updates in the chunk.
@@ -2743,6 +2738,46 @@ mod tests {
         result
     }
 
+    /// A pool with a zero budget, so every body is evicted at insert and reads back serialized.
+    /// Separate from [`test_pool`], whose unlimited budget other tests rely on.
+    fn evicting_pool() -> mz_ore::pool::Pool {
+        static POOL: std::sync::OnceLock<mz_ore::pool::Pool> = std::sync::OnceLock::new();
+        POOL.get_or_init(|| {
+            let pool = mz_ore::pool::Pool::new().expect("pool reservation");
+            pool.set_budget(0);
+            pool
+        })
+        .clone()
+    }
+
+    /// A chain of `count` updates at distinct times, crossing the mint boundary.
+    fn spilled_chain(count: u64) -> Chain<i64> {
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..count {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+        assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+        assert_all_spilled(&chain);
+        chain
+    }
+
+    /// Whether the pool holds each chunk of the chain in its typed form.
+    fn typed_in_pool<D: Data>(chain: &Chain<D>) -> Vec<bool> {
+        chain
+            .chunks
+            .iter()
+            .map(|c| {
+                c.pooled
+                    .lock()
+                    .expect("not poisoned")
+                    .as_ref()
+                    .is_some_and(|h| h.is_typed())
+            })
+            .collect()
+    }
+
     /// Assert every chunk in the chain went to the pool, so a read must fetch it back.
     fn assert_all_spilled<D: Data>(chain: &Chain<D>) {
         assert!(
@@ -2816,5 +2851,67 @@ mod tests {
             }
             assert_eq!(expected, count);
         });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn reads_borrow_bodies_the_pool_holds_typed() {
+        let count = 200_000_u64;
+        with_spill_pool(|| {
+            let chain = spilled_chain(count);
+            assert!(
+                typed_in_pool(&chain).iter().all(|t| *t),
+                "an unlimited budget keeps every body typed"
+            );
+            assert_eq!(chain.iter().count(), usize::try_from(count).expect("fits"));
+            assert!(
+                typed_in_pool(&chain).iter().all(|t| *t),
+                "a scoped read leaves the body typed in the pool"
+            );
+
+            let mut rest = chain.into_cursor();
+            let mut expected = 0_u64;
+            while let Some(cursor) = rest.take() {
+                assert_eq!(cursor.get().1, Timestamp::new(expected));
+                expected += 1;
+                rest = cursor.step();
+            }
+            assert_eq!(expected, count);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn evicted_bodies_read_back() {
+        let count = 200_000_u64;
+        chunk::set_spill_override(Some(evicting_pool()));
+        let chain = spilled_chain(count);
+        assert!(
+            typed_in_pool(&chain).iter().all(|t| !*t),
+            "a zero budget evicts every body at insert"
+        );
+
+        let mut expected = 0_u64;
+        for (d, t, r) in chain.iter() {
+            assert_eq!(d, i64::try_from(expected).expect("fits"));
+            assert_eq!(t, Timestamp::new(expected));
+            assert_eq!(r, Diff::ONE);
+            expected += 1;
+        }
+        assert_eq!(expected, count);
+        assert_all_spilled(&chain);
+
+        let mut rest = chain.into_cursor();
+        let mut expected = 0_u64;
+        while let Some(cursor) = rest.take() {
+            let (d, t, r) = cursor.get();
+            assert_eq!(i64::into_owned(d), i64::try_from(expected).expect("fits"));
+            assert_eq!(t, Timestamp::new(expected));
+            assert_eq!(r, Diff::ONE);
+            expected += 1;
+            rest = cursor.step();
+        }
+        assert_eq!(expected, count);
+        chunk::set_spill_override(None);
     }
 }
