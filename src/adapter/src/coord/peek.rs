@@ -666,6 +666,10 @@ impl FastPathPlan {
 }
 
 impl crate::coord::Coordinator {
+    /// Creates the transient dataflow for a slow-path peek and acquires the peek's read hold.
+    ///
+    /// On error, nothing stays installed. On success, the caller must drop the returned
+    /// collection, after queuing any peek on it, to release the dataflow's implied holds.
     fn create_transient_peek_target(
         &mut self,
         plan: PeekDataflowPlan,
