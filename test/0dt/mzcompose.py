@@ -540,6 +540,122 @@ def workflow_read_only(c: Composition) -> None:
             """))
 
 
+def workflow_pg_sink_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_pg_sink(c)
+
+
+def workflow_pg_sink(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("postgres", "mz_old", Service("testdrive", idle=True))
+    setup(c)
+    c.testdrive(dedent("""
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        CREATE SCHEMA pgsink;
+
+        > CREATE SECRET pgsink_pass AS 'postgres'
+        > CREATE CONNECTION pgsink_conn TO POSTGRES
+          (HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgsink_pass)
+        > CREATE TABLE pgsink_input (a int NOT NULL, b text)
+        > INSERT INTO pgsink_input VALUES (1, 'one'), (2, 'two'), (2, 'two')
+        > CREATE MATERIALIZED VIEW pgsink_keyed AS SELECT a, max(b) AS b FROM pgsink_input GROUP BY a
+        > CREATE MATERIALIZED VIEW pgsink_keyless AS SELECT * FROM pgsink_input
+    """))
+    for kind in ["keyed", "keyless"]:
+        c.testdrive(dedent(f"""
+            > CREATE SINK pgsink_{kind}_sink IN CLUSTER cluster FROM pgsink_{kind}
+              INTO POSTGRES CONNECTION pgsink_conn (SCHEMA 'pgsink', TABLE '{kind}')
+              {"KEY (a)" if kind == "keyed" else ""}
+            > SELECT write_frontier > 0 FROM mz_internal.mz_frontiers
+              WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'pgsink_{kind}_sink')
+            true
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER TABLE pgsink.{kind} REPLICA IDENTITY FULL;
+            CREATE PUBLICATION pgsink_{kind} FOR TABLE pgsink.{kind};
+
+            > CREATE SOURCE pgsink_{kind}_source IN CLUSTER cluster_singlereplica
+              FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_{kind}')
+            > CREATE TABLE pgsink_{kind}_readback FROM SOURCE pgsink_{kind}_source
+              (REFERENCE pgsink.{kind})
+        """))
+
+    def validate(service: str) -> None:
+        for kind in ["keyed", "keyless"]:
+            c.testdrive(
+                dedent(f"""
+                > SELECT * FROM
+                  ((SELECT * FROM pgsink_{kind} EXCEPT ALL SELECT * FROM pgsink_{kind}_readback)
+                  UNION ALL
+                  (SELECT * FROM pgsink_{kind}_readback EXCEPT ALL SELECT * FROM pgsink_{kind}))
+            """),
+                mz_service=service,
+            )
+
+    def epochs() -> list:
+        return c.sql_query(
+            "SELECT sink_id, epoch, sink_version FROM materialize.sink_progress ORDER BY sink_id",
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database="postgres",
+        )
+
+    validate("mz_old")
+    before = epochs()
+    assert len(before) == 2
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    assert epochs() == before, "standby claimed a Postgres sink before promotion"
+    c.testdrive(
+        dedent("""
+        ! INSERT INTO pgsink_input VALUES (3, 'standby')
+        contains:cannot write in read-only mode
+    """),
+        mz_service="mz_new",
+    )
+
+    c.testdrive(
+        dedent("""
+        > UPDATE pgsink_input SET b = 'changed' WHERE a = 1
+        > DELETE FROM pgsink_input WHERE a = 2
+        > INSERT INTO pgsink_input VALUES (4, 'dup'), (4, 'dup')
+    """),
+        mz_service="mz_old",
+    )
+    validate("mz_old")
+    assert epochs() == before, "standby fenced the active Postgres sink writer"
+
+    # Keep the old generation alive while the promoted one takes over its sinks.
+    c.promote_mz("mz_new", retire_mz_service=None)
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+    c.testdrive(
+        dedent("""
+        > INSERT INTO pgsink_input VALUES (5, 'after promotion')
+        > DELETE FROM pgsink_input WHERE a = 1
+    """),
+        mz_service="mz_new",
+    )
+    validate("mz_new")
+    after = epochs()
+    assert len(after) == len(before)
+    for (old_id, old_epoch, old_version), (new_id, new_epoch, new_version) in zip(
+        before, after
+    ):
+        assert old_id == new_id and old_version == new_version
+        assert new_epoch > old_epoch, "promoted writer did not claim a new sink epoch"
+    c.testdrive(
+        dedent("""
+        > SELECT count(*) FROM mz_internal.mz_sink_status_history
+          WHERE sink_id IN (SELECT id FROM mz_sinks WHERE name LIKE 'pgsink_%')
+            AND status = 'stalled'
+        0
+    """),
+        mz_service="mz_new",
+    )
+    c.kill_fenced_mz("mz_old")
+
+
 def workflow_basic_forced_catalog_migration(c: Composition) -> None:
     with c.override(_mz_new(force_catalog_migration=True)):
         workflow_basic(c)
