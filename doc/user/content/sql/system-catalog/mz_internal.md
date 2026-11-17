@@ -547,11 +547,12 @@ declared keys. Each row comes from a single view's definition:
   `*_id`. A join that none of these settle is undirected.
 - A `key`: the view passes a key through unchanged, as in
   `SELECT o.id AS org_id`, so its output column references that key.
-- `same_values`: the view passes any other column through unchanged.
+- `passthrough`: the view passes any other column through unchanged.
 
-Relationships across several views are the paths through these rows. A
-`same_values` row describes the columns' domain, not their data: a view may
-filter, so its input column can hold values that its output never shows.
+A `passthrough` row is not a relationship. It says the two columns share a
+domain, not their data: a view may filter, so its input column can hold
+values that its output never shows. [`mz_mcp_relationships`](#mz_mcp_relationships)
+follows these rows to derive references across views.
 
 <!-- RELATION_SPEC mz_internal.mz_inferred_relationships -->
 | Field           | Type           | Meaning  |
@@ -560,7 +561,7 @@ filter, so its input column can hold values that its output never shows.
 | `source_column` | [`text`]       | The referencing column. |
 | `target_id`     | [`text`]       | The ID of the relation holding the referenced column. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 | `target_column` | [`text`]       | The referenced column. |
-| `kind`          | [`text`]       | `join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `same_values` when a view passes any other target column through as the source column. |
+| `kind`          | [`text`]       | `join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `passthrough` when a view passes any other target column through as the source column, which relates nothing by itself. |
 | `is_directed`   | [`boolean`]    | Whether a key decides which side references the other. When false, the two columns are only known to be joined, and their order is arbitrary. |
 | `inferred_from` | [`text array`] | The IDs of the views and materialized views whose definitions imply the relationship. |
 

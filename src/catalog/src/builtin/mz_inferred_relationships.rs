@@ -30,8 +30,10 @@ use super::{BuiltinIndex, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
 ///   not named `*_id`. A join neither settles is undirected.
 /// - `key`: a view's output column that is an input key unchanged, which
 ///   references that key.
-/// - `same_values`: a view's output column that is any other input column
-///   unchanged.
+/// - `passthrough`: a view's output column that is any other input column
+///   unchanged. The two share a domain, not necessarily data, since the view
+///   may filter, so this is no relationship by itself. `mz_mcp_relationships`
+///   follows these rows to derive references.
 ///
 /// Relationships across several views follow by chaining rows. Deriving them
 /// here was measured at about three times the maintenance cost of
@@ -68,7 +70,7 @@ pub static MZ_INFERRED_RELATIONSHIPS: LazyLock<BuiltinMaterializedView> = LazyLo
             ("target_column", "The referenced column."),
             (
                 "kind",
-                "`join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `same_values` when a view passes any other target column through as the source column.",
+                "`join` when a view joins the two columns, `key` when a view passes the target key through as the source column, and `passthrough` when a view passes any other target column through as the source column, which relates nothing by itself.",
             ),
             (
                 "is_directed",
@@ -203,7 +205,7 @@ WITH
         FROM joins
         UNION ALL
         SELECT view_id, view_id, output_column, source_id, source_column,
-            CASE WHEN is_key THEN 'key' ELSE 'same_values' END, true
+            CASE WHEN is_key THEN 'key' ELSE 'passthrough' END, true
         FROM passed_columns
     )
 SELECT
@@ -307,12 +309,12 @@ WITH MUTUALLY RECURSIVE
             FROM mz_internal.mz_inferred_relationships e
             LEFT JOIN pointers p
                 ON p.child_id = e.source_id AND p.child_column = e.source_column
-            WHERE e.kind = 'same_values'
+            WHERE e.kind = 'passthrough'
         ) s
         LEFT JOIN pointers jump
             ON jump.child_id = s.at_id AND jump.child_column = s.at_column
         LEFT JOIN mz_internal.mz_inferred_relationships up
-            ON up.kind = 'same_values'
+            ON up.kind = 'passthrough'
             AND up.source_id = s.at_id AND up.source_column = s.at_column
     ),
     members (id text, name text, root_id text, root_column text) AS (

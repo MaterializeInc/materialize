@@ -82,11 +82,11 @@ key  org_spend  org_id  organizations  id  true
 key  seller_performance  seller_id  users  id  true
 key  winning_bids  auction_id  auctions  id  true
 key  winning_bids  bid_id  bids  id  true
-same_values  org_spend  name  organizations  name  true
-same_values  user_accounts  balance  accounts  balance  true
-same_values  user_accounts  name  users  name  true
-same_values  winning_bids  buyer  bids  buyer  true
-same_values  winning_bids  seller  auctions  seller  true
+passthrough  org_spend  name  organizations  name  true
+passthrough  user_accounts  balance  accounts  balance  true
+passthrough  user_accounts  name  users  name  true
+passthrough  winning_bids  buyer  bids  buyer  true
+passthrough  winning_bids  seller  auctions  seller  true
 
 # Evidence names the views that imply each relationship.
 query TT
