@@ -203,8 +203,15 @@ a slower publisher's prefix even while peers make progress. Bounded retries
 preserve correctness but do not guarantee fair progress under this contention.
 
 Keep the 1s variant as a stress test, not an M3 acceptance gate. Do not optimize
-candidate cost further for that regime or increase its retry limits. The 60s
-variant still needs a current-binary run and per-publisher commit-rate report.
+candidate cost further for that regime or increase its retry limits. The current
+60s debug workflow passed. In 53.6257s of acknowledged unpaused windows, 17 observed
+publishers had 19 successful derived commit outcomes and no failed attempts
+(0.3543 successes/s). Startup/default-cadence and post-workflow commits are excluded.
+These short windows do not establish steady-state capacity, fairness across all
+publishers or a measured Persist CAS rate. Per-publisher evidence and limits are
+in `current-four-index-60s-audit.md` and `.json` in the handoff's evidence
+directory. The earlier 1s runs are not a controlled comparison.
+
 Distinguish attempted, rejected and successful publications, and report success
 gaps as well as aggregate throughput. The cadence alone does not establish an
 observed CAS rate or a capacity threshold. Targeted DEBUG timings also include
