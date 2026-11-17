@@ -11,6 +11,9 @@
 # it nor its table writes status rows for restarts that stall the same way, and
 # `running` is written again once it recovers.
 
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET storage_suppress_restart_loop_statuses = true
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
@@ -56,14 +59,17 @@ WHERE source_id IN (
 # `storage_suspend_and_restart_delay` (5 s).
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=25s
 
-> SELECT count(*) FROM mz_internal.mz_source_status_history
+> SELECT count(*) = ${status-rows} FROM mz_internal.mz_source_status_history
   WHERE source_id IN (
       SELECT id FROM mz_sources WHERE name = 'mz_source'
       UNION ALL SELECT id FROM mz_tables WHERE name = 't1'
   )
-${status-rows}
+true
 
 > ALTER CONNECTION pg SET (HOST = postgres) WITH (VALIDATE = false);
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET storage_suppress_restart_loop_statuses
