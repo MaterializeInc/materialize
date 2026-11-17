@@ -805,26 +805,7 @@ pub(crate) mod tests {
             return Ok(());
         };
         const DB: &str = "mz_probe_stale_test";
-        recreate_db(&mut conn, DB).await?;
-        // This setup stays bespoke: STATS_AUTO_RECALC=0 plus an ANALYZE while
-        // empty pins the persisted statistics at zero rows, no matter what is
-        // inserted afterwards.
-        #[allow(clippy::disallowed_methods)]
-        {
-            conn.query_drop(format!(
-                "CREATE TABLE {DB}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
-                 COLLATE utf8mb4_bin PRIMARY KEY NOT NULL) \
-                 STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
-            ))
-            .await?;
-            conn.query_drop(format!("ANALYZE TABLE {DB}.t")).await?;
-        }
-        let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
-        conn.exec_batch(
-            format!("INSERT INTO {DB}.t VALUES (?)"),
-            ids.iter().map(|id| (id.as_str(),)),
-        )
-        .await?;
+        let table = setup_stale_table(&mut conn, DB).await?;
 
         // The staleness this test is about: table_rows reports 0.
         let table_rows: Option<u64> = conn
@@ -836,19 +817,71 @@ pub(crate) mod tests {
             .await?;
         assert_eq!(table_rows, Some(0));
 
-        let table = QualifiedTableRef {
-            schema_name: DB,
-            table_name: "t",
-        };
         let mut tx = start_tx(&mut conn).await?;
         let mut prober = KeyProber::new(&mut tx, table, "id");
 
-        // Range estimates come from index dives on the real B-tree, not the
-        // stale table statistics, so they still reflect the actual data.
+        // Until the table is reopened the optimizer uses InnoDB's in-memory row
+        // count, so the estimates still reflect the actual data.
         let all = prober.estimate_range_rows("", None).await?;
         assert!((500..=2000).contains(&all), "all={all}");
         let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
         assert!((50..=200).contains(&range), "range={range}");
+
+        tx.rollback().await?;
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// `FLUSH TABLES` reopens the table, which makes InnoDB reload the persisted
+    /// zero row count.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_stale_statistics_reopened() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_stale_reopened_test";
+        let table = setup_stale_table(&mut conn, DB).await?;
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("FLUSH TABLES {DB}.t")).await?;
+
+        let mut tx = start_tx(&mut conn).await?;
+
+        let before = handler_reads(&mut tx).await?;
+        let got = prefix_of_first_key_in_range(
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
+            "a00500",
+            None,
+            6,
+        )
+        .await;
+        let reads = handler_reads(&mut tx).await? - before;
+        assert_eq!(got, some("a00501"));
+        assert!(
+            reads >= 500,
+            "expected an index scan up to the key, reads={reads}"
+        );
+
+        let before = handler_reads(&mut tx).await?;
+        let got = prefix_of_first_row_not_matching_prefix(
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
+            "a001",
+            None,
+            4,
+        )
+        .await;
+        let reads = handler_reads(&mut tx).await? - before;
+        assert_eq!(got, some("a002"));
+        assert!(
+            reads >= 500,
+            "expected index scans around the prefix, reads={reads}"
+        );
+
+        let all = KeyProber::new(&mut tx, table, "id")
+            .estimate_range_rows("", None)
+            .await?;
+        assert_eq!(all, 1, "expected the estimate to collapse, all={all}");
 
         tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
@@ -1082,7 +1115,8 @@ pub(crate) mod tests {
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!(
             "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET {charset} \
-             COLLATE {collation} PRIMARY KEY NOT NULL)"
+             COLLATE {collation} PRIMARY KEY NOT NULL) \
+             STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
         ))
         .await?;
 
@@ -1099,8 +1133,56 @@ pub(crate) mod tests {
             )
             .await?;
         }
+        // NOTE: With `STATS_AUTO_RECALC` on, the persisted row count was observed
+        // below the loaded count after this `ANALYZE TABLE`.
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!("ANALYZE TABLE {db}.t")).await?;
+        let plan: Option<mysql_async::Row> = conn
+            .exec_first(
+                format!("EXPLAIN FORMAT=TRADITIONAL SELECT id FROM {db}.t"),
+                (),
+            )
+            .await?;
+        let table_rows: u64 = plan.and_then(|row| row.get("rows")).unwrap_or(0);
+        assert!(
+            table_rows.saturating_mul(2) >= u64::cast_from(keys.len()),
+            "optimizer sees {table_rows} of {} rows after ANALYZE TABLE",
+            keys.len()
+        );
+        Ok(QualifiedTableRef {
+            schema_name: db,
+            table_name: "t",
+        })
+    }
+
+    /// Recreates scratch database `db` holding one table `t` with the keys `a00000`
+    /// to `a00999`, whose persisted statistics say it has zero rows.
+    async fn setup_stale_table<'a>(
+        conn: &mut mysql_async::Conn,
+        db: &'a str,
+    ) -> Result<QualifiedTableRef<'a>, anyhow::Error> {
+        recreate_db(conn, db).await?;
+        // `ANALYZE TABLE` while empty persists zero rows, and `STATS_AUTO_RECALC=0`
+        // keeps the insert from recalculating them.
+        #[allow(clippy::disallowed_methods)]
+        {
+            conn.query_drop(format!(
+                "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET utf8mb4 \
+                 COLLATE utf8mb4_bin PRIMARY KEY NOT NULL) \
+                 STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
+            ))
+            .await?;
+            conn.query_drop(format!("ANALYZE TABLE {db}.t")).await?;
+        }
+        let ids: Vec<Value> = (0..1000).map(|i| format!("a{i:05}").into()).collect();
+        conn.exec_drop(
+            format!(
+                "INSERT INTO {db}.t VALUES {}",
+                vec!["(?)"; ids.len()].join(",")
+            ),
+            ids,
+        )
+        .await?;
         Ok(QualifiedTableRef {
             schema_name: db,
             table_name: "t",
