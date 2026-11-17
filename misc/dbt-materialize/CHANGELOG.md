@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.14 - 2026-11-17
+
 * Fix installing with pip 26.3 or later, which failed with `Distributions
   from PyPI cannot declare direct URL dependencies`. The package declared a
   test-only `dev` extra that pointed at a git URL. The extra is removed.
