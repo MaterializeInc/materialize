@@ -49,7 +49,6 @@ mz-ore = { path = "../ore", default-features = false, features = ["metrics", "as
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
-openssl-sys.workspace = true
 parquet.workspace = true
 postgres-protocol.workspace = true
 prometheus.workspace = true

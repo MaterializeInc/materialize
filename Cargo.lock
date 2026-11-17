@@ -8014,7 +8014,6 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
- "openssl-sys",
  "parquet",
  "postgres-protocol",
  "prometheus",
