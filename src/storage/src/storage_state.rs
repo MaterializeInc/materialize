@@ -269,6 +269,7 @@ impl StorageState {
             persist_clients,
             txns_ctx,
             sink_tokens: BTreeMap::new(),
+            dataflow_incarnations: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
@@ -337,6 +338,9 @@ pub struct StorageState {
     /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
     /// to prevent usage of custom shutdown tokens that are tricky to get right.
     pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
+    /// How often each dataflow was rendered. Equal on all workers, because they render in the
+    /// order of the sequenced internal commands.
+    pub dataflow_incarnations: BTreeMap<GlobalId, u64>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -404,6 +408,13 @@ pub struct StorageState {
 }
 
 impl StorageState {
+    /// Records that the dataflow for `id` is being rendered and returns its incarnation.
+    pub fn next_dataflow_incarnation(&mut self, id: GlobalId) -> u64 {
+        let incarnation = self.dataflow_incarnations.entry(id).or_default();
+        *incarnation += 1;
+        *incarnation
+    }
+
     /// Return an error handler that triggers a suspend and restart of the corresponding storage
     /// dataflow.
     pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
@@ -715,7 +726,21 @@ impl<'w> Worker<'w> {
                     );
                 }
             }
-            InternalStorageCommand::Suspend { id, reason } => {
+            InternalStorageCommand::Suspend {
+                id,
+                incarnation,
+                reason,
+            } => {
+                // NOTE: a dataflow rendered after the command was sent has not hit the error, and
+                // nothing would bring it back.
+                if self.storage_state.dataflow_incarnations.get(&id) != Some(&incarnation) {
+                    info!(
+                        "worker {}/{} ignoring suspend for {id} from incarnation {incarnation}",
+                        self.timely_worker.index(),
+                        self.timely_worker.peers(),
+                    );
+                    return;
+                }
                 // Nothing brings the dataflow back on its own, so this is louder than a restart.
                 warn!(
                     "worker {}/{} suspending {id} because of: {reason}",
@@ -887,6 +912,7 @@ impl<'w> Worker<'w> {
 
                     self.storage_state.sink_tokens.remove(id);
                     self.storage_state.sink_write_frontiers.remove(id);
+                    self.storage_state.dataflow_incarnations.remove(id);
 
                     self.storage_state.aggregated_statistics.deinitialize(*id);
                 }

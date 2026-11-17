@@ -457,6 +457,7 @@ pub fn build_ingestion_dataflow(
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
+                    incarnation: storage_state.next_dataflow_incarnation(primary_source_id),
                 },
                 storage_state
                     .storage_configuration
@@ -504,6 +505,7 @@ pub fn build_export_dataflow(
             crate::healthcheck::DefaultWriter {
                 command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),
+                incarnation: storage_state.next_dataflow_incarnation(id),
             },
             storage_state
                 .storage_configuration

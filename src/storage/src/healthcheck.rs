@@ -276,6 +276,8 @@ pub trait HealthOperator {
 pub struct DefaultWriter {
     pub command_tx: InternalCommandSender,
     pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    /// The incarnation of the dataflow this operator is part of.
+    pub incarnation: u64,
 }
 
 impl HealthOperator for DefaultWriter {
@@ -320,6 +322,7 @@ impl HealthOperator for DefaultWriter {
     fn send_suspend(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
         self.command_tx.send(InternalStorageCommand::Suspend {
             id,
+            incarnation: self.incarnation,
             reason: format!("{:?}", error),
         });
     }
