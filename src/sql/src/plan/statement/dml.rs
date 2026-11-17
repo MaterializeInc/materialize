@@ -114,6 +114,10 @@ pub fn plan_insert(
             expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // `RETURNING` is evaluated in `environmentd`.
+    if returning.iter().any(|e| e.contains_unbounded()) {
+        bail_unsupported!("jq in a RETURNING clause");
+    }
 
     Ok(Plan::Insert(InsertPlan {
         id,

@@ -227,3 +227,11 @@ COPY INTO docs FROM (jq('"s3://path/to/dir"', '.') #>> '{}') (FORMAT CSV, AWS CO
 # Refused even in a branch that is never evaluated.
 statement error jq\["\."\] in a constant expression not yet supported
 SELECT 1 LIMIT CASE WHEN true THEN 1 ELSE jq('1', '.')::int8 END
+
+statement error jq in a webhook CHECK expression not yet supported
+CREATE SOURCE jq_webhook FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (WITH (BODY) jq(body::jsonb, '.ok') = 'true')
+
+statement error jq in a RETURNING clause not yet supported
+INSERT INTO docs VALUES ('{"name": "dee"}', '.name') RETURNING jq(doc, '.name')
