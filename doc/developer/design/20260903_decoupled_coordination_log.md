@@ -6,19 +6,19 @@ Finish native-only M3 under the current [prompt](20260903_decoupled_coordination
 Preserve compatible full writers, explicit retirement, protection and adapter-owned
 policy. Do not restore legacy execution paths or weaken validation.
 
-Trace the late source-statistics inputs during candidate readiness before choosing
-another performance change. The bounded generation-8 capture found s2 using about
-one CPU and the eight-CPU aggregate budget nearly saturated. Leaf samples do not
-identify the readiness critical path. Source-statistics indexes s745/s747 were the
-last blockers, then reached readiness. Follow their inputs, not generic sampled
-functions. The diagnostic workload again reached action 409 before its unchanged
-deadline. Its runtimes are cleaned up. Scoped Python and Rust lint corrections
-are verified. All-target Clippy passed for storage-controller, catalog,
-clusterd-test-driver, adapter and environmentd with warnings denied. Catalog oracle
-regressions also passed. Fresh debug binaries from `e3094b50ed8f` built successfully.
-The unchanged KafkaSources diagnostic now runs with an input-frontier observer,
-under the original workload, resource limits and deadline. Runtime acceptance
-remains open.
+Resolve the Iceberg replica-placement decision below, then continue readiness
+attribution before choosing a performance change. The current debug workload hit
+its unchanged deadline at action 400 after nine promotions. Final validation and
+backup/restore remain unverified. Its runtimes are cleaned up, with no recorded
+OOM events. Scoped Python/Rust checks, catalog oracle regressions and the fresh
+debug build passed. Runtime acceptance remains open.
+
+The late generation-8 capture found both catalog-server processes using about one
+CPU under a saturated eight-CPU budget. Candidate source-statistics inputs were
+already near wall clock. Readiness logs identify source-status and public-frontier
+indexes as the final blockers in this run. Trace those inputs from the start of
+readiness. Neither these late samples nor earlier leaf profiles identify the
+full readiness critical path.
 
 Both cache-repair comparison runs reached action 409 and exhausted the unchanged
 1800s guard during generation 10 readiness. Each completed nine promotions and
@@ -72,6 +72,11 @@ source status, metrics and HTTP proxy coverage. These are not latest-build accep
 
 ## Live blockers and decisions
 
+- Iceberg lacks Kafka's catalog-derived replica selector. Two replicas in the
+  active deployment repeatedly conflict and restart the same sinks. Applying the
+  existing selector to Iceberg awaits user approval because it changes placement.
+  Commit conflict checks must remain. The evidence does not establish duplicate
+  committed output or quantify this contention's share of CPU.
 - Readiness/hydration remains the largest measured Kafka phase. Map the remaining
   system-cluster blockers and attribute their work or input waits before tuning.
 - One pre-cache run had a recovered promoted-adapter storage-initialization
@@ -121,11 +126,19 @@ binary provenance plus restored image identities. `kafka-runner-recovery.md`
 identifies the preserved ancillary binaries and exact fixture recipes. Do not use
 historical runtime manifests to authenticate replacement binaries.
 
-The current capture is `aj-native-parallel-f73b8d12`. Its launch and observer logs
-are `current-kafka-driver.log` and `current-input-observer.log` in the recovery
-directory. `watch_readiness_inputs.py` observes both deployments during generation
-8 readiness and stops on probe failure or execution replacement. Its local checks
-are not live acceptance evidence.
+`current-kafka-diagnostics.tar.gz` preserves the completed recovery runs. The first
+stopped on a diagnostic Docker inventory race. The narrow observer repair passed
+a real Docker red/green check without changing workload guards. The repeat,
+`aj-native-parallel-a39d02c7`, hit the original deadline. See
+`diagnostic-outcome-a39.json` and `inventory-race-check.log`.
+
+`readiness-inputs-a39d02c7.tar.gz`, `readiness-input-capture-analysis.md` and
+`g8-input-capture-controller.log` preserve the late SQL/counter capture and matched
+readiness decisions. The first observer lacked permission to inspect container
+processes. The root observer attached late, not at the start of readiness.
+`sink-execution-contention-survey.md` traces the separate Iceberg placement gap.
+The post-promotion replica SIGKILLs were intentional workload action 324, not a
+promotion failure.
 
 - Earlier cache-repair binaries and checks: `expression-cache-build-evidence.tar.gz`.
   Runner: `native_zippy_expression_cache.py`. Diagnostic helpers:
