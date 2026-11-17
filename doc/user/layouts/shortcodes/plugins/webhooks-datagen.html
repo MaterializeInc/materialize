@@ -29,13 +29,13 @@
     <div class="json">
       <textarea placeholder="JSON schema" id="jsonSchema" rows="5" cols="30" class="json-textarea">
 {
-  "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
-  "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+  "sensor_id": "faker.number.int({ max: 100, min: 1})",
+  "timestamp": "faker.date.between({ from: '2020-01-01T00:00:00.000Z', to: '2030-01-01T00:00:00.000Z' })",
   "location": {
-      "latitude": "faker.datatype.number({ max: 90, min: -90})",
-      "longitude": "faker.datatype.number({ max: 180, min: -180})"
+      "latitude": "faker.number.int({ max: 90, min: -90})",
+      "longitude": "faker.number.int({ max: 180, min: -180})"
   },
-  "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+  "temperature": "faker.number.float({ min: 20, max: 95 })"
 }
       </textarea>
       <div id="jsonError" class="error" style="display: none"></div>
@@ -191,16 +191,16 @@
 
   const schemas = {
     sensorData: `{
-      "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
-      "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+      "sensor_id": "faker.number.int({ max: 100, min: 1})",
+      "timestamp": "faker.date.between({ from: '2020-01-01T00:00:00.000Z', to: '2030-01-01T00:00:00.000Z' })",
       "location": {
-          "latitude": "faker.datatype.number({ max: 90, min: -90})",
-          "longitude": "faker.datatype.number({ max: 180, min: -180})"
+          "latitude": "faker.number.int({ max: 90, min: -90})",
+          "longitude": "faker.number.int({ max: 180, min: -180})"
       },
-      "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+      "temperature": "faker.number.float({ min: 20, max: 95 })"
     }`,
     userActivity: `{
-      "user_id": "faker.datatype.uuid()",
+      "user_id": "faker.string.uuid()",
       "event": "faker.helpers.arrayElement(['page_view', 'click', 'scroll', 'navigation'])",
       "timestamp": "faker.date.recent()",
       "page": {
@@ -209,15 +209,15 @@
       },
       "interaction": {
         "element": "faker.lorem.word()",
-        "time_spent": "faker.datatype.number({ min: 1, max: 120 })"
+        "time_spent": "faker.number.int({ min: 1, max: 120 })"
       }
     }`,
     ecommerceTransaction: `{
-      "user_id": "faker.datatype.uuid()",
+      "user_id": "faker.string.uuid()",
       "event": "faker.helpers.arrayElement(['add_to_cart', 'remove_from_cart', 'purchase', 'view_product'])",
       "timestamp": "faker.date.recent()",
       "product": {
-        "id": "faker.datatype.uuid()",
+        "id": "faker.string.uuid()",
         "name": "faker.commerce.productName()",
         "category": "faker.commerce.department()",
         "price": "faker.commerce.price()"

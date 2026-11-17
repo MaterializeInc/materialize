@@ -7,163 +7,182 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { faker } from "@faker-js/faker";
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import path from "path";
 
-describe("Webhooks Data Generator", async () => {
+describe("Webhooks Data Generator", () => {
   let window, document;
-  let isGenerating = false;
+  const uuid = /^[0-9a-f-]{36}$/;
+  const fakerVersion = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"),
+  ).dependencies["@faker-js/faker"];
 
-  beforeEach(async () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
     const htmlPath = path.join(
       __dirname,
-      "../../../doc/user/layouts/shortcodes/plugins/webhooks-datagen.html"
+      "../../../doc/user/layouts/shortcodes/plugins/webhooks-datagen.html",
     );
-    const htmlContent = fs.readFileSync(htmlPath, "utf-8");
-    const dom = new JSDOM(htmlContent, {
-      runScripts: "dangerously",
-      resources: "usable",
+    const dom = new JSDOM(fs.readFileSync(htmlPath, "utf-8"), {
+      runScripts: "outside-only",
       url: "http://localhost",
     });
-
     window = dom.window;
     document = window.document;
+    window.faker = faker;
+    window.fetch = vi.fn().mockResolvedValue({ ok: true });
+    window.alert = vi.fn();
+    window.console.error = vi.fn();
 
-    // Wait for all the scripts and content to load
-    await vi.waitFor(() => {
-      if (document.readyState === "complete") {
-        return true;
-      } else {
-        throw new Error("Document not ready yet");
+    // JSDOM does not execute module scripts, so supply the real Faker instance
+    // and evaluate the widget without its browser-only CDN import.
+    const script = document.querySelector('script[type="module"]').textContent;
+    const importStatement = script.match(
+      /^\s*import \{ faker \} from 'https:\/\/esm\.sh\/@faker-js\/faker@([^']+)';/m,
+    );
+    expect(importStatement?.[1]).toBe(fakerVersion);
+    window.eval(script.replace(importStatement[0], ""));
+    document.getElementById("webhookURL").value = "http://localhost/webhook";
+    document.getElementById("authPassword").value = "test-token";
+  });
+
+  afterEach(() => {
+    window.close();
+    vi.useRealTimers();
+  });
+
+  it.each(["", "sensorData", "userActivity", "ecommerceTransaction"])(
+    "generates and sends valid data for preset %j",
+    async (preset) => {
+      if (preset) {
+        const select = document.getElementById("useCaseSelect");
+        select.value = preset;
+        select.dispatchEvent(new window.Event("change"));
       }
+      document.getElementById("startButton").click();
+      expect(document.getElementById("startButton").style.display).toBe("none");
+      expect(document.getElementById("stopButton").style.display).toBe(
+        "inline-block",
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(window.fetch).toHaveBeenCalledExactlyOnceWith(
+        "http://localhost/webhook",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-KEY": "test-token",
+          },
+          body: expect.any(String),
+        },
+      );
+      const payload = JSON.parse(window.fetch.mock.calls[0][1].body);
+      expect(window.console.error).not.toHaveBeenCalled();
+      expect(JSON.stringify(payload)).not.toContain('"Error"');
+      expect(Number.isNaN(Date.parse(payload.timestamp))).toBe(false);
+      if (!preset || preset === "sensorData") {
+        expect(payload).toEqual({
+          sensor_id: expect.any(Number),
+          timestamp: expect.any(String),
+          location: {
+            latitude: expect.any(Number),
+            longitude: expect.any(Number),
+          },
+          temperature: expect.any(Number),
+        });
+        for (const [value, min, max] of [
+          [payload.sensor_id, 1, 100],
+          [payload.location.latitude, -90, 90],
+          [payload.location.longitude, -180, 180],
+          [payload.temperature, 20, 95],
+        ]) {
+          expect(value).toBeGreaterThanOrEqual(min);
+          expect(value).toBeLessThanOrEqual(max);
+        }
+      } else {
+        expect(payload.user_id).toMatch(uuid);
+        if (preset === "userActivity") {
+          expect(["page_view", "click", "scroll", "navigation"]).toContain(
+            payload.event,
+          );
+          expect(payload.interaction.time_spent).toBeGreaterThanOrEqual(1);
+          expect(payload.interaction.time_spent).toBeLessThanOrEqual(120);
+        } else {
+          expect([
+            "add_to_cart",
+            "remove_from_cart",
+            "purchase",
+            "view_product",
+          ]).toContain(payload.event);
+          expect(payload.product.id).toMatch(uuid);
+          expect(payload.product.name).toEqual(expect.any(String));
+          expect(Number.isNaN(Number(payload.product.price))).toBe(false);
+        }
+      }
+      expect(document.getElementById("logOutput").textContent).toContain(
+        "Sent:",
+      );
+    },
+  );
+
+  it("supports custom Faker expressions", async () => {
+    document.getElementById("jsonSchema").value = JSON.stringify({
+      id: "faker.string.uuid()",
+      measurement: "faker.number.float({ min: 0, max: 1 })",
+      status: "faker.helpers.arrayElement(['open', 'closed'])",
     });
+    document.getElementById("startButton").click();
+    await vi.advanceTimersByTimeAsync(1000);
+    const payload = JSON.parse(window.fetch.mock.calls[0][1].body);
+    expect(payload.id).toMatch(uuid);
+    expect(payload.measurement).toBeGreaterThanOrEqual(0);
+    expect(payload.measurement).toBeLessThanOrEqual(1);
+    expect(["open", "closed"]).toContain(payload.status);
+    expect(window.console.error).not.toHaveBeenCalled();
   });
 
-  it("should initialize the DOM elements correctly", async () => {
-    const webhookURLInput = window.document.getElementById("webhookURL");
-    const authPasswordInput = window.document.getElementById("authPassword");
-    const jsonSchemaTextarea = window.document.getElementById("jsonSchema");
-    const startButton = window.document.getElementById("startButton");
-    const stopButton = window.document.getElementById("stopButton");
+  it.each(["webhookURL", "authPassword"])(
+    "requires %s before starting",
+    async (input) => {
+      document.getElementById(input).value = "";
+      document.getElementById("startButton").click();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(window.alert).toHaveBeenCalledOnce();
+      expect(window.fetch).not.toHaveBeenCalled();
+      expect(document.getElementById("startButton").style.display).not.toBe(
+        "none",
+      );
+      expect(document.getElementById("stopButton").style.display).toBe("none");
+    },
+  );
 
-    await vi.waitFor(() => webhookURLInput && authPasswordInput && jsonSchemaTextarea && startButton && stopButton);
-
-    expect(webhookURLInput).not.toBeNull();
-    expect(authPasswordInput).not.toBeNull();
-    expect(jsonSchemaTextarea).not.toBeNull();
-    expect(startButton).not.toBeNull();
-    expect(stopButton).not.toBeNull();
+  it("rejects invalid JSON and permits starting after it is corrected", async () => {
+    const textarea = document.getElementById("jsonSchema");
+    textarea.value = "invalid json";
+    document.getElementById("startButton").click();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(window.fetch).not.toHaveBeenCalled();
+    expect(document.getElementById("jsonError").style.display).toBe("block");
+    textarea.value = '{"valid": "json"}';
+    document.getElementById("startButton").click();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(window.fetch).toHaveBeenCalledOnce();
+    expect(document.getElementById("jsonError").style.display).toBe("none");
   });
 
-  it("should not start generation without valid URL and password", async () => {
-    const startButton = window.document.getElementById("startButton");
-    const webhookURLInput = window.document.getElementById("webhookURL");
-    const authPasswordInput = window.document.getElementById("authPassword");
-
-    // Leave the URL and password empty
-    webhookURLInput.value = "";
-    authPasswordInput.value = "";
-
-    startButton.click();
-
-    expect(startButton.style.display).not.toBe("none");
-  });
-
-  it("should enable the stop button when generation starts", async () => {
-    const startButton = window.document.getElementById("startButton");
-    const stopButton = window.document.getElementById("stopButton");
-    const webhookURLInput = window.document.getElementById("webhookURL");
-    const authPasswordInput = window.document.getElementById("authPassword");
-
-    webhookURLInput.value = "http://localhost";
-    authPasswordInput.value = "password";
-
-    startButton.click();
-
-    await vi.waitFor(() => !stopButton.disabled);
-
-    expect(stopButton.disabled).toBe(false);
-  });
-
-  it("should populate JSON schema based on selected use case", async () => {
-    const jsonSchemaTextarea = window.document.getElementById("jsonSchema");
-    const useCaseSelect = window.document.getElementById("useCaseSelect");
-
-    // Select a use case
-    useCaseSelect.value = "sensorData";
-    useCaseSelect.dispatchEvent(new window.Event("change"));
-
-    expect(jsonSchemaTextarea.value.trim()).not.toBe("");
-  });
-
-  it("should clear logs when the stop button is clicked", async () => {
-    const stopButton = window.document.getElementById("stopButton");
-    const logOutputDiv = window.document.getElementById("logOutput");
-
-    logOutputDiv.innerHTML = "<p>Log message</p>";
-
-    stopButton.click();
-
-    expect(logOutputDiv.innerHTML).toBe(logOutputDiv.innerHTML);
-  });
-
-  it("should remove the error message if the JSON schema is corrected", async () => {
-    const jsonSchemaTextarea = window.document.getElementById("jsonSchema");
-    const jsonErrorDiv = window.document.getElementById("jsonError");
-
-    // Input invalid JSON and then correct it
-    jsonSchemaTextarea.value = "invalid json";
-    jsonSchemaTextarea.dispatchEvent(new window.Event("blur"));
-
-    await vi.waitFor(() => jsonErrorDiv.style.display === "block");
-
-    jsonSchemaTextarea.value = '{"valid": "json"}';
-    jsonSchemaTextarea.dispatchEvent(new window.Event("blur"));
-
-    await vi.waitFor(() => jsonErrorDiv.style.display === "none");
-
-    expect(jsonErrorDiv.style.display).toBe("none");
-  });
-
-  it("should have empty webhook URL and auth password inputs initially", async () => {
-    const webhookURLInput = window.document.getElementById("webhookURL");
-    const authPasswordInput = window.document.getElementById("authPassword");
-    await vi.waitFor(() => webhookURLInput && authPasswordInput);
-    expect(webhookURLInput.value).toBe("");
-    expect(authPasswordInput.value).toBe("");
-  });
-
-  it("should not start generation with empty webhook URL and auth password", async () => {
-    const startButton = window.document.getElementById("startButton");
-    const webhookURLInput = window.document.getElementById("webhookURL");
-    const authPasswordInput = window.document.getElementById("authPassword");
-    await vi.waitFor(() => startButton && webhookURLInput && authPasswordInput);
-    webhookURLInput.value = "";
-    authPasswordInput.value = "";
-
-    startButton.click();
-
-    await vi.waitFor(() => isGenerating);
-
-    expect(isGenerating).toBe(false);
-  });
-
-  it("should stop data generation and enable start button when stop button is clicked", async () => {
-    const startButton = window.document.getElementById("startButton");
-    const stopButton = window.document.getElementById("stopButton");
-
-    // Trigger generation
-    startButton.click();
-
-    await vi.waitFor(() => isGenerating);
-
-    stopButton.click();
-
-    await vi.waitFor(() => !isGenerating);
-
-    expect(isGenerating).toBe(false);
-    expect(startButton.style.display).not.toBe("none");
+  it("stops sending events when stopped", async () => {
+    document.getElementById("startButton").click();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(window.fetch).toHaveBeenCalledOnce();
+    document.getElementById("stopButton").click();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(window.fetch).toHaveBeenCalledOnce();
+    expect(document.getElementById("startButton").style.display).toBe(
+      "inline-block",
+    );
+    expect(document.getElementById("stopButton").style.display).toBe("none");
   });
 });
