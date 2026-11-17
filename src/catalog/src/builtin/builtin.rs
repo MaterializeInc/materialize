@@ -10,7 +10,7 @@
 //! Constant builtin views exposing information about builtin objects.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_catalog_protos::objects::CatalogItemType;
@@ -31,9 +31,11 @@ use crate::builtin::{Builtin, BuiltinType, BuiltinView, PUBLIC_SELECT, assert_sa
 /// Generate builtin views reporting the given builtins.
 ///
 /// Used in the [`super::BUILTINS_STATIC`] initializer, which keeps the
-/// `Builtin::Type`s in `builtin_types` apart from the other `builtin_items`.
+/// `Builtin::Type`s in `builtin_types` and the `Builtin::Func`s in
+/// `builtin_funcs` apart from the other `builtin_items`.
 pub(super) fn builtins(
     builtin_types: &[Builtin<NameReference>],
+    builtin_funcs: &[Builtin<NameReference>],
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
     let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(builtin_items)));
@@ -46,6 +48,12 @@ pub(super) fn builtins(
     let index_columns: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_index_columns(builtin_items)));
     let types: &'static BuiltinView = Box::leak(Box::new(make_builtin_types(builtin_types)));
+    let functions: &'static BuiltinView = Box::leak(Box::new(make_builtin_functions(
+        builtin_types,
+        builtin_funcs,
+    )));
+    let operators: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_operators(builtin_types)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
@@ -67,6 +75,8 @@ pub(super) fn builtins(
             index_columns,
             &columns,
             types,
+            functions,
+            operators,
         ],
     )));
     make_builtin_columns_sql(
@@ -79,6 +89,8 @@ pub(super) fn builtins(
             indexes,
             index_columns,
             types,
+            functions,
+            operators,
             views,
         ],
         &mut columns,
@@ -96,6 +108,8 @@ pub(super) fn builtins(
         index_columns,
         columns,
         types,
+        functions,
+        operators,
         views,
     ]
     .into_iter()
@@ -565,6 +579,169 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, category, type_kind, privile
     }
 }
 
+/// Generates `mz_internal.mz_builtin_functions`, one row per implementation of
+/// each builtin function.
+fn make_builtin_functions(
+    builtin_types: &[Builtin<NameReference>],
+    builtin_funcs: &[Builtin<NameReference>],
+) -> BuiltinView {
+    let type_names = builtin_type_names(builtin_types);
+    let type_names = &type_names;
+    let values = builtin_funcs
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::Func(f) => Some(f),
+            _ => None,
+        })
+        .flat_map(|func| {
+            assert_safe_builtin_name(func.name, "function");
+            let kind = func.inner.class();
+            func.inner.func_impls().into_iter().map(move |imp| {
+                format!(
+                    "({}::oid, {}, {}, '{kind}', {}, {}, {}, {})",
+                    imp.oid,
+                    escaped_string_literal(func.schema),
+                    escaped_string_literal(func.name),
+                    type_names_sql(&imp.arg_typs, type_names),
+                    type_name_sql(imp.variadic_typ, type_names),
+                    type_name_sql(imp.return_typ, type_names),
+                    imp.return_is_set,
+                )
+            })
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, kind, argument_type_names, variadic_argument_type_name, return_type_name, returns_set
+FROM (VALUES {values}) AS v(oid, schema_name, name, kind, argument_type_names, variadic_argument_type_name, return_type_name, returns_set)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_functions",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_FUNCTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("kind", SqlScalarType::String.nullable(false))
+            .with_column(
+                "argument_type_names",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column(
+                "variadic_argument_type_name",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("return_type_name", SqlScalarType::String.nullable(true))
+            .with_column("returns_set", SqlScalarType::Bool.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this). Every implementation has
+            // its own oid, which `test_compare_builtins_postgres` asserts, so
+            // `oid` is a key.
+            .with_key(vec![0])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// Generates `mz_internal.mz_builtin_operators`, one row per implementation of
+/// each operator in [`mz_sql::func::OP_IMPLS`].
+fn make_builtin_operators(builtin_types: &[Builtin<NameReference>]) -> BuiltinView {
+    let type_names = builtin_type_names(builtin_types);
+    let type_names = &type_names;
+    let values = mz_sql::func::OP_IMPLS
+        .iter()
+        .flat_map(|(op, func)| {
+            assert!(
+                matches!(func, mz_sql::func::Func::Scalar(_)),
+                "operator {op} is not a scalar function"
+            );
+            func.func_impls().into_iter().map(move |imp| {
+                format!(
+                    "({}::oid, {}, {}, {})",
+                    imp.oid,
+                    escaped_string_literal(op),
+                    type_names_sql(&imp.arg_typs, type_names),
+                    type_name_sql(imp.return_typ, type_names),
+                )
+            })
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, name, argument_type_names, return_type_name
+FROM (VALUES {values}) AS v(oid, name, argument_type_names, return_type_name)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_operators",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_OPERATORS_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "argument_type_names",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("return_type_name", SqlScalarType::String.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this). Every implementation has
+            // its own oid, which `test_compare_builtins_postgres` asserts, so
+            // `oid` is a key.
+            .with_key(vec![0])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// The names of the builtin types
+fn builtin_type_names(builtin_types: &[Builtin<NameReference>]) -> BTreeSet<&str> {
+    builtin_types
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::Type(t) => Some(t.name),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `name` as a SQL string literal, or NULL for no type.
+fn type_name_sql(name: Option<&str>, type_names: &BTreeSet<&str>) -> String {
+    match name {
+        Some(name) => {
+            // Panic if
+            assert!(
+                type_names.contains(name),
+                "function signature references unknown builtin type {name}"
+            );
+            escaped_string_literal(name).to_string()
+        }
+        None => "NULL::text".to_string(),
+    }
+}
+
+/// `names` as a SQL `text[]` literal.
+fn type_names_sql(names: &[&str], type_names: &BTreeSet<&str>) -> String {
+    if names.is_empty() {
+        return "ARRAY[]::text[]".to_string();
+    }
+    let names = names
+        .iter()
+        .map(|name| type_name_sql(Some(name), type_names))
+        .join(", ");
+    format!("ARRAY[{names}]")
+}
+
 /// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
 /// including itself and the `generated` views.
 ///
@@ -585,7 +762,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, category, type_kind, privile
 /// declared keys rely on.
 fn make_builtin_views(
     builtin_items: &[Builtin<NameReference>],
-    generated: [&BuiltinView; 8],
+    generated: [&BuiltinView; 10],
 ) -> BuiltinView {
     let iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::View(x) => Some(*x),
@@ -697,7 +874,7 @@ fn builtin_columns_view() -> BuiltinView {
 /// itself.
 fn make_builtin_columns_sql(
     builtin_items: &[Builtin<NameReference>],
-    generated: [&BuiltinView; 8],
+    generated: [&BuiltinView; 10],
     columns: &mut BuiltinView,
 ) {
     // Map to (schema, relation, desc)

@@ -1222,9 +1222,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_ROLE_MEMBERS),
         Builtin::MaterializedView(&MZ_ROLE_PARAMETERS),
         Builtin::View(&MZ_PSEUDO_TYPES),
-        Builtin::Table(&MZ_FUNCTIONS),
-        Builtin::Table(&MZ_OPERATORS),
-        Builtin::Table(&MZ_AGGREGATES),
+        Builtin::View(&MZ_FUNCTIONS),
+        Builtin::View(&MZ_OPERATORS),
+        Builtin::View(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZE_INTERNAL),
         Builtin::MaterializedView(&MZ_CLUSTERS),
@@ -1572,7 +1572,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     {
         let ontology_preview = ontology::generate_views(&builtin_items);
         let builtin_reporter_preview: Vec<_> =
-            builtin::builtins(&builtin_types, &builtin_items).collect();
+            builtin::builtins(&builtin_types, &builtin_funcs, &builtin_items).collect();
         let generator_input: Vec<_> = builtin_types
             .iter()
             .chain(builtin_funcs.iter())
@@ -1599,7 +1599,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
 
     // Generate builtin relations reporting builtin objects last, since they need a complete view
     // of all other builtins.
-    let mut builtin_builtins = builtin::builtins(&builtin_types, &builtin_items).collect();
+    let mut builtin_builtins =
+        builtin::builtins(&builtin_types, &builtin_funcs, &builtin_items).collect();
 
     // Construct the full list of builtins, retaining dependency order.
     let mut builtins = Vec::new();
