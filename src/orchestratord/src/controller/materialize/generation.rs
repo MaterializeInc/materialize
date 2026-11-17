@@ -204,12 +204,7 @@ impl Resources {
     }
 
     #[instrument]
-    pub async fn apply(
-        &self,
-        client: &Client,
-        force_promote: bool,
-        namespace: &str,
-    ) -> Result<Option<Action>, Error> {
+    pub async fn apply(&self, client: &Client, namespace: &str) -> Result<(), Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
@@ -225,6 +220,21 @@ impl Resources {
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
+
+        Ok(())
+    }
+
+    /// Checks whether this generation's environmentd is ready to be promoted,
+    /// returning the action to retry with if it is not. With `force_promote`,
+    /// tells environmentd to skip catching up instead of waiting for it.
+    #[instrument]
+    pub async fn await_ready(
+        &self,
+        client: &Client,
+        force_promote: bool,
+        namespace: &str,
+    ) -> Result<Option<Action>, Error> {
+        let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
 
         let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
 

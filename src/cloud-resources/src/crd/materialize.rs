@@ -174,6 +174,62 @@ impl Default for RolloutRequestTimeout {
     }
 }
 
+/// The step the operator performs on its next reconcile of a Materialize
+/// resource.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    JsonSchema
+)]
+pub enum MaterializePhase {
+    /// Nothing is in flight.
+    #[default]
+    Idle,
+    /// Deciding whether the spec calls for a rollout.
+    PlanningRollout,
+    /// Deleting the active generation to make room for the candidate, under
+    /// the `ImmediatelyPromoteCausingDowntime` rollout strategy.
+    TearingDownActiveGeneration,
+    /// Creating the candidate generation's resources.
+    ApplyingCandidate,
+    /// Waiting for the candidate generation to be ready to take over.
+    AwaitingCandidate,
+    /// The candidate generation is ready and waits for `forcePromote`, under
+    /// the `ManuallyPromote` rollout strategy.
+    ReadyToPromote,
+    /// Promoting the candidate generation. The rollout can no longer be
+    /// cancelled.
+    Promoting,
+    /// Deleting the generation that the promoted candidate replaced.
+    TearingDownPreviousGeneration,
+    /// Applying the balancer.
+    SyncingBalancer,
+    /// Applying the console.
+    SyncingConsole,
+}
+
+/// A rollout in flight.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RolloutStatus {
+    /// The candidate generation.
+    pub generation: u64,
+    /// The `requestRollout` this rollout was started for.
+    pub request: Uuid,
+    /// The environmentd image ref the candidate generation runs.
+    pub environmentd_image_ref: String,
+    /// The hash of the candidate generation's resources.
+    pub resources_hash: String,
+    /// When the rollout started. The rollout request timeout counts from here.
+    pub started_at: Time,
+}
+
 pub mod v1alpha1 {
     use super::*;
 
@@ -612,50 +668,12 @@ pub mod v1alpha1 {
                 .expect("DEFAULT_ROLLOUT_REQUEST_TIMEOUT must be a valid duration")
         }
 
-        /// If a timeout-eligible rollout is currently in progress, returns the
-        /// time at which it entered the in-progress (`Unknown`) state. Used to
-        /// enforce the rollout timeout.
-        ///
-        /// The `Applying` and `ReadyToPromote` phases are both reported as a
-        /// single in-progress window: [`Self::up_to_date_transition_time`]
-        /// carries the timestamp forward across them (they share the `Unknown`
-        /// status), so the timeout spans the whole pre-promotion rollout rather
-        /// than resetting at each phase.
-        ///
-        /// The `Promoting` phase is deliberately excluded even though it is
-        /// also `Unknown`: once a rollout has reached promotion it must never
-        /// be cancelled by the timeout, since the previously-active generation
-        /// may already be torn down, leaving nothing to fall back to. (The
-        /// controller also never reaches the timeout check while promoting,
-        /// because `is_promoting` takes priority; this is belt-and-suspenders.)
-        pub fn rollout_in_progress_since(&self) -> Option<Timestamp> {
-            self.status
-                .as_ref()?
-                .conditions
-                .iter()
-                .find_map(|condition| {
-                    if condition.type_ == "UpToDate"
-                        && condition.status == "Unknown"
-                        && condition.reason != "Promoting"
-                    {
-                        Some(condition.last_transition_time.0)
-                    } else {
-                        None
-                    }
-                })
-        }
-
         /// The `last_transition_time` to record for a new `UpToDate` condition
         /// with `new_status`, following the Kubernetes convention that
         /// `last_transition_time` marks when the condition's *status* last
         /// changed — not its reason or message. While the status is unchanged
         /// the existing timestamp is carried forward; it only resets to `now`
         /// when the status actually changes (or there is no prior condition).
-        ///
-        /// This is what lets a rollout that moves through several same-status
-        /// phases (`Applying` -> `ReadyToPromote`, both `Unknown`) be measured
-        /// from when it first entered that status, so the rollout timeout
-        /// covers the phases together instead of restarting at each one.
         pub fn up_to_date_transition_time(&self, new_status: &str, now: Timestamp) -> Timestamp {
             self.status
                 .as_ref()
@@ -710,20 +728,6 @@ pub mod v1alpha1 {
             false
         }
 
-        pub fn is_ready_to_promote(&self, resources_hash: &str) -> bool {
-            let Some(status) = self.status.as_ref() else {
-                return false;
-            };
-            if status.conditions.is_empty() {
-                return false;
-            }
-            status
-                .conditions
-                .iter()
-                .any(|condition| condition.reason == "ReadyToPromote")
-                && &status.resources_hash == resources_hash
-        }
-
         pub fn is_promoting(&self) -> bool {
             let Some(status) = self.status.as_ref() else {
                 return false;
@@ -735,21 +739,6 @@ pub mod v1alpha1 {
                 .conditions
                 .iter()
                 .any(|condition| condition.reason == "Promoting")
-        }
-
-        pub fn update_in_progress(&self) -> bool {
-            let Some(status) = self.status.as_ref() else {
-                return false;
-            };
-            if status.conditions.is_empty() {
-                return false;
-            }
-            for condition in &status.conditions {
-                if condition.type_ == "UpToDate" && condition.status == "Unknown" {
-                    return true;
-                }
-            }
-            false
         }
 
         /// Checks that the given version is greater than or equal
@@ -881,14 +870,19 @@ pub mod v1alpha1 {
         /// Used to deny upgrades past 1 major version from the last successful rollout.
         /// When None, we upgrade anyways.
         pub last_completed_rollout_environmentd_image_ref: Option<String>,
-        /// A hash calculated from the spec of resources to be created based on this Materialize
-        /// spec. This is used for detecting when the existing resources are up to date.
+        /// A hash calculated from the resources of the active generation. This is used for
+        /// detecting when the existing resources are up to date. Empty when no active
+        /// generation is running.
         /// If you want to trigger a rollout without making other changes that would cause this
         /// hash to change, you must set forceRollout to the same UUID as requestRollout.
         pub resources_hash: String,
         /// The last completed rollout hash from v1.
         /// This exists on this older version only for round-trip conversion support.
         pub last_completed_rollout_hash: Option<String>,
+        /// The step the operator performs on its next reconcile.
+        pub phase: Option<MaterializePhase>,
+        /// The rollout in flight, if any.
+        pub rollout: Option<RolloutStatus>,
         pub conditions: Vec<Condition>,
     }
 
@@ -998,6 +992,8 @@ pub mod v1alpha1 {
                         .unwrap_or(Uuid::nil()),
                     last_completed_rollout_hash: status.last_completed_rollout_hash,
                     resources_hash: "".to_owned(),
+                    phase: status.phase,
+                    rollout: status.rollout,
                 }),
             }
         }
@@ -1273,6 +1269,18 @@ pub mod v1alpha1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub phase: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub conditions: PartialField,
         #[serde(flatten)]
         pub extra: serde_json::Map<String, serde_json::Value>,
@@ -1389,6 +1397,8 @@ pub mod v1alpha1 {
                 last_completed_rollout_environmentd_image_ref,
                 resources_hash,
                 last_completed_rollout_hash,
+                phase,
+                rollout,
                 conditions,
             } = status;
             Self {
@@ -1400,6 +1410,8 @@ pub mod v1alpha1 {
                 ),
                 resources_hash: present(resources_hash),
                 last_completed_rollout_hash: present_opt(last_completed_rollout_hash),
+                phase: present_opt(phase),
+                rollout: present_opt(rollout),
                 conditions: present(conditions),
                 extra: serde_json::Map::new(),
             }
@@ -1516,6 +1528,8 @@ pub mod v1alpha1 {
                 last_completed_rollout_environmentd_image_ref,
                 last_completed_rollout_hash,
                 requested_rollout_hash: _,
+                phase,
+                rollout,
                 conditions,
                 extra,
             } = status;
@@ -1530,6 +1544,8 @@ pub mod v1alpha1 {
                 resources_hash: None,
                 last_completed_rollout_environmentd_image_ref,
                 last_completed_rollout_hash,
+                phase,
+                rollout,
                 conditions,
                 extra,
             }
@@ -2021,48 +2037,6 @@ pub mod v1 {
             false
         }
 
-        pub fn is_ready_to_promote(&self, rollout_hash: &str) -> bool {
-            let Some(status) = self.status.as_ref() else {
-                return false;
-            };
-            if status.conditions.is_empty() {
-                return false;
-            }
-            status
-                .conditions
-                .iter()
-                .any(|condition| condition.reason == "ReadyToPromote")
-                && status.requested_rollout_hash.as_deref() == Some(rollout_hash)
-        }
-
-        pub fn is_promoting(&self) -> bool {
-            let Some(status) = self.status.as_ref() else {
-                return false;
-            };
-            if status.conditions.is_empty() {
-                return false;
-            }
-            status
-                .conditions
-                .iter()
-                .any(|condition| condition.reason == "Promoting")
-        }
-
-        pub fn update_in_progress(&self) -> bool {
-            let Some(status) = self.status.as_ref() else {
-                return false;
-            };
-            if status.conditions.is_empty() {
-                return false;
-            }
-            for condition in &status.conditions {
-                if condition.type_ == "UpToDate" && condition.status == "Unknown" {
-                    return true;
-                }
-            }
-            false
-        }
-
         /// Checks that the given version is greater than or equal
         /// to the existing version, if the existing version
         /// can be parsed.
@@ -2196,6 +2170,10 @@ pub mod v1 {
         /// Hash of a subset of the Materialize spec and other fields.
         /// This is used to determine when the spec has changed and we need to rollout.
         pub requested_rollout_hash: Option<String>,
+        /// The step the operator performs on its next reconcile.
+        pub phase: Option<MaterializePhase>,
+        /// The rollout in flight, if any.
+        pub rollout: Option<RolloutStatus>,
         pub conditions: Vec<Condition>,
     }
 
@@ -2339,6 +2317,8 @@ pub mod v1 {
                     .last_completed_rollout_environmentd_image_ref,
                 last_completed_rollout_hash,
                 requested_rollout_hash,
+                phase: status.phase,
+                rollout: status.rollout,
                 conditions: status.conditions,
             });
             mz
@@ -2591,6 +2571,18 @@ pub mod v1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub phase: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub rollout: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub conditions: PartialField,
         #[serde(flatten)]
         pub extra: serde_json::Map<String, serde_json::Value>,
@@ -2700,6 +2692,8 @@ pub mod v1 {
                 last_completed_rollout_environmentd_image_ref,
                 last_completed_rollout_hash,
                 requested_rollout_hash,
+                phase,
+                rollout,
                 conditions,
             } = status;
             Self {
@@ -2710,6 +2704,8 @@ pub mod v1 {
                 ),
                 last_completed_rollout_hash: present_opt(last_completed_rollout_hash),
                 requested_rollout_hash: present_opt(requested_rollout_hash),
+                phase: present_opt(phase),
+                rollout: present_opt(rollout),
                 conditions: present(conditions),
                 extra: serde_json::Map::new(),
             }
@@ -2833,6 +2829,8 @@ pub mod v1 {
                 last_completed_rollout_environmentd_image_ref,
                 resources_hash: _,
                 last_completed_rollout_hash,
+                phase,
+                rollout,
                 conditions,
                 extra,
             } = status;
@@ -2846,6 +2844,8 @@ pub mod v1 {
                 // absent for partial objects so a field manager cannot gain
                 // ownership of a field it never set.
                 requested_rollout_hash: None,
+                phase,
+                rollout,
                 conditions,
                 extra,
             }
@@ -3529,64 +3529,6 @@ mod tests {
             default,
             &serde_json::json!(DEFAULT_ROLLOUT_REQUEST_TIMEOUT),
             "rolloutRequestTimeout schema default missing/wrong in generated CRD",
-        );
-    }
-
-    #[mz_ore::test]
-    fn rollout_in_progress_since() {
-        let now = Timestamp::now();
-        let condition = |type_: &str, status: &str| Condition {
-            type_: type_.to_owned(),
-            status: status.to_owned(),
-            last_transition_time: Time(now),
-            message: String::new(),
-            observed_generation: None,
-            reason: "Test".to_owned(),
-        };
-        let mz_with = |conditions: Vec<Condition>| Materialize {
-            spec: MaterializeSpec::default(),
-            metadata: ObjectMeta::default(),
-            status: Some(MaterializeStatus {
-                conditions,
-                ..Default::default()
-            }),
-        };
-
-        // No status at all.
-        let mz = Materialize {
-            spec: MaterializeSpec::default(),
-            metadata: ObjectMeta::default(),
-            status: None,
-        };
-        assert_eq!(mz.rollout_in_progress_since(), None);
-
-        // A timeout-eligible rollout in progress is signalled by an `Unknown`
-        // `UpToDate` condition (the Applying and ReadyToPromote phases).
-        assert_eq!(
-            mz_with(vec![condition("UpToDate", "Unknown")]).rollout_in_progress_since(),
-            Some(now)
-        );
-
-        // The `Promoting` phase is also `Unknown`, but must NOT be reported:
-        // once promoting, the rollout can no longer be cancelled by the
-        // timeout.
-        assert_eq!(
-            mz_with(vec![Condition {
-                reason: "Promoting".to_owned(),
-                ..condition("UpToDate", "Unknown")
-            }])
-            .rollout_in_progress_since(),
-            None
-        );
-
-        // A settled rollout (True/False) is not in progress.
-        assert_eq!(
-            mz_with(vec![condition("UpToDate", "True")]).rollout_in_progress_since(),
-            None
-        );
-        assert_eq!(
-            mz_with(vec![condition("UpToDate", "False")]).rollout_in_progress_since(),
-            None
         );
     }
 
