@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-from materialize import ci_util, git, mzbuild, spawn
+from materialize import ci_util, git, mzbuild
 from materialize.mz_version import MzVersion
 from materialize.rustc_flags import Sanitizer
 from materialize.version_list import get_all_mz_versions
@@ -18,12 +18,6 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
-    ci_helm_chart_version = os.getenv("CI_HELM_CHART_VERSION")
-    ci_mz_version = os.getenv("CI_MZ_VERSION")
-
-    if ci_helm_chart_version and ci_mz_version:
-        spawn.runv(["git", "checkout", ci_mz_version])
-
     repos = [
         mzbuild.Repository(
             Path("."),
