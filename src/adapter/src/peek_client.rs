@@ -47,7 +47,7 @@ use timely::progress::Antichain;
 use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::{FastPathPlan, PeekResponseUnary};
@@ -785,6 +785,40 @@ impl PeekClient {
         self.statement_logging_frontend
             .log
             .set_execution_transient_index(id, transient_index_id);
+    }
+
+    /// Returns the watch set that reports when the dependencies of a logged
+    /// statement have caught up to its timestamp. Returns `None` if they
+    /// already have, after recording that.
+    pub(crate) fn dependency_watch_set(
+        &self,
+        id: StatementLoggingId,
+        catalog_state: &CatalogState,
+        input_id_bundle: &CollectionIdBundle,
+        determination: &TimestampDetermination,
+    ) -> Option<WatchSetCreation> {
+        // The determination's upper is not beyond any input's write frontier.
+        // Once every input is complete at the timestamp, the statement no
+        // longer waits for anything, whatever the frontiers of the
+        // collections that those inputs are derived from.
+        //
+        // NOTE: `respond_immediately` is true for every read without a
+        // timestamp. Such a read still waits for its inputs' frontiers to
+        // become empty, which is what comparing against the maximum timestamp
+        // checks.
+        let timestamp = determination.timestamp_context.timestamp_or_default();
+        if !determination.upper.less_equal(&timestamp) {
+            use statement_logging::StatementLifecycleEvent::*;
+            self.log_lifecycle_event(id, StorageDependenciesFinished);
+            self.log_lifecycle_event(id, ComputeDependenciesFinished);
+            return None;
+        }
+        Some(WatchSetCreation::new(
+            id,
+            catalog_state,
+            input_id_bundle,
+            timestamp,
+        ))
     }
 
     /// Log a statement lifecycle event.
