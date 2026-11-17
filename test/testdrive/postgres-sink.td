@@ -74,8 +74,8 @@ true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 SET TIME ZONE 'UTC';
-CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid, atttypmod) || CASE WHEN attnotnull THEN '' not null'' ELSE '''' END, '', '' ORDER BY attnum) FROM pg_attribute WHERE attrelid = ''pgsink.target''::regclass AND attnum > 0 AND NOT attisdropped', 'a integer not null, b text, c numeric(39,2), d timestamp with time zone, e jsonb, f uuid, g integer[]');
-CALL pgsink.wait_for('SELECT string_agg(a.attname, '', '') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) WHERE i.indrelid = ''pgsink.target''::regclass AND i.indisprimary', 'a');
+CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid, atttypmod) || CASE WHEN attnotnull THEN '' not null'' ELSE '''' END, '', '' ORDER BY attnum) FROM pg_attribute WHERE attrelid = to_regclass(''pgsink.target'') AND attnum > 0 AND NOT attisdropped', 'a integer not null, b text, c numeric(39,2), d timestamp with time zone, e jsonb, f uuid, g integer[]');
+CALL pgsink.wait_for('SELECT string_agg(a.attname, '', '') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) WHERE i.indrelid = to_regclass(''pgsink.target'') AND i.indisprimary', 'a');
 CALL pgsink.wait_for('SELECT string_agg(tablename, '', '') FROM pg_tables WHERE schemaname = ''pgsink''', 'target');
 
 # A halted sink is reported here, with its error, rather than being left to
@@ -157,41 +157,6 @@ ALTER TABLE pgsink.agg_target REPLICA IDENTITY FULL;
 
 > DROP SINK pgsink_agg_snk
 
-> CREATE MATERIALIZED VIEW pgsink_global AS SELECT count(*) AS n FROM pgsink_t
-
-> CREATE SINK pgsink_global_snk
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM pgsink_global
-  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA 'pgsink', TABLE 'global_target')
-
-> SELECT s.status, s.error, f.write_frontier > 0
-  FROM mz_internal.mz_sink_statuses s JOIN mz_internal.mz_frontiers f ON f.object_id = s.id
-  WHERE s.name = 'pgsink_global_snk'
-running <null> true
-
-> CREATE SOURCE pgsink_global_readback_src
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
-
-> CREATE TABLE pgsink_global_readback FROM SOURCE pgsink_global_readback_src (REFERENCE pgsink.global_target)
-
-> SELECT * FROM pgsink_global_readback
-2
-
-> INSERT INTO pgsink_t VALUES (4, NULL, NULL, NULL, NULL, NULL, NULL)
-
-> SELECT * FROM pgsink_global_readback
-3
-
-> DELETE FROM pgsink_t WHERE a = 4
-
-> SELECT * FROM pgsink_global_readback
-2
-
-> DROP SINK pgsink_global_snk
-
-> DROP SOURCE pgsink_global_readback_src CASCADE
-
 # A sink without a KEY matches retractions on every column and counts them, so
 # a genuine duplicate row survives retracting one copy of it. The view projects
 # away the id, which is the only way to retract one of two identical rows.
@@ -233,8 +198,6 @@ dup
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_kl_snk'
 running
 
-> DROP SINK pgsink_kl_snk
-
 # A restart claims a new epoch and resumes from the recorded frontier without
 # applying anything twice.
 
@@ -243,6 +206,8 @@ ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 0);
 ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
 
 > INSERT INTO pgsink_t VALUES (5, 'after restart', NULL, NULL, NULL, NULL, NULL)
+
+> INSERT INTO pgsink_kl_src VALUES (4, 'dup'), (5, 'after restart')
 
 > SELECT * FROM
   ((SELECT * FROM pgsink_t EXCEPT ALL SELECT * FROM pgsink_readback)
@@ -254,6 +219,16 @@ CALL pgsink.wait_for('SELECT (epoch > 1)::text FROM materialize.sink_progress WH
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
 running
+
+> SELECT * FROM
+  ((SELECT * FROM pgsink_kl EXCEPT ALL SELECT * FROM pgsink_kl_readback)
+  UNION ALL
+  (SELECT * FROM pgsink_kl_readback EXCEPT ALL SELECT * FROM pgsink_kl))
+
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_kl_snk'
+running
+
+> DROP SINK pgsink_kl_snk
 
 # The progress table is the source of truth. A recorded frontier ahead of the
 # progress shard, which is what a crash between the transaction and the shard
@@ -358,6 +333,41 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT count(*)::text FROM pg_tables WHERE schemaname = ''pgsink'' AND tablename LIKE ''bad_target%''', '0');
 
 > DROP SINK pgsink_bad_snk
+
+> CREATE MATERIALIZED VIEW pgsink_global AS SELECT count(*) AS n FROM pgsink_t
+
+> CREATE SINK pgsink_global_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM pgsink_global
+  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA 'pgsink', TABLE 'global_target')
+
+> SELECT s.status, s.error, f.write_frontier > 0
+  FROM mz_internal.mz_sink_statuses s JOIN mz_internal.mz_frontiers f ON f.object_id = s.id
+  WHERE s.name = 'pgsink_global_snk'
+running <null> true
+
+> CREATE SOURCE pgsink_global_readback_src
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pgsink_conn (PUBLICATION 'pgsink_all_tables')
+
+> CREATE TABLE pgsink_global_readback FROM SOURCE pgsink_global_readback_src (REFERENCE pgsink.global_target)
+
+> SELECT * FROM pgsink_global_readback
+4
+
+> INSERT INTO pgsink_t VALUES (4, NULL, NULL, NULL, NULL, NULL, NULL)
+
+> SELECT * FROM pgsink_global_readback
+5
+
+> DELETE FROM pgsink_t WHERE a = 4
+
+> SELECT * FROM pgsink_global_readback
+4
+
+> DROP SINK pgsink_global_snk
+
+> DROP SOURCE pgsink_global_readback_src CASCADE
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION IF EXISTS pgsink_all_tables;

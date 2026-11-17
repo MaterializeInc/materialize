@@ -192,11 +192,31 @@ class ValidateView(Action):
         else:
             self.view = view
 
+        self.sink_source = next(
+            (
+                sink.source_view
+                for sink in capabilities.get(SinkExists)
+                if sink.dest_view is self.view
+            ),
+            None,
+        )
+
         # Trigger the PeekPersist optimization
         self.select_limit = random.choice(["", "LIMIT 1"])
         super().__init__(capabilities)
 
     def run(self, c: Composition, state: State) -> None:
+        if self.sink_source is not None:
+            c.testdrive(
+                dedent(f"""
+                    > SELECT * FROM
+                      ((SELECT * FROM {self.sink_source.name} EXCEPT ALL SELECT * FROM {self.view.name})
+                      UNION ALL
+                      (SELECT * FROM {self.view.name} EXCEPT ALL SELECT * FROM {self.sink_source.name}))
+                """),
+                mz_service=state.mz_service,
+            )
+
         watermarks = self.view.get_watermarks()
         view_min = watermarks.min
         view_max = watermarks.max

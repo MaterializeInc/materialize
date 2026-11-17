@@ -127,19 +127,18 @@ class PgCdcScenario(Scenario):
 
 
 class PgSinkScenario(Scenario):
-    # Check payloads separately to keep wide rows out of EXCEPT ALL.
+    # Keep wide payloads out of EXCEPT ALL.
     @staticmethod
     def validate(retract_rows: int) -> str:
         return dedent(f"""
-        > SELECT count(*) FROM pgsink_readback
-          WHERE pad IS DISTINCT FROM
-            repeat(CASE WHEN key <= {retract_rows} THEN 'y' ELSE 'x' END, {PAD_LEN}) || key::text
-        0
-
         > SELECT * FROM
           ((SELECT key FROM pgsink_input EXCEPT ALL SELECT key FROM pgsink_readback)
           UNION ALL
-          (SELECT key FROM pgsink_readback EXCEPT ALL SELECT key FROM pgsink_input))
+          (SELECT key FROM pgsink_readback EXCEPT ALL SELECT key FROM pgsink_input)
+          UNION ALL
+          (SELECT key FROM pgsink_readback
+            WHERE pad IS DISTINCT FROM
+              repeat(CASE WHEN key <= {retract_rows} THEN 'y' ELSE 'x' END, {PAD_LEN}) || key::text))
     """)
 
 

@@ -151,10 +151,6 @@ class CreateSink(Action):
 class CreatePostgresSink(CreateSink):
     def run(self, c: Composition, state: State) -> None:
         c.up("postgres")
-        columns = ["count_all"]
-        if self.sink.dest_view.expensive_aggregates:
-            columns += ["count_distinct", "min_value", "max_value"]
-        aggregates = ", ".join(f"SUM({column})::int AS {column}" for column in columns)
         refresh = random.choice(
             ["ON COMMIT", f"EVERY '{random.randint(1, 5)} seconds'"]
         )
@@ -182,7 +178,7 @@ class CreatePostgresSink(CreateSink):
             > CREATE TABLE {self.sink.name}_source_tbl FROM SOURCE {self.sink.name}_source
               (REFERENCE zippy_sinks.{self.sink.name})
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} WITH (REFRESH {refresh})
-              AS SELECT {aggregates} FROM {self.sink.name}_source_tbl
+              AS SELECT * FROM {self.sink.name}_source_tbl
         """),
             mz_service=state.mz_service,
         )
