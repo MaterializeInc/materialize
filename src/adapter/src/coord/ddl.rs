@@ -145,7 +145,7 @@ async fn catalog_preparation_test_pause(name: &'static str) {
 impl Coordinator {
     /// Sets allowed responses and checks read-only and execution-cluster restrictions.
     fn prepare_command_execution(
-        &mut self,
+        &self,
         ctx: &mut ExecuteContext,
         plan: &mz_sql::plan::Plan,
     ) -> Result<(), AdapterError> {
@@ -161,7 +161,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_catalog_result_command(
-        &mut self,
+        &self,
         mut ctx: ExecuteContext,
         statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
         params: mz_sql::plan::Params,

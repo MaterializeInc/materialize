@@ -1421,7 +1421,6 @@ impl SessionClient {
                 | Command::LookupConnection { .. }
                 | Command::InstallPeekWatchSets { .. }
                 | Command::ExplainTimestamp { .. }
-                | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
                 | Command::RegisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }

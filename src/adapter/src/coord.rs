@@ -515,7 +515,6 @@ impl Message {
                 Command::LookupConnection { .. } => "lookup-connection",
                 Command::InstallPeekWatchSets { .. } => "install-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
-                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
                 Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
@@ -4281,7 +4280,7 @@ impl Coordinator {
 
     #[instrument(level = "debug")]
     pub(crate) fn retire_execution(
-        &mut self,
+        &self,
         reason: StatementEndedExecutionReason,
         ctx_extra: ExecuteContextExtra,
     ) {
@@ -5052,6 +5051,7 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                let dyncfgs = catalog.system_config().dyncfgs().clone();
                 let max_concurrent_occ_writes =
                     usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
 
@@ -5096,7 +5096,7 @@ pub fn serve(
                     scoped_frontend: None,
                     optimizer_metrics,
                     tracing_handle,
-                    statement_logging: StatementLogging::new(coord_now.clone()),
+                    statement_logging: StatementLogging::new(coord_now.clone(), &dyncfgs),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
                     caught_up_check: clusters_caught_up_check,
