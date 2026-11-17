@@ -1849,7 +1849,11 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             name="mz_old",
             sanity_restart=False,
             deploy_generation=0,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            # NOTE: this failpoint is only reached by the v1 upsert operator.
+            system_parameter_defaults={
+                **SYSTEM_PARAMETER_DEFAULTS,
+                "enable_upsert_v2": "false",
+            },
             external_metadata_store=True,
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
             default_replication_factor=2,
