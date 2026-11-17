@@ -505,7 +505,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 # The iceberg fork's public API (`with_client`, `OAuth2TokenProvider`) takes
 # reqwest 0.12 types, so the iceberg connection code in mz-storage-types uses
 # this alias.
-reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = false, features = ["charset", "http2", "json", "native-tls-vendored"] }
+reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots-no-provider"] }
 reqwest-middleware = { version = "0.5.2", features = ["json"] }
 reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
@@ -521,7 +521,7 @@ schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
 seahash = "4.1.0"
 security-framework = "3.7.0"
-segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
+segment = { version = "0.2.6", default-features = false }
 semver = "1.0.28"
 sentry = { version = "0.49.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "reqwest", "rustls"] }
 sentry-panic = "0.49.1"
@@ -712,9 +712,9 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
 
 
 # BEGIN LINT CONFIG
