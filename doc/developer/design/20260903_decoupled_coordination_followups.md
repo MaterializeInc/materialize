@@ -247,6 +247,25 @@ opportunity. Validate against each transaction's item versions and optimizer
 settings, retaining the existing incremental reader rather than adding shard
 scans. No incremental-replay cache change or measured saving is claimed here.
 
+The current debug pair has distinct controller and adapter executable build IDs,
+so their ordinary expression-cache namespaces differ even within one package
+version. Adapters publish optimized misses asynchronously after bootstrap.
+Controllers discard their misses, and replicas only read the paired adapter's
+namespace. This explains repeated controller optimization and permits duplicate
+cold-start work before adapter publication. Cache hits still parse and SQL-plan
+builtin views. It does not establish a same-binary adapter cache failure after
+a full restart retaining storage. Measure that case before changing invalidation
+or sharing namespaces. Evidence: `current-builtin-cache-startup-survey.md` and
+`current-cache-build-identities.log` in the handoff's evidence directory.
+
+Current lifecycle, DDL and subscription evidence shows one intentional candidate
+adapter restart at promotion, not two. The later clean DDL exit belongs to the
+retired predecessor. The process backend adds its fixed five-second relaunch
+delay to the expected candidate restart. Exit code 166 is also used for recovery
+from errors, so it alone cannot justify bypassing crash-loop backoff. Preserve
+per-process identity and reason when measuring this cost. See
+`current-promotion-adapter-exits.md`.
+
 ## Metadata-only identities after execution retirement
 
 Durable execution retirement can remove the last client grant without the
