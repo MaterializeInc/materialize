@@ -332,11 +332,11 @@ where
             // STEP 4: Reclock the source frontier and the new and deferred updates
             //         This only makes sense if there are any times for which we can correctly
             //         accumulate the remap trace, which is what we check here.
-            if remap_trace
-                .since()
-                .iter()
-                .all(|t| !remap_upper.less_equal(t))
-            {
+            //
+            // NOTE: `less_than` is false for an empty since. That can't happen here. Step 5
+            // empties the since and the capability set together, and the operator returns early
+            // once it holds no capability.
+            if PartialOrder::less_than(remap_trace.since(), &remap_upper) {
                 // 4.1. Reclock `source_frontier`
                 //      If any FromTime in the source frontier could still be reclocked to a
                 //      binding then we must keep our capability to emit data at that binding's
@@ -345,7 +345,7 @@ where
                 let source_frontier = source_frontier.frontier();
                 let reclocked_source_frontier = match remap_trace
                     .cursor()
-                    .seek(|bound| source_frontier.iter().any(|t| !bound.less_equal(t)))
+                    .seek(|bound| !PartialOrder::less_equal(&bound, &source_frontier))
                 {
                     Some((time, _)) => Antichain::from_elem(time.clone()),
                     None => remap_upper.clone(),
@@ -547,11 +547,9 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
 /// have changed (for example UUIDs of GTID set that are no longer written to). Historically,
 /// this memory intensive approach was dropped.
 struct RemapTrace<FromTime, IntoTime> {
-    /// When non-empty, this equals `keyframes[0].0`. This will differ from keyframes once the
-    /// since is empty, which happens after the remap input closes. Calling `advance_by` with an
-    /// empty frontier doesn't advance time, so keyframes holds a stale value. Steps 4 and 5 in
-    /// reclock rely on empty antichain behavior, so we maintain it rather than deriving or using
-    /// a bool/Option.
+    /// When non-empty, this equals `keyframes[0].0`. It becomes empty after the remap input
+    /// closes. `keyframes[0].0` can't show that, because `advance_by` with an empty frontier
+    /// leaves a time unchanged.
     since: Antichain<IntoTime>,
     /// In strictly increasing time order. Never empty, and the first is the binding at the since.
     keyframes: VecDeque<(IntoTime, Antichain<FromTime>)>,
