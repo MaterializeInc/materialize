@@ -47,6 +47,10 @@ pub enum PostgresError {
     #[cfg(feature = "tunnel")]
     #[error("error setting up ssh: {0}")]
     Ssh(#[source] anyhow::Error),
+    /// Error generating an AWS IAM authentication token.
+    #[cfg(feature = "tunnel")]
+    #[error(transparent)]
+    AwsToken(#[from] mz_aws_util::rds::RdsTokenError),
     /// Error doing io to setup an ssh connection.
     #[error("error communicating with ssh tunnel: {0}")]
     SshIo(std::io::Error),

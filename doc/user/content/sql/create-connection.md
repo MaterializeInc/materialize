@@ -894,6 +894,37 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 
 {{< /tab >}}
+
+{{< tab "AWS IAM">}}
+
+##### Example {#postgres-aws-connection-example}
+
+To authenticate to Amazon RDS or Amazon Aurora PostgreSQL with AWS IAM, in
+place of a password:
+
+```mzsql
+CREATE CONNECTION aws_rds_postgres TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeRDS',
+    REGION = 'us-west-1'
+);
+
+CREATE CONNECTION pg_connection TO POSTGRES (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    USER 'materialize',
+    AWS CONNECTION aws_rds_postgres,
+    SSL MODE 'verify_full',
+    DATABASE 'postgres'
+);
+```
+
+The database user must be granted the `rds_iam` role, and the IAM role assumed
+by the [AWS connection](#aws) must be allowed the `rds-db:connect` action for
+that user. See the [Amazon RDS User Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
+for instructions on enabling IAM database authentication, creating IAM
+policies, and creating a database account.
+
+{{< /tab >}}
 {{< /tabs >}}
 
 ### SQL Server
