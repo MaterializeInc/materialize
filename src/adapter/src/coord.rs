@@ -70,7 +70,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::net::IpAddr;
-use std::ops::Neg;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
@@ -92,16 +91,13 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::USER_ID_POOL_BATCH_SIZE;
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
-    MZ_REPLICA_HYDRATION_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
-};
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Index,
-    MaterializedView, MetricSink, ReconfigurationTarget, Table, TableDataSource,
+    MaterializedView, MetricSink, ReconfigurationTarget, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
@@ -3194,34 +3190,17 @@ impl Coordinator {
         Ok(bootstrap_client)
     }
 
-    /// Prepares tables for writing by resetting them to a known state and
-    /// appending the given builtin table updates. The timestamp oracle
-    /// will be advanced to the write timestamp of the append when this
-    /// method returns.
-    #[allow(clippy::async_yields_async)]
+    /// Completes WAL progress and publishes committed builtin updates before serving.
+    /// Shared table contents belong to their publishers and are never reset by joiners.
     #[instrument]
     async fn bootstrap_tables(
         &mut self,
         entries: &[CatalogEntry],
-        mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) {
-        /// Smaller helper struct of metadata for bootstrapping tables.
-        struct TableMetadata<'a> {
-            id: CatalogItemId,
-            name: &'a QualifiedItemName,
-            table: &'a Table,
-        }
-
-        // Filter our entries down to just tables.
-        let table_metas: Vec<_> = entries
-            .into_iter()
-            .filter_map(|entry| {
-                entry.table().map(|table| TableMetadata {
-                    id: entry.id(),
-                    name: entry.name(),
-                    table,
-                })
-            })
+        let table_ids: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| entry.table().map(|table| table.global_id_writes()))
             .collect();
 
         // Establish completed WAL progress, not exclusive table ownership.
@@ -3229,7 +3208,7 @@ impl Coordinator {
         // fresh allocation and repeat the catalog retirement check each time.
         debug!("coordinator init: advancing all tables to current timestamp");
         let mut lower_bound = Timestamp::MIN;
-        let read_ts = loop {
+        loop {
             let timestamp = self.get_local_write_ts().await;
             if timestamp.timestamp < lower_bound {
                 tokio::task::yield_now().await;
@@ -3240,10 +3219,7 @@ impl Coordinator {
                 .advance_upper(timestamp.advance_to)
                 .await
                 .unwrap_or_terminate("unable to advance catalog upper for bootstrap snapshot");
-            let appends = table_metas
-                .iter()
-                .map(|meta| (meta.table.global_id_writes(), Vec::new()))
-                .collect();
+            let appends = table_ids.iter().map(|id| (*id, Vec::new())).collect();
             match self
                 .table_write_handle
                 .append(timestamp.timestamp, timestamp.advance_to, appends)
@@ -3252,7 +3228,7 @@ impl Coordinator {
             {
                 Ok(()) => {
                     self.apply_local_write(timestamp.timestamp).await;
-                    break timestamp.timestamp;
+                    break;
                 }
                 Err(mz_storage_types::controller::StorageError::InvalidUppers(uppers)) => {
                     lower_bound = uppers
@@ -3265,110 +3241,6 @@ impl Coordinator {
                 Err(error) => Err::<(), _>(error)
                     .unwrap_or_terminate("cannot establish bootstrap table progress"),
             }
-        };
-
-        // Snapshot at the completed barrier, never a later oracle read: catalog
-        // publishers can advance the oracle without advancing the table WAL.
-        debug!("coordinator init: resetting system tables");
-
-        let retained_across_restarts = BTreeSet::from([
-            self.catalog()
-                .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
-            self.catalog()
-                .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
-            self.catalog()
-                .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
-            self.catalog()
-                .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
-        ]);
-        // Shared projections, runtime rows and history belong to their own
-        // publishers. A protected adapter's startup cannot reset peer contents.
-        let reset_system_tables = !self.catalog().state().catalog_read_protection_enabled();
-
-        let mut retraction_tasks = Vec::new();
-        let system_tables: Vec<_> = table_metas
-            .iter()
-            .filter(|meta| {
-                reset_system_tables
-                    && meta.id.is_system()
-                    && !retained_across_restarts.contains(&meta.id)
-            })
-            .collect();
-        let txns_shard = self
-            .catalog()
-            .txn_wal_shard()
-            .await
-            .unwrap_or_terminate("table writer has committed WAL metadata");
-        let reader = mz_storage_client::collection_reader::CollectionReader::new(
-            self.persist_client.clone(),
-            mz_txn_wal::txn_read::TxnsRead::start::<mz_storage_types::controller::TxnsCodecRow>(
-                self.persist_client.clone(),
-                txns_shard,
-            )
-            .await,
-        );
-
-        for system_table in system_tables {
-            let table_id = system_table.id;
-            let full_name = self.catalog().resolve_full_name(system_table.name, None);
-            debug!("coordinator init: resetting system table {full_name} ({table_id})");
-
-            // Fetch the current contents of the table for retraction.
-            let global_id = system_table.table.global_id_writes();
-            let metadata = mz_storage_types::controller::CollectionMetadata {
-                persist_location: self.query_persist_location.clone(),
-                data_shard: self
-                    .catalog()
-                    .state()
-                    .storage_metadata()
-                    .get_collection_shard(global_id)
-                    .expect("system table has committed shard metadata"),
-                relation_desc: system_table.table.desc.latest(),
-                txns_shard: Some(txns_shard),
-            };
-            let snapshot_fut = reader.snapshot_cursor(global_id, metadata.clone(), read_ts);
-            let persist = self.persist_client.clone();
-
-            let task = spawn(|| format!("snapshot-{table_id}"), async move {
-                use mz_storage_types::{StorageDiff, sources::SourceData};
-                let writer = persist
-                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
-                        metadata.data_shard,
-                        Arc::new(metadata.relation_desc),
-                        Arc::new(mz_persist_types::codec_impls::UnitSchema),
-                        mz_persist_client::Diagnostics {
-                            shard_name: global_id.to_string(),
-                            handle_purpose: "system table reset batch".into(),
-                        },
-                    )
-                    .await
-                    .expect("system table schema matches committed description");
-                let mut batch = mz_storage_client::client::TimestamplessUpdateBuilder::new(&writer);
-                tracing::info!(?table_id, "starting snapshot");
-                // Get a cursor which will emit a consolidated snapshot.
-                let mut snapshot_cursor = snapshot_fut
-                    .await
-                    .unwrap_or_terminate("cannot fail to snapshot");
-
-                // Retract the current contents, spilling into our builder.
-                while let Some(values) = snapshot_cursor.next().await {
-                    for (key, _t, d) in values {
-                        let d_invert = d.neg();
-                        batch.add(&key, &(), &d_invert).await;
-                    }
-                }
-                tracing::info!(?table_id, "finished snapshot");
-
-                let batch = batch.finish().await;
-                writer.expire().await;
-                BuiltinTableUpdate::batch(table_id, batch)
-            });
-            retraction_tasks.push(task);
-        }
-
-        let retractions_res = futures::future::join_all(retraction_tasks).await;
-        for retractions in retractions_res {
-            builtin_table_updates.push(retractions);
         }
 
         info!("coordinator init: sending builtin table updates");

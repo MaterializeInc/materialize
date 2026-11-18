@@ -606,11 +606,11 @@ inputs or for the initial snapshot after catalog progress outpaces the txns WAL.
 
 #### Generation barrier
 
-On `environmentd` bootstrap in read/write mode:
+On adapter bootstrap:
 
 ```text
 catalog fence -> set up and register tables -> txns write advances table uppers
-              -> snapshot and reset system tables -> start serving
+              -> publish committed builtin updates -> start serving
 ```
 
 The bootstrap table fence establishes completed WAL progress, not exclusive
@@ -634,7 +634,7 @@ Controller activation makes one bounded registration round per tick and defers
 definitive contention without marking activation complete. Never cancel a
 submitted registration or its oracle completion to meet that scheduling bound.
 
-Bootstrap snapshots use the table-fence timestamp, not a subsequent oracle read.
+Controller initialization snapshots use the table-fence timestamp, not a subsequent oracle read.
 Catalog publishers can advance the shared oracle without advancing the table WAL.
 Waiting for that newer timestamp can deadlock bootstrap before normal table
 progress starts.
@@ -646,10 +646,9 @@ stale-generation target T <= B -> may land before barrier, never after it
 stale-generation target T > B  -> catalog advance observes fence before txns CAS
 ```
 
-For exclusive legacy handover, a system-table write before the barrier is included
-in the reset. A user-table write remains visible to later reads. Protected
-promotion does not fence retained members or authorize a shared-table reset.
-Protected exclusion requires explicit retirement. Let `C_f` be an applicable
+Adapter startup never resets shared system tables. Promotion does not fence
+retained members or authorize a shared-table reset. Exclusion requires explicit
+retirement. Let `C_f` be an applicable
 catalog fence or retirement commit and B a subsequent barrier write. Bootstrap applies the catalog upper to the oracle
 before allocating B, so `B > C_f`. After the barrier, a stale generation could
 land only at `T >= B+1`. Its cached catalog upper is `<= C_f`, hence
