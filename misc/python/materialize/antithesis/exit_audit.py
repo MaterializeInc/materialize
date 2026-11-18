@@ -90,7 +90,7 @@ def audit(
         "SELECT sampled_at, details FROM exit_observer WHERE singleton = 1"
     ).fetchone()
     age = now - recent[0] if recent is not None else None
-    if age is not None and 0 <= age <= OBSERVER_FRESH_S:
+    if recent is not None and age is not None and 0 <= age <= OBSERVER_FRESH_S:
         details = json.loads(recent[1])
         emit(
             {**details, "mode": "audit", "sample_age_s": age},
