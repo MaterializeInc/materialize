@@ -8,9 +8,9 @@ adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
 The current 26.46/26.47 debug pair built successfully, restored its source inputs
-and passed the local lifecycle assertions and unchanged DDL workflow. Adapter-loss
-is running as `aj-native-parallel-a105e001.service`. Inspect its result and cleanup
-before running the prepared subscription-identity fixture. The pair shares
+and passed the local lifecycle, unchanged DDL and adapter-loss workflows.
+Subscription identity is rerunning as `aj-native-parallel-5ab10002.service` after
+a scratch-wrapper provenance failure. Inspect its result and cleanup. The pair shares
 implementation and plan encoding, not release-skew or migration coverage.
 The optimized comparison and 60s four-index acceptance are complete. Finish the
 remaining pair checks before further readiness tuning. Debug builds remain
@@ -44,6 +44,13 @@ across promotion, warmed indexes and explicit retirement. The independent log
 audit found no Materialize panic or OOM event. A PostgreSQL connection-level FATAL
 was followed by successful CDC recovery. This is local debug coverage, not full
 CI. See `current-frontier-ddl-audit.md` for evidence and limits.
+
+Current debug adapter-loss coverage passed source-fed execution during SQL
+absence, history protection, physical compaction after replacement, replica
+reconstruction without SQL and final source/table/webhook catch-up. No Materialize
+panic or OOM was observed. Successful compaction states were not saved separately,
+so that claim rests on executed assertions, not replayable numerical evidence.
+See `current-frontier-adapter-loss-audit.md`.
 
 The frontier rewrite derives execution keys from catalog records rather than
 frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
@@ -125,9 +132,13 @@ Essential pointers:
   `current-frontier-lifecycle-evidence.tar.gz`.
 - `current-frontier-ddl-audit.md` and `.json`, plus locally verified
   `current-frontier-ddl-evidence.tar.gz` and `current-frontier-ddl-result.log`.
-- `current-frontier-adapter-loss-driver.log`. The subsequent
-  `native_frontier_subscriptions.py` is staged in `upsert-oom-investigation/`
-  and runs unchanged `subscribe-execution-identity` on the current pair.
+- `current-frontier-adapter-loss-audit.md` and `.json`, plus the locally verified
+  `current-frontier-adapter-loss-evidence.tar.gz`.
+- `current-frontier-subscriptions-retry-driver.log`. The first workflow returned,
+  but its wrapper missed the asynchronously started candidate's SQL-version
+  receipt. The retry records that version at the existing ReadyToPromote boundary.
+  Assertions, workload and limits are unchanged. Do not count the first run as
+  an acceptance pass.
 - `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
   `current-pair-worker-provenance.log`. Pair artifacts are in sibling
   `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed
