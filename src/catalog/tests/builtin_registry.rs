@@ -22,6 +22,9 @@
 //! `mz-compute-types` complements it: that pins the serialized shape of the
 //! function enums but not what the variants mean.
 //!
+//! TODO(mgree): follow-up PRs will handle SQL-defined builtin functions and
+//! builtin views.
+//!
 //! Three files in `tests/snapshots` hold the state, each with one compact
 //! JSON object per record so a changed builtin is a one-line diff:
 //!

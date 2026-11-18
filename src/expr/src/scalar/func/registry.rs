@@ -93,7 +93,7 @@ pub struct FuncRegistry {
 /// the function computes, and the source they were read from.
 ///
 /// The two halves are snapshotted separately by the test in
-/// `mz-compute-types`. A change to `properties` of a shipped LIR version
+/// `mz-catalog`. A change to `properties` of a shipped LIR version
 /// requires a version bump. A change to `source` alone is informational.
 #[derive(Debug)]
 pub struct Record<P> {
