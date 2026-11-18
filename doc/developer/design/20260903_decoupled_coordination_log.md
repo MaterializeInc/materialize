@@ -15,8 +15,8 @@ The accepted version pair predates this isolated cache repair. Its implementatio
 and plan encoding are shared, not release-skew or migration coverage. Optimized
 comparison and 60s four-index acceptance are complete.
 
-Next, verify live retirement and full-tick continuation, then resume the remaining
-conditional-write retry survey. The user rejected the
+Next, resume the remaining conditional-write retry survey and verify full-tick
+continuation under activation contention. The user rejected the
 configuration commit-contract change. The committed repair preserves fresh
 snapshots and B/B+1 validation, returns exhaustion to a later controller tick, and
 does not skip unrelated tick work. Retirement drops invalid preparation without
@@ -26,8 +26,11 @@ retirement of the running controller's own deployment as normal shutdown.
 Initialization, retirement and controller unit coverage, controller compilation,
 and targeted Clippy pass. Configuration and retirement regressions fail for the
 expected reasons without their repairs. Registration adoption racing DROP and
-Forget passes. Live process retirement and full-tick continuation still need
-integration coverage.
+Forget passes. Same-build live retirement now passes: the outgoing controller
+exits naturally with status zero before launcher cleanup, retired reopening is
+rejected, and survivor SQL, snapshot protection and warmed execution persist.
+Full-tick continuation still needs integration coverage. See
+`native-clean-exit-audit.md` and `native-clean-exit-evidence.tar.gz`.
 Controller-only cache publication is covered for enabled and disabled defaults
 and overrides. Removing publication reproduces cold misses on reopening.
 
@@ -57,8 +60,9 @@ handover, adapter-loss recovery and colliding subscription identities. The latte
 covers joins, independent cleanup, incumbent continuity across promotion and
 survivor progress after retirement. See the linked audits for exact scope.
 
-These are targeted local checks, not full CI. The host walkthrough still exposes
-a live-retirement controller panic. Candidate adapter restart at promotion remains
+These are targeted local checks, not full CI. The earlier host walkthrough exposed
+a live-retirement controller panic, now repaired and verified in the same-build
+debug lifecycle check. Candidate adapter restart at promotion remains
 permitted. DDL, adapter-loss and subscription log audits found no Materialize panic
 or OOM. Successful SQL/compaction values are not all saved separately, so some
 claims rely on executed unchanged assertions rather than numerical replay.
@@ -111,9 +115,9 @@ data was removed, leaving 155 GiB free on scratch.
 
 ## Live blockers and boundaries
 
-- Outgoing controllerd panics remain in the accepted workflow evidence. The
-  committed clean-exit repair has not yet passed live-process verification. Keep
-  unexpected errors fatal and retired-reopen rejection distinct.
+- Historical distinct-version and Kafka workflow evidence retains outgoing
+  controller panics. The repair now passes same-build live verification, not a
+  rerun of those workflows. Retired reopening remains a fatal startup rejection.
 - Cache reclamation needs a scope decision: membership records release versions,
   whereas development cache keys include executable identities. Pruning unused
   release namespaces can preserve all variants of live versions. Exact variant
