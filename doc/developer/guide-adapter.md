@@ -523,6 +523,16 @@ backoff between attempts. Do not cancel a submitted write or its completion.
 Fixed-timestamp OCC retains its single-attempt path and returns conflicts to the
 session owner rather than reusing its diffs at a new timestamp.
 
+Runtime registration adopts schemas before allocating its timestamp, but installs
+local routes only after the WAL write completes. Retain preparation across
+definitive conflicts and certify catalog bindings after every fresh allocation.
+Preparation can encounter a target already finalized by a peer. Such a handle is
+not authority to restore membership and must not fail before certification can
+exclude it. After completion, release prepared commit handles without surviving
+routes, preserving aliases and independently owned application handles. An empty
+or already-registered request still completes WAL progress before the oracle and
+the CREATE/ALTER acknowledgement.
+
 Detaching local handles does not retire shared txn-WAL membership. Physical
 finalization requires definitive shard-addressed Forget, including applying prior
 transactions, through the writer's fenced path. Install that path only after

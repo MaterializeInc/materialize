@@ -386,6 +386,14 @@ impl GroupCommitter {
                         }
                     }
                     TableWriteCmd::Register { tables, result } => {
+                        let Ok(prepared) = self
+                            .table_write_handle
+                            .prepare_registration(tables.clone())
+                            .await
+                        else {
+                            return;
+                        };
+                        prepared.unwrap_or_terminate("cannot fail to prepare table registration");
                         let ids = tables.iter().map(|table| table.id).collect();
                         let catalog_upper = &self.catalog_upper;
                         let table_write_handle = &self.table_write_handle;
@@ -1610,6 +1618,19 @@ mod tests {
     }
 
     impl TableWriteHandle for ConflictingTableWriteHandle {
+        fn prepare_registration(
+            &self,
+            _tables: Vec<TableRegistration>,
+        ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.events
+                .lock()
+                .expect("events")
+                .push("prepare_registration");
+            let (tx, rx) = oneshot::channel();
+            tx.send(Ok(())).expect("receiver still in scope");
+            rx
+        }
+
         fn prepare(
             &self,
             commands: Vec<(GlobalId, Vec<TableData>)>,
@@ -1655,6 +1676,349 @@ mod tests {
             self.events.lock().expect("events").push("forget");
             self.respond(forget_ts)
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn registration_retry_refreshes_catalog_certificate() {
+        use mz_catalog::durable::{
+            CatalogTimestampOracle, TestCatalogStateBuilder, test_bootstrap_args,
+        };
+        use mz_persist_client::ShardId;
+        use mz_persist_client::critical::Opaque;
+        use mz_repr::{Diff, RelationDesc, Row};
+        use mz_storage_client::controller::{PersistEpoch, StorageTxn};
+        use mz_storage_types::StorageDiff;
+        use mz_storage_types::controller::TxnsCodecRow;
+        use mz_storage_types::sources::SourceData;
+        use mz_txn_wal::txns::TxnsHandle;
+
+        // Forward every operation to the real worker. Only the first register
+        // pauses, after the committer has obtained its actual catalog certificate.
+        #[derive(Debug)]
+        struct GatedRegistration {
+            inner: Arc<dyn TableWriteHandle>,
+            prepared: AtomicUsize,
+            attempts: Mutex<Vec<(Timestamp, BTreeMap<GlobalId, ShardId>)>>,
+            gate: Mutex<Option<(oneshot::Sender<Timestamp>, oneshot::Receiver<()>)>>,
+            conflict:
+                Mutex<Option<oneshot::Sender<Vec<mz_storage_types::controller::InvalidUpper>>>>,
+        }
+
+        impl TableWriteHandle for GatedRegistration {
+            fn prepare_registration(
+                &self,
+                tables: Vec<TableRegistration>,
+            ) -> oneshot::Receiver<Result<(), StorageError>> {
+                self.prepared.fetch_add(1, Ordering::SeqCst);
+                self.inner.prepare_registration(tables)
+            }
+
+            fn register(
+                &self,
+                ts: Timestamp,
+                tables: Vec<TableRegistration>,
+            ) -> oneshot::Receiver<Result<(), StorageError>> {
+                self.attempts.lock().expect("attempts").push((
+                    ts,
+                    tables
+                        .iter()
+                        .map(|table| (table.id, table.data_shard))
+                        .collect(),
+                ));
+                let Some((entered, release)) = self.gate.lock().expect("gate").take() else {
+                    return self.inner.register(ts, tables);
+                };
+                let conflict = self
+                    .conflict
+                    .lock()
+                    .expect("conflict")
+                    .take()
+                    .expect("first attempt");
+                let inner = Arc::clone(&self.inner);
+                let (tx, rx) = oneshot::channel();
+                task::spawn(|| "gated-registration", async move {
+                    entered.send(ts).expect("test awaits certificate");
+                    release.await.expect("test releases registration");
+                    let result = inner.register(ts, tables).await.expect("worker responds");
+                    let Err(StorageError::InvalidUppers(uppers)) = &result else {
+                        panic!("stale registration must conflict: {result:?}");
+                    };
+                    conflict.send(uppers.clone()).expect("test awaits conflict");
+                    tx.send(result).expect("committer awaits real result");
+                });
+                rx
+            }
+
+            fn prepare(
+                &self,
+                commands: Vec<(GlobalId, Vec<TableData>)>,
+            ) -> oneshot::Receiver<Result<Vec<(GlobalId, Vec<TableData>)>, StorageError>>
+            {
+                self.inner.prepare(commands)
+            }
+
+            fn append(
+                &self,
+                ts: Timestamp,
+                advance_to: Timestamp,
+                commands: Vec<(GlobalId, Vec<TableData>)>,
+            ) -> oneshot::Receiver<Result<(), StorageError>> {
+                self.inner.append(ts, advance_to, commands)
+            }
+
+            fn detach(&self, ids: Vec<GlobalId>) -> oneshot::Receiver<Result<(), StorageError>> {
+                self.inner.detach(ids)
+            }
+
+            fn forget(
+                &self,
+                ts: Timestamp,
+                shards: BTreeSet<ShardId>,
+            ) -> oneshot::Receiver<Result<(), StorageError>> {
+                self.inner.forget(ts, shards)
+            }
+        }
+
+        let mut config = mz_persist_client::cfg::PersistConfig::new_for_tests();
+        config.configs = Arc::new(mz_txn_wal::all_dyncfgs((*config.configs).clone()));
+        let clients = mz_persist_client::cache::PersistClientCache::new(
+            config,
+            &MetricsRegistry::new(),
+            |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+        );
+        let persist = clients
+            .open(mz_persist_types::PersistLocation::new_in_mem())
+            .await
+            .expect("in-memory Persist");
+        let organization = uuid::Uuid::new_v4();
+        let bootstrap = test_bootstrap_args();
+        let builder = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation();
+        let mut seed = builder
+            .clone()
+            .build()
+            .await
+            .expect("seed builder")
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("seed catalog");
+        seed.sync_to_current_updates()
+            .await
+            .expect("drain bootstrap");
+        let mut txn = seed
+            .transaction()
+            .await
+            .expect("enable same-deployment joins");
+        txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+            .expect("native mode");
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.expect("commit native mode");
+        seed.expire().await;
+
+        let catalog = Catalog::open_debug_catalog(persist.clone(), organization, &bootstrap)
+            .await
+            .expect("debug catalog");
+        let oracle = Arc::new(MemTimestampOracle::starting_at(
+            catalog.current_upper().await,
+        ));
+        let mut peer_catalog = builder
+            .with_timestamp_oracle(CatalogTimestampOracle::new(
+                Arc::<MemTimestampOracle>::clone(&oracle),
+                SYSTEM_TIME.clone(),
+            ))
+            .build()
+            .await
+            .expect("peer builder")
+            .join()
+            .await
+            .expect("same-deployment peer");
+        peer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("drain join");
+        let retired = GlobalId::User(100_000);
+        let live = GlobalId::User(100_001);
+        let mappings = BTreeMap::from([(retired, ShardId::new()), (live, ShardId::new())]);
+        // No SQL item is needed: the certified durable binding is the authority
+        // boundary for runtime registration, including its removal by a peer.
+        let mut txn = peer_catalog.transaction().await.expect("insert bindings");
+        txn.insert_collection_metadata(mappings.clone())
+            .expect("real collection metadata");
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.expect("commit bindings");
+        let tables: Vec<_> = mappings
+            .iter()
+            .map(|(id, shard)| TableRegistration {
+                id: *id,
+                data_shard: *shard,
+                relation_desc: RelationDesc::empty(),
+            })
+            .collect();
+        let wal = ShardId::new();
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+        let writer = crate::table_writer::open(persist.clone(), wal, Arc::clone(&metrics)).await;
+        let peer = crate::table_writer::open(persist.clone(), wal, Arc::clone(&metrics)).await;
+        peer.prepare_registration(tables.clone())
+            .await
+            .expect("peer responds")
+            .expect("peer prepares");
+        let initial = oracle.write_ts().await;
+        peer_catalog
+            .advance_upper(initial.advance_to)
+            .await
+            .expect("fence peer registration");
+        peer.register(initial.timestamp, tables.clone())
+            .await
+            .expect("peer responds")
+            .expect("peer registers");
+        oracle.apply_write(initial.timestamp).await;
+
+        let (entered_tx, entered) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        let (conflict_tx, conflict) = oneshot::channel();
+        let handle = Arc::new(GatedRegistration {
+            inner: writer,
+            prepared: AtomicUsize::new(0),
+            attempts: Mutex::new(Vec::new()),
+            gate: Mutex::new(Some((entered_tx, release_rx))),
+            conflict: Mutex::new(Some(conflict_tx)),
+        });
+        let (commands, rx) = mpsc::unbounded_channel();
+        // Keep this receiver alive through the retry, which also watches shutdown.
+        let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+        let committer = GroupCommitter {
+            rx,
+            oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+            table_write_handle: Arc::<GatedRegistration>::clone(&handle),
+            catalog_upper: catalog.upper_handle(),
+            internal_cmd_tx,
+            now: SYSTEM_TIME.clone(),
+            timestamp_oracle_now: SYSTEM_TIME.clone(),
+            metrics: Metrics::register_into(&MetricsRegistry::new()),
+        };
+        let (result, registered) = oneshot::channel();
+        commands
+            .send(TableWriteCmd::Register { tables, result })
+            .expect("submit registration");
+        let task = task::spawn(|| "certificate-refresh-committer", committer.run());
+        let stale_ts = entered.await.expect("first certificate acquired");
+        assert_eq!(
+            *handle.attempts.lock().expect("attempts"),
+            vec![(stale_ts, mappings.clone())]
+        );
+        assert_eq!(handle.prepared.load(Ordering::SeqCst), 1);
+
+        peer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("catch up peer");
+        let mut txn = peer_catalog.transaction().await.expect("retire binding");
+        assert_eq!(
+            txn.delete_collection_metadata(BTreeSet::from([retired])),
+            vec![(retired, mappings[&retired])]
+        );
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.expect("commit binding removal");
+        let forget = oracle.write_ts().await;
+        assert!(forget.timestamp > stale_ts);
+        peer_catalog
+            .advance_upper(forget.advance_to)
+            .await
+            .expect("fence peer Forget");
+        peer.forget(forget.timestamp, BTreeSet::from([mappings[&retired]]))
+            .await
+            .expect("peer responds")
+            .expect("real WAL Forget");
+        oracle.apply_write(forget.timestamp).await;
+        assert_eq!(oracle.read_ts().await, forget.timestamp);
+        release.send(()).expect("release stale certificate");
+        let uppers = conflict.await.expect("actual WAL conflict");
+        assert_eq!(
+            uppers.iter().map(|upper| upper.id).collect::<BTreeSet<_>>(),
+            BTreeSet::from([retired, live])
+        );
+        assert!(
+            uppers
+                .iter()
+                .all(|upper| upper.current_upper == Antichain::from_elem(forget.advance_to))
+        );
+        let completed = registered
+            .await
+            .expect("registration completes after retry");
+        assert!(completed > forget.timestamp);
+        assert_eq!(
+            *handle.attempts.lock().expect("attempts"),
+            vec![
+                (stale_ts, mappings.clone()),
+                (completed, BTreeMap::from([(live, mappings[&live])])),
+            ]
+        );
+        assert_eq!(handle.prepared.load(Ordering::SeqCst), 1);
+        assert_eq!(oracle.read_ts().await, completed);
+        assert!(
+            !oracle
+                .applied_timestamps
+                .lock()
+                .expect("applied timestamps")
+                .contains(&stale_ts)
+        );
+        assert!(catalog.current_upper().await >= completed.step_forward());
+
+        let mut observer =
+            TxnsHandle::<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>::open(
+                Timestamp::MIN,
+                persist.clone(),
+                persist.dyncfgs().clone(),
+                metrics,
+                wal,
+                Opaque::encode(&PersistEpoch::default()),
+            )
+            .await;
+        let (upper, membership) = observer
+            .registration_status(mappings.values().copied())
+            .await;
+        assert_eq!(upper, completed.step_forward());
+        assert_eq!(membership, BTreeSet::from([mappings[&live]]));
+        let updates = |id| vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])];
+        let appended = oracle.write_ts().await;
+        catalog
+            .upper_handle()
+            .advance_upper(appended.advance_to)
+            .await
+            .expect("fence live append");
+        handle
+            .append(appended.timestamp, appended.advance_to, updates(live))
+            .await
+            .expect("worker responds")
+            .expect("live route appends");
+        oracle.apply_write(appended.timestamp).await;
+        assert!(
+            matches!(
+                handle.prepare(updates(retired)).await.expect("worker responds"),
+                Err(StorageError::IdentifierMissing(id)) if id == retired
+            ),
+            "retired local route must not be installed"
+        );
+        let (upper, membership) = observer
+            .registration_status(mappings.values().copied())
+            .await;
+        assert_eq!(upper, appended.advance_to);
+        assert_eq!(oracle.read_ts().await, appended.timestamp);
+        assert_eq!(
+            membership,
+            BTreeSet::from([mappings[&live]]),
+            "retired WAL membership must not be resurrected"
+        );
+        drop(commands);
+        task.await;
+        drop(internal_cmd_rx);
+        peer_catalog.expire().await;
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1724,8 +2088,21 @@ mod tests {
             assert_eq!(
                 *oracle.events.lock().expect("events"),
                 vec![
-                    "prepare", "allocate", "append", "allocate", "append", "allocate", "append",
-                    "apply", "allocate", "register", "apply", "detach", "allocate", "forget",
+                    "prepare",
+                    "allocate",
+                    "append",
+                    "allocate",
+                    "append",
+                    "allocate",
+                    "append",
+                    "apply",
+                    "prepare_registration",
+                    "allocate",
+                    "register",
+                    "apply",
+                    "detach",
+                    "allocate",
+                    "forget",
                     "apply",
                 ]
             );

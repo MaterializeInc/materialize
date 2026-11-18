@@ -14,7 +14,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::critical::Opaque;
 use mz_persist_client::write::WriteHandle;
@@ -65,7 +64,15 @@ pub(crate) trait TableWriteHandle: Debug + Send + Sync {
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 
-    /// Registers `tables` at `register_ts`.
+    /// Opens and adopts schemas without changing shared WAL membership or local routes.
+    /// Call once before allocating a registration timestamp. FIFO ordering keeps
+    /// later appends behind the completed registration.
+    fn prepare_registration(
+        &self,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Registers previously prepared, catalog-certified `tables` at `register_ts`.
     fn register(
         &self,
         register_ts: Timestamp,
@@ -133,6 +140,10 @@ struct PersistTableWriteWorker {
 /// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
 enum PersistTableWriteCmd {
+    PrepareRegistration {
+        tables: Vec<TableRegistration>,
+        tx: oneshot::Sender<Result<(), StorageError>>,
+    },
     Prepare {
         updates: Vec<(GlobalId, Vec<TableData>)>,
         tx: oneshot::Sender<Result<Vec<(GlobalId, Vec<TableData>)>, StorageError>>,
@@ -163,6 +174,9 @@ enum PersistTableWriteCmd {
 impl PersistTableWriteCmd {
     fn name(&self) -> &'static str {
         match self {
+            PersistTableWriteCmd::PrepareRegistration { .. } => {
+                "PersistTableWriteCmd::PrepareRegistration"
+            }
             PersistTableWriteCmd::Prepare { .. } => "PersistTableWriteCmd::Prepare",
             PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
             PersistTableWriteCmd::Detach { .. } => "PersistTableWriteCmd::Detach",
@@ -175,7 +189,7 @@ impl PersistTableWriteCmd {
 
 /// Opens fresh table write handles concurrently.
 ///
-/// Registration consumes handles even on conflict, so retries cannot reuse them.
+/// Adopt these before allocating a timestamp so definitive conflicts can reuse them.
 async fn open_table_write_handles(
     persist_client: &PersistClient,
     tables: Vec<TableRegistration>,
@@ -200,9 +214,17 @@ async fn open_table_write_handles(
             // Fetch the most recent upper: a freshly opened handle may otherwise report an upper
             // behind the shard's since.
             write.fetch_recent_upper().await;
-            (table.id, write)
+            // A queued target can already be finalized by a peer. Defer authority
+            // to post-allocation catalog certification rather than failing here.
+            // An admitted target still requires an adopted schema at registration.
+            if write.try_register_schema().await.is_none() {
+                write.expire().await;
+                return None;
+            }
+            Some((table.id, write))
         })
         .buffer_unordered(50)
+        .filter_map(|handle| async move { handle })
         .collect()
         .await
 }
@@ -238,6 +260,15 @@ impl PersistTableWriteWorker {
 }
 
 impl TableWriteHandle for PersistTableWriteWorker {
+    fn prepare_registration(
+        &self,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistTableWriteCmd::PrepareRegistration { tables, tx });
+        rx
+    }
+
     fn prepare(
         &self,
         updates: Vec<(GlobalId, Vec<TableData>)>,
@@ -315,6 +346,10 @@ impl TxnsTableWorker {
     ) {
         while let Some((span, command)) = rx.recv().await {
             match command {
+                PersistTableWriteCmd::PrepareRegistration { tables, tx } => {
+                    self.prepare_registration(tables).instrument(span).await;
+                    let _ = tx.send(Ok(()));
+                }
                 PersistTableWriteCmd::Prepare { updates, tx } => {
                     let result = self.prepare(updates).instrument(span).await;
                     let _ = tx.send(result);
@@ -359,58 +394,63 @@ impl TxnsTableWorker {
         tracing::info!("PersistTableWriteWorker shutting down via input exhaustion");
     }
 
-    async fn register(
-        &mut self,
-        register_ts: Timestamp,
-        tables: Vec<TableRegistration>,
-    ) -> Result<(), StorageError> {
+    async fn prepare_registration(&mut self, tables: Vec<TableRegistration>) {
         let mut ids_handles = open_table_write_handles(&self.persist_client, tables).await;
         // As tables evolve (e.g. columns are added) we treat the older versions as
         // "views" on the later versions. While it's not required, it's easier to reason
         // about table registration if we do it in GlobalId order.
         ids_handles.sort_unstable_by_key(|(gid, _handle)| *gid);
 
-        for (id, write_handle) in ids_handles.iter() {
-            debug!(
-                "tables register {} {:.9}",
-                id,
-                write_handle.shard_id().to_string()
-            );
-            let previous = self.write_handles.insert(*id, write_handle.shard_id());
-            if previous.is_some() {
-                panic!("already registered a WriteHandle for collection {:?}", id);
-            }
-        }
+        self.txns
+            .adopt(ids_handles.into_iter().map(|(_, handle)| handle));
+    }
 
-        // Registering also advances the logical upper of all shards in the txns set.
-        let new_ids = ids_handles.iter().map(|(id, _)| *id).collect_vec();
-        let handles = ids_handles.into_iter().map(|(_, handle)| handle);
-        let res = self.txns.register(register_ts, handles).await;
-        match res {
+    async fn register(
+        &mut self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> Result<(), StorageError> {
+        // The caller certifies these bindings after timestamp allocation. Adopted
+        // handles alone never authorize restoring membership after DROP/Forget.
+        // Even existing membership needs completed WAL time before acknowledging
+        // CREATE/ALTER, so retain the empty registration advancement.
+        let shards = tables
+            .iter()
+            .map(|table| table.data_shard)
+            .collect::<BTreeSet<_>>();
+        match self.txns.register_adopted(register_ts, shards).await {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
+                for table in tables {
+                    debug!(
+                        "tables register {} {:.9}",
+                        table.id,
+                        table.data_shard.to_string()
+                    );
+                    let previous = self.write_handles.insert(table.id, table.data_shard);
+                    if previous.is_some() {
+                        panic!(
+                            "already registered a WriteHandle for collection {:?}",
+                            table.id
+                        );
+                    }
+                }
+                // Preparation may include targets removed by catalog certification.
+                // Keep handles for every surviving alias, while application handles
+                // remain owned by txn-WAL independently of commit preparation.
+                self.txns
+                    .retain_adopted(&self.write_handles.values().copied().collect());
                 Ok(())
             }
-            Err(current) => {
-                // Registration consumed the handles. Roll back the IDs so a fresh retry can
-                // register them.
-                debug!(
-                    "register at {:?} conflicted with txns upper {:?}, rolling back {:?}",
-                    register_ts, current, new_ids
-                );
-                for id in &new_ids {
-                    self.write_handles.remove(id);
-                }
-                Err(StorageError::InvalidUppers(
-                    new_ids
-                        .into_iter()
-                        .map(|id| InvalidUpper {
-                            id,
-                            current_upper: Antichain::from_elem(current),
-                        })
-                        .collect(),
-                ))
-            }
+            Err(current) => Err(StorageError::InvalidUppers(
+                tables
+                    .into_iter()
+                    .map(|table| InvalidUpper {
+                        id: table.id,
+                        current_upper: Antichain::from_elem(current),
+                    })
+                    .collect(),
+            )),
         }
     }
 
@@ -681,15 +721,18 @@ mod tests {
             (&first, alias, 11),
             (&peer, peer_id, 12),
         ] {
+            let tables: Vec<_> = vec![TableRegistration {
+                id,
+                data_shard: shard,
+                relation_desc: RelationDesc::empty(),
+            }];
             writer
-                .register(
-                    ts.into(),
-                    vec![TableRegistration {
-                        id,
-                        data_shard: shard,
-                        relation_desc: RelationDesc::empty(),
-                    }],
-                )
+                .prepare_registration(tables.clone())
+                .await
+                .expect("worker responds")
+                .expect("preparation succeeds");
+            writer
+                .register(ts.into(), tables)
                 .await
                 .expect("worker responds")
                 .expect("shared registration succeeds");
@@ -751,6 +794,71 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn registration_preparation_tolerates_finalized_target() {
+        let persist = persist_client().await;
+        let shard = ShardId::new();
+        let mut write = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("fixture operation succeeds");
+        write.advance_upper(&Antichain::new()).await;
+        let mut since = persist
+            .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                mz_persist_client::critical::CriticalReaderId::new(),
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("fixture operation succeeds");
+        let epoch = since.opaque().clone();
+        since
+            .compare_and_downgrade_since(&epoch, (&epoch, &Antichain::new()))
+            .await
+            .expect("fixture operation succeeds");
+        write.expire().await;
+        persist
+            .finalize_shard::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("fixture operation succeeds");
+        let writer = open(
+            persist,
+            ShardId::new(),
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+        )
+        .await;
+        writer
+            .prepare_registration(vec![TableRegistration {
+                id: GlobalId::User(1),
+                data_shard: shard,
+                relation_desc: RelationDesc::empty(),
+            }])
+            .await
+            .expect("fixture operation succeeds")
+            .expect("fixture operation succeeds");
+        // Certification excludes the retired binding. Its empty barrier must
+        // still finish, and the worker must remain usable.
+        writer
+            .register(10.into(), Vec::new())
+            .await
+            .expect("fixture operation succeeds")
+            .expect("fixture operation succeeds");
+        writer
+            .append(11.into(), 12.into(), Vec::new())
+            .await
+            .expect("fixture operation succeeds")
+            .expect("fixture operation succeeds");
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn prepared_append_survives_peer_progress() {
         let persist = persist_client().await;
         let txns = ShardId::new();
@@ -760,15 +868,18 @@ mod tests {
         let writer = open(persist.clone(), txns, Arc::clone(&metrics)).await;
         let peer = open(persist.clone(), txns, metrics).await;
         for (handle, ts) in [(&writer, 10u64), (&peer, 11)] {
+            let tables: Vec<_> = vec![TableRegistration {
+                id,
+                data_shard: shard,
+                relation_desc: RelationDesc::empty(),
+            }];
             handle
-                .register(
-                    ts.into(),
-                    vec![TableRegistration {
-                        id,
-                        data_shard: shard,
-                        relation_desc: RelationDesc::empty(),
-                    }],
-                )
+                .prepare_registration(tables.clone())
+                .await
+                .expect("worker responds")
+                .expect("preparation succeeds");
+            handle
+                .register(ts.into(), tables)
                 .await
                 .expect("worker responds")
                 .expect("registration succeeds");
@@ -852,18 +963,21 @@ mod tests {
             let first = open(persist.clone(), txns, Arc::clone(&metrics)).await;
             let peer = open(peer_persist, txns, metrics).await;
             for (worker, ts) in [(&first, 10u64), (&peer, 11)] {
+                let tables: Vec<_> = [(retired_id, retired), (live_id, live)]
+                    .into_iter()
+                    .map(|(id, data_shard)| TableRegistration {
+                        id,
+                        data_shard,
+                        relation_desc: RelationDesc::empty(),
+                    })
+                    .collect();
                 worker
-                    .register(
-                        ts.into(),
-                        [(retired_id, retired), (live_id, live)]
-                            .into_iter()
-                            .map(|(id, data_shard)| TableRegistration {
-                                id,
-                                data_shard,
-                                relation_desc: RelationDesc::empty(),
-                            })
-                            .collect(),
-                    )
+                    .prepare_registration(tables.clone())
+                    .await
+                    .expect("worker responds")
+                    .expect("preparation succeeds");
+                worker
+                    .register(ts.into(), tables)
                     .await
                     .expect("worker responds")
                     .expect("table operation succeeds");
@@ -976,21 +1090,20 @@ mod tests {
 
         // Enqueue without awaiting, so registration, append, and forgetting must
         // be serialized by the concrete worker, without a storage controller.
-        let registered = writer.register(
-            10.into(),
-            vec![TableRegistration {
-                id,
-                data_shard: shard,
-                relation_desc: RelationDesc::empty(),
-            }],
-        );
+        let tables: Vec<_> = vec![TableRegistration {
+            id,
+            data_shard: shard,
+            relation_desc: RelationDesc::empty(),
+        }];
+        let prepared = writer.prepare_registration(tables.clone());
+        let registered = writer.register(10.into(), tables);
         let appended = writer.append(
             11.into(),
             12.into(),
             vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
         );
         let forgotten = writer.forget(12.into(), BTreeSet::from([shard, ShardId::new()]));
-        for result in [registered, appended, forgotten] {
+        for result in [prepared, registered, appended, forgotten] {
             result
                 .await
                 .expect("worker responds")
