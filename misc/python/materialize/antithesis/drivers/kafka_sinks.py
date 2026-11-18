@@ -141,8 +141,11 @@ EVENTUALLY_TIGHT_S = 120.0
 EVENTUALLY_WEDGE_S = 600.0
 EVENTUALLY_POLL_S = 5.0
 
+# Wording an older upgrade base can still report.
+LEGACY_SINK_ERRORS = ("input compacted past resume upper",)
 FORBIDDEN_SINK_ERRORS = (
-    "input compacted past resume upper",
+    *LEGACY_SINK_ERRORS,
+    "cannot resume: input compacted to",
     "upper regressed in topic",
     "Fenced off by newer version of the sink",
     "invalid progress record",

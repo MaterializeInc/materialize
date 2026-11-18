@@ -294,3 +294,17 @@ def test_bag_diff() -> None:
     d = o.bag_diff([(1,), (1,), (2,)], [(1,), (3,)])
     assert d["missing_count"] == 2 and d["extra_count"] == 1
     assert d["missing"] == [[1], [2]] and d["extra"] == [[3]]
+
+
+def test_forbidden_sink_errors_match_the_product_text() -> None:
+    pytest.importorskip("antithesis")
+    from materialize import MZ_ROOT
+    from materialize.antithesis.drivers import kafka_sinks
+
+    sink = MZ_ROOT / "src" / "storage" / "src" / "sink"
+    source = sink.with_suffix(".rs").read_text() + (sink / "kafka.rs").read_text()
+    current = set(kafka_sinks.FORBIDDEN_SINK_ERRORS) - set(
+        kafka_sinks.LEGACY_SINK_ERRORS
+    )
+    stale = sorted(m for m in current if m not in source)
+    assert not stale, f"no sink can report these errors any more: {stale}"
