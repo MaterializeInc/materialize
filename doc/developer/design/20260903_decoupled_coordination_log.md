@@ -9,14 +9,17 @@ Do not restore legacy execution or weaken validation to make tests pass.
 
 The current 26.46/26.47 debug pair passed local lifecycle, DDL, adapter-loss and
 subscription-identity coverage and debug restart measurements. All owned runtimes
-are stopped. A small controller-cache publication repair is uncommitted in
-`src/environmentd/src/controllerd.rs` and `controllerd/startup.rs`. Source review
-and its bounded debug build pass. Next, review the pending private
-`native_controller_cache_probe.py`, then compare the preserved old debug pin and
-`native-controller-cache-candidate` sequentially. Verify actual cache hits and
-recovery, including cache-disable behavior, before claiming improvement or committing.
-The version pair shares implementation and plan encoding, not release-skew or
-migration coverage. Optimized comparison and 60s four-index acceptance are complete.
+are stopped. Controller cache publication is committed in `240f174b`, with source
+review, debug build, matched restart probes and a disabled-then-enabled check.
+The accepted version pair predates this isolated cache repair. Its implementation
+and plan encoding are shared, not release-skew or migration coverage. Optimized
+comparison and 60s four-index acceptance are complete.
+
+Next, resolve the configuration-retry scope with the user. Before adopting the
+proposed retained-input/rebuilt-diff boundary, finish checking whether existing
+WAL state can distinguish unrelated progress from writes to the configuration
+shards. Avoid claiming backoff alone guarantees convergence under continuous
+peer writes. No retry-policy or retirement-exit changes have landed.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -130,6 +133,8 @@ Essential pointers:
   build was stopped to honor disabled caching even when native plan storage
   retains a cache handle. The corrected build passed. Candidate artifacts and
   `native-controller-cache-binaries.json` are in `upsert-oom-investigation/`.
+  `controller-cache-comparison-audit.md`, `controller-cache-disabled-result.log`
+  and locally verified `controller-cache-probes-evidence.tar.gz` record the tests.
 - `current-frontier-lifecycle-audit.md` and `.json`, plus
   `current-frontier-lifecycle-result.log`. The locally verified archive is
   `current-frontier-lifecycle-evidence.tar.gz`.
@@ -141,8 +146,9 @@ Essential pointers:
   `current-frontier-subscriptions-evidence.tar.gz`. An earlier wrapper-only
   version-receipt failure is retained in `current-frontier-subscriptions-driver.log`.
 - `current-builtin-cache-startup-survey.md` and `current-cache-build-identities.log`.
-  Controllers and adapters have distinct cache namespaces in the pinned pair.
-  Controllers discard misses. Same-binary whole-restart misses remain unproven.
+  Controllers and adapters have distinct cache namespaces. The controller repair
+  preserves that isolation. Same-binary adapter whole-restart misses were not
+  reproduced.
 - `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
   `current-pair-worker-provenance.log`. Pair artifacts are in sibling
   `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed

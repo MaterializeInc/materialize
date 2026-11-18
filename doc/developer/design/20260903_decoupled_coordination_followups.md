@@ -247,16 +247,25 @@ opportunity. Validate against each transaction's item versions and optimizer
 settings, retaining the existing incremental reader rather than adding shard
 scans. No incremental-replay cache change or measured saving is claimed here.
 
-The current debug pair has distinct controller and adapter executable build IDs,
-so their ordinary expression-cache namespaces differ even within one package
-version. Adapters publish optimized misses asynchronously after bootstrap.
-Controllers discard their misses, and replicas only read the paired adapter's
-namespace. This explains repeated controller optimization and permits duplicate
-cold-start work before adapter publication. Cache hits still parse and SQL-plan
-builtin views. It does not establish a same-binary adapter cache failure after
-a full restart retaining storage. Measure that case before changing invalidation
-or sharing namespaces. Evidence: `current-builtin-cache-startup-survey.md` and
-`current-cache-build-identities.log` in the handoff's evidence directory.
+Controller and adapter development binaries have distinct expression-cache
+namespaces. Controllers now enqueue their local misses after successful catalog
+initialization, respecting cache enablement and without waiting for durability.
+The matched debug probe observed controller restart at 21.2s before versus 4.5s
+after, and all-native restart at 23.9s versus 7.5s. Repaired restarts recorded 259
+builtin hits versus zero before. Fresh startup remained about 53s. These are
+single-run observations with unchanged limits, not a production benchmark.
+Disabled startup left the controller cold on its first enabled restart, which
+then warmed the following restart. See `controller-cache-comparison-audit.md`,
+`controller-cache-disabled-result.log` and `controller-cache-probes-evidence.tar.gz`.
+
+Replicas still read the paired adapter's namespace, and cache hits still parse
+and SQL-plan builtin views. Concurrent cold startup can duplicate optimization
+before adapter publication. Retained-state restart evidence shows no repeated
+observed adapter builtin optimization events, unlike the earlier controllers.
+Do not infer per-item hits from that timing or change namespace isolation to
+avoid first-start misses. The adapter's disabled-cache publisher still checks
+handle presence rather than best-effort enablement, although native plan storage
+retains a handle. That adjacent cleanup is not part of the controller repair.
 
 Current lifecycle, DDL and subscription evidence shows one intentional candidate
 adapter restart at promotion, not two. The later clean DDL exit belongs to the
