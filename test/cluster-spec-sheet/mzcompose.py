@@ -1980,7 +1980,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             for repeat in range(3):
                 for disable_statement_logging in (False, True):
                     for protocol in self.options.protocols:
-                        for concurrency in (128, 256, 512):
+                        for concurrency in (512, 1024):
                             self.measure(
                                 runner,
                                 size,
@@ -3381,7 +3381,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [32]
+    ENVD_CPU_SCALES: list[int] = [64]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
