@@ -38,7 +38,15 @@ unchanged transaction/bounded-staleness SQL suites passed on rebuilt binaries.
 External-source RTR integration was not rerun. Earlier stale-binary attempts are
 excluded from evidence, and the runtime wrapper now rejects failed builds.
 
-Then finish the remaining conditional-write survey, particularly inline DDL owners. Recheck `multi-writer-retry-survey.md` and
+Database/schema creation now uses the existing staged commit owner. Independent
+review, Clippy, unchanged namespace/transaction SQL tests and a new pgwire test
+passed. IF NOT EXISTS notices and existing catalog error codes are preserved.
+Namespace-specific forced-contention coverage remains missing: the existing global
+failpoint cannot distinguish these operations from background transactions without
+another test hook. See `namespace-ddl-verification.md`.
+
+Next, finish the remaining conditional-write survey, especially sessionless cluster
+policy/login synchronization and SQL owners with separate completion effects. Recheck `multi-writer-retry-survey.md` and
 `native-only/native-ci-recovery/current-remaining-retry-sites.md` against source.
 Runtime-level activation exhaustion/tick continuation coverage remains outstanding.
 Bring changes to write guarantees or public semantics to the user before landing.
@@ -91,8 +99,8 @@ The remaining architecture-generated load is assessed in the
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 16:00 UTC,
-tag expiry 16:05. Timing and focused SQL runtimes are stopped. Never overlap builds and runtimes. Builds use one job,
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 18:00 UTC,
+tag expiry 18:05. Timing and focused SQL runtimes are stopped. Never overlap builds and runtimes. Builds use one job,
 four CPUs, 32 GiB, no swap and a 30 GiB disk reserve. Runtime uses a 28 GiB/6-CPU
 user slice plus an 8 GiB/2-CPU root slice. Extend the worker within these caps
 without asking when needed. Restore caps and stop owned runtimes after each run.
@@ -103,6 +111,8 @@ Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recove
 source overlays. Verify hashes, not the displayed Git revision.
 
 Essential current pointers:
+- `namespace-ddl-verification.md` links the accepted namespace SQL/protocol evidence
+  and documents the missing operation-specific contention fixture.
 - Scratch `controller-followups/native-recency-verified-build.log` and local
   `native-recency-verified-test.log` contain accepted recency verification.
   `native-recency-source.sha256` matches the tested source.
