@@ -115,8 +115,11 @@ pub fn plan_insert(
         })
         .collect::<Result<Vec<_>, _>>()?;
     // `RETURNING` is evaluated in `environmentd`.
-    if returning.iter().any(|e| e.contains_unbounded()) {
-        bail_unsupported!("jq in a RETURNING clause");
+    if let Some(func) = returning.iter().find_map(|e| e.unbounded_func()) {
+        bail_unsupported!(format!(
+            "{} in a RETURNING clause",
+            mz_expr::func_for_error(func)
+        ));
     }
 
     Ok(Plan::Insert(InsertPlan {

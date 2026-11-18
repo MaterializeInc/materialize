@@ -124,6 +124,19 @@ impl std::fmt::Debug for MirScalarExpr {
     }
 }
 
+/// How an error message shows a function: its `Display`, cut after 40
+/// characters, because a `jq` call shows its whole program.
+pub fn func_for_error(func: &dyn fmt::Display) -> String {
+    // Function names stay whole: the longest `UnmaterializableFunc` name,
+    // `mz_session_role_memberships`, has 27 characters.
+    const MAX_CHARS: usize = 40;
+    let s = func.to_string();
+    match s.char_indices().nth(MAX_CHARS) {
+        Some((end, _)) => format!("{}...", &s[..end]),
+        None => s,
+    }
+}
+
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
         is.iter().map(|i| MirScalarExpr::column(*i)).collect()
@@ -1120,16 +1133,14 @@ impl MirScalarExpr {
     }
 
     /// The function of an [unfoldable](Self::contains_unfoldable) call in the
-    /// expression, as printed by its `Display`, if there is one.
-    fn unfoldable_func(&self) -> Option<String> {
-        let mut found = None;
-        self.visit_pre(|e| {
+    /// expression, if there is one.
+    fn unfoldable_func(&self) -> Option<&dyn fmt::Display> {
+        let mut found: Option<&dyn fmt::Display> = None;
+        Visit::visit_pre(self, &mut |e| {
             if found.is_none() {
                 found = match e {
-                    MirScalarExpr::CallUnmaterializable(f) => Some(f.to_string()),
-                    MirScalarExpr::CallUnary { func, .. } if func.is_unbounded() => {
-                        Some(func.to_string())
-                    }
+                    MirScalarExpr::CallUnmaterializable(f) => Some(f),
+                    MirScalarExpr::CallUnary { func, .. } if func.is_unbounded() => Some(func),
                     _ => None,
                 };
             }
@@ -1140,13 +1151,21 @@ impl MirScalarExpr {
     /// True iff the expression contains a call to an
     /// [unbounded](UnaryFunc::is_unbounded) function.
     pub fn contains_unbounded(&self) -> bool {
-        let mut contains = false;
-        self.visit_pre(|e| {
+        self.unbounded_func().is_some()
+    }
+
+    /// The function of a call to an [unbounded](UnaryFunc::is_unbounded)
+    /// function in the expression, if there is one.
+    pub fn unbounded_func(&self) -> Option<&UnaryFunc> {
+        let mut found = None;
+        Visit::visit_pre(self, &mut |e| {
             if let MirScalarExpr::CallUnary { func, .. } = e {
-                contains |= func.is_unbounded();
+                if found.is_none() && func.is_unbounded() {
+                    found = Some(func);
+                }
             }
         });
-        contains
+        found
     }
 
     /// Evaluates an expression that references no columns and contains no
@@ -1162,7 +1181,7 @@ impl MirScalarExpr {
     ) -> Result<Datum<'a>, EvalError> {
         if let Some(func) = self.unfoldable_func() {
             return Err(EvalError::Unsupported {
-                feature: format!("{func} in a constant expression").into(),
+                feature: format!("{} in a constant expression", func_for_error(func)).into(),
                 discussion_no: None,
             });
         }
@@ -2684,6 +2703,13 @@ mod tests {
                 bincode::deserialize(&bytes).expect("deserializes from bincode");
             prop_assert_eq!(&stable, &from_bincode);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_func_for_error_cuts_at_char_boundary() {
+        assert_eq!(func_for_error(&"current_user"), "current_user");
+        let long = "é".repeat(50);
+        assert_eq!(func_for_error(&long), format!("{}...", "é".repeat(40)));
     }
 
     /// An `OutOfDomain` with both limits unset is not constructible by any

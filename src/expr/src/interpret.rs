@@ -1048,6 +1048,8 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             (special.map_fn)(self, summary.range)
         } else if func.is_unbounded() {
             // The call must not be evaluated, so nothing is known about its result.
+            // TODO: This also stops clusters, which may evaluate the call, from pruning on its
+            // result. Revisit once jq's evaluation is bounded, as materialize#40133 proposes.
             ResultSpec::anything()
         } else {
             let is_monotone = func.is_monotone();

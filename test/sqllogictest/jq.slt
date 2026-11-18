@@ -199,6 +199,10 @@ SELECT * FROM jq_programs, regexp_extract(p || '', 'x')
 query error jq\["\."\] in a constant expression not yet supported
 SELECT 1 LIMIT jq('1', '.')::int8
 
+# The error shows at most the first 40 characters of the call.
+query error jq\["\.abcdefghij\.abcdefghij\.abcdefghij\.ab\.\.\. in a constant expression not yet supported
+SELECT 1 LIMIT jq('1', '.abcdefghij.abcdefghij.abcdefghij.abcdefghij')::int8
+
 statement ok
 PREPARE jq_param AS SELECT $1::jsonb
 
@@ -228,12 +232,12 @@ COPY INTO docs FROM (jq('"s3://path/to/dir"', '.') #>> '{}') (FORMAT CSV, AWS CO
 statement error jq\["\."\] in a constant expression not yet supported
 SELECT 1 LIMIT CASE WHEN true THEN 1 ELSE jq('1', '.')::int8 END
 
-statement error jq in a webhook CHECK expression not yet supported
+statement error jq\["\.ok"\] in a webhook CHECK expression not yet supported
 CREATE SOURCE jq_webhook FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (WITH (BODY) jq(body::jsonb, '.ok') = 'true')
 
-statement error jq in a RETURNING clause not yet supported
+statement error jq\["\.name"\] in a RETURNING clause not yet supported
 INSERT INTO docs VALUES ('{"name": "dee"}', '.name') RETURNING jq(doc, '.name')
 
 # Equivalence propagation prunes constant rows by evaluating the filter on

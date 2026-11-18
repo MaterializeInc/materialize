@@ -184,7 +184,9 @@ impl EquivalencePropagation {
         match expr {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 if let Ok(rows) = rows {
-                    // Expressions with an unbounded call must not be evaluated, so they take no part below.
+                    // Expressions with an unbounded call must not be evaluated, so they take no
+                    // part below. The other members of a class are still all equal, so checking
+                    // only them keeps more rows, never fewer.
                     let classes: Vec<Vec<_>> = outer_equivalences
                         .classes
                         .iter()

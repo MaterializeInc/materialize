@@ -610,8 +610,11 @@ pub fn plan_create_webhook_source(
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
         // Validation runs in `environmentd`, on every request.
-        if expression.contains_unbounded() {
-            bail_unsupported!("jq in a webhook CHECK expression");
+        if let Some(func) = expression.unbounded_func() {
+            bail_unsupported!(format!(
+                "{} in a webhook CHECK expression",
+                mz_expr::func_for_error(func)
+            ));
         }
     }
 
