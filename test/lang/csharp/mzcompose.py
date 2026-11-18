@@ -21,7 +21,7 @@ SERVICES = [
         name="csharp",
         config={
             # renovate: datasource=docker depName=mcr.microsoft.com/dotnet/sdk versioning=docker
-            "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+            "image": "mcr.microsoft.com/dotnet/sdk:8.0@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5",
             "volumes": [
                 "../../../:/workdir",
             ],
