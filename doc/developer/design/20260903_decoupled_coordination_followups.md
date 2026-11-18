@@ -516,9 +516,16 @@ complete conversion still needs investigation.
 
 ### Maintained physical dependencies and MV refresh state
 
-M3 requires a two-adapter reproduction before deciding scope. If one adapter
-retracts another's rows, repair row scoping using the frontier ownership model.
-Otherwise retain this as a follow-up. Source inspection alone is not reproduction.
+The default-debug two-adapter witness reproduced missing dependency and refresh
+rows during peer join and restart. This ownership repair is now M3 work, not a
+deferred follow-up. See `remaining-introspection-ownership.md` and
+`dependency-refresh-fixed-evidence/` under the handoff's evidence root.
+
+The reduction contract remains open. Deduplicating live adapters' edges can
+include different selected plans. Selecting the furthest live refresh observation
+must preserve its complete last/next pair, including completed-schedule NULLs,
+and can fall back when that execution retires. Do not silently substitute these
+semantics for one authoritative plan or retirement-stable progress.
 
 `src/adapter/src/coord/introspection/frontiers.rs` publishes selected physical
 imports and refresh observations through differential introspection collections.
