@@ -675,8 +675,9 @@ promotions cannot precede B+2, so this authorizes B+1 without excluding other
 writers. Losing active authority skips the write, not the retained controller.
 The newly active controller reconciles its own local configuration on promotion.
 Success excludes intervening WAL writes. A definitive conflict requires fresh snapshots,
-not replayed differences. Reconciliation completes before readiness and does not
-depend on compute queries. Adapters join the controller-initialized catalog and
+not replayed differences. Reconciliation does not depend on compute queries.
+Fresh initialization completes it before starting children. Restart and promotion
+reconciliation run on the controller tick without blocking readiness on publication. Adapters join the controller-initialized catalog and
 never publish these configuration snapshots, even though their catalog handles
 can write protection. Planning continues to use deployment-local configuration.
 
