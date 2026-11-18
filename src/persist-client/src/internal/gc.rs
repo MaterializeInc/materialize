@@ -26,7 +26,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use tracing::{Instrument, Span, debug, debug_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::PartDeletes;
+use crate::batch::{BlobDeleteStats, PartDeletes};
 use crate::cfg::{GC_BLOB_DELETE_CONCURRENCY_LIMIT, GC_REMOVE_FINALIZED_ROLLUPS};
 
 use mz_ore::cast::CastFrom;
@@ -49,9 +49,18 @@ pub struct GcReq {
     pub new_seqno_since: SeqNo,
 }
 
+/// Who asked for a GC, for metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcCaller {
+    /// A commit's maintenance.
+    Maintenance,
+    /// [Machine::finish_finalized_gc], on a dropped shard.
+    Finalize,
+}
+
 #[derive(Debug)]
 pub struct GarbageCollector<K, V, T, D> {
-    sender: UnboundedSender<(GcReq, oneshot::Sender<RoutineMaintenance>)>,
+    sender: UnboundedSender<(GcReq, GcCaller, oneshot::Sender<RoutineMaintenance>)>,
     _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
@@ -121,20 +130,25 @@ where
 {
     pub fn new(machine: Machine<K, V, T, D>, isolated_runtime: Arc<IsolatedRuntime>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
-            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<RoutineMaintenance>)>();
+            mpsc::unbounded_channel::<(GcReq, GcCaller, oneshot::Sender<RoutineMaintenance>)>();
 
         // spin off a single task responsible for executing GC requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistGcWorker", async move {
-            while let Some((req, completer)) = gc_req_recv.recv().await {
+            while let Some((req, caller, completer)) = gc_req_recv.recv().await {
                 let mut consolidated_req = req;
+                let mut consolidated_caller = caller;
                 let mut gc_completed_senders = vec![completer];
 
                 // check if any further gc requests have built up. we'll merge their requests
                 // together and run a single GC pass to satisfy all of them
-                while let Ok((req, completer)) = gc_req_recv.try_recv() {
+                while let Ok((req, caller, completer)) = gc_req_recv.try_recv() {
                     assert_eq!(req.shard_id, consolidated_req.shard_id);
                     gc_completed_senders.push(completer);
+                    // The merged pass does the finalize's work too.
+                    if caller == GcCaller::Finalize {
+                        consolidated_caller = caller;
+                    }
                     consolidated_req.new_seqno_since =
                         std::cmp::max(req.new_seqno_since, consolidated_req.new_seqno_since);
                 }
@@ -158,7 +172,7 @@ where
 
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
-                let (mut maintenance, _stats) = {
+                let (mut maintenance, stats) = {
                     let name = format!("gc_and_truncate ({})", consolidated_req.shard_id);
                     let machine = machine.clone();
                     isolated_runtime
@@ -171,6 +185,13 @@ where
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
+                if machine.applier.is_tombstone() {
+                    machine
+                        .applier
+                        .metrics
+                        .gc
+                        .tombstone_deleted(consolidated_caller, stats.deleted);
+                }
                 machine
                     .applier
                     .metrics
@@ -200,10 +221,11 @@ where
     pub fn gc_and_truncate_background(
         &self,
         req: GcReq,
+        caller: GcCaller,
     ) -> Option<oneshot::Receiver<RoutineMaintenance>> {
         let (gc_completed_sender, gc_completed_receiver) = oneshot::channel();
         let new_gc_sender = self.sender.clone();
-        let send = new_gc_sender.send((req, gc_completed_sender));
+        let send = new_gc_sender.send((req, caller, gc_completed_sender));
 
         if let Err(e) = send {
             // In the steady state we expect this to always succeed, but during
@@ -571,7 +593,7 @@ where
             gc_results.batch_parts_deleted_from_blob += batch_parts_to_delete.len();
             gc_results.rollups_deleted_from_blob += rollups_to_delete.len();
 
-            Self::delete_and_truncate(
+            let deleted = Self::delete_and_truncate(
                 truncate_lt,
                 &mut batch_parts_to_delete,
                 &mut rollups_to_delete,
@@ -579,6 +601,8 @@ where
                 timer,
             )
             .await;
+            gc_results.deleted.count += deleted.count;
+            gc_results.deleted.bytes += deleted.bytes;
         }
     }
 
@@ -627,7 +651,8 @@ where
         rollups: &mut BTreeSet<PartialRollupKey>,
         machine: &Machine<K, V, T, D>,
         timer: &mut F,
-    ) where
+    ) -> BlobDeleteStats
+    where
         F: FnMut(&Counter),
     {
         let shard_id = machine.shard_id();
@@ -635,7 +660,7 @@ where
         let delete_semaphore = Semaphore::new(concurrency_limit);
 
         let batch_parts = std::mem::take(batch_parts);
-        batch_parts
+        let mut deleted = batch_parts
             .delete(
                 machine.applier.state_versions.blob.borrow(),
                 shard_id,
@@ -647,7 +672,7 @@ where
             .await;
         timer(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
 
-        Self::delete_all(
+        let rollups_deleted = Self::delete_all(
             machine.applier.state_versions.blob.borrow(),
             rollups.iter().map(|k| k.complete(&shard_id)),
             &machine.applier.metrics.retries.external.rollup_delete,
@@ -655,6 +680,8 @@ where
             &delete_semaphore,
         )
         .await;
+        deleted.count += rollups_deleted.count;
+        deleted.bytes += rollups_deleted.bytes;
         rollups.clear();
         timer(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
 
@@ -664,6 +691,7 @@ where
             .truncate_diffs(&shard_id, truncate_lt)
             .await;
         timer(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
+        deleted
     }
 
     // There's also a bulk delete API in s3 if the performance of this
@@ -676,7 +704,7 @@ where
         metrics: &RetryMetrics,
         span: Span,
         semaphore: &Semaphore,
-    ) {
+    ) -> BlobDeleteStats {
         let futures = FuturesUnordered::new();
         for key in keys {
             futures.push(
@@ -687,14 +715,18 @@ where
                             .acquire()
                             .await
                             .expect("acquiring permit from open semaphore");
-                        blob.delete(&key).await.map(|_| ())
+                        blob.delete(&key).await
                     }
                 })
                 .instrument(span.clone()),
             )
         }
 
-        futures.collect().await
+        let mut deleted = BlobDeleteStats::default();
+        for result in futures.collect::<Vec<_>>().await {
+            deleted.add(result);
+        }
+        deleted
     }
 }
 
@@ -702,6 +734,7 @@ where
 pub(crate) struct GcResults {
     pub(crate) batch_parts_deleted_from_blob: usize,
     pub(crate) rollups_deleted_from_blob: usize,
+    pub(crate) deleted: BlobDeleteStats,
     pub(crate) truncated_consensus_to: Vec<SeqNo>,
     pub(crate) rollups_removed_from_state: Vec<SeqNo>,
 }
