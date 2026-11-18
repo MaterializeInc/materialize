@@ -16,6 +16,9 @@ source. The adapter configuration twin was unreachable and is now removed, not a
 remaining retry target. Verify controller tick continuation under activation
 contention. Then complete startup phase attribution and current-head acceptance.
 Bring changes to write guarantees or public behavior to the user before landing.
+Startup attribution is running alongside removal, not behind it: the instrumented
+pre-tick-repair debug build is `aj-startup-timing-before-build`. Use the focused
+`native_startup_readiness_20261027_aj.py` harness, not full acceptance.
 
 ## Live decisions and boundaries
 
@@ -88,6 +91,12 @@ parameters. The initial direct invocation omitted those parameters and failed at
 load-generator feature gates, not assertions. No forced-conflict/cancellation
 coverage for these dispatches is claimed. Other inline DDL owners remain.
 
+Optimizer statistics now require the native query client in both peek paths.
+Clippy, enabled-statistics SQL in both paths (including observed timeout fallback)
+and unchanged plan-insights coverage pass. Initial fixture failures were missing
+feature admission and transaction-block ALTER SYSTEM, reproduced before repair.
+The preexisting cardinality suite remains halted and is not counted as coverage.
+
 Candidate promotion in the latest lifecycle run waited on the existing 600000ms
 stability gate after catching up. Do not classify that wait as unexplained replay
 or CPU work. The earlier statistics replay audit separately found zero-holding
@@ -115,6 +124,8 @@ source overlays. Verify hashes, not just its Git revision. Remote logs are under
 `~/.local/share/aj/m3-evidence/controller-followups/`.
 
 Essential pointers:
+- Query statistics: local `native-query-statistics-fixed-test.log`; earlier
+  failures are in `native-query-statistics-reproduce.log`.
 - Cluster policy: local `native-cluster-policy-test.log`, including the build
   result and standard-parameter SQL run.
 - Persisted EXPLAIN: local `native-selected-explain-test.log`, including the
