@@ -1113,6 +1113,43 @@ describe("ClusterHydration", () => {
     ).toBeVisible();
   });
 
+  it("opens a restart that ended after a hydration Materialize hasn't recorded yet", async () => {
+    // r2 hydrated after running out of memory, unrecorded. Later, r1 ran out
+    // of memory partway through rebuilding after a restart of its own.
+    const bootedAtMs = NOW_MS - 19 * MINUTE_MS;
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u2", NOW_MS - 20 * MINUTE_MS),
+        online("u2", bootedAtMs),
+        outOfMemory("u1", NOW_MS - 30 * MINUTE_MS),
+        online("u1", NOW_MS - 29 * MINUTE_MS),
+        outOfMemory("u1", NOW_MS - 10 * MINUTE_MS),
+        online("u1", NOW_MS - 9 * MINUTE_MS),
+      ],
+      progress: { u1: [3, 9], u2: [9, 9] },
+      replicaObjectRows: [
+        {
+          globalId: "u10",
+          objectId: "u10",
+          installedAt: String(bootedAtMs),
+          startedAt: String(bootedAtMs),
+          hydratedAt: String(bootedAtMs + 280_000),
+        },
+      ],
+    });
+
+    await screen.findByRole("group", { name: "Ended" });
+    await settleReplicaReads();
+    expect(screen.queryByText(/^Read from r2/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Last Hydration" }),
+    ).toBeVisible();
+    const ended = screen.getByRole("group", { name: "Ended" });
+    expect(within(ended).getByText("Out of memory")).toBeVisible();
+  });
+
   it("keeps the recorded last hydration when the replica can't be read", async () => {
     await renderHydrationTab({
       statusRows: [

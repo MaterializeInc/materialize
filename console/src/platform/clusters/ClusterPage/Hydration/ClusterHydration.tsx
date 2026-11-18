@@ -263,7 +263,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           startMs: data.startMs,
         })
       : [];
-  const unrecorded = useLastUnrecordedHydration({
+  const lastUnrecorded = useLastUnrecordedHydration({
     clusterId: cluster.id,
     clusterName: cluster.name,
     candidates,
@@ -271,13 +271,20 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     bootTimes: data.bootTimes,
     clusterObjectCount: data.objectCount,
   });
-  // Until the replicas answer, the recorded hydrations stand.
-  const hasUnrecorded = unrecorded !== undefined;
   // Rows are ordered by when each began, and a long hydration can end after a
   // later one.
   const lastRow = greatest(rows, (row) => rowEndTime(row).getTime());
-  // A hydration that isn't recorded yet finished recently and has no row to
-  // place it by, so it stands in for the last.
+  // Until the replicas answer, the recorded hydrations stand. A hydration that
+  // isn't recorded yet has no row to place it by, so it stands in for the last
+  // unless a row ended after it, such as another replica's restart.
+  const unrecorded =
+    lastUnrecorded &&
+    (lastRow === undefined ||
+      lastUnrecorded.hydration.finishedAt.getTime() >=
+        rowEndTime(lastRow).getTime())
+      ? lastUnrecorded
+      : undefined;
+  const hasUnrecorded = unrecorded !== undefined;
   const selectedRow =
     rows.find(({ id }) => id === selectedRowId) ??
     (hasUnrecorded ? undefined : lastRow);

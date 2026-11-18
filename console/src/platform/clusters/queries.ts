@@ -9,6 +9,7 @@
 
 import {
   keepPreviousData,
+  Query,
   QueryFunctionContext,
   useMutation,
   useQueries,
@@ -1486,10 +1487,12 @@ const combineReplicaObjectHydrations = (
 ) => results.map(({ data }) => data);
 
 /**
- * Each user object's hydration on each given replica, read once from the
- * replica itself. Keyed on `since`, the last time the replica needed a
- * hydration, so it reads again after the next one. Idle before the
- * environment records per-worker hydration times.
+ * Each user object's hydration on each given replica, read from the replica
+ * itself. Keyed on `since`, the last time the replica needed a hydration, so
+ * it reads again after the next one. A read that has an object still
+ * hydrating is taken again every minute while the replica reports every
+ * object hydrated, unless it failed. Idle before the environment records
+ * per-worker hydration times.
  */
 export function useReplicaObjectHydrations(
   replicas: Array<{
@@ -1497,33 +1500,46 @@ export function useReplicaObjectHydrations(
     replicaId: string;
     replicaName: string;
     since: Date;
+    isHydrated: boolean;
   }>,
 ) {
   const hasHydrationTimes =
     useEnvironmentGate(OBJECT_HYDRATION_TIMES_MIN_VERSION) === true;
   return useQueries({
-    queries: replicas.map(({ clusterName, replicaId, replicaName, since }) => {
-      const queryKey = clusterQueryKeys.replicaObjectHydrations({
-        clusterName,
-        replicaId,
-        replicaName,
-        since: since.toISOString(),
-      });
-      return {
-        queryKey,
-        enabled: hasHydrationTimes,
-        staleTime: Infinity,
-        // A replica that failed to answer is often busy hydrating, and the
-        // recorded hydrations show meanwhile, so it isn't asked again.
-        retry: false,
-        queryFn: ({ signal }: { signal: AbortSignal }) =>
-          fetchReplicaObjectHydrations({
-            params: { clusterName, replicaName },
-            queryKey,
-            requestOptions: { signal },
-          }),
-      };
-    }),
+    queries: replicas.map(
+      ({ clusterName, replicaId, replicaName, since, isHydrated }) => {
+        const queryKey = clusterQueryKeys.replicaObjectHydrations({
+          clusterName,
+          replicaId,
+          replicaName,
+          since: since.toISOString(),
+        });
+        // Right after a restart, progress can still report the previous
+        // process's objects hydrated, and a read then catches the new process
+        // mid-hydration. `since` stays the same when that hydration finishes.
+        const isBehind = ({ state }: Query<LiveObjectHydration[]>) =>
+          isHydrated &&
+          state.status !== "error" &&
+          state.data?.some(({ hydratedAt }) => hydratedAt === null) === true;
+        return {
+          queryKey,
+          enabled: hasHydrationTimes,
+          staleTime: (query: Query<LiveObjectHydration[]>) =>
+            isBehind(query) ? 0 : Infinity,
+          refetchInterval: (query: Query<LiveObjectHydration[]>) =>
+            isBehind(query) ? millisecondsInMinute : false,
+          // A replica that failed to answer is often busy hydrating, and the
+          // recorded hydrations show meanwhile, so it isn't asked again.
+          retry: false,
+          queryFn: ({ signal }: { signal: AbortSignal }) =>
+            fetchReplicaObjectHydrations({
+              params: { clusterName, replicaName },
+              queryKey,
+              requestOptions: { signal },
+            }),
+        };
+      },
+    ),
     combine: combineReplicaObjectHydrations,
   });
 }

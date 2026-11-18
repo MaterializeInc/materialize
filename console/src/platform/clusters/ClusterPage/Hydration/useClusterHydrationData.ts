@@ -411,11 +411,12 @@ export function useLastUnrecordedHydration({
   clusterObjectCount: number | undefined;
 }) {
   const reads = useReplicaObjectHydrations(
-    candidates.map(({ replica, since }) => ({
+    candidates.map(({ replica, since, isHydrated }) => ({
       clusterName,
       replicaId: replica.id,
       replicaName: replica.name,
       since,
+      isHydrated,
     })),
   );
   const { data: objects } = useClusterObjectsLive(

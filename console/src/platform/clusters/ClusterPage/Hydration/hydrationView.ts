@@ -300,6 +300,8 @@ export interface UnrecordedHydration {
   replica: HydrationReplica;
   /** When it last needed a hydration. */
   since: Date;
+  /** Whether it reports every object hydrated. */
+  isHydrated: boolean;
 }
 
 /**
@@ -364,7 +366,15 @@ export function findUnrecordedHydrations({
       ({ replicaId, finishedAt }) =>
         replicaId === replica.id && finishedAt.getTime() > sinceMs,
     );
-    return isRecorded ? [] : [{ replica, since: new Date(sinceMs) }];
+    return isRecorded
+      ? []
+      : [
+          {
+            replica,
+            since: new Date(sinceMs),
+            isHydrated: unhydrated.size === 0,
+          },
+        ];
   });
 }
 

@@ -421,6 +421,31 @@ describe("findUnrecordedHydrations", () => {
     ).toEqual([["u1", at("10:00:00")]]);
   });
 
+  it("says whether each replica reports every object hydrated", () => {
+    const hydrations = [
+      hydration("u1", "09:00:00", 60_000),
+      hydration("u2", "09:00:00", 60_000),
+    ];
+    expect(
+      findUnrecordedHydrations({
+        replicasNow: summarize({
+          progress: { u1: [9, 9], u2: [8, 9, ["u20"]] },
+          hydrations,
+        }),
+        hydrations,
+        restarts: [outOfMemoryAt("u1", "10:00:00")],
+        createdObjects: [
+          { id: "u10", occurredAt: at("09:30:00") },
+          { id: "u20", occurredAt: at("11:00:00") },
+        ],
+        startMs: at("00:00:00").getTime(),
+      }).map(({ replica: { id }, isHydrated }) => [id, isHydrated]),
+    ).toEqual([
+      ["u1", true],
+      ["u2", false],
+    ]);
+  });
+
   it("finds a replica that restarted just after it finished hydrating", () => {
     expect(
       unrecorded({

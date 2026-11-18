@@ -101,7 +101,7 @@ export const UnrecordedDetail = ({
         hydration yet. It records hydrations by visiting replicas in turn, which
         can take several minutes.
       </Text>
-      <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} spacing={3}>
+      <SimpleGrid minChildWidth="120px" spacing={3}>
         <Stat
           label="Duration"
           help={HYDRATION_HELP.duration}
@@ -203,7 +203,7 @@ const UnfinishedDetail = ({
   const isOom = row.reason === OOM_REASON;
   return (
     <VStack spacing={4} alignItems="stretch">
-      <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} spacing={3}>
+      <SimpleGrid minChildWidth="120px" spacing={3}>
         <Stat
           label="Ended"
           help={HYDRATION_HELP.ended}
@@ -337,7 +337,7 @@ const FinishedDetail = ({
       : percentOf(detail.peakCpuNanoCores, allocation?.cpuNanoCores ?? null);
   return (
     <VStack spacing={4} alignItems="stretch">
-      <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} spacing={3}>
+      <SimpleGrid minChildWidth="120px" spacing={3}>
         <Stat
           label="Duration"
           help={HYDRATION_HELP.duration}
