@@ -84,7 +84,7 @@ RUN TRUFFLEHOG_VERSION=${TRUFFLEHOG_AMD64%@*} \
 # Install Python dependencies. These are necessary to run some of our base tooling.
 COPY requirements.txt /workdir/
 # renovate: datasource=github-releases depName=astral-sh/uv
-ARG UV_VERSION=0.9.10
+ARG UV_VERSION=0.13.8
 RUN curl -LsSf https://astral.sh/uv/$UV_VERSION/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
     && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt \
     && rm -rf /root/.cache/uv
