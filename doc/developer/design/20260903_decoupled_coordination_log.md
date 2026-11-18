@@ -71,7 +71,8 @@ The obsolete adapter configuration publisher, system-table resets, extra reset W
 reader and non-native bootstrap/writer alternatives are removed. Unchanged
 configuration startup/restart, adapter restart preservation and CREATE/ALTER
 infrastructure recovery checks pass. Serving now requires the bootstrap-created
-client, with no alternative registration. Independent review, Clippy, native
+client, with no alternative registration. Bootstrap plan/publication helpers
+also require that client. Independent review, Clippy, native
 configuration/restart and independent-oracle bootstrap checks pass. No dedicated
 supersession race was added. Persisted-object EXPLAIN now has only the native
 selected-plan path. Clippy and unchanged materialized-view/physical-plan SQL
@@ -119,7 +120,8 @@ Essential pointers:
 - Persisted EXPLAIN: local `native-selected-explain-test.log`, including the
   build result and standard-parameter SQL run.
 - Client adoption: local `mandatory-bootstrap-client-test.log` and remote
-  `mandatory-bootstrap-client-recheck.log`.
+  `mandatory-bootstrap-client-recheck.log`. The mandatory helper follow-up is
+  covered by local `native-bootstrap-protection-test.log`.
 - Current retry checks: remote `registration-certificate-red.log`,
   `registration-finalization-red.log`, `append-wal-final.log`,
   `controller-unit.log`, `retirement-red.log`, `cache-red.log` and
