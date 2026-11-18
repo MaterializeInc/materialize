@@ -34,7 +34,10 @@ import { defaultRegionId, renderComponent } from "~/test/utils";
 
 import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
-import { OUTAGE_TEMPLATE, TICKET_TEMPLATE } from "./ticketForm";
+import {
+  OUTAGE_DESCRIPTION_PLACEHOLDER,
+  TICKET_DESCRIPTION_PLACEHOLDER,
+} from "./ticketForm";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
 
@@ -236,6 +239,26 @@ describe("SupportPage", () => {
     expect(
       screen.getByRole("link", { name: "support@materialize.com" }),
     ).toHaveAttribute("href", SUPPORT_MAILTO);
+  });
+
+  it("shows quick answers in the sidebar and support plans under the ticket buttons", async () => {
+    await renderComponent(<SupportPageWithIntercom />);
+
+    const sidebar = await screen.findByRole("complementary", {
+      name: "More ways to get help",
+    });
+    expect(
+      within(sidebar).getByRole("region", { name: "Get answers now" }),
+    ).toBeVisible();
+    // The form explains severities, so the page doesn't repeat them.
+    expect(
+      screen.queryByRole("heading", { name: "Before you open a ticket" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("support-ticket-actions")).getByRole("link", {
+        name: "Support plans and response times ↗",
+      }),
+    ).toHaveAttribute("href", SUPPORT_PLANS_URL);
   });
 
   it("opens the Messenger for tickets and outages once Intercom has booted", async () => {
@@ -1235,12 +1258,12 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("radio", { name: /^High/ }));
       await user.click(screen.getByRole("radio", { name: /^Staging/ }));
       const details = screen.getByRole("textbox", { name: /What happened/ });
-      expect(details).toHaveValue(TICKET_TEMPLATE);
-      // Clearing the template doesn't count as a description either.
-      await user.clear(details);
-      await user.click(screen.getByRole("button", { name: "Open ticket" }));
-      expect(screen.getByText("Describe what happened.")).toBeVisible();
-      expect(createdWith).toBeUndefined();
+      // The prompts are a placeholder, so the box starts empty.
+      expect(details).toHaveValue("");
+      expect(details).toHaveAttribute(
+        "placeholder",
+        TICKET_DESCRIPTION_PLACEHOLDER,
+      );
       await user.type(details, "Kafka sink is 10 minutes behind.");
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
@@ -1510,7 +1533,7 @@ describe("SupportPage", () => {
       ).toHaveTextContent("Production");
       expect(
         screen.getByRole("textbox", { name: /What happened/ }),
-      ).toHaveValue(OUTAGE_TEMPLATE);
+      ).toHaveAttribute("placeholder", OUTAGE_DESCRIPTION_PLACEHOLDER);
       expect(
         screen.getByRole("link", { name: "How to run mz-debug ↗" }),
       ).toHaveAttribute("href", MZ_DEBUG_SELF_MANAGED_URL);

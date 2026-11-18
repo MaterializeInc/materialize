@@ -745,6 +745,23 @@ export const useEnvironmentGate = (
   return environmentMeetsVersion(environment, version);
 };
 
+/**
+ * Whether the Console runs against the Materialize Emulator. A self-managed
+ * install through the operator's Helm chart reports the chart's version in
+ * `mz_version()`, and the emulator reports none. False until the environment
+ * is healthy.
+ */
+export const useIsEmulator = () => {
+  const appConfig = useAtomValue(appConfigAtom);
+  const [environment] = useAtom(currentEnvironmentState);
+  return (
+    appConfig.mode === "self-managed" &&
+    environment?.state === "enabled" &&
+    environment.status.health === "healthy" &&
+    environment.status.version.helmChartVersion === undefined
+  );
+};
+
 /** The number of enabled environments. */
 export const numEnabledEnvironmentsState = atom<number | undefined>((get) => {
   const envs = get(environmentsWithHealth);

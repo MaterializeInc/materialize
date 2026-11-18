@@ -25,9 +25,10 @@ import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
-import { formatDurationExact, formatPercentage } from "~/utils/format";
+import { formatDurationExact } from "~/utils/format";
 
 import { percentOf } from "../ResourceUsage/processReadingsModel";
+import { InfoTip } from "./hydrationComponents";
 import {
   formatPeakBytes,
   HYDRATION_HELP,
@@ -40,11 +41,10 @@ import {
 interface HydrationTableMeta {
   colorById: Map<string, string>;
   nameById: Map<string, string>;
-  heapLimitById: Map<string, number>;
   /** Each replica's per-process CPU, memory and disk. */
   allocationById: Map<string, SizeAllocation>;
   selectedId: string | undefined;
-  onSelect: (rowId: string) => void;
+  onSelect: (row: HydrationRow) => void;
 }
 
 const columnHelper = createColumnHelper<HydrationRow>();
@@ -61,7 +61,7 @@ const SelectCell = ({
     type="button"
     fontWeight={row.id === meta.selectedId ? "600" : undefined}
     aria-pressed={row.id === meta.selectedId}
-    onClick={() => meta.onSelect(row.id)}
+    onClick={() => meta.onSelect(row)}
   >
     {formatDate(rowTime(row), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
   </TextLink>
@@ -112,10 +112,20 @@ const COLUMNS = [
     id: "kind",
     header: "Hydration",
     meta: { tooltip: HYDRATION_HELP.kind },
-    cell: (info) => ROW_KIND_NAMES[info.getValue()].short,
+    cell: (info) =>
+      info.row.original.type === "unrecorded" ? (
+        <HStack spacing={1}>
+          <Text as="span">
+            {ROW_KIND_NAMES[info.getValue()].short} · Being recorded
+          </Text>
+          <InfoTip subject="being recorded" label={HYDRATION_HELP.recording} />
+        </HStack>
+      ) : (
+        ROW_KIND_NAMES[info.getValue()].short
+      ),
   }),
   columnHelper.accessor(
-    (row) => (row.type === "hydration" ? row.durationMs : null),
+    (row) => (row.type === "unfinished" ? null : row.durationMs),
     {
       id: "duration",
       header: "Duration",
@@ -128,7 +138,7 @@ const COLUMNS = [
     },
   ),
   columnHelper.accessor(
-    (row) => (row.type === "hydration" ? row.objectCount : null),
+    (row) => (row.type === "unfinished" ? null : row.objectCount),
     {
       id: "objects",
       header: "Objects",
@@ -143,7 +153,9 @@ const COLUMNS = [
     meta: { tooltip: HYDRATION_HELP.peakMemory },
     cell: (info) => {
       const row = info.row.original;
-      if (row.type === "unfinished") return "-";
+      if (row.type === "unfinished") {
+        return row.reason === OOM_REASON ? "Out of memory" : "-";
+      }
       const meta = info.table.options.meta as HydrationTableMeta;
       const percent = percentOf(
         row.peakMemoryBytes,
@@ -162,29 +174,9 @@ const COLUMNS = [
     meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakDisk },
     cell: (info) => {
       const row = info.row.original;
-      return row.type === "hydration"
-        ? (formatPeakBytes(row.peakDiskBytes) ?? "-")
-        : "-";
-    },
-  }),
-  columnHelper.display({
-    id: "peakHeap",
-    header: "Peak heap",
-    meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakHeap },
-    cell: (info) => {
-      const row = info.row.original;
-      if (row.type === "unfinished") {
-        return row.reason === OOM_REASON ? "Out of memory" : "-";
-      }
-      const meta = info.table.options.meta as HydrationTableMeta;
-      const percent = percentOf(
-        row.peakHeapBytes,
-        meta.heapLimitById.get(row.replicaId) ?? null,
-      );
-      const peakBytes = formatPeakBytes(row.peakHeapBytes) ?? "-";
-      return percent === null
-        ? peakBytes
-        : `${formatPercentage(percent / 100, 0)} · ${peakBytes}`;
+      return row.type === "unfinished"
+        ? "-"
+        : (formatPeakBytes(row.peakDiskBytes) ?? "-");
     },
   }),
 ];

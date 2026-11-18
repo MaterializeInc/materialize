@@ -28,15 +28,20 @@ import Alert from "~/components/Alert";
 import { PaginationControls } from "~/components/Table/TablePagination";
 import TextLink from "~/components/TextLink";
 import docUrls from "~/mz-doc-urls.json";
+import { useReplicaPeakUsage } from "~/platform/clusters/queries";
 import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
+import {
+  formatDate,
+  FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+} from "~/utils/dateFormat";
 import { formatDurationExact, formatPercentage } from "~/utils/format";
 
 import { percentOf } from "../ResourceUsage/processReadingsModel";
 import { InfoTip } from "./hydrationComponents";
-import { Hydration, ObjectHydrationSpan } from "./hydrationModel";
+import { Hydration, NamedSpan } from "./hydrationModel";
 import { formatPeakBytes, HYDRATION_HELP, HydrationRow } from "./hydrationView";
-import { useHydrationDetail } from "./useClusterHydrationData";
+import { useHydrationDetail, useShowsHeap } from "./useClusterHydrationData";
 
 // A page of objects, enough to see the ones that set an episode's length
 // without mounting a row per object on a cluster with hundreds.
@@ -59,32 +64,182 @@ export interface HydrationDetailProps {
   allocation: SizeAllocation | undefined;
 }
 
-/** What one hydration took, or why it never finished. */
+/** What one hydration took, or how it ended before it finished. */
 export const HydrationDetail = (props: HydrationDetailProps) =>
   props.row.type === "unfinished" ? (
-    <UnfinishedDetail row={props.row} replicaName={props.replicaName} />
+    <UnfinishedDetail {...props} row={props.row} />
+  ) : props.row.type === "unrecorded" ? (
+    <UnrecordedDetail {...props} row={props.row} />
   ) : (
     <FinishedDetail {...props} hydration={props.row} />
   );
 
-const UnfinishedDetail = ({
-  row,
+/** A hydration a replica finished before Materialize recorded it. */
+const UnrecordedDetail = ({
+  row: hydration,
   replicaName,
-}: {
-  row: Extract<HydrationRow, { type: "unfinished" }>;
-  replicaName: string;
+  heapLimitBytes,
+  allocation,
+}: HydrationDetailProps & {
+  row: Extract<HydrationRow, { type: "unrecorded" }>;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
-    <VStack spacing={2} alignItems="start">
-      <Text textStyle="text-base">
-        {row.reason === OOM_REASON
-          ? `${replicaName} ran out of memory and restarted with no finished hydration recorded.`
-          : `${replicaName} went offline with no finished hydration recorded.`}
-      </Text>
+    <VStack spacing={4} alignItems="stretch">
       <Text textStyle="text-small" color={colors.foreground.secondary}>
-        Materialize records object timings only for hydrations that finish.
+        Read from {replicaName}, since Materialize hasn&apos;t recorded this
+        hydration yet. It records hydrations by visiting replicas in turn, which
+        can take several minutes.
       </Text>
+      <SimpleGrid minChildWidth="120px" spacing={3}>
+        <Stat
+          label="Duration"
+          help={HYDRATION_HELP.duration}
+          value={formatDurationExact(hydration.durationMs)}
+          note={`${hydration.objectCount} ${pluralize(hydration.objectCount, "object", "objects")}`}
+        />
+        <SampledPeakStats
+          replicaId={hydration.replicaId}
+          window={{
+            startedAt: hydration.startedAt,
+            endedAt: hydration.finishedAt,
+          }}
+          heapLimitBytes={heapLimitBytes}
+          allocation={allocation}
+        />
+      </SimpleGrid>
+      <ObjectWaterfall
+        // Its page and order belong to one hydration.
+        key={hydration.id}
+        spans={hydration.spans}
+        durationMs={hydration.durationMs}
+      />
+    </VStack>
+  );
+};
+
+/**
+ * The highest memory, heap and CPU sampled on a replica over a window, each
+ * with why it's missing when it is. Undefined `window` means it wasn't
+ * recorded. A recorded hydration has its own memory peak, so it leaves memory
+ * out with `showsMemory`.
+ */
+const SampledPeakStats = ({
+  replicaId,
+  window,
+  heapLimitBytes,
+  allocation,
+  showsMemory = true,
+}: {
+  replicaId: string;
+  window: { startedAt: Date; endedAt: Date } | undefined;
+  heapLimitBytes: number | undefined;
+  allocation: SizeAllocation | undefined;
+  showsMemory?: boolean;
+}) => {
+  const showsHeap = useShowsHeap();
+  const usage = useReplicaPeakUsage(
+    window && {
+      replicaId,
+      startDate: window.startedAt,
+      endDate: window.endedAt,
+    },
+  );
+  const memory = peakStat(
+    usage.data?.peakMemoryBytes ?? null,
+    allocation?.memoryBytes,
+  );
+  const heap = peakStat(usage.data?.peakHeapBytes ?? null, heapLimitBytes);
+  const cpuPercent = percentOf(
+    usage.data?.peakCpuNanoCores ?? null,
+    allocation?.cpuNanoCores ?? null,
+  );
+  const missingNote = (peak: number | null | undefined) =>
+    !window
+      ? "Not recorded"
+      : usage.isError
+        ? "Couldn't be loaded"
+        : peak === null
+          ? "No sample during this hydration"
+          : undefined;
+  return (
+    <>
+      {showsMemory && (
+        <Stat
+          label="Peak memory"
+          help={HYDRATION_HELP.sampledMemory}
+          value={memory.value}
+          note={memory.note ?? missingNote(usage.data?.peakMemoryBytes)}
+        />
+      )}
+      {showsHeap && (
+        <Stat
+          label="Peak heap"
+          help={HYDRATION_HELP.sampledHeap}
+          value={heap.value}
+          note={
+            heap.note ??
+            (usage.data?.peakHeapBytes === null &&
+            usage.data.peakMemoryBytes !== null
+              ? "Not reported"
+              : missingNote(usage.data?.peakHeapBytes))
+          }
+          isCritical={
+            heap.percent !== null && heap.percent >= NEAR_LIMIT_PERCENT
+          }
+        />
+      )}
+      <Stat
+        label="Peak CPU"
+        help={HYDRATION_HELP.cpu}
+        value={formatShare(cpuPercent)}
+        note={missingNote(usage.data?.peakCpuNanoCores)}
+      />
+    </>
+  );
+};
+
+const UnfinishedDetail = ({
+  row,
+  heapLimitBytes,
+  allocation,
+}: HydrationDetailProps & {
+  row: Extract<HydrationRow, { type: "unfinished" }>;
+}) => {
+  const isOom = row.reason === OOM_REASON;
+  return (
+    <VStack spacing={4} alignItems="stretch">
+      <SimpleGrid minChildWidth="120px" spacing={3}>
+        <Stat
+          label="Ended"
+          help={HYDRATION_HELP.ended}
+          value={isOom ? "Out of memory" : "Went offline"}
+          isCritical={isOom}
+        />
+        <Stat
+          label="Ran for"
+          help={HYDRATION_HELP.ranFor}
+          value={
+            row.startedAt
+              ? formatDurationExact(
+                  row.endedAt.getTime() - row.startedAt.getTime(),
+                )
+              : "-"
+          }
+          note={
+            row.startedAt &&
+            `From ${formatDate(row.startedAt, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`
+          }
+        />
+        <SampledPeakStats
+          replicaId={row.replicaId}
+          window={
+            row.startedAt && { startedAt: row.startedAt, endedAt: row.endedAt }
+          }
+          heapLimitBytes={heapLimitBytes}
+          allocation={allocation}
+        />
+      </SimpleGrid>
       <Text textStyle="text-small">
         See our{" "}
         <TextLink
@@ -106,13 +261,13 @@ const Stat = ({
   value,
   note,
   help,
-  isNearLimit = false,
+  isCritical = false,
 }: {
   label: string;
   value: string;
   note?: string;
   help: string;
-  isNearLimit?: boolean;
+  isCritical?: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const labelId = React.useId();
@@ -123,7 +278,7 @@ const Stat = ({
       p={3}
       borderRadius="md"
       borderWidth="1px"
-      borderColor={isNearLimit ? colors.accent.red : colors.border.primary}
+      borderColor={isCritical ? colors.accent.red : colors.border.primary}
       role="group"
       aria-labelledby={labelId}
     >
@@ -139,7 +294,7 @@ const Stat = ({
       </HStack>
       <Text
         textStyle="heading-xs"
-        color={isNearLimit ? colors.accent.red : undefined}
+        color={isCritical ? colors.accent.red : undefined}
       >
         {value}
       </Text>
@@ -181,14 +336,9 @@ const FinishedDetail = ({
     hydration.peakDiskBytes,
     allocation?.diskBytes ?? undefined,
   );
-  const heap = peakStat(hydration.peakHeapBytes, heapLimitBytes);
-  const cpuPercent =
-    detail.peakCpuNanoCores === undefined
-      ? null
-      : percentOf(detail.peakCpuNanoCores, allocation?.cpuNanoCores ?? null);
   return (
     <VStack spacing={4} alignItems="stretch">
-      <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} spacing={3}>
+      <SimpleGrid minChildWidth="120px" spacing={3}>
         <Stat
           label="Duration"
           help={HYDRATION_HELP.duration}
@@ -207,26 +357,15 @@ const FinishedDetail = ({
           value={disk.value}
           note={disk.note}
         />
-        <Stat
-          label="Peak heap"
-          help={HYDRATION_HELP.peakHeap}
-          value={heap.value}
-          note={heap.note}
-          isNearLimit={
-            heap.percent !== null && heap.percent >= NEAR_LIMIT_PERCENT
-          }
-        />
-        <Stat
-          label="Peak CPU"
-          help={HYDRATION_HELP.cpu}
-          value={detail.isCpuLoading ? "-" : formatShare(cpuPercent)}
-          note={
-            detail.isCpuError
-              ? "Couldn't be loaded"
-              : detail.peakCpuNanoCores === null
-                ? "No sample during this hydration"
-                : undefined
-          }
+        <SampledPeakStats
+          replicaId={hydration.replicaId}
+          window={{
+            startedAt: hydration.startedAt,
+            endedAt: hydration.finishedAt,
+          }}
+          heapLimitBytes={heapLimitBytes}
+          allocation={allocation}
+          showsMemory={false}
         />
       </SimpleGrid>
       {detail.isSpansError ? (
@@ -262,8 +401,6 @@ const FinishedDetail = ({
   );
 };
 
-type NamedSpan = ObjectHydrationSpan & { name: string };
-
 type WaterfallOrder = "started" | "slowest";
 
 const WATERFALL_ORDERS: Record<WaterfallOrder, string> = {
@@ -271,7 +408,7 @@ const WATERFALL_ORDERS: Record<WaterfallOrder, string> = {
   slowest: "Slowest first",
 };
 
-const ObjectWaterfall = ({
+export const ObjectWaterfall = ({
   spans,
   durationMs,
 }: {

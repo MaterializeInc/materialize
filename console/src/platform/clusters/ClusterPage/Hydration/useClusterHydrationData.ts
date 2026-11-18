@@ -10,7 +10,9 @@
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
 
+import { isSystemId } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { useAppConfig } from "~/config/useAppConfig";
 import {
   REPLICA_HYDRATION_HISTORY_MIN_VERSION,
   replicaStatusesUpdatedAt,
@@ -19,8 +21,8 @@ import {
   useDroppedObjectLifetimes,
   useEpisodeObjectHydrations,
   useObjectCreationTimes,
-  useReplicaCpuPeak,
   useReplicaHeapLimits,
+  useReplicaObjectHydrations,
   useReplicaSizeAllocations,
   useReplicaStatusHistory,
 } from "~/platform/clusters/queries";
@@ -32,15 +34,26 @@ import {
   findUnfinishedHydrations,
   heapLimitBytes,
   Hydration,
+  latestFinishedEpisode,
   mergeHydrationReplicas,
+  ObjectHydrationSpan,
   replicaBootTimes,
   restartsReadingAsFinished,
   transformHydrations,
   transformObjectHydrationSpans,
 } from "./hydrationModel";
+import { isUnrecordedEpisode, UnrecordedHydration } from "./hydrationView";
 import { useLiveHydrationProgress } from "./useLiveHydration";
 
 const COMPUTE_OBJECT_TYPES = ["index", "materialized-view"];
+
+/**
+ * Whether the tab shows heap. Heap counts swap, and Cloud replicas spill to
+ * swap (the cloud repo's production node pools set `swap_enabled`), so heap
+ * against its limit is how close a process came to running out of memory. A
+ * self-managed replica can spill to a disk outside the heap instead.
+ */
+export const useShowsHeap = () => useAppConfig().mode === "cloud";
 
 /** When an object on the cluster was created, named from the catalog. */
 export interface CreatedObject {
@@ -103,10 +116,16 @@ export function useClusterHydrationData({
   // A hydration is full when it covers every object the cluster had, so
   // classifying one needs the objects and when they were created.
   const {
-    data: objects,
+    data: clusterObjects,
     snapshotComplete: hasObjects,
     isError: isObjectsError,
   } = useClusterObjectsLive(cluster.id, COMPUTE_OBJECT_TYPES);
+  // Hydrations leave out the cluster's introspection indexes
+  // (`src/adapter/src/coord/hydration_history.rs`), so its counts must too.
+  const objects = React.useMemo(
+    () => clusterObjects.filter(({ id }) => !isSystemId(id)),
+    [clusterObjects],
+  );
   // Not bound to the window: a replica hydrating an object created before it
   // is dated from that creation.
   const creationTimes = useObjectCreationTimes({
@@ -128,7 +147,8 @@ export function useClusterHydrationData({
     clusterId: cluster.id,
     replicaIds: currentReplicaIds,
   });
-  const heapLimits = useReplicaHeapLimits(currentReplicaIds);
+  const showsHeap = useShowsHeap();
+  const heapLimits = useReplicaHeapLimits(showsHeap ? currentReplicaIds : []);
   const allocations = useReplicaSizeAllocations([
     ...new Set(
       replicas.flatMap(({ size }) => (size === undefined ? [] : [size])),
@@ -274,6 +294,7 @@ export function useClusterHydrationData({
     bootTimes: derived.bootTimes,
     hydrations: derived.hydrations,
     unfinished,
+    restarts: derived.restarts,
     heapLimitBytesById: derived.heapLimitBytesById,
     allocationById: derived.allocationById,
     startMs,
@@ -309,10 +330,23 @@ export function useClusterHydrationData({
   };
 }
 
+/** Names each span from the catalog, or by its dataflow's id once dropped. */
+const nameSpans = (
+  spans: ObjectHydrationSpan[],
+  objects: Array<{ id: string; name: string }>,
+) => {
+  const namesById = new Map(objects.map(({ id, name }) => [id, name]));
+  return spans.map((span) => ({
+    ...span,
+    name:
+      (span.objectId ? namesById.get(span.objectId) : undefined) ??
+      span.globalId,
+  }));
+};
+
 /**
  * The objects of one finished hydration, in the order they started and named
- * from the catalog, and the replica's highest sampled CPU during it. Each loads
- * and fails on its own.
+ * from the catalog.
  */
 export function useHydrationDetail({
   clusterId,
@@ -322,40 +356,124 @@ export function useHydrationDetail({
   hydration: Hydration | undefined;
 }) {
   const objectHydrations = useEpisodeObjectHydrations(hydration);
-  const cpuPeak = useReplicaCpuPeak(
-    hydration && {
-      replicaId: hydration.replicaId,
-      startDate: hydration.startedAt,
-      endDate: hydration.finishedAt,
-    },
-  );
   const {
     data: objects,
     snapshotComplete: hasObjectNames,
     isError: isObjectNamesError,
   } = useClusterObjectsLive(clusterId, COMPUTE_OBJECT_TYPES);
-  const spans = React.useMemo(() => {
-    if (!hydration || !objectHydrations.data) return undefined;
-    const namesById = new Map(objects.map(({ id, name }) => [id, name]));
-    return transformObjectHydrationSpans(
-      objectHydrations.data,
-      hydration.startedAt,
-    ).map((span) => ({
-      ...span,
-      name:
-        (span.objectId ? namesById.get(span.objectId) : undefined) ??
-        span.globalId,
-    }));
-  }, [hydration, objectHydrations.data, objects]);
+  const spans = React.useMemo(
+    () =>
+      hydration && objectHydrations.data
+        ? nameSpans(
+            transformObjectHydrationSpans(
+              objectHydrations.data,
+              hydration.startedAt,
+            ),
+            objects,
+          )
+        : undefined,
+    [hydration, objectHydrations.data, objects],
+  );
   return {
     spans,
-    peakCpuNanoCores: cpuPeak.data,
     // Without the catalog every object would be named by its id, so the spans
     // wait for it unless it failed.
     isSpansLoading:
       objectHydrations.isLoading || (!hasObjectNames && !isObjectNamesError),
     isSpansError: objectHydrations.isError,
-    isCpuLoading: cpuPeak.isLoading,
-    isCpuError: cpuPeak.isError,
   };
+}
+
+/**
+ * The hydrations current replicas finished that Materialize hasn't recorded
+ * yet, read from the replicas that may have one, each classified like a
+ * recorded one, with its objects named from the catalog. Empty while the
+ * replicas are read, and when none confirms one or none can be read.
+ */
+export function useUnrecordedHydrations({
+  clusterId,
+  clusterName,
+  candidates,
+  hydrations,
+  bootTimes,
+  clusterObjectCount,
+}: {
+  clusterId: string;
+  clusterName: string;
+  candidates: UnrecordedHydration[];
+  /** The recorded hydrations, which a replica's episode may already be. */
+  hydrations: Hydration[];
+  bootTimes: Map<string, number[]>;
+  /** The cluster's indexes and materialized views, undefined until known. */
+  clusterObjectCount: number | undefined;
+}) {
+  const reads = useReplicaObjectHydrations(
+    candidates.map(({ replica, since, isHydrated }) => ({
+      clusterName,
+      replicaId: replica.id,
+      replicaName: replica.name,
+      since,
+      isHydrated,
+    })),
+  );
+  const { data: objects } = useClusterObjectsLive(
+    clusterId,
+    COMPUTE_OBJECT_TYPES,
+  );
+  // Candidates are rebuilt on every render, which comes every second while a
+  // replica hydrates, so the result is keyed on their content and the table's
+  // rows hold.
+  const candidatesKey = JSON.stringify(
+    candidates.map(({ replica, since }) => [replica.id, since.getTime()]),
+  );
+  return React.useMemo(
+    () =>
+      (JSON.parse(candidatesKey) as Array<[string, number]>).flatMap(
+        ([replicaId, sinceMs], index) => {
+          const rows = reads[index];
+          const episode = rows && latestFinishedEpisode(rows);
+          if (
+            !episode ||
+            !isUnrecordedEpisode({
+              episode,
+              since: new Date(sinceMs),
+              hydrations: hydrations.filter(
+                (hydration) => hydration.replicaId === replicaId,
+              ),
+            })
+          ) {
+            return [];
+          }
+          const [hydration] = transformHydrations(
+            [
+              {
+                replicaId,
+                startedAt: episode.startedAt,
+                finishedAt: episode.finishedAt,
+                objectCount: episode.objects.length,
+                peakMemoryBytes: null,
+                peakDiskBytes: null,
+              },
+            ],
+            bootTimes,
+            clusterObjectCount === undefined
+              ? undefined
+              : () => clusterObjectCount,
+          );
+          return [
+            {
+              hydration,
+              spans: nameSpans(
+                transformObjectHydrationSpans(
+                  episode.objects,
+                  episode.startedAt,
+                ),
+                objects,
+              ),
+            },
+          ];
+        },
+      ),
+    [candidatesKey, reads, hydrations, bootTimes, clusterObjectCount, objects],
+  );
 }

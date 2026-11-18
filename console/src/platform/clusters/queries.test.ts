@@ -49,6 +49,7 @@ import {
   useOwners,
   useReplicaHeapBytes,
   useReplicaHeapLimits,
+  useReplicaObjectHydrations,
   useReplicaOfflineEvents,
   useReplicaStatusHistory,
   useReplicaUtilizationHistory,
@@ -789,6 +790,21 @@ describe("useDroppedObjectLifetimes", () => {
   });
 });
 
+const HYDRATION_HISTORY_ENVIRONMENT = {
+  ...healthyEnvironment,
+  status: {
+    ...healthyEnvironment.status,
+    version: parseDbVersion("v26.46.0 (0000000000)"),
+  },
+};
+
+const OBJECT_HYDRATION_COLUMNS = [
+  ...buildColumns(["globalId", "objectId"]),
+  ...["installedAt", "startedAt", "hydratedAt"].map((name) =>
+    buildColumn({ name, type_oid: MzDataType.timestamptz }),
+  ),
+];
+
 describe("useEpisodeObjectHydrations", () => {
   const EPISODE = {
     replicaId: "u1",
@@ -803,12 +819,6 @@ describe("useEpisodeObjectHydrations", () => {
     startedAt: String(EPISODE.startedAt.getTime()),
     hydratedAt: String(EPISODE.finishedAt.getTime()),
   });
-  const COLUMNS = [
-    ...buildColumns(["globalId", "objectId"]),
-    ...["installedAt", "startedAt", "hydratedAt"].map((name) =>
-      buildColumn({ name, type_oid: MzDataType.timestamptz }),
-    ),
-  ];
   let requests: { count: number };
 
   // The collector recorded the episode before one of its two objects.
@@ -819,21 +829,13 @@ describe("useEpisodeObjectHydrations", () => {
         request === 1
           ? [objectRow("u20")]
           : [objectRow("u20"), objectRow("u21")],
-      COLUMNS,
+      OBJECT_HYDRATION_COLUMNS,
     );
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  const HYDRATION_HISTORY_ENVIRONMENT = {
-    ...healthyEnvironment,
-    status: {
-      ...healthyEnvironment.status,
-      version: parseDbVersion("v26.46.0 (0000000000)"),
-    },
-  };
 
   const renderEpisode = async () => {
     const ProviderWrapper = await createProviderWrapper({
@@ -874,6 +876,150 @@ describe("useEpisodeObjectHydrations", () => {
     const reopened = await renderEpisode();
 
     await waitFor(() => expect(reopened.result.current.data).toHaveLength(2));
+  });
+});
+
+describe("useReplicaObjectHydrations", () => {
+  const SINCE = new Date("2026-10-20T10:00:00Z");
+  const objectRow = (globalId: string, hydratedAtMs: number | null) => ({
+    globalId,
+    objectId: globalId,
+    installedAt: String(SINCE.getTime()),
+    startedAt: String(SINCE.getTime()),
+    hydratedAt: hydratedAtMs === null ? null : String(hydratedAtMs),
+  });
+  let requests: { count: number };
+
+  // The first read catches the replica before one of its two objects.
+  beforeEach(() => {
+    requests = answerByRequest(
+      "replicaObjectHydrations",
+      (request) => [
+        objectRow("u20", SINCE.getTime() + 1_000),
+        objectRow("u21", request === 1 ? null : SINCE.getTime() + 5_000),
+      ],
+      OBJECT_HYDRATION_COLUMNS,
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const readReplica = async (isHydrated: boolean) => {
+    const ProviderWrapper = await createProviderWrapper({
+      initializeState: ({ set }) =>
+        setFakeEnvironment(set, defaultRegionId, HYDRATION_HISTORY_ENVIRONMENT),
+    });
+    return renderHook(
+      () =>
+        useReplicaObjectHydrations([
+          {
+            clusterName: "analytics",
+            replicaId: "u2",
+            replicaName: "r2",
+            since: SINCE,
+            isHydrated,
+          },
+        ]),
+      { wrapper: ProviderWrapper },
+    );
+  };
+
+  const hydratedAt = (
+    reads: Array<Array<{ hydratedAt: Date | null }> | undefined>,
+  ) => reads[0]?.map((row) => row.hydratedAt);
+
+  it("reads a replica again while it reports every object hydrated and the read doesn't", async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const { result } = await readReplica(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hydratedAt(result.current)?.[1]).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(millisecondsInMinute);
+    expect(hydratedAt(result.current)?.[1]).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
+    expect(requests.count).toBe(2);
+  });
+
+  it("reads a replica once while it reports objects still to hydrate", async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const { result } = await readReplica(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hydratedAt(result.current)?.[1]).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
+    expect(requests.count).toBe(1);
+  });
+
+  it("stops reading a replica again once it fails to answer", async () => {
+    let failures = 0;
+    server.use(
+      http.post("*/api/sql", ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "replicaObjectHydrations") return undefined;
+        if (requests.count === 0) return undefined;
+        failures += 1;
+        return HttpResponse.json({
+          results: [
+            {
+              error: {
+                message: "Something went wrong",
+                code: ErrorCode.INTERNAL_ERROR,
+              },
+              notices: [],
+            },
+          ],
+        });
+      }),
+    );
+    vi.useFakeTimers({
+      toFake: [
+        "Date",
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+      ],
+    });
+    const { result } = await readReplica(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hydratedAt(result.current)?.[1]).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5 * millisecondsInMinute);
+
+    expect(failures).toBe(1);
+  });
+
+  it("reads a replica again on asking anew while the read disagrees with progress", async () => {
+    const { result, unmount } = await readReplica(true);
+    await waitFor(() => expect(hydratedAt(result.current)?.[1]).toBeNull());
+    unmount();
+
+    const reread = await readReplica(true);
+
+    await waitFor(() =>
+      expect(hydratedAt(reread.result.current)?.[1]).not.toBeNull(),
+    );
   });
 });
 
