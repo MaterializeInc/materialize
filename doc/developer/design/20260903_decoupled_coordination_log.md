@@ -60,6 +60,13 @@ changed-restart and unchanged-restart configuration assertions pass. Evidence:
 `adapter-config-removal-test.log` and scratch
 `controller-followups/remove-adapter-config-build.log`.
 
+The legacy adapter system-table reset path and its unconditional WAL reader are
+removed. The completed-WAL barrier and committed builtin updates remain. Clippy,
+unchanged configuration startup/restart coverage and adapter-only restart
+preservation pass. Evidence: `bootstrap-reset-test.log` and scratch
+`controller-followups/remove-bootstrap-reset-build.log`. No load reduction has
+been measured for this removal.
+
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
 code. Bring changes to write guarantees or public behavior to the user before
