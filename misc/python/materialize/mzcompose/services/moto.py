@@ -24,7 +24,7 @@ class Moto(Service):
         self,
         name: str = "moto",
         # renovate: datasource=docker depName=motoserver/moto versioning=docker
-        image: str = "motoserver/moto:5.2.1",
+        image: str = "motoserver/moto:5.2.5@sha256:59a1965d845249b04def37a0e2565f9cc6c44543cb89b68e90f28f344b3b0d1a",
         port: int = 5000,
     ) -> None:
         super().__init__(
