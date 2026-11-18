@@ -15,11 +15,13 @@ The accepted version pair predates this isolated cache repair. Its implementatio
 and plan encoding are shared, not release-skew or migration coverage. Optimized
 comparison and 60s four-index acceptance are complete.
 
-Next, resolve the configuration-retry scope with the user. Before adopting the
-proposed retained-input/rebuilt-diff boundary, finish checking whether existing
-WAL state can distinguish unrelated progress from writes to the configuration
-shards. Avoid claiming backoff alone guarantees convergence under continuous
-peer writes. No retry-policy or retirement-exit changes have landed.
+Next, resolve the configuration-retry scope with the user. Source review found
+that retained WAL state can distinguish unrelated progress from configuration
+writes, but validation must occur inside every WAL CAS attempt. The proposed
+controller-only non-seed repair retains snapshot diffs across unrelated writes
+and rejects changed inputs. Initial seeding and adapter bootstrap stay unchanged.
+This commit-contract change awaits approval. No retry-policy or retirement-exit
+changes have landed.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -88,21 +90,27 @@ Detailed older outcomes and evidence remain in the
   acceptance. Clean shutdown of an already-running retired controller awaits
   approval for the exit-behavior change. Keep retired-reopen rejection distinct.
 - Configuration reconciliation still retries conflicts inline. The proposed
-  boundary retains handles and desired rows, rebuilds snapshot-relative diffs
-  after conflicts, and keeps startup pending with backoff rather than halting.
-  Readiness and write ordering remain unchanged. This proposal awaits approval.
-  See `current-config-convergence-survey.md` for current-source evidence.
+  controller repair validates every selected table, including empty-diff tables,
+  against each attempted WAL prefix. Changed writes or registration invalidate
+  the retained snapshot. Readiness, authority and retirement checks remain.
+  See `current-config-convergence-survey.md` and
+  `current-config-wal-validation-survey.md`. The latter refines the earlier
+  assumption that every unrelated conflict requires a new snapshot.
 - Promoted-adapter storage initialization can return `CatalogOutOfSync` when
   catch-up changes its captured transient revision. Revalidate preparation rather
   than removing that guard.
 - Debug upsert OOM also reproduces on the pinned upstream base. No native-specific
   cause is established. Do not increase memory or shrink the workload.
 - The last inspected CI failure is
-  [Build143686](https://buildkite.com/materialize/test/builds/143686), at `27a9d4ca`.
-  Scoped local fixes pass, but current-head broad CI is unverified. DockerHub
+  [Build143907](https://buildkite.com/materialize/test/builds/143907), at `e48407bf`.
+  Its source-owned Clippy and metric-reference failures are fixed. Full Linux
+  `cargo clippy --all-targets -- -D warnings` and the documentation extraction
+  tests pass locally. This is not macOS or broad runtime CI verification. DockerHub
   `materialize/pubsubd` visibility needs team-testing intervention. Merge-skew
   checking conflicts before compilation. Do not merge main without approval.
-  Full local formatting lacked `buf`. See `current-head-ci-143686.md`.
+  Full local formatting lacked `buf`. See `current-ci-143907.md` and
+  `ci-143907-clippy-fixed-driver.log`. The initial Clippy reproduction hit its
+  build-time cap, not a source diagnostic. The corrected rerun completed.
 - Positive builtin-schema migrations, pre-native conversion, Kubernetes, operator
   and Terraform integration remain deferred. Keep rejection guards and unsupported
   coverage explicit. Unrelated tracing/performance changes need separate scope.
