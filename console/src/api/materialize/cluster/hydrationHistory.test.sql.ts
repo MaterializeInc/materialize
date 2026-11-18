@@ -118,7 +118,6 @@ describe("buildClusterHydrationEpisodesQuery", () => {
         objectCount: 8,
         peakMemoryBytes: 300,
         peakDiskBytes: 10,
-        peakHeapBytes: 300,
       },
       {
         replicaId: "u1",
@@ -127,7 +126,6 @@ describe("buildClusterHydrationEpisodesQuery", () => {
         objectCount: 1,
         peakMemoryBytes: 120,
         peakDiskBytes: 40,
-        peakHeapBytes: 160,
       },
       {
         replicaId: "u1",
@@ -136,7 +134,6 @@ describe("buildClusterHydrationEpisodesQuery", () => {
         objectCount: 0,
         peakMemoryBytes: 50,
         peakDiskBytes: 0,
-        peakHeapBytes: 50,
       },
     ]);
   });
@@ -499,7 +496,7 @@ describe("buildReplicaPeakUsageQuery", () => {
          heap_limit UINT8,
          swap_bytes UINT8`,
         `('u1', 0, 400, 50, 30, '2026-10-20T10:01:00Z', 95, 100, 0),
-         ('u1', 1, 900, 90, NULL, '2026-10-20T10:02:00Z', NULL, 100, 0),
+         ('u1', 1, 900, 90, 10, '2026-10-20T10:02:00Z', NULL, 100, 0),
          ('u1', 0, NULL, NULL, NULL, '2026-10-20T10:03:00Z', NULL, NULL, NULL),
          ('u1', 0, 1000, 99, 99, '2026-10-20T10:05:00Z', 1, 1, 0),
          ('u2', 0, 1000, 99, 99, '2026-10-20T10:02:00Z', 1, 1, 0)`,
@@ -515,8 +512,8 @@ describe("buildReplicaPeakUsageQuery", () => {
         }).compile(),
       );
 
-    // Heap is the larger of the reported heap and memory plus disk: 95 over
-    // 80, and 90 where heap isn't reported.
+    // Heap is only what a process reports: 95, not the other process's 100
+    // of memory plus disk.
     expect(
       (await run("2026-10-20T10:00:00Z", "2026-10-20T10:04:00Z")).rows,
     ).toEqual([

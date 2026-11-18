@@ -419,8 +419,6 @@ export const HYDRATION_HELP = {
     "The most memory one process used, as a share of its memory. Materialize records the peak since the process started, so it can predate this hydration.",
   peakDisk:
     "The most disk one process used, as a share of its disk. Recorded since the process started.",
-  peakHeap:
-    "Memory plus disk, as a share of the process's heap limit. A process that reaches the limit runs out of memory. Recorded since the process started.",
   cpu: "The highest CPU sample during the hydration. Materialize samples CPU once a minute.",
   ended:
     "Whether the replica ran out of memory or went offline, from its status.",
@@ -428,7 +426,7 @@ export const HYDRATION_HELP = {
   sampledMemory:
     "The most memory one process used while it hydrated, as a share of its memory. Materialize samples memory once a minute, so the true peak can be higher.",
   sampledHeap:
-    "The most memory plus disk or swap one process used while it hydrated, as a share of its heap limit. A process that reaches the limit runs out of memory. Materialize samples these once a minute, so the true peak can be higher.",
+    "The most heap one process reported while it hydrated, memory plus swap, as a share of its heap limit. A process that reaches the limit runs out of memory. Materialize samples heap once a minute, so the true peak can be higher.",
   restarting:
     "Inferred from replica status: it restarted with no finished hydration recorded.",
   offline: "The replica is offline, so it isn't hydrating.",

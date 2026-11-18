@@ -13,6 +13,7 @@ import React from "react";
 
 import { isSystemId } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { useAppConfig } from "~/config/useAppConfig";
 import {
   REPLICA_HYDRATION_HISTORY_MIN_VERSION,
   replicaStatusesUpdatedAt,
@@ -23,7 +24,6 @@ import {
   useObjectCreationTimes,
   useReplicaHeapLimits,
   useReplicaObjectHydrations,
-  useReplicaPeakUsage,
   useReplicaSizeAllocations,
   useReplicaStatusHistory,
 } from "~/platform/clusters/queries";
@@ -47,6 +47,14 @@ import { isUnrecordedEpisode, UnrecordedHydration } from "./hydrationView";
 import { useLiveHydrationProgress } from "./useLiveHydration";
 
 const COMPUTE_OBJECT_TYPES = ["index", "materialized-view"];
+
+/**
+ * Whether the tab shows heap. Heap counts swap, and Cloud replicas spill to
+ * swap (the cloud repo's production node pools set `swap_enabled`), so heap
+ * against its limit is how close a process came to running out of memory. A
+ * self-managed replica can spill to a disk outside the heap instead.
+ */
+export const useShowsHeap = () => useAppConfig().mode === "cloud";
 
 /** When an object on the cluster was created, named from the catalog. */
 export interface CreatedObject {
@@ -140,7 +148,8 @@ export function useClusterHydrationData({
     clusterId: cluster.id,
     replicaIds: currentReplicaIds,
   });
-  const heapLimits = useReplicaHeapLimits(currentReplicaIds);
+  const showsHeap = useShowsHeap();
+  const heapLimits = useReplicaHeapLimits(showsHeap ? currentReplicaIds : []);
   const allocations = useReplicaSizeAllocations([
     ...new Set(
       replicas.flatMap(({ size }) => (size === undefined ? [] : [size])),
@@ -338,8 +347,7 @@ const nameSpans = (
 
 /**
  * The objects of one finished hydration, in the order they started and named
- * from the catalog, and the replica's highest sampled CPU during it. Each loads
- * and fails on its own.
+ * from the catalog.
  */
 export function useHydrationDetail({
   clusterId,
@@ -349,13 +357,6 @@ export function useHydrationDetail({
   hydration: Hydration | undefined;
 }) {
   const objectHydrations = useEpisodeObjectHydrations(hydration);
-  const peakUsage = useReplicaPeakUsage(
-    hydration && {
-      replicaId: hydration.replicaId,
-      startDate: hydration.startedAt,
-      endDate: hydration.finishedAt,
-    },
-  );
   const {
     data: objects,
     snapshotComplete: hasObjectNames,
@@ -376,14 +377,11 @@ export function useHydrationDetail({
   );
   return {
     spans,
-    peakCpuNanoCores: peakUsage.data?.peakCpuNanoCores,
     // Without the catalog every object would be named by its id, so the spans
     // wait for it unless it failed.
     isSpansLoading:
       objectHydrations.isLoading || (!hasObjectNames && !isObjectNamesError),
     isSpansError: objectHydrations.isError,
-    isCpuLoading: peakUsage.isLoading,
-    isCpuError: peakUsage.isError,
   };
 }
 
@@ -446,7 +444,6 @@ export function useLastUnrecordedHydration({
         startedAt: episode.startedAt,
         finishedAt: episode.finishedAt,
         objectCount: episode.objects.length,
-        peakHeapBytes: null,
         peakMemoryBytes: null,
         peakDiskBytes: null,
       },

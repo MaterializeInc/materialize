@@ -414,7 +414,6 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
                 rows={rows}
                 colorById={colorById}
                 nameById={nameById}
-                heapLimitById={data.heapLimitBytesById}
                 allocationById={data.allocationById}
                 selectedId={selectedRow?.id}
                 onSelect={setSelectedRowId}

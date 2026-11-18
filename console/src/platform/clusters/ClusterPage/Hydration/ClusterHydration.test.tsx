@@ -153,7 +153,6 @@ const episode = (
   objectCount: String(objectCount),
   peakMemoryBytes: String(6 * GIB),
   peakDiskBytes: String(GIB / 4),
-  peakHeapBytes: String(6.4 * GIB),
 });
 
 // r2's full hydration, the latest one.
@@ -389,7 +388,6 @@ const renderHydrationTab = async ({
               float8("objectCount"),
               float8("peakMemoryBytes"),
               float8("peakDiskBytes"),
-              float8("peakHeapBytes"),
             ],
           }),
     }),
@@ -557,15 +555,22 @@ const renderHydrationTab = async ({
           ],
         });
       }
-      const finishedPeaks = { peakMemoryBytes: null, peakHeapBytes: null };
       return HttpResponse.json({
         results: [
           mapKyselyToTabular({
             rows: [
               isLastFinished
-                ? { ...finishedPeaks, peakCpuNanoCores: "300000000" }
+                ? {
+                    peakMemoryBytes: null,
+                    peakHeapBytes: null,
+                    peakCpuNanoCores: "300000000",
+                  }
                 : isLatestFull
-                  ? { ...finishedPeaks, peakCpuNanoCores: "900000000" }
+                  ? {
+                      peakMemoryBytes: null,
+                      peakHeapBytes: String(6.4 * GIB),
+                      peakCpuNanoCores: "900000000",
+                    }
                   : attemptPeakUsage,
             ],
             columns: [
@@ -752,13 +757,19 @@ describe("ClusterHydration", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps a hydration's object timings when its CPU sample fails to load", async () => {
+  it("keeps a hydration's object timings when its CPU and heap samples fail to load", async () => {
     await renderHydrationTab({ isCpuPeakError: true });
 
     expect(
       await screen.findByRole("img", { name: "Object hydration times" }),
     ).toBeVisible();
-    expect(screen.getByText("Couldn't be loaded")).toBeVisible();
+    for (const name of ["Peak heap", "Peak CPU"]) {
+      expect(
+        within(screen.getByRole("group", { name })).getByText(
+          "Couldn't be loaded",
+        ),
+      ).toBeVisible();
+    }
   });
 
   it("keeps the history up while a new replica's or object's data loads", async () => {
@@ -911,6 +922,7 @@ describe("ClusterHydration", () => {
     expect(
       within(table).getAllByText("Restarted before finishing"),
     ).toHaveLength(2);
+    expect(within(table).getAllByText("Out of memory")).toHaveLength(2);
     // The last restart, with how it ended and what it used before it did.
     expect(
       screen.getByRole("heading", { name: "Last Hydration" }),
@@ -1022,9 +1034,11 @@ describe("ClusterHydration", () => {
       within(table)
         .getAllByRole("columnheader")
         .map(({ textContent }) => textContent),
-    ).toEqual(
-      expect.arrayContaining(["Peak memory", "Peak disk", "Peak heap"]),
-    );
+    ).toEqual(expect.arrayContaining(["Peak memory", "Peak disk"]));
+    // Materialize doesn't record heap.
+    expect(
+      within(table).queryByRole("columnheader", { name: /Peak heap/ }),
+    ).not.toBeInTheDocument();
     // 6 GiB of the replica's 8 GiB.
     expect(within(table).getAllByText("75.0%")).toHaveLength(3);
   });
@@ -1360,6 +1374,63 @@ describe("ClusterHydration", () => {
     expect(await screen.findByRole("note")).toHaveTextContent(
       /^This is the Materialize Emulator\./,
     );
+  });
+
+  it("says when a replica reports memory but not heap", async () => {
+    await renderHydrationTab({
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u1", NOW_MS - 30 * MINUTE_MS),
+        online("u1", NOW_MS - 29 * MINUTE_MS),
+        outOfMemory("u1", NOW_MS - 10 * MINUTE_MS),
+        online("u1", NOW_MS - 9 * MINUTE_MS),
+      ],
+      progress: { u1: [3, 9], u2: [9, 9] },
+      attemptPeakUsage: {
+        peakCpuNanoCores: "500000000",
+        peakMemoryBytes: String(7.5 * GIB),
+        peakHeapBytes: null,
+      },
+    });
+
+    const peakHeap = await screen.findByRole("group", { name: "Peak heap" });
+    expect(await within(peakHeap).findByText("Not reported")).toBeVisible();
+  });
+
+  it("leaves heap out on a self-managed install", async () => {
+    await renderHydrationTab({
+      appConfig: new SelfManagedAppConfig(),
+      environment: HELM_INSTALL_ENVIRONMENT,
+      statusRows: [
+        online("u1", BOOTED_AT_MS),
+        online("u2", BOOTED_AT_MS),
+        outOfMemory("u1", NOW_MS - 30 * MINUTE_MS),
+        online("u1", NOW_MS - 29 * MINUTE_MS),
+        outOfMemory("u1", NOW_MS - 10 * MINUTE_MS),
+        online("u1", NOW_MS - 9 * MINUTE_MS),
+      ],
+      progress: { u1: [3, 9], u2: [9, 9] },
+    });
+
+    // The restart, sampled over its window.
+    expect(
+      await screen.findByRole("group", { name: "Peak memory" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("group", { name: "Peak heap" }),
+    ).not.toBeInTheDocument();
+
+    const table = screen.getByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    await userEvent.click(within(rows[1]).getByRole("button"));
+    expect(
+      await screen.findByRole("heading", { name: "Selected Hydration" }),
+    ).toBeVisible();
+    expect(screen.getByRole("group", { name: "Peak CPU" })).toBeVisible();
+    expect(
+      screen.queryByRole("group", { name: "Peak heap" }),
+    ).not.toBeInTheDocument();
   });
 
   it("says nothing of the emulator on a self-managed install", async () => {

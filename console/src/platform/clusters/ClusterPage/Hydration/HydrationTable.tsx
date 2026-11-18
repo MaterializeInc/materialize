@@ -25,7 +25,7 @@ import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
-import { formatDurationExact, formatPercentage } from "~/utils/format";
+import { formatDurationExact } from "~/utils/format";
 
 import { percentOf } from "../ResourceUsage/processReadingsModel";
 import {
@@ -40,7 +40,6 @@ import {
 interface HydrationTableMeta {
   colorById: Map<string, string>;
   nameById: Map<string, string>;
-  heapLimitById: Map<string, number>;
   /** Each replica's per-process CPU, memory and disk. */
   allocationById: Map<string, SizeAllocation>;
   selectedId: string | undefined;
@@ -143,7 +142,9 @@ const COLUMNS = [
     meta: { tooltip: HYDRATION_HELP.peakMemory },
     cell: (info) => {
       const row = info.row.original;
-      if (row.type === "unfinished") return "-";
+      if (row.type === "unfinished") {
+        return row.reason === OOM_REASON ? "Out of memory" : "-";
+      }
       const meta = info.table.options.meta as HydrationTableMeta;
       const percent = percentOf(
         row.peakMemoryBytes,
@@ -165,26 +166,6 @@ const COLUMNS = [
       return row.type === "hydration"
         ? (formatPeakBytes(row.peakDiskBytes) ?? "-")
         : "-";
-    },
-  }),
-  columnHelper.display({
-    id: "peakHeap",
-    header: "Peak heap",
-    meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakHeap },
-    cell: (info) => {
-      const row = info.row.original;
-      if (row.type === "unfinished") {
-        return row.reason === OOM_REASON ? "Out of memory" : "-";
-      }
-      const meta = info.table.options.meta as HydrationTableMeta;
-      const percent = percentOf(
-        row.peakHeapBytes,
-        meta.heapLimitById.get(row.replicaId) ?? null,
-      );
-      const peakBytes = formatPeakBytes(row.peakHeapBytes) ?? "-";
-      return percent === null
-        ? peakBytes
-        : `${formatPercentage(percent / 100, 0)} · ${peakBytes}`;
     },
   }),
 ];

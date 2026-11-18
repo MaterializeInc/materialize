@@ -41,7 +41,7 @@ import { percentOf } from "../ResourceUsage/processReadingsModel";
 import { InfoTip } from "./hydrationComponents";
 import { Hydration, ObjectHydrationSpan } from "./hydrationModel";
 import { formatPeakBytes, HYDRATION_HELP, HydrationRow } from "./hydrationView";
-import { useHydrationDetail } from "./useClusterHydrationData";
+import { useHydrationDetail, useShowsHeap } from "./useClusterHydrationData";
 
 // A page of objects, enough to see the ones that set an episode's length
 // without mounting a row per object on a cluster with hundreds.
@@ -131,19 +131,23 @@ export const UnrecordedDetail = ({
 /**
  * The highest memory, heap and CPU sampled on a replica over a window, each
  * with why it's missing when it is. Undefined `window` means it wasn't
- * recorded.
+ * recorded. A recorded hydration has its own memory peak, so it leaves memory
+ * out with `showsMemory`.
  */
 const SampledPeakStats = ({
   replicaId,
   window,
   heapLimitBytes,
   allocation,
+  showsMemory = true,
 }: {
   replicaId: string;
   window: { startedAt: Date; endedAt: Date } | undefined;
   heapLimitBytes: number | undefined;
   allocation: SizeAllocation | undefined;
+  showsMemory?: boolean;
 }) => {
+  const showsHeap = useShowsHeap();
   const usage = useReplicaPeakUsage(
     window && {
       replicaId,
@@ -170,19 +174,31 @@ const SampledPeakStats = ({
           : undefined;
   return (
     <>
-      <Stat
-        label="Peak memory"
-        help={HYDRATION_HELP.sampledMemory}
-        value={memory.value}
-        note={memory.note ?? missingNote(usage.data?.peakMemoryBytes)}
-      />
-      <Stat
-        label="Peak heap"
-        help={HYDRATION_HELP.sampledHeap}
-        value={heap.value}
-        note={heap.note ?? missingNote(usage.data?.peakHeapBytes)}
-        isCritical={heap.percent !== null && heap.percent >= NEAR_LIMIT_PERCENT}
-      />
+      {showsMemory && (
+        <Stat
+          label="Peak memory"
+          help={HYDRATION_HELP.sampledMemory}
+          value={memory.value}
+          note={memory.note ?? missingNote(usage.data?.peakMemoryBytes)}
+        />
+      )}
+      {showsHeap && (
+        <Stat
+          label="Peak heap"
+          help={HYDRATION_HELP.sampledHeap}
+          value={heap.value}
+          note={
+            heap.note ??
+            (usage.data?.peakHeapBytes === null &&
+            usage.data.peakMemoryBytes !== null
+              ? "Not reported"
+              : missingNote(usage.data?.peakHeapBytes))
+          }
+          isCritical={
+            heap.percent !== null && heap.percent >= NEAR_LIMIT_PERCENT
+          }
+        />
+      )}
       <Stat
         label="Peak CPU"
         help={HYDRATION_HELP.cpu}
@@ -330,11 +346,6 @@ const FinishedDetail = ({
     hydration.peakDiskBytes,
     allocation?.diskBytes ?? undefined,
   );
-  const heap = peakStat(hydration.peakHeapBytes, heapLimitBytes);
-  const cpuPercent =
-    detail.peakCpuNanoCores === undefined
-      ? null
-      : percentOf(detail.peakCpuNanoCores, allocation?.cpuNanoCores ?? null);
   return (
     <VStack spacing={4} alignItems="stretch">
       <SimpleGrid minChildWidth="120px" spacing={3}>
@@ -356,26 +367,15 @@ const FinishedDetail = ({
           value={disk.value}
           note={disk.note}
         />
-        <Stat
-          label="Peak heap"
-          help={HYDRATION_HELP.peakHeap}
-          value={heap.value}
-          note={heap.note}
-          isCritical={
-            heap.percent !== null && heap.percent >= NEAR_LIMIT_PERCENT
-          }
-        />
-        <Stat
-          label="Peak CPU"
-          help={HYDRATION_HELP.cpu}
-          value={detail.isCpuLoading ? "-" : formatShare(cpuPercent)}
-          note={
-            detail.isCpuError
-              ? "Couldn't be loaded"
-              : detail.peakCpuNanoCores === null
-                ? "No sample during this hydration"
-                : undefined
-          }
+        <SampledPeakStats
+          replicaId={hydration.replicaId}
+          window={{
+            startedAt: hydration.startedAt,
+            endedAt: hydration.finishedAt,
+          }}
+          heapLimitBytes={heapLimitBytes}
+          allocation={allocation}
+          showsMemory={false}
         />
       </SimpleGrid>
       {detail.isSpansError ? (

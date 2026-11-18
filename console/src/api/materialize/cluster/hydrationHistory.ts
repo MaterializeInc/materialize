@@ -23,7 +23,6 @@ const timestampLit = (date: string) => sql<Date>`${sql.lit(date)}::timestamptz`;
  *
  * Peaks are the highest any of the episode's processes reached since it
  * started, read when the episode was recorded, so they can predate it.
- * `peakHeapBytes` is the highest memory plus disk peak of a single process.
  *
  * NOTE: the history has no index, so this reads storage. It is sampled one
  * replica at a time, so an episode shows up a while after it finishes, and
@@ -49,11 +48,6 @@ export function buildClusterHydrationEpisodesQuery({
           "peakMemoryBytes",
         ),
         sql<number | null>`max(peak_disk_bytes)::float8`.as("peakDiskBytes"),
-        sql<
-          number | null
-        >`max(peak_memory_bytes + coalesce(peak_disk_bytes, 0))::float8`.as(
-          "peakHeapBytes",
-        ),
       ])
       .where("cluster_id", "=", clusterId)
       // Rows recorded before 26.43 have no process id, peaks taken across
@@ -285,11 +279,7 @@ export async function fetchEpisodeObjectHydrations({
 export interface ReplicaPeakUsage {
   peakCpuNanoCores: number | null;
   peakMemoryBytes: number | null;
-  /**
-   * The highest of one process's memory plus disk or swap: its reported heap,
-   * which counts swap, or its memory plus disk, whichever is larger. That is
-   * what a recorded hydration's heap peak counts.
-   */
+  /** The highest heap one process reported, which counts swap. */
   peakHeapBytes: number | null;
 }
 
@@ -313,11 +303,7 @@ export function buildReplicaPeakUsageQuery({
     .select([
       sql<number | null>`max(cpu_nano_cores)::float8`.as("peakCpuNanoCores"),
       sql<number | null>`max(memory_bytes)::float8`.as("peakMemoryBytes"),
-      sql<
-        number | null
-      >`max(greatest(heap_bytes, memory_bytes + coalesce(disk_bytes, 0)))::float8`.as(
-        "peakHeapBytes",
-      ),
+      sql<number | null>`max(heap_bytes)::float8`.as("peakHeapBytes"),
     ])
     .where("replica_id", "=", replicaId)
     .where("occurred_at", ">=", timestampLit(startDate))

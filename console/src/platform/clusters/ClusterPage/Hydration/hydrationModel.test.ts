@@ -48,7 +48,6 @@ const episode = (
   startedAt: at(startedAt),
   finishedAt: at(finishedAt),
   objectCount,
-  peakHeapBytes: 100,
   peakMemoryBytes: 90,
   peakDiskBytes: 10,
 });

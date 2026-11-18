@@ -49,7 +49,6 @@ const hydration = (
   finishedAt: new Date(at(startedAt).getTime() + durationMs),
   durationMs,
   objectCount: 8,
-  peakHeapBytes: null,
   peakMemoryBytes: null,
   peakDiskBytes: null,
   kind: "full",

@@ -47,8 +47,6 @@ export interface Hydration {
   finishedAt: Date;
   durationMs: number;
   objectCount: number;
-  /** The highest memory plus disk of one process since it started. */
-  peakHeapBytes: number | null;
   peakMemoryBytes: number | null;
   peakDiskBytes: number | null;
   kind: HydrationKind;
@@ -151,7 +149,6 @@ export function transformHydrations(
     startedAt: Date;
     finishedAt: Date;
     objectCount: number;
-    peakHeapBytes: number | null;
     peakMemoryBytes: number | null;
     peakDiskBytes: number | null;
   }>,
