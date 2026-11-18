@@ -56,6 +56,7 @@ CONNECTION_ERROR_STRINGS = [
     "consuming input failed: SSL SYSCALL error: EOF detected",
     "unexpected eof while reading",
     "consuming input failed: SSL connection has been closed unexpectedly",
+    "upstream server not available",
 ]
 
 
@@ -122,6 +123,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     APP_PASSWORD = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
 
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
+    parser.add_argument(
+        "--recovery-timeout",
+        default=30,
+        type=int,
+        help="Maximum seconds after a connection error to complete a successful validation",
+    )
     args = parser.parse_args()
 
     start_time = time.time()
@@ -147,15 +154,33 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         failures: list[TestFailureDetails] = []
         connection_failures: list[tuple[str, str]] = []
+        recovery_deadline: float | None = None
+        boot: tuple[str, datetime.datetime] | None = None
 
         try:
             count_chunk = 0
             while time.time() - start_time < args.runtime:
+                if (
+                    recovery_deadline is not None
+                    and time.monotonic() >= recovery_deadline
+                ):
+                    break
                 count_chunk = count_chunk + 1
                 try:
                     c.testdrive(dedent("""
                                 > DELETE FROM qa_canary_environment.public_table.table
                             """))
+
+                    # Connection errors are tolerated for upgrade cutovers. A
+                    # restart that kept the version was something else, e.g. a crash.
+                    prev, boot = boot, environmentd_boot(host, USERNAME, APP_PASSWORD)
+                    if prev and boot[1] != prev[1] and boot[0] == prev[0]:
+                        failures.append(
+                            TestFailureDetails(
+                                message=f"environmentd restarted at {boot[1]} without a version change",
+                                details=None,
+                            )
+                        )
 
                     conn1, cursor_on_table = create_connection_and_cursor(
                         host,
@@ -186,6 +211,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             i,
                             webhook_sender,
                         )
+                        if (
+                            recovery_deadline is not None
+                            and time.monotonic() >= recovery_deadline
+                        ):
+                            break
+                        recovery_deadline = None
                         i += 1
 
                     close_connection_and_cursor(
@@ -201,6 +232,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ) as e:
                     error_msg_str = str(e)
                     if is_connection_error(error_msg_str):
+                        if recovery_deadline is None:
+                            recovery_deadline = time.monotonic() + args.recovery_timeout
                         now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, error_msg_str))
                         print(f"Connection failure at {now}: {e}; retrying")
@@ -212,7 +245,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         # TODO(def-): Remove when database-issues#6825 is fixed
                         if "Non-positive multiplicity in DistinctBy" in error.message:
                             continue
-                        if is_connection_error(error.message):
+                        # testdrive puts the actual error in details.
+                        if is_connection_error(f"{error.message}\n{error.details}"):
+                            if recovery_deadline is None:
+                                recovery_deadline = (
+                                    time.monotonic() + args.recovery_timeout
+                                )
                             now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                             connection_failures.append((now, error.message))
                             print(
@@ -230,6 +268,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     if "Non-positive multiplicity in DistinctBy" in msg:
                         continue
                     if is_connection_error(msg):
+                        if recovery_deadline is None:
+                            recovery_deadline = time.monotonic() + args.recovery_timeout
                         now = datetime.datetime.now(tz=datetime.UTC).isoformat()
                         connection_failures.append((now, msg))
                         print(f"Connection failure at {now}: {msg}; continuing.")
@@ -241,6 +281,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(TestFailureDetails(message=msg, details=None))
         finally:
             webhook_sender.stop()
+
+        if recovery_deadline is not None:
+            failures.append(
+                TestFailureDetails(
+                    message="No successful validation after connection errors",
+                    details=f"Recovery must complete within {args.recovery_timeout}s and before the run ends.",
+                )
+            )
 
         if connection_failures:
             print("\n--- Connection failure summary ---")
@@ -296,6 +344,9 @@ def http_sql_query(
         print("Got 401, refreshing token and retrying")
         new_token = refresh_token()
         return http_sql_query(host, query, new_token, retries, refresh_token=None)
+    if r.status_code == 502:
+        # The main loop tolerates this. An AssertionError would abort the run.
+        raise ConnectionError(r.text)
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
@@ -316,6 +367,18 @@ def http_sql_query(
         )
 
     return results[0]["rows"]
+
+
+def environmentd_boot(
+    host: str, user_name: str, app_password: str
+) -> tuple[str, datetime.datetime]:
+    """Version and boot time of the environmentd serving `host`."""
+    with psycopg.connect(
+        host=host, user=user_name, password=app_password, port=6875, sslmode="require"
+    ) as conn:
+        row = conn.execute("SELECT mz_version(), now() - mz_uptime()").fetchone()
+    assert row is not None
+    return row[0], row[1]
 
 
 def create_connection_and_cursor(
