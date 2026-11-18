@@ -110,15 +110,13 @@ data was removed, leaving 155 GiB free on scratch.
 - Debug upsert OOM also reproduces on the pinned upstream base. No native-specific
   cause is established. Do not increase memory or shrink the workload.
 - The last inspected CI failure is
-  [Build143907](https://buildkite.com/materialize/test/builds/143907), at `e48407bf`.
-  Its source-owned Clippy and metric-reference failures are fixed. Full Linux
-  `cargo clippy --all-targets -- -D warnings` and the documentation extraction
-  tests pass locally. This is not macOS or broad runtime CI verification. DockerHub
+  [Build143929](https://buildkite.com/materialize/test/builds/143929), at `6e7a3107`.
+  Linux and macOS Clippy, lint/rustfmt, docs lint and doctests passed. The only
+  failed jobs are the image build gate and merge-skew check. Dependent runtime
+  jobs did not run, so broad runtime CI remains unverified. DockerHub
   `materialize/pubsubd` visibility needs team-testing intervention. Merge-skew
   checking conflicts before compilation. Do not merge main without approval.
-  Full local formatting lacked `buf`. See `current-ci-143907.md` and
-  `ci-143907-clippy-fixed-driver.log`. The initial Clippy reproduction hit its
-  build-time cap, not a source diagnostic. The corrected rerun completed.
+  See `current-ci-143929.md` and its terminal metadata, annotation and merge log.
 - Positive builtin-schema migrations, pre-native conversion, Kubernetes, operator
   and Terraform integration remain deferred. Keep rejection guards and unsupported
   coverage explicit. Unrelated tracing/performance changes need separate scope.
