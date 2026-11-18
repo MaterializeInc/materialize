@@ -108,7 +108,15 @@ def test_historical_finding_shape_preserves_every_category() -> None:
 
 
 @pytest.mark.parametrize(
-    "group", ["Always: Always", "Always: AlwaysOrUnreachable", "Always: Unreachable"]
+    "group",
+    [
+        "Always: Always",
+        "Always: AlwaysOrUnreachable",
+        "Always: Unreachable",
+        "Always assertions",
+        "AlwaysOrUnreachable assertions",
+        "Unreachability assertions",
+    ],
 )
 def test_concrete_sdk_counterexample_remains_a_product_failure(group: str) -> None:
     report = findings.summarize([prop("wrong_rows", group)], events=[])

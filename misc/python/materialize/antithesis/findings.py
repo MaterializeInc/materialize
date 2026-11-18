@@ -22,14 +22,20 @@ from materialize.antithesis.exit_evidence import classify_exit_property, native_
 
 _SUT_CONTAINERS = {"environmentd", "clusterd", "orchestratord", "persistcli"}
 _PANIC_EXITS = {101, 132, 134, 135, 136, 139}
+# The platform renamed its SDK assertion groups in release 66. Both spellings
+# stay, so exports of older runs still classify.
 _INVARIANT_GROUPS = {
     "Always: Always",
     "Always: AlwaysOrUnreachable",
     "Always: Unreachable",
+    "Always assertions",
+    "AlwaysOrUnreachable assertions",
+    "Unreachability assertions",
 }
 _HEALTH_GROUPS = {
     "Always: Commands finish with zero exit code",
     "Always: SDK Minimum Version",
+    "Antithesis SDK version is supported",
 }
 _COMMAND_COVERAGE = {
     "All commands were run to completion at least once",
