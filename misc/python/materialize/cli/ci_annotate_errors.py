@@ -16,6 +16,7 @@ import json
 import mmap
 import os
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -584,11 +585,7 @@ def annotate_unexplained_failure(
     unnoticed, with the end of `log_file` and the current failures on main
     branch.
     """
-    if (
-        ui.env_is_truthy("BUILDKITE")
-        and test_result != 0
-        and get_job_state() not in ("canceling", "canceled")
-    ):
+    if ui.env_is_truthy("BUILDKITE") and test_result != 0 and not job_was_canceled():
         annotation = Annotation(
             suite_name=get_suite_name(),
             buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
@@ -1229,7 +1226,29 @@ def _get_failures_on_main_from_buildkite(
     )
 
 
-def get_job_state() -> str:
+def job_was_canceled() -> bool:
+    if ui.env_is_truthy("BUILDKITE_JOB_CANCELLED"):
+        return True
+
+    if os.getenv("BUILDKITE_AGENT_JOB_API_SOCKET"):
+        try:
+            result = subprocess.run(
+                [
+                    "buildkite-agent",
+                    "env",
+                    "get",
+                    "--format=plain",
+                    "BUILDKITE_JOB_CANCELLED",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     job_id = os.getenv("BUILDKITE_JOB_ID")
@@ -1237,7 +1256,7 @@ def get_job_state() -> str:
     build = generic_api.get(url, {})
     for job in build["jobs"]:
         if job["id"] == job_id:
-            return job["state"]
+            return job["state"] in ("canceling", "canceled")
     raise ValueError("Job not found")
 
 
