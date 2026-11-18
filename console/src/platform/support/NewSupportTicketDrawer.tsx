@@ -67,10 +67,10 @@ import {
   buildTicketTargets,
   defaultTicketTarget,
   ENVIRONMENT_OPTIONS,
-  OUTAGE_TEMPLATE,
+  OUTAGE_DESCRIPTION_PLACEHOLDER,
   SEVERITY_OPTIONS,
+  TICKET_DESCRIPTION_PLACEHOLDER,
   TICKET_SEVERITY_OPTIONS,
-  TICKET_TEMPLATE,
   TicketFormValues,
   TicketSeverity,
 } from "./ticketForm";
@@ -165,7 +165,9 @@ const NewTicketForm = ({
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
   const targets = buildTicketTargets(supportOrganizations.data ?? [], signedIn);
-  const descriptionPlaceholder = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
+  const descriptionPlaceholder = isOutage
+    ? OUTAGE_DESCRIPTION_PLACEHOLDER
+    : TICKET_DESCRIPTION_PLACEHOLDER;
   const { register, handleSubmit, formState, watch } =
     useForm<TicketFormValues>({
       mode: "onTouched",
@@ -369,9 +371,7 @@ const NewTicketForm = ({
                 },
               })}
               placeholder={descriptionPlaceholder}
-              variant={errors.description ? "error" : "default"}
               rows={6}
-              minH="9.5rem"
               lineHeight="1.4"
               resize="vertical"
             />

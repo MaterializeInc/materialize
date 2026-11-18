@@ -34,7 +34,10 @@ import { defaultRegionId, renderComponent } from "~/test/utils";
 
 import { supportTicketQueryKeys, supportTicketsQueryOptions } from "./queries";
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
-import { OUTAGE_TEMPLATE, TICKET_TEMPLATE } from "./ticketForm";
+import {
+  OUTAGE_DESCRIPTION_PLACEHOLDER,
+  TICKET_DESCRIPTION_PLACEHOLDER,
+} from "./ticketForm";
 
 const mockFlags: Record<string, boolean> = vi.hoisted(() => ({}));
 
@@ -249,7 +252,7 @@ describe("SupportPage", () => {
     ).toBeVisible();
     // The form explains severities, so the page doesn't repeat them.
     expect(
-      screen.queryByRole("region", { name: "Before you open a ticket" }),
+      screen.queryByRole("heading", { name: "Before you open a ticket" }),
     ).not.toBeInTheDocument();
     expect(
       within(screen.getByTestId("support-ticket-actions")).getByRole("link", {
@@ -1257,7 +1260,10 @@ describe("SupportPage", () => {
       const details = screen.getByRole("textbox", { name: /What happened/ });
       // The prompts are a placeholder, so the box starts empty.
       expect(details).toHaveValue("");
-      expect(details).toHaveAttribute("placeholder", TICKET_TEMPLATE);
+      expect(details).toHaveAttribute(
+        "placeholder",
+        TICKET_DESCRIPTION_PLACEHOLDER,
+      );
       await user.type(details, "Kafka sink is 10 minutes behind.");
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
@@ -1527,7 +1533,7 @@ describe("SupportPage", () => {
       ).toHaveTextContent("Production");
       expect(
         screen.getByRole("textbox", { name: /What happened/ }),
-      ).toHaveAttribute("placeholder", OUTAGE_TEMPLATE);
+      ).toHaveAttribute("placeholder", OUTAGE_DESCRIPTION_PLACEHOLDER);
       expect(
         screen.getByRole("link", { name: "How to run mz-debug ↗" }),
       ).toHaveAttribute("href", MZ_DEBUG_SELF_MANAGED_URL);
