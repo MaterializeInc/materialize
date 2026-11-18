@@ -8,12 +8,15 @@ adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
 The current 26.46/26.47 debug pair passed local lifecycle, DDL, adapter-loss and
-subscription-identity coverage. All owned runtimes are stopped. Review the pending
-`native_frontier_restart_measurement.py` fixture, then measure adapter and full
-native-process restarts with retained metadata/blob state. Keep its existing
-resource and time limits. The pair shares implementation and plan encoding, not
-release-skew or migration coverage. Optimized comparison and 60s four-index
-acceptance are complete. Debug remains required for startup measurements.
+subscription-identity coverage and debug restart measurements. All owned runtimes
+are stopped. A small controller-cache publication repair is uncommitted in
+`src/environmentd/src/controllerd.rs` and `controllerd/startup.rs`. Source review
+and its bounded debug build pass. Next, review the pending private
+`native_controller_cache_probe.py`, then compare the preserved old debug pin and
+`native-controller-cache-candidate` sequentially. Verify actual cache hits and
+recovery, including cache-disable behavior, before claiming improvement or committing.
+The version pair shares implementation and plan encoding, not release-skew or
+migration coverage. Optimized comparison and 60s four-index acceptance are complete.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -36,6 +39,13 @@ a live-retirement controller panic. Candidate adapter restart at promotion remai
 permitted. DDL, adapter-loss and subscription log audits found no Materialize panic
 or OOM. Successful SQL/compaction values are not all saved separately, so some
 claims rely on executed unchanged assertions rather than numerical replay.
+
+Debug measurements passed at unchanged limits: adapter-only restart 9.2s,
+promotion request to serving 12.6s excluding catch-up, and whole-native relaunch
+24.4s after a separate 10.4s stop. PostgreSQL remained alive. The adapter did not
+repeat the observed builtin optimization events after retained-state restart,
+while the controller did. This supports the controller-cache repair, not a claim
+that all adapter items hit. See `current-frontier-restart-audit.md`.
 
 The frontier rewrite derives execution keys from catalog records rather than
 frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
@@ -106,12 +116,20 @@ CPUs/32 GiB. Never overlap builds and runtimes. Keep heavy work off the local VM
 Extension within these caps needs no approval.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
-`remote.py` accesses the worker. Worker source is base `59a59d89` plus the exact
-frontier overlay. The pair temporarily changes package versions. Its required
+`remote.py` accesses the worker. Worker source is base `59a59d89`, the exact
+frontier overlay and the two controller files in `controller-cache-source-inputs.json`.
+The accepted pair remains unchanged. Pair building temporarily changes package versions. Its required
 systemd ExecStopPost hook restores source only after the build cgroup has drained.
 Do not bypass `run-current-frontier-pair.sh` or use incomplete artifacts.
 
 Essential pointers:
+- `current-frontier-restart-audit.md` and `.json`, plus locally verified
+  `current-frontier-restart-evidence.tar.gz` and `current-frontier-restart-result.log`.
+- `controller-cache-enabled-build-driver.log`, `controller-cache-pinning.log`,
+  `controller-cache-publication-review.md` and its `-followup.md`. The initial
+  build was stopped to honor disabled caching even when native plan storage
+  retains a cache handle. The corrected build passed. Candidate artifacts and
+  `native-controller-cache-binaries.json` are in `upsert-oom-investigation/`.
 - `current-frontier-lifecycle-audit.md` and `.json`, plus
   `current-frontier-lifecycle-result.log`. The locally verified archive is
   `current-frontier-lifecycle-evidence.tar.gz`.
