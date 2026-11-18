@@ -971,6 +971,15 @@ impl Catalog {
                 uncached_local_exprs,
             } = result;
 
+            // Admission and reconstruction have completed. Replica/read-only and
+            // savepoint opens expose no committed membership for reclamation.
+            if !diagnostic_config.read_only
+                && let Some(cache) = &expr_cache_handle
+                && let Some(members) = storage.deployment_members()
+            {
+                cache.reclaim_unused_releases(members.values().cloned().collect());
+            }
+
             // Authentication overrides belong to this process, including writable
             // joiners. They are not durable credentials or shared projection rows.
             if let Some(password) = external_login_password_mz_system {

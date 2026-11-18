@@ -315,11 +315,15 @@ impl Catalog {
         &self,
         generation: u64,
     ) -> Result<bool, crate::durable::CatalogError> {
-        self.storage
-            .lock()
-            .await
-            .retire_deployment(generation)
-            .await
+        let mut storage = self.storage.lock().await;
+        let retired = storage.retire_deployment(generation).await?;
+        if retired
+            && let Some(cache) = &self.expr_cache_handle
+            && let Some(members) = storage.deployment_members()
+        {
+            cache.reclaim_unused_releases(members.values().cloned().collect());
+        }
+        Ok(retired)
     }
 
     /// Releases local preparation after a completed retirement retry sequence.

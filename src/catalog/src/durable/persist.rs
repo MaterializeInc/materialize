@@ -3020,6 +3020,16 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.bootstrap_complete
     }
 
+    fn deployment_members(&self) -> Option<&BTreeMap<u64, semver::Version>> {
+        if self.mode != Mode::Writable || !self.update_applier.protected {
+            return None;
+        }
+        self.update_applier
+            .deployment_admission
+            .as_ref()
+            .map(|admission| &admission.members)
+    }
+
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
         let audit_logs: Vec<_> = self

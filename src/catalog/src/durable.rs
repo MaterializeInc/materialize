@@ -364,6 +364,11 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Returns true if the system bootstrapping process is complete, false otherwise.
     fn is_bootstrap_complete(&self) -> bool;
 
+    /// Cached committed deployment membership, without I/O. Only writable,
+    /// protected catalogs expose it. Missing metadata is unknown, not an empty
+    /// live set. This snapshot is not a fence against concurrent admissions.
+    fn deployment_members(&self) -> Option<&BTreeMap<u64, semver::Version>>;
+
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.

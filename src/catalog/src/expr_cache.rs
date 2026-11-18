@@ -318,7 +318,6 @@ impl ExpressionCache {
                 Ok(build_version) => build_version,
                 Err(err) => {
                     warn!("unable to parse build version: {key:?}: {err:?}");
-                    keys_to_remove.push(key.clone());
                     continue;
                 }
             };
@@ -374,6 +373,35 @@ impl ExpressionCache {
             }
         }
         (local_expressions, global_expressions, keys_to_remove)
+    }
+
+    async fn reclaim_unused_releases(
+        &mut self,
+        live_releases: &[Version],
+    ) -> Result<(), mz_durable_cache::Error> {
+        // A peer may have populated a retired namespace since our last command.
+        // Incorporate that prefix incrementally before deciding there is no work.
+        self.durable_cache.synchronize().await;
+        let keys: Vec<_> = self
+            .durable_cache
+            .entries_local()
+            .filter(|(key, _)| {
+                matches!(
+                    key.expr_type,
+                    ExpressionType::Local | ExpressionType::Global
+                ) && key.build_version.parse::<Version>().is_ok_and(|version| {
+                    !live_releases
+                        .iter()
+                        .any(|live| live.cmp_precedence(&version).is_eq())
+                })
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let removals: Vec<_> = keys.iter().map(|key| (key, None)).collect();
+        self.durable_cache.try_set_many(&removals).await
     }
 
     fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
@@ -558,6 +586,9 @@ impl ExpressionCache {
 
 /// Operations to perform on the cache.
 enum CacheOperation {
+    ReclaimUnusedReleases {
+        live_releases: Vec<Version>,
+    },
     WritePlans {
         plans: Vec<(GlobalId, Uuid, GlobalExpressions)>,
         tx: oneshot::Sender<Result<(), PlanStoreError>>,
@@ -649,8 +680,37 @@ impl ExpressionCacheHandle {
     fn spawn(mut cache: ExpressionCache) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn(|| "expression-cache-task", async move {
-            while let Some(op) = rx.recv().await {
+            let mut pending_reclamation = None;
+            let mut retry_at = tokio::time::Instant::now();
+            loop {
+                let op = tokio::select! {
+                    op = rx.recv() => match op {
+                        Some(op) => op,
+                        None => break,
+                    },
+                    _ = tokio::time::sleep_until(retry_at), if pending_reclamation.is_some() => {
+                        CacheOperation::ReclaimUnusedReleases {
+                            live_releases: pending_reclamation.take().expect("pending reclamation"),
+                        }
+                    },
+                };
                 match op {
+                    CacheOperation::ReclaimUnusedReleases { live_releases } => {
+                        match cache.reclaim_unused_releases(&live_releases).await {
+                            Ok(()) => pending_reclamation = None,
+                            Err(error) => {
+                                // The failed CAS incrementally refreshed the cache. Recompute
+                                // removals on the next turn, serving plan requests and shutdown
+                                // during backoff rather than dropping the cleanup request.
+                                debug!(%error, "expression cache reclamation deferred");
+                                pending_reclamation = Some(live_releases);
+                                retry_at = tokio::time::Instant::now()
+                                    + crate::retry::periodic_delay(
+                                        std::time::Duration::from_millis(100),
+                                    );
+                            }
+                        }
+                    }
                     CacheOperation::WritePlans { plans, tx } => {
                         let _ = tx.send(cache.write_plans(plans).await);
                     }
@@ -679,6 +739,21 @@ impl ExpressionCacheHandle {
         });
 
         Self { tx }
+    }
+
+    /// Enqueues reclamation using committed admission membership.
+    /// Retains every build variant of a live release (ignoring build metadata),
+    /// unknown namespaces, and all Written revisions. Call only after writable
+    /// catalog admission or successful retirement, never from replica opens.
+    ///
+    /// Membership can change before this runs. Concurrent admission may lose
+    /// disposable cache hits, never authoritative plans. No completion is required
+    /// for admission, publication, or retirement. The cache owner retries contention
+    /// between serving commands and exits when its handles are dropped.
+    pub fn reclaim_unused_releases(&self, live_releases: Vec<Version>) {
+        let _ = self
+            .tx
+            .send(CacheOperation::ReclaimUnusedReleases { live_releases });
     }
 
     /// Writes immutable revisions and acknowledges durable completion. A catalog transaction
@@ -754,6 +829,274 @@ mod tests {
     use semver::Version;
 
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn reclaim_unused_release_namespaces() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use mz_persist::location::{
+            CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+        };
+        use mz_persist::mem::{MemBlob, MemConsensus};
+        use mz_persist_client::async_runtime::IsolatedRuntime;
+        use mz_persist_client::cache::{PersistClientCache, StateCache};
+        use mz_persist_client::rpc::PubSubClientConnection;
+        use tokio::sync::Notify;
+
+        // Only the owner's next CAS is gated. Separate state caches and noop
+        // pubsub keep the peer's advance from bypassing the backend conflict.
+        #[derive(Debug)]
+        struct GatedConsensus {
+            inner: Arc<MemConsensus>,
+            shard_key: String,
+            armed: AtomicBool,
+            entered: Notify,
+            release: Notify,
+            lost: AtomicBool,
+        }
+
+        #[async_trait::async_trait]
+        impl Consensus for GatedConsensus {
+            fn list_keys(&self) -> ResultStream<'_, String> {
+                self.inner.list_keys()
+            }
+
+            async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+                self.inner.head(key).await
+            }
+
+            async fn compare_and_set(
+                &self,
+                key: &str,
+                new: VersionedData,
+            ) -> Result<CaSResult, ExternalError> {
+                let gated = key == self.shard_key && self.armed.swap(false, Ordering::SeqCst);
+                if gated {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+                let result = self.inner.compare_and_set(key, new).await;
+                if gated {
+                    assert_eq!(
+                        result.as_ref().expect("gated consensus operation"),
+                        &CaSResult::ExpectationMismatch
+                    );
+                    self.lost.store(true, Ordering::SeqCst);
+                }
+                result
+            }
+
+            async fn scan(
+                &self,
+                key: &str,
+                from: SeqNo,
+                limit: usize,
+            ) -> Result<Vec<VersionedData>, ExternalError> {
+                self.inner.scan(key, from, limit).await
+            }
+
+            async fn truncate(
+                &self,
+                key: &str,
+                seqno: SeqNo,
+            ) -> Result<Option<usize>, ExternalError> {
+                self.inner.truncate(key, seqno).await
+            }
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let shard = ShardId::new();
+            let consensus = Arc::new(MemConsensus::default());
+            let blob = Arc::new(MemBlob::open(Default::default()));
+            let gate = Arc::new(GatedConsensus {
+                inner: Arc::clone(&consensus),
+                shard_key: shard.to_string(),
+                armed: AtomicBool::new(false),
+                entered: Notify::new(),
+                release: Notify::new(),
+                lost: AtomicBool::new(false),
+            });
+            let new_client = |consensus: Arc<dyn Consensus>| {
+                let cache = PersistClientCache::new_no_metrics();
+                let cfg = cache.cfg().clone();
+                let metrics = Arc::clone(cache.metrics());
+                let sender = PubSubClientConnection::noop().sender;
+                let states = Arc::new(StateCache::new(
+                    &cfg,
+                    Arc::clone(&metrics),
+                    Arc::clone(&sender),
+                ));
+                PersistClient::new(
+                    cfg,
+                    Arc::<MemBlob>::clone(&blob),
+                    consensus,
+                    metrics,
+                    Arc::new(IsolatedRuntime::new_for_tests()),
+                    states,
+                    sender,
+                )
+                .expect("test persist client")
+            };
+            let persist = new_client(Arc::<GatedConsensus>::clone(&gate));
+            let peer = new_client(consensus);
+            let id = GlobalId::User(1);
+            let revision = Uuid::new_v4();
+            let namespaces = [
+                "0.1.0",
+                "0.2.0-dev.0+adapter",
+                "0.2.0-dev.0+controller",
+                "0.2.0-dev.0",
+                "0.2.0-dev.1+unused",
+                "0.3.0+live",
+                "0.4.0+unused",
+                "unknown",
+                PROTOTYPE_SHARED_PLAN_NAMESPACE,
+            ];
+            let mut expected = BTreeMap::new();
+            for namespace in namespaces {
+                for expr_type in [
+                    ExpressionType::Local,
+                    ExpressionType::Global,
+                    ExpressionType::Written { revision },
+                ] {
+                    let value = match expr_type {
+                        ExpressionType::Local => bincode::serialize(&gen_local_expressions()),
+                        _ => bincode::serialize(&gen_global_expressions()),
+                    }
+                    .expect("serialize expression");
+                    expected.insert(
+                        CacheKey {
+                            build_version: namespace.into(),
+                            id,
+                            expr_type,
+                        },
+                        Bytes::from(value),
+                    );
+                }
+            }
+            let mut durable = DurableCache::<ExpressionCodec>::new(&peer, shard, "test").await;
+            durable
+                .set_many(
+                    &expected
+                        .iter()
+                        .map(|(key, value)| (key, Some(value)))
+                        .collect::<Vec<_>>(),
+                )
+                .await;
+            let cache = ExpressionCacheHandle::open_plan_store(
+                "0.3.0+live".parse().expect("live build version"),
+                &persist,
+                shard,
+            )
+            .await;
+            // Retiring one of two deployments of a release must preserve every dev
+            // build of that release, not just the exact build recorded by the survivor.
+            let mut members = BTreeMap::from([
+                (
+                    7,
+                    "0.2.0-dev.0+retiring"
+                        .parse::<Version>()
+                        .expect("retiring build version"),
+                ),
+                (
+                    8,
+                    "0.2.0-dev.0+surviving"
+                        .parse()
+                        .expect("surviving build version"),
+                ),
+                (9, "0.3.0".parse().expect("live release version")),
+            ]);
+            members.remove(&7);
+            gate.armed.store(true, Ordering::SeqCst);
+            cache.reclaim_unused_releases(members.values().cloned().collect());
+            gate.entered.notified().await;
+            // Reclamation has synchronized and submitted its removal CAS. Advancing
+            // the peer now forces an upper conflict, not just a stale initial read.
+            durable.set_many(&[]).await;
+            gate.release.notify_one();
+            assert_eq!(
+                cache.get_global(id).await,
+                Some(
+                    bincode::deserialize(
+                        &expected[&CacheKey {
+                            build_version: "0.3.0+live".into(),
+                            id,
+                            expr_type: ExpressionType::Global,
+                        }]
+                    )
+                    .expect("decode seeded global expression")
+                ),
+                "the actor must still serve commands after contention"
+            );
+            assert!(gate.lost.load(Ordering::SeqCst));
+            // No further startup or retirement request may be needed for cleanup.
+            expected.retain(|key, _| {
+                matches!(key.expr_type, ExpressionType::Written { .. })
+                    || !matches!(
+                        key.build_version.as_str(),
+                        "0.1.0" | "0.2.0-dev.1+unused" | "0.4.0+unused"
+                    )
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    durable.synchronize().await;
+                    let actual = durable
+                        .entries_local()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<BTreeMap<_, _>>();
+                    if actual == expected {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("reclamation must retry peer contention");
+
+            // Once the last member leaves, its ordinary caches are disposable but
+            // its immutable revisions remain, including revisions in foreign namespaces.
+            members.remove(&8);
+            cache.reclaim_unused_releases(members.values().cloned().collect());
+            let _ = cache.get_global(GlobalId::User(999)).await;
+            expected.retain(|key, _| {
+                matches!(key.expr_type, ExpressionType::Written { .. })
+                    || !key.build_version.starts_with("0.2.0-dev.0")
+            });
+            durable.synchronize().await;
+            assert_eq!(
+                durable
+                    .entries_local()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<BTreeMap<_, _>>(),
+                expected
+            );
+
+            // The actor's local cache now contains no removable keys. A peer can
+            // still publish a disposable namespace before retirement is observed.
+            let late = CacheKey {
+                build_version: "0.5.0+late".into(),
+                id,
+                expr_type: ExpressionType::Local,
+            };
+            let value = Bytes::from(
+                bincode::serialize(&gen_local_expressions()).expect("serialize peer expression"),
+            );
+            durable.set(&late, Some(&value)).await;
+            cache.reclaim_unused_releases(members.values().cloned().collect());
+            let _ = cache.get_global(GlobalId::User(999)).await;
+            durable.synchronize().await;
+            assert_eq!(
+                durable
+                    .entries_local()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<BTreeMap<_, _>>(),
+                expected,
+                "reclamation must discover peer entries even when its local selection was empty"
+            );
+        })
+        .await
+        .expect("reclamation and actor commands must complete");
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn written_plan_revisions() {
