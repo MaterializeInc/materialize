@@ -78,9 +78,9 @@ and bump `force_rollout` so Materialize picks up the new audience. This:
   as their token audience, and no other;
 - adds that URL to Materialize's `oidc_audience`.
 
-Then connect the client to `https://<materialize_console_fqdn>/api/mcp/developer`
-(or `/api/mcp/agent`). On first use it registers, opens the browser for
-sign-in and a consent screen, and stores its token.
+Then connect the client to `https://<materialize_console_fqdn>/api/mcp`
+(or `/api/mcp/agent` or `/api/mcp/developer`). On first use it registers, opens
+the browser for sign-in and a consent screen, and stores its token.
 
 {{< note >}}
 Anyone who can reach Hydra's public endpoint can register a client.

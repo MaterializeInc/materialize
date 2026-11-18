@@ -56,7 +56,7 @@ first and fall back to 2025-11-25. For example, a 2026-07-28 `tools/list`
 request:
 
 ```bash
-curl -X POST http://localhost:6876/api/mcp/developer \
+curl -X POST http://localhost:6876/api/mcp \
   -H "Content-Type: application/json" \
   -H "MCP-Protocol-Version: 2026-07-28" \
   -H "Mcp-Method: tools/list" \
