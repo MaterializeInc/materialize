@@ -17,7 +17,7 @@ MZFROM debian-base AS fetch
 # version in the release series, and minor versions have been known to introduce
 # breakage.
 # renovate: datasource=maven depName=io.debezium:debezium-connector-postgres versioning=maven
-ARG DEBEZIUM_VERSION="3.3.1.Final"
+ARG DEBEZIUM_VERSION="3.7.1.Final"
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl \
