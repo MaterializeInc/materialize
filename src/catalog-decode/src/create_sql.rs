@@ -35,7 +35,7 @@ use serde_json::json;
 use crate::durable;
 
 /// Parses `sql`, which must contain exactly one statement.
-pub fn parse_single_statement(sql: &str) -> Result<Statement<Raw>, String> {
+fn parse_single_statement(sql: &str) -> Result<Statement<Raw>, String> {
     let mut stmts = mz_sql_parser::parser::parse_statements(sql)
         .map_err(|e| format!("failed to parse create_sql: {e}"))?;
     match stmts.len() {
@@ -205,109 +205,18 @@ fn insert_refresh_strategies<'a, T: AstInfo + 'a>(
 /// The returned JSON does not fully reflect the parsed SQL and instead contains only fields
 /// required by current callers.
 pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
-    item_details_of(parse_single_statement(a)?)
-}
+    let stmt = parse_single_statement(a)?;
 
-/// The type of catalog item of `stmt`, or
-/// `None` if `stmt` doesn't correspond to a catalog item.
-pub fn item_type(stmt: &Statement<Raw>) -> Option<&'static str> {
-    use mz_sql_parser::ast::Statement::*;
-    Some(match stmt {
-        CreateSecret(_) => "secret",
-        CreateConnection(_) => "connection",
-        CreateView(_) => "view",
-        CreateMaterializedView(_) => "materialized-view",
-        CreateTable(_) | CreateTableFromSource(_) => "table",
-        CreateSource(_) => "source",
-        CreateWebhookSource(stmt) if stmt.is_table => "table",
-        CreateWebhookSource(_) => "source",
-        CreateSubsource(_) => "subsource",
-        CreateSink(_) => "sink",
-        CreateMetricSink(_) => "metric-sink",
-        CreateIndex(_) => "index",
-        CreateType(_) => "type",
-        // NOTE: every statement that creates a catalog item needs an arm above. Our builtin
-        // relations run this over every item row, so an unclassified `create_sql`
-        // would cause a parse error in a relation. The match is exhaustive to make
-        // that a compile error, not a runtime failure.
-        Select(_)
-        | Insert(_)
-        | Copy(_)
-        | Update(_)
-        | Delete(_)
-        | CreateDatabase(_)
-        | CreateSchema(_)
-        | CreateRole(_)
-        | CreateCluster(_)
-        | CreateClusterReplica(_)
-        | CreateNetworkPolicy(_)
-        | CreateQueryPolicy(_)
-        | AlterCluster(_)
-        | AlterOwner(_)
-        | AlterObjectRename(_)
-        | AlterObjectSwap(_)
-        | AlterRetainHistory(_)
-        | AlterIndex(_)
-        | AlterSecret(_)
-        | AlterSetCluster(_)
-        | AlterSink(_)
-        | AlterSource(_)
-        | AlterSystemSet(_)
-        | AlterSystemReset(_)
-        | AlterSystemResetAll(_)
-        | AlterConnection(_)
-        | AlterNetworkPolicy(_)
-        | AlterQueryPolicy(_)
-        | AlterRole(_)
-        | AlterTableAddColumn(_)
-        | AlterMaterializedViewApplyReplacement(_)
-        | Discard(_)
-        | DropObjects(_)
-        | DropOwned(_)
-        | SetVariable(_)
-        | ResetVariable(_)
-        | Show(_)
-        | StartTransaction(_)
-        | SetTransaction(_)
-        | Commit(_)
-        | Rollback(_)
-        | Subscribe(_)
-        | ExplainPlan(_)
-        | ExplainPushdown(_)
-        | ExplainTimestamp(_)
-        | ExplainSinkSchema(_)
-        | ExplainAnalyzeObject(_)
-        | ExplainAnalyzeCluster(_)
-        | Declare(_)
-        | Fetch(_)
-        | Close(_)
-        | Prepare(_)
-        | Execute(_)
-        | ExecuteUnitTest(_)
-        | Deallocate(_)
-        | Raise(_)
-        | GrantRole(_)
-        | RevokeRole(_)
-        | GrantPrivileges(_)
-        | RevokePrivileges(_)
-        | AlterDefaultPrivileges(_)
-        | ReassignOwned(_)
-        | ValidateConnection(_)
-        | Comment(_) => return None,
-    })
-}
-
-/// Like [`item_details`] for an already parsed statement.
-pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String> {
-    let item_type = item_type(&stmt).ok_or_else(|| "not a CREATE item statement".to_string())?;
     let mut info = BTreeMap::<&str, serde_json::Value>::new();
 
     use mz_sql_parser::ast::Statement::*;
-    match stmt {
-        CreateSecret(_) => {}
+    let item_type = match stmt {
+        CreateSecret(_) => "secret",
         CreateConnection(stmt) => {
             let connection_type = stmt.connection_type.as_str();
             info.insert("connection_type", json!(connection_type));
+
+            "connection"
         }
         CreateView(stmt) => {
             let mut definition = stmt.definition.query.to_ast_string_stable();
@@ -315,6 +224,8 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
             // do the same for compatibility's sake.
             definition.push(';');
             info.insert("definition", json!(definition));
+
+            "view"
         }
         CreateMaterializedView(stmt) => {
             let Some(in_cluster) = stmt.in_cluster else {
@@ -341,6 +252,8 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
             if let Some(target) = stmt.replacement_for {
                 info.insert("replacement_target", json!(item_id(target)?));
             }
+
+            "materialized-view"
         }
         CreateTable(stmt) => {
             insert_retain_history(
@@ -368,6 +281,7 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                 })
                 .collect();
             info.insert("column_defaults", json!(column_defaults));
+            "table"
         }
         CreateTableFromSource(stmt) => {
             let source_id = item_id(stmt.source)?;
@@ -378,6 +292,8 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                 stmt.with_options.iter().map(|o| (&o.name, &o.value)),
                 TableFromSourceOptionName::RetainHistory,
             )?;
+
+            "table"
         }
         CreateSource(stmt) => {
             insert_retain_history(
@@ -454,14 +370,19 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                     }
                 }
             }
+
+            "source"
         }
         CreateWebhookSource(stmt) => {
-            if !stmt.is_table {
+            if stmt.is_table {
+                "table"
+            } else {
                 info.insert("source_type", json!("webhook"));
                 if let Some(in_cluster) = stmt.in_cluster {
                     let cluster_id = cluster_id(in_cluster)?;
                     info.insert("cluster_id", json!(cluster_id));
                 }
+                "source"
             }
         }
         CreateSubsource(stmt) => {
@@ -483,6 +404,8 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                 let of_source_id = item_id(of_source)?;
                 info.insert("of_source_id", json!(of_source_id));
             }
+
+            "subsource"
         }
         // Everything the mz_sinks, mz_kafka_sinks and mz_iceberg_sinks
         // views read. The Rust side of each value lives in `Sink` and
@@ -603,6 +526,8 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                     }
                 }
             }
+
+            "sink"
         }
         CreateMetricSink(stmt) => {
             let Some(in_cluster) = stmt.in_cluster else {
@@ -612,6 +537,7 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
             info.insert("cluster_id", json!(cluster_id));
             let from_id = item_id(stmt.from)?;
             info.insert("from_id", json!(from_id));
+            "metric-sink"
         }
         CreateIndex(stmt) => {
             let Some(in_cluster) = stmt.in_cluster else {
@@ -633,9 +559,79 @@ pub fn item_details_of(stmt: Statement<Raw>) -> Result<serde_json::Value, String
                 .map(|expr| json!(expr.to_ast_string_simple()))
                 .collect();
             info.insert("key_parts", json!(key_parts));
+            "index"
         }
-        _ => {}
-    }
+        CreateType(_) => "type",
+        // NOTE: every statement that creates a catalog item needs an arm above. These
+        // catalog views run this over every item row before their type filter drops the
+        // unwanted rows, so one unclassified `create_sql` takes out `mz_objects`,
+        // `mz_indexes`, and every sibling view at once. The match is exhaustive to make
+        // that a compile error here, not a runtime failure.
+        Select(_)
+        | Insert(_)
+        | Copy(_)
+        | Update(_)
+        | Delete(_)
+        | CreateDatabase(_)
+        | CreateSchema(_)
+        | CreateRole(_)
+        | CreateCluster(_)
+        | CreateClusterReplica(_)
+        | CreateNetworkPolicy(_)
+        | CreateQueryPolicy(_)
+        | AlterCluster(_)
+        | AlterOwner(_)
+        | AlterObjectRename(_)
+        | AlterObjectSwap(_)
+        | AlterRetainHistory(_)
+        | AlterIndex(_)
+        | AlterSecret(_)
+        | AlterSetCluster(_)
+        | AlterSink(_)
+        | AlterSource(_)
+        | AlterSystemSet(_)
+        | AlterSystemReset(_)
+        | AlterSystemResetAll(_)
+        | AlterConnection(_)
+        | AlterNetworkPolicy(_)
+        | AlterQueryPolicy(_)
+        | AlterRole(_)
+        | AlterTableAddColumn(_)
+        | AlterMaterializedViewApplyReplacement(_)
+        | Discard(_)
+        | DropObjects(_)
+        | DropOwned(_)
+        | SetVariable(_)
+        | ResetVariable(_)
+        | Show(_)
+        | StartTransaction(_)
+        | SetTransaction(_)
+        | Commit(_)
+        | Rollback(_)
+        | Subscribe(_)
+        | ExplainPlan(_)
+        | ExplainPushdown(_)
+        | ExplainTimestamp(_)
+        | ExplainSinkSchema(_)
+        | ExplainAnalyzeObject(_)
+        | ExplainAnalyzeCluster(_)
+        | Declare(_)
+        | Fetch(_)
+        | Close(_)
+        | Prepare(_)
+        | Execute(_)
+        | ExecuteUnitTest(_)
+        | Deallocate(_)
+        | Raise(_)
+        | GrantRole(_)
+        | RevokeRole(_)
+        | GrantPrivileges(_)
+        | RevokePrivileges(_)
+        | AlterDefaultPrivileges(_)
+        | ReassignOwned(_)
+        | ValidateConnection(_)
+        | Comment(_) => return Err("not a CREATE item statement".into()),
+    };
     info.insert("type", json!(item_type));
 
     let info = info.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
@@ -1877,22 +1873,6 @@ mod tests {
             },
             other => panic!("not a JSON object: {other:?}"),
         }
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-    fn item_type_is_known_for_a_statement_the_decoder_rejects() {
-        let sql = "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" AS SELECT 1";
-        let stmt = super::parse_single_statement(sql).unwrap();
-        assert_eq!(super::item_type(&stmt), Some("materialized-view"));
-        assert_eq!(
-            super::item_details_of(stmt),
-            Err("missing IN CLUSTER".into())
-        );
-        assert_eq!(
-            super::item_type(&super::parse_single_statement("SELECT 1").unwrap()),
-            None
-        );
     }
 
     /// `mz_tables` and `mz_views` select rows by
