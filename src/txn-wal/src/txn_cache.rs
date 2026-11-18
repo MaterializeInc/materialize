@@ -1124,8 +1124,11 @@ pub(crate) enum Unapplied<'a> {
 #[cfg(test)]
 mod tests {
     use DataListenNext::*;
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_ore::assert_err;
-    use mz_persist_client::PersistClient;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::read::READER_LEASE_EXPIRED_EXIT_CODE;
+    use mz_persist_client::{PersistClient, PersistLocation};
     use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 
     use crate::operator::DataSubscribe;
@@ -1503,5 +1506,102 @@ mod tests {
                 empty_to: 10,
             }
         );
+    }
+
+    /// The child's blob directory. Set only in the re-executed child.
+    const LEASE_CHILD_BLOB_DIR: &str = "MZ_TXN_WAL_TEST_LEASE_CHILD_BLOB_DIR";
+
+    /// Re-runs `test_name` in a child, which runs `lose_txns_part`, and returns
+    /// the child's exit code and output. Only a parent can observe a `halt!`.
+    fn run_lease_child(test_name: &str, expire_lease: bool) -> (Option<i32>, String) {
+        if let Some(dir) = std::env::var_os(LEASE_CHILD_BLOB_DIR) {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            rt.block_on(lose_txns_part(dir.as_ref(), expire_lease));
+        }
+        let blob_dir = tempfile::tempdir().expect("tempdir");
+        let test_path = format!("txn_cache::tests::{test_name}");
+        let output = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .args(["--exact", &test_path, "--nocapture"])
+            .env(LEASE_CHILD_BLOB_DIR, blob_dir.path())
+            .output()
+            .expect("spawn child");
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (output.status.code(), log)
+    }
+
+    /// PER-68: a `TxnsCache` fetches a txns part whose blob is gone, after
+    /// losing its lease if `expire_lease`. Never returns normally.
+    async fn lose_txns_part(blob_dir: &std::path::Path, expire_lease: bool) {
+        let mut clients = PersistClientCache::new_no_metrics();
+        // Compaction could rewrite the parts we delete into new blobs.
+        clients.cfg.compaction_enabled = false;
+        let mut updates = ConfigUpdates::default();
+        // Inline parts have no blob to delete.
+        updates.add_dynamic(
+            "persist_inline_writes_single_max_bytes",
+            ConfigVal::Usize(0),
+        );
+        // A cached blob would still be served after its file is deleted.
+        updates.add_dynamic("persist_blob_cache_mem_limit_bytes", ConfigVal::Usize(0));
+        updates.apply(clients.cfg());
+        let location = PersistLocation {
+            blob_uri: format!("file://{}", blob_dir.display())
+                .parse()
+                .expect("valid uri"),
+            consensus_uri: "mem://".parse().expect("valid uri"),
+        };
+        let client = clients.open(location).await.expect("valid location");
+
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let d0 = txns.expect_register(1).await;
+        txns.expect_commit_at(2, d0, &["a"], &log).await;
+        let mut cache = TxnsCache::expect_open(2, &txns).await;
+        // Parts past the cache's frontier, for its subscribe to fetch.
+        for ts in 3..6 {
+            txns.expect_commit_at(ts, d0, &["b"], &log).await;
+        }
+
+        if expire_lease {
+            cache.txns_subscribe.expire_lease_for_tests().await;
+        }
+        for entry in std::fs::read_dir(blob_dir).expect("read blob dir") {
+            let path = entry.expect("dir entry").path();
+            let name = path.file_name().expect("file name").to_string_lossy();
+            // Batch part keys end in a `p<uuid>` part id, rollups in `r<uuid>`.
+            let last = name
+                .rsplit(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .next()
+                .expect("non-empty");
+            if last.starts_with('p') {
+                std::fs::remove_file(&path).expect("delete part");
+            }
+        }
+
+        let _ = cache.update_gt(&5).await;
+        panic!("fetched every txns part despite deleting their blobs");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // spawns a process
+    fn txns_cache_lost_lease_halts() {
+        let (code, log) = run_lease_child("txns_cache_lost_lease_halts", true);
+        assert_eq!(code, Some(READER_LEASE_EXPIRED_EXIT_CODE), "{log}");
+        assert!(log.contains("could not fetch batch part"), "{log}");
+        assert!(log.contains("expired out of state"), "{log}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // spawns a process
+    fn txns_cache_missing_blob_with_live_lease_panics() {
+        let (code, log) = run_lease_child("txns_cache_missing_blob_with_live_lease_panics", false);
+        // libtest exits 101 when a test panics.
+        assert_eq!(code, Some(101), "{log}");
+        assert!(log.contains("could not fetch batch part"), "{log}");
+        assert!(log.contains("is still present in state"), "{log}");
     }
 }

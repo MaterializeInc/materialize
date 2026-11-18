@@ -1061,8 +1061,8 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
-    /// Counted where `shard_source` reports a lost lease. Only observable where
-    /// the error handler survives it (storage); compute halts right after.
+    /// Counted by `MissingBlobDiagnosis::exit` on a lost lease. Every reader but
+    /// storage's `shard_source` halts right after, so only storage exports it.
     pub(crate) expired_live_read: IntCounter,
     pub(crate) dropped_part: IntCounter,
 }
