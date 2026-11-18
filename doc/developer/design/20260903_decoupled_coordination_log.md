@@ -27,8 +27,11 @@ The exact rerun passed both suites without source, fixture or setting changes.
 This intermittent scheduling failure is not resolved. Preserve it in final-head
 acceptance tracking rather than treating the rerun as proof of stability.
 
-Then finish the remaining conditional-write survey, including startup wrappers and
-inline DDL owners. Recheck `multi-writer-retry-survey.md` and
+Startup table registration now backs off between rejected rounds while retaining
+preparation. Clippy and deployment initialization tests passed, including recovery
+after a peer overtakes a complete round and existing DROP-ordering coverage.
+
+Next, finish the remaining conditional-write survey, particularly inline DDL owners. Recheck `multi-writer-retry-survey.md` and
 `native-only/native-ci-recovery/current-remaining-retry-sites.md` against source.
 Runtime-level activation exhaustion/tick continuation coverage remains outstanding.
 Bring changes to write guarantees or public semantics to the user before landing.
@@ -88,6 +91,8 @@ Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recove
 source overlays. Verify hashes, not the displayed Git revision.
 
 Essential current pointers:
+- Scratch `controller-followups/startup-registration-check.log` records passing
+  Clippy and startup/registration boundary tests.
 - Scratch `controller-followups/native-cache-mv-final-build.log` records passing
   Clippy, cache tests and the SQL test binary build. Local
   `native-cache-mv-source.sha256` matches every tested changed source.
@@ -99,8 +104,8 @@ Essential current pointers:
 - `startup-after-evidence.tar.gz`, extracted `startup-after-evidence/`,
   `startup-after-phase-summary.json` and `startup-readiness-comparison.md` contain
   the completed comparison. `summarize-startup-timings.py` extracts log-linked phases.
-- Scratch `controller-followups/startup-timing-{before,after}/` contains private
-  debug binaries and exact source/binary manifests. Both generations use the same
+- Scratch `controller-followups/startup-timing-{before,after}/` retains exact
+  source/binary manifests. Superseded private timing binaries were removed. Both generations use the same
   26.46 build in this timing experiment, not the accepted distinct-version pair.
 - `native_startup_readiness_20261027_aj.py` and
   `run-native-startup-readiness.sh` are the focused harness and capped wrapper.
