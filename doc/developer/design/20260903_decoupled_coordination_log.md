@@ -44,6 +44,14 @@ found no remaining concrete issue. Evidence: scratch
 latency has not been remeasured, and inline coordinator registration waits remain
 in the retry survey.
 
+Runtime registration now prepares handles once before allocation (`a46d99ff`),
+retains them across WAL conflicts, certifies bindings on every attempt, and releases
+filtered preparation after completion. Real peer binding deletion/Forget and
+finalized-before-preparation regressions pass, with negative controls confirming
+the failure modes. Targeted Clippy and writer/committer suites pass. Evidence:
+`controller-followups/registration-certificate-red.log` and
+`registration-finalization-red.log`. No end-to-end latency claim is made.
+
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
 code. Bring changes to write guarantees or public behavior to the user before
@@ -118,6 +126,11 @@ data was removed, leaving 155 GiB free on scratch.
 - Historical distinct-version and Kafka workflow evidence retains outgoing
   controller panics. The repair now passes same-build live verification, not a
   rerun of those workflows. Retired reopening remains a fatal startup rejection.
+- Restart scheduling needs approval: active-controller restart currently retries
+  configuration publication before serving HTTP. Proposed change moves publication
+  into the existing runtime tick, retaining admission checks before serving and
+  fresh initialization before children. HTTP and reconciliation could proceed
+  while restart configuration publication remains pending, as during promotion.
 - Cache reclamation needs a scope decision: membership records release versions,
   whereas development cache keys include executable identities. Pruning unused
   release namespaces can preserve all variants of live versions. Exact variant
