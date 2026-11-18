@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
+import { Box, HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import {
   ColumnFiltersState,
   createColumnHelper,
@@ -53,8 +53,10 @@ import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { notNullOrUndefined } from "~/util";
 import {
+  DATE_FORMAT,
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+  TIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
 import { ClusterFilterChips } from "./ClusterFilterChips";
@@ -144,7 +146,7 @@ const ReplicaPercentCell = ({ value }: { value: number | null }) => {
   if (value === null) {
     return <>-</>;
   }
-  return <PercentBar fraction={value} />;
+  return <PercentBar fraction={value} isStacked />;
 };
 
 /**
@@ -191,10 +193,6 @@ const hydrationSortingFn: SortingFn<ClusterReplicaRow> = (rowA, rowB) => {
   return a - b;
 };
 
-/** Formats a status-change timestamp for display, or "-" when there is none. */
-const formatStatusChange = (timestamp: string | null | undefined) =>
-  timestamp ? formatDate(timestamp, FRIENDLY_DATETIME_FORMAT_NO_SECONDS) : "-";
-
 const ReplicaLastStatusChangeCell = ({
   updatedAt,
   offlineStatus,
@@ -203,9 +201,24 @@ const ReplicaLastStatusChangeCell = ({
   offlineStatus: LatestOfflineReplicaInfo | undefined;
 }) => (
   <HStack>
-    <Text as="span" noOfLines={1}>
-      {formatStatusChange(updatedAt)}
-    </Text>
+    {updatedAt ? (
+      // The date over its time, so the column is as wide as the date alone.
+      <Text as="span" whiteSpace="nowrap">
+        <Text as="span" display="block">
+          {formatDate(updatedAt, DATE_FORMAT)}
+        </Text>{" "}
+        <Text
+          as="span"
+          display="block"
+          textStyle="text-small"
+          color="foreground.secondary"
+        >
+          {formatDate(updatedAt, `${TIME_FORMAT_NO_SECONDS} z`)}
+        </Text>
+      </Text>
+    ) : (
+      <Text as="span">-</Text>
+    )}
     {offlineStatus?.shouldSurfaceOom && (
       <Tooltip
         px={3}
@@ -344,8 +357,8 @@ const columns = [
     sortingFn: "alphanumeric",
     cell: (info) => <ClusterNameCell cluster={info.row.original.cluster} />,
     meta: {
-      minWidth: { md: "180px", sm: "auto" },
-      cellProps: truncateMaxWidth,
+      minWidth: { md: "140px", sm: "auto" },
+      cellProps: { maxW: { base: "120px", xl: "150px", "2xl": "400px" } },
     },
   }),
   columnHelper.accessor((row) => row.replica?.name ?? null, {
@@ -373,12 +386,20 @@ const columns = [
     header: "Owner",
     sortingFn: sortingFunctions.nullsLast,
     filterFn: ownerFilterFn,
-    cell: (info) => info.getValue() ?? "-",
+    cell: (info) => {
+      const owner = info.getValue();
+      // Role names are often email addresses. A long one is cut short, with
+      // the whole name on hover.
+      return owner === null ? (
+        "-"
+      ) : (
+        <Text as="span" noOfLines={1} title={owner}>
+          {owner}
+        </Text>
+      );
+    },
     meta: {
-      // Role names are often email addresses, so a long one wraps within the
-      // column, at any character.
-      minWidth: "130px",
-      cellProps: { maxW: "180px", overflowWrap: "anywhere" },
+      cellProps: { maxW: { base: "110px", xl: "120px", "2xl": "240px" } },
       renderFilter: (column, table) => {
         const meta = table.options.meta as ClusterUsageTableMeta;
         return (
@@ -428,7 +449,12 @@ const columns = [
     // from the replica status *history*, so it counts replicas that have since
     // been dropped and can name a time no visible row reports.
     id: "lastStatusChange",
-    header: "Last status change",
+    // Wraps, as its dates do: on one line this is the widest column.
+    header: () => (
+      <Text as="span" whiteSpace="normal" minWidth="80px">
+        Last status change
+      </Text>
+    ),
     sortingFn: sortingFunctions.nullsLast,
     sortDescFirst: false,
     cell: (info) => {
@@ -631,11 +657,15 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
         </EmptyListWrapper>
       ) : (
         <>
-          <UniversalTable
-            table={table}
-            variant="linkable"
-            data-testid="cluster-table"
-          />
+          {/* Eleven columns at the table's usual padding overflow a laptop
+              window, so cells here are padded less. */}
+          <Box sx={{ "& th, & td": { px: 3 } }}>
+            <UniversalTable
+              table={table}
+              variant="linkable"
+              data-testid="cluster-table"
+            />
+          </Box>
           <TablePagination table={table} itemLabel="replicas" />
         </>
       )}

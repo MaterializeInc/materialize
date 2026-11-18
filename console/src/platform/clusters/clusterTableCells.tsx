@@ -42,6 +42,7 @@ export const ClusterNameCell = ({
       to={relativeClusterPath(cluster)}
       textStyle="text-ui-med"
       noOfLines={1}
+      title={cluster.name}
     >
       {cluster.name}
     </TextLink>
