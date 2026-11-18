@@ -3381,7 +3381,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [64]
+    ENVD_CPU_SCALES: list[int] = [48]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
