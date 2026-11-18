@@ -1099,12 +1099,6 @@ impl Coordinator {
                 // next tick.
                 ApplyOutcome::Rejected
             }
-            Err(AdapterError::ReadOnly) => {
-                // Native prewarming admits only owned metadata operations.
-                // A shared mutation remains forbidden while the adapter is read-only.
-                debug!("cluster controller apply skipped in read-only mode");
-                ApplyOutcome::Rejected
-            }
             Err(AdapterError::ResourceExhaustion { .. }) => {
                 // The batch cannot fit the resource budget. Report the fact and
                 // leave the reaction (what, if anything, to shed) to the kernel.
@@ -1169,16 +1163,6 @@ impl Coordinator {
             Some(())
         };
         let mut config = cluster.config.clone();
-        if !self.catalog().state().catalog_read_protection_enabled() {
-            apply(&mut config, write)?;
-            return Some(vec![Op::UpdateClusterConfig {
-                id: cluster_id,
-                name: cluster.name.clone(),
-                config,
-                reconfiguration_audit: write.reconfiguration.as_ref().and_then(|w| w.audit),
-                burst_audit: write.burst.as_ref().and_then(|w| w.audit),
-            }]);
-        }
         let expected = crate::catalog::cluster_state::project_deployment_expected(
             self.catalog().state(),
             cluster_id,
