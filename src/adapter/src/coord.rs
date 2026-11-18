@@ -2719,11 +2719,10 @@ impl Coordinator {
 
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let protected_plans = self.catalog().state().catalog_read_protection_enabled();
         let mut index_timeline_holds = ReadHolds::new();
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
-        let bootstrap_client = if protected_plans {
+        let bootstrap_client = {
             let expected = Self::adapter_execution_predecessor(self.catalog(), self.adapter_id);
             let incarnations = self
                 .bootstrap_catalog_transact(
@@ -2751,8 +2750,6 @@ impl Coordinator {
                 })
                 .collect();
             Some(self.build_query_client(incarnation, requirements).await?)
-        } else {
-            None
         };
         if let Some(client) = &bootstrap_client {
             let indexes: BTreeSet<_> = entries
@@ -2794,7 +2791,7 @@ impl Coordinator {
         }
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
-        if protected_plans {
+        {
             let build = self.catalog().state().written_plan_namespace();
             let revisions: Vec<_> = self
                 .catalog()
@@ -2814,19 +2811,13 @@ impl Coordinator {
                 ));
             }
             written_ids.extend(written.iter().filter_map(|(id, plan)| {
-                (!protected_plans
-                    || plan
-                        .collection_imports()
-                        .all(|input| self.catalog().try_get_entry_by_global_id(input).is_some()))
-                .then_some(*id)
+                plan.collection_imports()
+                    .all(|input| self.catalog().try_get_entry_by_global_id(input).is_some())
+                    .then_some(*id)
             }));
             candidates.extend(written);
         }
-        let mut prepared = if protected_plans {
-            candidates.clone()
-        } else {
-            BTreeMap::new()
-        };
+        let mut prepared = candidates.clone();
         let mut plan_holds = Vec::new();
         let (uncached_global_exps, admitted_ids, admission_holds) = self
             .bootstrap_dataflow_plans(
@@ -2841,7 +2832,7 @@ impl Coordinator {
         let planning_revision = self.catalog().transient_revision();
         written_ids.extend(admitted_ids);
         index_timeline_holds.extend(admission_holds);
-        if protected_plans {
+        {
             prepared.extend(uncached_global_exps.clone());
             prepared.retain(|id, _| {
                 !written_ids.contains(id)
@@ -3380,14 +3371,11 @@ impl Coordinator {
                         .relation_desc()
                         .expect("sinks can only be built on items with descs")
                         .into_owned();
-                    let as_of = if self.catalog().state().catalog_read_protection_enabled() {
-                        self.catalog().state().maintained_read_requirements()[&sink.global_id()]
-                            .frontier
-                            .into_iter()
-                            .collect()
-                    } else {
-                        Antichain::from_elem(Timestamp::minimum())
-                    };
+                    let as_of = self.catalog().state().maintained_read_requirements()
+                        [&sink.global_id()]
+                        .frontier
+                        .into_iter()
+                        .collect();
                     let collection_desc = CollectionDescription {
                         // TODO(sinks): make generic once we have more than one sink type.
                         desc: KAFKA_PROGRESS_DESC.clone(),
@@ -3496,7 +3484,6 @@ impl Coordinator {
                 )
             }),
         );
-        let mut table_registrations = Vec::new();
 
         for batch in batches {
             let mut ready: Vec<_> = batch
@@ -3532,11 +3519,6 @@ impl Coordinator {
                 }
                 collection.since = Some(derived_since);
             }
-
-            table_registrations.extend(ready.iter().filter_map(|(gid, collection)| {
-                matches!(collection.data_source, DataSource::Table)
-                    .then(|| self.table_registration(*gid, collection.desc.clone()))
-            }));
 
             self.register_adapter_storage_collections(&ready).await;
             self.controller
@@ -3576,20 +3558,9 @@ impl Coordinator {
             )
             .await;
 
-        // Writable native startup already completed and adopted table registration
-        // before constructing controllers. Complete this bootstrap timestamp too,
-        // without reinstalling its local routes. Ungoverned startup still needs
-        // its table handles installed here.
-        let tables_completed = self.catalog.state().catalog_read_protection_enabled();
-        if tables_completed {
-            self.register_tables_via_committer(Vec::new()).await;
-        } else if !table_registrations.is_empty() {
-            self.table_write_handle
-                .register(register_ts, table_registrations)
-                .await
-                .expect("table worker is alive during bootstrap")
-                .unwrap_or_terminate("cannot fail to register tables");
-        }
+        // Startup already adopted table registration before constructing controllers.
+        // Complete this bootstrap timestamp without reinstalling local routes.
+        self.register_tables_via_committer(Vec::new()).await;
 
         self.apply_local_write(register_ts).await;
     }
