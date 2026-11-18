@@ -14,7 +14,7 @@ anyhow.workspace = true
 aws-types = { workspace = true, optional = true }
 mz-aws-util = { path = "../aws-util", default-features = false, features = ["rds"], optional = true }
 mz-cloud-resources = { path = "../cloud-resources", optional = true }
-mz-ore = { path = "../ore", default-features = false, features = ["async"], optional = true }
+mz-ore = { path = "../ore", default-features = false }
 mz-proto = { path = "../proto", optional = true }
 mz-repr = { path = "../repr", optional = true }
 mz-source-schema-change = { path = "../source-schema-change", optional = true }
@@ -44,7 +44,7 @@ tunnel = [
     "mz-ssh-util",
     "mz-repr",
     "openssh",
-    "mz-ore",
+    "mz-ore/async",
 ]
 
 [build-dependencies]
