@@ -296,7 +296,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.8.7" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
-    && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && cargo install --root /usr/local --version "=0.15.1" --locked wasm-pack \
     && if [ "$RUST_VERSION" = "nightly" ]; then \
            # NOTE: no --locked, unlike the installs above. cargo-fuzz 0.13.1's \
            # bundled Cargo.lock pins deps that fail on the pinned nightly \
