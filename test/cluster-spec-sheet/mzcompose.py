@@ -4001,7 +4001,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     parser.add_argument(
         "--max-scale",
         type=int,
-        default=32,
+        default=64,
         help="Maximum scale to test. For QPS scenarios, this directly corresponds to the number of CPU cores given to envd.",
     )
     parser.add_argument(
