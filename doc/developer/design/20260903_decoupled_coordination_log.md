@@ -7,12 +7,18 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Two adapters reproduced missing maintained dependency and MV refresh rows during
-peer join and restart. Repair these relations in M3. Storage statistics and
-compute logging remain follow-ups. Before implementation, settle the public
-reduction contract: distinct live-plan edges versus one authoritative plan, and
-furthest live refresh observation versus progress that survives reporter retirement.
-Do not mix fields from different refresh observations or revive retired executions.
+Finish conditional startup history pruning first. Its implementation uses the
+existing fixed-timestamp write path, discarding conflicts. Compilation and the
+two-adapter regression remain outstanding. A deterministic snapshot-before-write
+failpoint needs approval. Also establish protection for its preselected snapshot
+cut before claiming the whole path safe.
+
+Then finish catalog-derived dependency/refresh rows, the `mz_storage_shards`
+view, and conditional storage-usage collection. The shard view and publisher
+removal are uncommitted and unverified. Dependencies need physical imports in
+the existing selected-plan record, distinct from its broader validation imports.
+Refresh derivation needs approval for evaluated schedule metadata in the existing
+Item record, avoiding a change to displayed SQL. No adapter reduction is approved.
 
 The clean pinned-upstream debug startup comparison passed. Fresh startup was
 30.271s upstream versus 53.080s in the prior native capture. Catalog opening was
@@ -28,16 +34,21 @@ Caller attribution remains unreliable, so no parser optimization is selected.
 Investigate a narrower replica catalog boundary without skipping validation or
 weakening cache compatibility. See `startup-readiness-comparison.md`.
 
-Next, resolve the observation reduction contract and implement its scoped repair.
-The proposed promotion-only immediate relaunch also needs approval: status 166 is a general halt,
-so skipping its backoff would also accelerate failure loops. A distinct planned
-restart status would preserve failure backoff. Adopted-process polling is separate.
+The shutdown timeout is reproduced and repaired at the launcher boundary:
+unreaped non-children took 10.03s before and 0.13s after. The strengthened regression
+fails on the original implementation and the full launcher suite passes on the
+repair. TERM/KILL deadlines and identity checks are unchanged. Full-environment
+before/after timings remain outstanding. See `shutdown-zombie-wait.md`.
+
+The approved promotion-only exit status is implemented as 168, preserving 5s
+backoff for other exits. Compilation, tests and runtime timing remain outstanding.
 No publication cadence, readiness interval or resource-limit changes are approved.
 
 ## Live gaps and constraints
 
-- Dependency/refresh ownership repair is confirmed M3 work. Its public reduction
-  semantics and the promotion restart-status proposal await decisions.
+- Scratch SSO expired. Renew with `bin/scratch login` before runtime verification.
+  Keep builds off the editing VM. Test-hook and refresh-metadata decisions are
+  pending as described above.
 - Declaration reconciliation, login sync and SQL owners with separate completion
   effects remain in the conditional-write retry survey.
 - The unchanged MV admission suite had an intermittent compaction-scheduling

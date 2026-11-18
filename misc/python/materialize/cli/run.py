@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -767,20 +768,31 @@ def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
             return False
 
     processes = [process for process in processes if live(process)]
+
+    def wait_stopped(processes: list[psutil.Process]) -> list[psutil.Process]:
+        deadline = time.monotonic() + 10
+        alive = processes
+        while alive and (remaining := deadline - time.monotonic()) > 0:
+            # wait_procs waits for non-children to disappear, including zombies
+            # whose owners have not reaped them. Check for stopped processes
+            # between bounded waits without shortening the termination deadline.
+            _, alive = psutil.wait_procs(alive, timeout=min(0.1, remaining))
+            alive = [process for process in alive if live(process)]
+        return alive
+
     # psutil retains creation times and checks identity again before signaling.
     for process in processes:
         try:
             process.terminate()
         except psutil.NoSuchProcess:
             pass
-    _, alive = psutil.wait_procs(processes, timeout=10)
-    alive = [process for process in alive if live(process)]
+    alive = wait_stopped(processes)
     for process in alive:
         try:
             process.kill()
         except psutil.NoSuchProcess:
             pass
-    _, alive = psutil.wait_procs(alive, timeout=10)
+    alive = wait_stopped(alive)
     if any(live(process) for process in alive):
         raise UIError("some environment processes did not stop")
 

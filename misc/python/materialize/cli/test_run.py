@@ -554,7 +554,7 @@ def test_controller_stop_rejects_stale_and_invalid_identities(tmp_path, generati
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux zombie process semantics")
-def test_controller_stop_accepts_exited_non_child(monkeypatch):
+def test_controller_stop_accepts_exited_non_child():
     # The owner deliberately waits to reap its child until after --stop returns.
     # A stopped process must not require cooperation from that unrelated owner.
     parent = subprocess.Popen(
@@ -573,13 +573,9 @@ def test_controller_stop_accepts_exited_non_child(monkeypatch):
     try:
         assert parent.stdout is not None
         child = psutil.Process(int(parent.stdout.readline()))
-        wait_procs = psutil.wait_procs
-        monkeypatch.setattr(
-            psutil,
-            "wait_procs",
-            lambda processes, timeout: wait_procs(processes, timeout=0.1),
-        )
+        started = time.monotonic()
         run._terminate_controller_processes([child])
+        assert time.monotonic() - started < 2, "waited for the unrelated owner to reap"
         assert child.status() == psutil.STATUS_ZOMBIE
         run._terminate_controller_processes([child])
         assert parent.poll() is None
@@ -596,13 +592,20 @@ def test_controller_stop_rejects_process_that_remains_live(monkeypatch):
     process = MagicMock(spec=psutil.Process)
     process.is_running.return_value = True
     process.status.return_value = psutil.STATUS_RUNNING
-    monkeypatch.setattr(
-        psutil, "wait_procs", lambda processes, timeout: ([], processes)
-    )
+    elapsed = 0.0
+
+    def wait_procs(processes, timeout):
+        nonlocal elapsed
+        elapsed += timeout
+        return [], processes
+
+    monkeypatch.setattr(psutil, "wait_procs", wait_procs)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed)
     with pytest.raises(UIError, match="some environment processes did not stop"):
         run._terminate_controller_processes([process])
     process.terminate.assert_called_once()
     process.kill.assert_called_once()
+    assert elapsed == 20, "both termination deadlines must remain intact"
 
 
 def test_controller_metadata_location_survives_shell_changes(tmp_path):
