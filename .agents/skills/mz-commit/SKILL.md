@@ -64,13 +64,15 @@ the current `LIR_VERSION` has shipped (see below), bump it first so the old
 `lir_v{N}.json` stays in place for migration tooling and the rewrite targets
 a fresh file.
 
-### Scalar function changes: regenerate the function registry
+### Function changes: regenerate the function registry
 
 The schema registry sees a plan's shape, not what its functions compute.
-`builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
-`VariadicFunc`. Run it whenever the diff touches
-`src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
-`impls/` and `#[sqlfunc]` bodies):
+`builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`,
+`VariadicFunc`, `AggregateFunc`, and `TableFunc`. Run it whenever the diff
+touches `src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/`
+(including `impls/` and `#[sqlfunc]` bodies),
+`src/expr/src/relation/func.rs`, or `src/compute-types/src/plan/reduce.rs`
+(which records each aggregate's reduction type):
 
 ```
 cargo test -p mz-catalog --test builtin_registry

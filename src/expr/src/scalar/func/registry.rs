@@ -7,13 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Registry of the declared properties of every scalar function variant.
+//! Registry of the declared properties of every scalar, aggregate and table
+//! function variant.
 //!
 //! The stable LIR schema (see `lir_schema.rs` in `mz-compute-types`) pins the
-//! *shape* of [`UnaryFunc`], [`BinaryFunc`] and [`VariadicFunc`]: their
-//! variants and payloads. It cannot see the properties the optimizer and the
-//! renderer rely on, such as null propagation, error behavior, monotonicity
-//! and output typing, nor the function bodies themselves. A change to any of
+//! *shape* of [`UnaryFunc`], [`BinaryFunc`], [`VariadicFunc`],
+//! [`AggregateFunc`] and [`TableFunc`]: their variants and payloads. It
+//! cannot see the properties the optimizer and the renderer rely on, such as
+//! null propagation, error behavior, monotonicity and output typing, nor the
+//! function bodies themselves. A change to any of
 //! those changes the meaning of a stored LIR plan without changing its
 //! serialized form.
 //!
@@ -26,6 +28,11 @@
 //! signature and a fingerprint of the function body, see [`SqlFuncSource`],
 //! and the output type is probed at the column types the parameter types
 //! map to, see [`ColumnTypeProbe`].
+//!
+//! Aggregate and table functions have no canonical names of their own, so
+//! their variants are listed from their `Deserialize` impls and keyed by serde
+//! variant name, which is what LIR stores. All of them are hand-written, so
+//! their records carry no source beyond the display name.
 //!
 //! Variants whose payload cannot be constructed without data need a
 //! representative [`Sample`] in this module. Building the registry panics
@@ -42,8 +49,9 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
-use mz_repr::{ColumnName, Datum, Row, SqlColumnType, SqlScalarType, StableRow};
+use mz_repr::{ColumnName, Datum, Row, SqlColumnType, SqlRelationType, SqlScalarType, StableRow};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::func::format::DateTimeFormat;
 use crate::func::variadic::{
@@ -51,7 +59,11 @@ use crate::func::variadic::{
     ListCreate, MapBuild, Or, RangeCreate, RecordCreate,
 };
 use crate::func::*;
-use crate::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc, like_pattern};
+use crate::{
+    AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, BinaryFunc, ColumnOrder, LagLeadType,
+    MirScalarExpr, TableFunc, UnaryFunc, VariadicFunc, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, like_pattern,
+};
 
 /// A representative instance of a function variant.
 ///
@@ -80,23 +92,29 @@ impl<F> Sample<F> {
     }
 }
 
-/// The registry of every variant of the three scalar function enums, keyed
-/// by canonical variant name (see [`FuncName`]) as described on [`Sample`].
+/// The registry of every variant of the function enums, keyed as described on
+/// [`Sample`] by canonical variant name (see [`FuncName`]) for the scalar
+/// functions and by serde variant name for the others.
 #[derive(Debug)]
 pub struct FuncRegistry {
-    pub unary: BTreeMap<String, Record<UnaryFuncProperties>>,
-    pub binary: BTreeMap<String, Record<BinaryFuncProperties>>,
-    pub variadic: BTreeMap<String, Record<VariadicFuncProperties>>,
+    pub unary: BTreeMap<String, Record<UnaryFunc, UnaryFuncProperties>>,
+    pub binary: BTreeMap<String, Record<BinaryFunc, BinaryFuncProperties>>,
+    pub variadic: BTreeMap<String, Record<VariadicFunc, VariadicFuncProperties>>,
+    pub aggregate: BTreeMap<String, Record<AggregateFunc, AggregateFuncProperties>>,
+    pub table: BTreeMap<String, Record<TableFunc, TableFuncProperties>>,
 }
 
 /// One registry entry: the properties that decide what a stored plan using
-/// the function computes, and the source they were read from.
+/// the function computes, the source they were read from, and the instance
+/// they were probed from. The instance lets a crate that `mz-expr` cannot
+/// depend on record properties it owns under the same key.
 ///
 /// The two halves are snapshotted separately by the test in
 /// `mz-catalog`. A change to `properties` of a shipped LIR version
 /// requires a version bump. A change to `source` alone is informational.
 #[derive(Debug)]
-pub struct Record<P> {
+pub struct Record<F, P> {
+    pub func: F,
     pub properties: P,
     pub source: FuncSource,
 }
@@ -207,8 +225,36 @@ pub struct VariadicFuncProperties {
     pub sqlfunc_signature: Option<&'static str>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AggregateFuncProperties {
+    pub ignores_multiplicity: bool,
+    pub propagates_nonnull_constraint: bool,
+    pub can_fuse_with_unnest_list: bool,
+    /// The result on empty input, as a `Datum` debug rendering.
+    pub default: String,
+    /// The datum whose inclusion leaves the result unchanged, as a `Datum`
+    /// debug rendering.
+    pub identity_datum: String,
+    pub input_types: Vec<String>,
+    pub output_type: Option<String>,
+    /// The output type at the same input made nullable. Most aggregates pass
+    /// input nullability through, so this and `output_type` together pin the
+    /// nullability rule.
+    pub output_type_on_nullable_input: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TableFuncProperties {
+    pub output_types: Vec<String>,
+    pub output_keys: Vec<Vec<usize>>,
+    pub output_arity: usize,
+    pub empty_on_null_input: bool,
+    pub preserves_monotonicity: bool,
+    pub supports_with_ordinality: bool,
+}
+
 impl FuncRegistry {
-    /// Records the properties of every variant of the three function enums.
+    /// Records the properties of every variant of the function enums.
     ///
     /// Panics if a variant can neither be constructed from its canonical name
     /// nor has a [`Sample`] in this module, or if a sample's input count does
@@ -242,8 +288,85 @@ impl FuncRegistry {
                 VariadicFunc::variant_name,
                 VariadicFuncProperties::of,
             ),
+            aggregate: collect(
+                "AggregateFunc",
+                serde_variants::<AggregateFunc>().iter().copied(),
+                from_serde_variant,
+                aggregate_natural_inputs,
+                aggregate_samples(),
+                serde_variant_name,
+                AggregateFuncProperties::of,
+            ),
+            table: collect(
+                "TableFunc",
+                serde_variants::<TableFunc>().iter().copied(),
+                from_serde_variant,
+                |_| None,
+                table_samples(),
+                serde_variant_name,
+                TableFuncProperties::of,
+            ),
         }
     }
+}
+
+/// The variant names an enum's `Deserialize` impl declares.
+///
+/// Derived impls pass them to `Deserializer::deserialize_enum`, which is the
+/// only place serde exposes them. This deserializer records them there and
+/// then fails.
+fn serde_variants<F: DeserializeOwned>() -> &'static [&'static str] {
+    use serde::de::{Error, Visitor};
+
+    struct Probe<'a>(&'a std::cell::Cell<&'static [&'static str]>);
+
+    impl<'de> serde::Deserializer<'de> for Probe<'_> {
+        type Error = serde::de::value::Error;
+
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(Error::custom("not an enum"))
+        }
+
+        fn deserialize_enum<V: Visitor<'de>>(
+            self,
+            _name: &'static str,
+            variants: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0.set(variants);
+            Err(Error::custom("variants recorded"))
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+            byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+            struct identifier ignored_any
+        }
+    }
+
+    let variants = std::cell::Cell::new(&[][..]);
+    let _ = F::deserialize(Probe(&variants));
+    let variants = variants.get();
+    assert!(
+        !variants.is_empty(),
+        "`{}` does not deserialize as an enum",
+        std::any::type_name::<F>()
+    );
+    variants
+}
+
+/// Constructs a unit variant from its serde name. `None` for variants with a
+/// payload.
+fn from_serde_variant<F: DeserializeOwned>(name: &str) -> Option<F> {
+    serde_json::from_value(serde_json::Value::String(name.to_string())).ok()
+}
+
+fn serde_variant_name<F: Serialize + DeserializeOwned>(func: &F) -> &'static str {
+    let ident = variant_ident(func);
+    serde_variants::<F>()
+        .iter()
+        .find(|name| **name == ident)
+        .unwrap_or_else(|| panic!("serialized variant `{ident}` is not a declared variant"))
 }
 
 /// Records the properties of every variant of one function enum, keyed as
@@ -373,7 +496,7 @@ fn type_strings(types: &[SqlColumnType]) -> Vec<String> {
 }
 
 impl UnaryFuncProperties {
-    fn of(sample: &Sample<UnaryFunc>) -> Record<Self> {
+    fn of(sample: &Sample<UnaryFunc>) -> Record<UnaryFunc, Self> {
         let func = &sample.func;
         let output_type = match sample.input_types.as_slice() {
             [] => None,
@@ -395,6 +518,7 @@ impl UnaryFuncProperties {
             sqlfunc_signature: source.map(|s| s.signature),
         };
         Record {
+            func: func.clone(),
             properties,
             source: FuncSource::of(func.to_string(), source),
         }
@@ -402,7 +526,7 @@ impl UnaryFuncProperties {
 }
 
 impl BinaryFuncProperties {
-    fn of(sample: &Sample<BinaryFunc>) -> Record<Self> {
+    fn of(sample: &Sample<BinaryFunc>) -> Record<BinaryFunc, Self> {
         let func = &sample.func;
         let output_type = match sample.input_types.as_slice() {
             [] => None,
@@ -424,6 +548,7 @@ impl BinaryFuncProperties {
             sqlfunc_signature: source.map(|s| s.signature),
         };
         Record {
+            func: func.clone(),
             properties,
             source: FuncSource::of(func.to_string(), source),
         }
@@ -431,7 +556,7 @@ impl BinaryFuncProperties {
 }
 
 impl VariadicFuncProperties {
-    fn of(sample: &Sample<VariadicFunc>) -> Record<Self> {
+    fn of(sample: &Sample<VariadicFunc>) -> Record<VariadicFunc, Self> {
         let func = &sample.func;
         let output_type = (!sample.input_types.is_empty())
             .then(|| func.output_sql_type(sample.input_types.clone()).to_string());
@@ -449,8 +574,69 @@ impl VariadicFuncProperties {
             sqlfunc_signature: source.map(|s| s.signature),
         };
         Record {
+            func: func.clone(),
             properties,
             source: FuncSource::of(func.to_string(), source),
+        }
+    }
+}
+
+impl AggregateFuncProperties {
+    fn of(sample: &Sample<AggregateFunc>) -> Record<AggregateFunc, Self> {
+        let func = &sample.func;
+        let (output_type, output_type_on_nullable_input) = match sample.input_types.as_slice() {
+            [] => (None, None),
+            [input] => (
+                Some(func.output_sql_type(input.clone()).to_string()),
+                Some(
+                    func.output_sql_type(input.scalar_type.clone().nullable(true))
+                        .to_string(),
+                ),
+            ),
+            _ => panic!(
+                "aggregate sample `{}` needs exactly one input type",
+                func.name()
+            ),
+        };
+        let properties = AggregateFuncProperties {
+            ignores_multiplicity: func.ignores_multiplicity(),
+            propagates_nonnull_constraint: func.propagates_nonnull_constraint(),
+            can_fuse_with_unnest_list: func.can_fuse_with_unnest_list(),
+            default: format!("{:?}", func.default()),
+            identity_datum: format!("{:?}", func.identity_datum()),
+            input_types: type_strings(&sample.input_types),
+            output_type,
+            output_type_on_nullable_input,
+        };
+        Record {
+            func: func.clone(),
+            properties,
+            source: FuncSource::of(func.name().to_string(), None),
+        }
+    }
+}
+
+impl TableFuncProperties {
+    fn of(sample: &Sample<TableFunc>) -> Record<TableFunc, Self> {
+        let func = &sample.func;
+        assert!(
+            sample.input_types.is_empty(),
+            "table function output types do not depend on input types, \
+             so sample `{func}` must not give any"
+        );
+        let output = func.output_sql_type();
+        let properties = TableFuncProperties {
+            output_types: type_strings(&output.column_types),
+            output_keys: output.keys,
+            output_arity: func.output_arity(),
+            empty_on_null_input: func.empty_on_null_input(),
+            preserves_monotonicity: func.preserves_monotonicity(),
+            supports_with_ordinality: TableFunc::with_ordinality(func.clone()).is_some(),
+        };
+        Record {
+            func: func.clone(),
+            properties,
+            source: FuncSource::of(func.to_string(), None),
         }
     }
 }
@@ -1069,6 +1255,263 @@ fn variadic_samples() -> Vec<Sample<VariadicFunc>> {
         variadic(
             ErrorIfNull,
             vec![SqlScalarType::Int32, SqlScalarType::String],
+        ),
+    ]
+}
+
+/// The input column type a payload-free aggregate is probed at. `None` for
+/// variants with a payload, which have samples in [`aggregate_samples`].
+fn aggregate_natural_inputs(func: &AggregateFunc) -> Option<Vec<SqlColumnType>> {
+    use AggregateFunc::*;
+    // No wildcard arm, so a new variant does not compile until it is placed.
+    let input = match func {
+        MaxNumeric | MinNumeric | SumNumeric => SqlScalarType::Numeric { max_scale: None },
+        MaxInt16 | MinInt16 | SumInt16 => SqlScalarType::Int16,
+        MaxInt32 | MinInt32 | SumInt32 => SqlScalarType::Int32,
+        MaxInt64 | MinInt64 | SumInt64 => SqlScalarType::Int64,
+        MaxUInt16 | MinUInt16 | SumUInt16 => SqlScalarType::UInt16,
+        MaxUInt32 | MinUInt32 | SumUInt32 => SqlScalarType::UInt32,
+        MaxUInt64 | MinUInt64 | SumUInt64 => SqlScalarType::UInt64,
+        MaxMzTimestamp | MinMzTimestamp => SqlScalarType::MzTimestamp,
+        MaxFloat32 | MinFloat32 | SumFloat32 => SqlScalarType::Float32,
+        MaxFloat64 | MinFloat64 | SumFloat64 => SqlScalarType::Float64,
+        MaxBool | MinBool | Any | All => SqlScalarType::Bool,
+        MaxString | MinString => SqlScalarType::String,
+        MaxDate | MinDate => SqlScalarType::Date,
+        MaxTimestamp | MinTimestamp => SqlScalarType::Timestamp { precision: None },
+        MaxTimestampTz | MinTimestampTz => SqlScalarType::TimestampTz { precision: None },
+        MaxInterval | MinInterval | SumInterval => SqlScalarType::Interval,
+        MaxTime | MinTime => SqlScalarType::Time,
+        MaxArray | MinArray => array_type(SqlScalarType::Int32),
+        MaxList | MinList => list_type(SqlScalarType::Int32),
+        Count | Dummy => SqlScalarType::Int32,
+        JsonbAgg { .. }
+        | JsonbObjectAgg { .. }
+        | MapAgg { .. }
+        | ArrayConcat { .. }
+        | ListConcat { .. }
+        | StringAgg { .. }
+        | RowNumber { .. }
+        | Rank { .. }
+        | DenseRank { .. }
+        | LagLead { .. }
+        | FirstValue { .. }
+        | LastValue { .. }
+        | FusedValueWindowFunc { .. }
+        | WindowAggregate { .. }
+        | FusedWindowAggregate { .. } => return None,
+    };
+    Some(vec![input.nullable(false)])
+}
+
+fn record_of(fields: Vec<SqlScalarType>) -> SqlScalarType {
+    SqlScalarType::Record {
+        fields: fields
+            .into_iter()
+            .enumerate()
+            .map(|(i, ty)| (ColumnName::from(format!("f{i}")), ty.nullable(false)))
+            .collect(),
+        custom_id: None,
+    }
+}
+
+fn aggregate(func: AggregateFunc, input: SqlScalarType) -> Sample<AggregateFunc> {
+    Sample {
+        func,
+        input_types: vec![input.nullable(false)],
+        label: "",
+    }
+}
+
+fn aggregate_samples() -> Vec<Sample<AggregateFunc>> {
+    let order_by = || {
+        vec![ColumnOrder {
+            column: 1,
+            desc: true,
+            nulls_last: true,
+        }]
+    };
+    let window_frame = || WindowFrame {
+        units: WindowFrameUnits::Rows,
+        start_bound: WindowFrameBound::OffsetPreceding(2),
+        end_bound: WindowFrameBound::CurrentRow,
+    };
+    let lag_lead = |lag_lead| AggregateFunc::LagLead {
+        order_by: order_by(),
+        lag_lead,
+        ignore_nulls: false,
+    };
+    // Order-sensitive aggregates take a record of the aggregated value and
+    // the ORDER BY columns.
+    let ordered = |value| record_of(vec![value, SqlScalarType::Int32]);
+    let original_row = record_of(vec![SqlScalarType::Int32]);
+    // Ranking functions take the partition's original rows as a list.
+    let ranking_input = ordered(list_type(original_row.clone()));
+    // Value window functions and window aggregates take a record of the
+    // original row and the encoded arguments.
+    let window_input = |args| ordered(record_of(vec![original_row.clone(), args]));
+    // lag and lead encode (value, offset, default).
+    let lag_lead_args = record_of(vec![
+        SqlScalarType::Int32,
+        SqlScalarType::Int32,
+        SqlScalarType::Int32,
+    ]);
+    vec![
+        aggregate(
+            AggregateFunc::JsonbAgg {
+                order_by: order_by(),
+            },
+            ordered(SqlScalarType::Jsonb),
+        ),
+        aggregate(
+            AggregateFunc::JsonbObjectAgg {
+                order_by: order_by(),
+            },
+            ordered(record_of(vec![SqlScalarType::String, SqlScalarType::Jsonb])),
+        ),
+        aggregate(
+            AggregateFunc::MapAgg {
+                order_by: order_by(),
+                value_type: SqlScalarType::Int32,
+            },
+            ordered(record_of(vec![SqlScalarType::String, SqlScalarType::Int32])),
+        ),
+        aggregate(
+            AggregateFunc::ArrayConcat {
+                order_by: order_by(),
+            },
+            ordered(array_type(SqlScalarType::Int32)),
+        ),
+        aggregate(
+            AggregateFunc::ListConcat {
+                order_by: order_by(),
+            },
+            ordered(list_type(SqlScalarType::Int32)),
+        ),
+        aggregate(
+            AggregateFunc::StringAgg {
+                order_by: order_by(),
+            },
+            ordered(record_of(vec![
+                SqlScalarType::String,
+                SqlScalarType::String,
+            ])),
+        ),
+        aggregate(
+            AggregateFunc::RowNumber {
+                order_by: order_by(),
+            },
+            ranking_input.clone(),
+        ),
+        aggregate(
+            AggregateFunc::Rank {
+                order_by: order_by(),
+            },
+            ranking_input.clone(),
+        ),
+        aggregate(
+            AggregateFunc::DenseRank {
+                order_by: order_by(),
+            },
+            ranking_input,
+        ),
+        aggregate(
+            lag_lead(LagLeadType::Lag),
+            window_input(lag_lead_args.clone()),
+        ),
+        aggregate(
+            lag_lead(LagLeadType::Lead),
+            window_input(lag_lead_args.clone()),
+        )
+        .labeled("lead"),
+        aggregate(
+            AggregateFunc::FirstValue {
+                order_by: order_by(),
+                window_frame: window_frame(),
+            },
+            window_input(SqlScalarType::Int32),
+        ),
+        aggregate(
+            AggregateFunc::LastValue {
+                order_by: order_by(),
+                window_frame: window_frame(),
+            },
+            window_input(SqlScalarType::Int32),
+        ),
+        aggregate(
+            AggregateFunc::FusedValueWindowFunc {
+                funcs: vec![
+                    lag_lead(LagLeadType::Lag),
+                    AggregateFunc::FirstValue {
+                        order_by: order_by(),
+                        window_frame: window_frame(),
+                    },
+                ],
+                order_by: order_by(),
+            },
+            window_input(record_of(vec![lag_lead_args, SqlScalarType::Int32])),
+        ),
+        aggregate(
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate: Box::new(AggregateFunc::SumInt32),
+                order_by: order_by(),
+                window_frame: window_frame(),
+            },
+            window_input(SqlScalarType::Int32),
+        ),
+        aggregate(
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates: vec![AggregateFunc::SumInt32, AggregateFunc::MaxInt32],
+                order_by: order_by(),
+                window_frame: window_frame(),
+            },
+            window_input(record_of(vec![SqlScalarType::Int32, SqlScalarType::Int32])),
+        ),
+    ]
+}
+
+fn table(func: TableFunc) -> Sample<TableFunc> {
+    Sample {
+        func,
+        input_types: vec![],
+        label: "",
+    }
+}
+
+fn table_samples() -> Vec<Sample<TableFunc>> {
+    let regex =
+        AnalyzedRegex::new("(?<a>a+)(b)", AnalyzedRegexOpts::default()).expect("valid regex");
+    vec![
+        table(TableFunc::RegexpExtract(regex)),
+        table(TableFunc::CsvExtract(2)),
+        table(TableFunc::GuardSubquerySize {
+            column_type: SqlScalarType::Int32,
+        }),
+        table(TableFunc::UnnestArray {
+            el_typ: SqlScalarType::Int32,
+        }),
+        table(TableFunc::UnnestList {
+            el_typ: SqlScalarType::Int32,
+        }),
+        table(TableFunc::UnnestMap {
+            value_type: SqlScalarType::Int32,
+        }),
+        table(TableFunc::Wrap {
+            types: vec![
+                SqlScalarType::Int32.nullable(false),
+                SqlScalarType::String.nullable(true),
+            ],
+            width: 2,
+        }),
+        table(TableFunc::TabletizedScalar {
+            name: "tabletized".to_string(),
+            relation: SqlRelationType::new(vec![SqlScalarType::Int32.nullable(true)]),
+        }),
+        table(
+            TableFunc::with_ordinality(TableFunc::UnnestList {
+                el_typ: SqlScalarType::Int32,
+            })
+            .expect("unnest_list supports WITH ORDINALITY"),
         ),
     ]
 }

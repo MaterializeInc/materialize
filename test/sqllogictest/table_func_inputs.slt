@@ -1,0 +1,755 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Table functions evaluated on edge-case inputs read from tables.
+#
+# Calls on literal arguments are folded by the optimizer, so a plan stores
+# their result and never runs the function. Every call here takes its
+# arguments from a table column, so it runs in a dataflow, which is how a
+# durably stored plan would run it. Rows whose input errors live in their own
+# tables, because one erroring row fails the whole query.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row_non_negative = true
+----
+COMPLETE 0
+
+# jsonb_each, jsonb_each_text, jsonb_object_keys
+
+# NOTE: jsonb numbers are normalized, so `1.50` reads back as `1.5`.
+# PostgreSQL keeps the written scale.
+
+statement ok
+CREATE TABLE objs (id int, v jsonb)
+
+statement ok
+INSERT INTO objs VALUES
+  (1, '{}'),
+  (2, '{"a": 1, "b": "x", "c": null, "d": [1, 2], "e": {"f": true}}'),
+  (3, '{"": 0, "ü": 1.50, "big": 1e20, "neg": -0, "small": 0.000001}'),
+  (4, '{"a": 1, "a": 2}'),
+  (5, '{"esc\"ape": "line\nbreak", "k\u00e9y": "\u00e9x"}'),
+  (6, '[1, 2]'),
+  (7, '"str"'),
+  (8, 'null'),
+  (9, NULL)
+
+query ITT
+SELECT id, key, value FROM objs, jsonb_each(v) ORDER BY id, key
+----
+2  a  1
+2  b  "x"
+2  c  null
+2  d  [1,2]
+2  e  {"f":true}
+3  (empty)  0
+3  big  100000000000000000000
+3  neg  0
+3  small  0.000001
+3  ü  1.5
+4  a  2
+5  esc"ape  "line\nbreak"
+5  kéy  "éx"
+
+query ITT
+SELECT id, key, value FROM objs, jsonb_each_text(v) ORDER BY id, key
+----
+2  a  1
+2  b  x
+2  c  NULL
+2  d  [1,2]
+2  e  {"f":true}
+3  (empty)  0
+3  big  100000000000000000000
+3  neg  0
+3  small  0.000001
+3  ü  1.5
+4  a  2
+5  esc"ape  line⏎break
+5  kéy  éx
+
+query IT
+SELECT id, k FROM objs, jsonb_object_keys(v) AS k ORDER BY id, k
+----
+2  a
+2  b
+2  c
+2  d
+2  e
+3  (empty)
+3  big
+3  neg
+3  small
+3  ü
+4  a
+5  esc"ape
+5  kéy
+
+query ITTI
+SELECT id, key, value, ordinality FROM objs, jsonb_each(v) WITH ORDINALITY ORDER BY id, ordinality
+----
+2  a  1  1
+2  b  "x"  2
+2  c  null  3
+2  d  [1,2]  4
+2  e  {"f":true}  5
+3  (empty)  0  1
+3  big  100000000000000000000  2
+3  neg  0  3
+3  small  0.000001  4
+3  ü  1.5  5
+4  a  2  1
+5  esc"ape  "line\nbreak"  1
+5  kéy  "éx"  2
+
+# jsonb_array_elements, jsonb_array_elements_text
+
+statement ok
+CREATE TABLE arrs (id int, v jsonb)
+
+statement ok
+INSERT INTO arrs VALUES
+  (1, '[]'),
+  (2, '[null]'),
+  (3, '[1, "a", true, null, [], {}]'),
+  (4, '[[1, [2]], {"k": [3]}]'),
+  (5, '["é", 1.0, 1e3, -0, "", " "]'),
+  (6, '{"a": 1}'),
+  (7, '"s"'),
+  (8, 'null'),
+  (9, NULL)
+
+query IT
+SELECT id, e FROM arrs, jsonb_array_elements(v) AS e ORDER BY id, e::text
+----
+2  null
+3  "a"
+3  1
+3  []
+3  null
+3  true
+3  {}
+4  [1,[2]]
+4  {"k":[3]}
+5  "␠"
+5  ""
+5  "é"
+5  0
+5  1
+5  1000
+
+query IT
+SELECT id, e FROM arrs, jsonb_array_elements_text(v) AS e ORDER BY id, e
+----
+2  NULL
+3  1
+3  []
+3  a
+3  true
+3  {}
+3  NULL
+4  [1,[2]]
+4  {"k":[3]}
+5  (empty)
+5  ␠
+5  0
+5  1
+5  1000
+5  é
+
+query ITI
+SELECT id, e, n FROM arrs, jsonb_array_elements(v) WITH ORDINALITY AS t(e, n) ORDER BY id, n
+----
+2  null  1
+3  1  1
+3  "a"  2
+3  true  3
+3  null  4
+3  []  5
+3  {}  6
+4  [1,[2]]  1
+4  {"k":[3]}  2
+5  "é"  1
+5  1  2
+5  1000  3
+5  0  4
+5  ""  5
+5  "␠"  6
+
+# aclexplode, mz_aclexplode
+
+statement ok
+CREATE TABLE acls (id int, a aclitem[], m mz_aclitem[])
+
+statement ok
+INSERT INTO acls VALUES
+  (1, ARRAY[]::aclitem[], ARRAY[]::mz_aclitem[]),
+  (2,
+   ARRAY[makeaclitem(10, 20, 'SELECT', false)],
+   ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE')]),
+  (3,
+   ARRAY[makeaclitem(10, 20, 'SELECT,INSERT,UPDATE,DELETE', false), makeaclitem(0, 20, 'USAGE', false)],
+   ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'SELECT,INSERT,UPDATE,DELETE'), mz_internal.make_mz_aclitem('p', 's1', 'CREATE')]),
+  (4,
+   ARRAY[makeaclitem(10, 20, 'SELECT', false), makeaclitem(10, 20, 'SELECT', false)],
+   ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE'), mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE')]),
+  (5, NULL, NULL)
+
+query IIITT
+SELECT id, grantor, grantee, privilege_type, is_grantable FROM acls, aclexplode(a) ORDER BY id, grantee, privilege_type
+----
+2  20  10  SELECT  false
+3  20  0  USAGE  false
+3  20  10  DELETE  false
+3  20  10  INSERT  false
+3  20  10  SELECT  false
+3  20  10  UPDATE  false
+4  20  10  SELECT  false
+4  20  10  SELECT  false
+
+query ITTTT
+SELECT id, grantor, grantee, privilege_type, is_grantable FROM acls, mz_internal.mz_aclexplode(m) ORDER BY id, grantee, privilege_type
+----
+2  u2  u1  USAGE  false
+3  s1  p  CREATE  false
+3  u2  u1  DELETE  false
+3  u2  u1  INSERT  false
+3  u2  u1  SELECT  false
+3  u2  u1  UPDATE  false
+4  u2  u1  USAGE  false
+4  u2  u1  USAGE  false
+
+# generate_series over integers
+
+statement ok
+CREATE TABLE int_series (id int, lo int, hi int, step int)
+
+statement ok
+INSERT INTO int_series VALUES
+  (1, 0, 0, 1),
+  (2, 1, 0, 1),
+  (3, 3, 1, -1),
+  (4, 0, 10, 3),
+  (5, 2147483646, 2147483647, 1),
+  (6, 2147483640, 2147483647, 5),
+  (7, -2147483647, -2147483648, -1),
+  (8, -2147483642, -2147483648, -5),
+  (9, 0, 5, 2147483647),
+  (10, NULL, 1, 1),
+  (11, 1, NULL, 1),
+  (12, 1, 2, NULL)
+
+query II
+SELECT id, g FROM int_series, generate_series(lo, hi, step) AS g ORDER BY id, g
+----
+1  0
+3  1
+3  2
+3  3
+4  0
+4  3
+4  6
+4  9
+5  2147483646
+5  2147483647
+6  2147483640
+6  2147483645
+7  -2147483648
+7  -2147483647
+8  -2147483647
+8  -2147483642
+9  0
+
+query II
+SELECT id, g FROM int_series, generate_series(lo, hi) AS g WHERE id <= 4 ORDER BY id, g
+----
+1  0
+4  0
+4  1
+4  2
+4  3
+4  4
+4  5
+4  6
+4  7
+4  8
+4  9
+4  10
+
+query III
+SELECT id, g, n FROM int_series, generate_series(lo, hi, step) WITH ORDINALITY AS t(g, n) ORDER BY id, n
+----
+1  0  1
+3  3  1
+3  2  2
+3  1  3
+4  0  1
+4  3  2
+4  6  3
+4  9  4
+5  2147483646  1
+5  2147483647  2
+6  2147483640  1
+6  2147483645  2
+7  -2147483647  1
+7  -2147483648  2
+8  -2147483642  1
+8  -2147483647  2
+9  0  1
+
+statement ok
+CREATE TABLE int_series_zero_step (lo int, hi int, step int)
+
+statement ok
+INSERT INTO int_series_zero_step VALUES (0, 1, 0)
+
+query error step size cannot equal zero
+SELECT g FROM int_series_zero_step, generate_series(lo, hi, step) AS g
+
+statement ok
+CREATE TABLE bigint_series (id int, lo bigint, hi bigint, step bigint)
+
+statement ok
+INSERT INTO bigint_series VALUES
+  (1, 0, 0, 1),
+  (2, 1, 0, 1),
+  (3, 9223372036854775806, 9223372036854775807, 1),
+  (4, 9223372036854775800, 9223372036854775807, 5),
+  (5, -9223372036854775807, -9223372036854775808, -1),
+  (6, 0, 5, 9223372036854775807),
+  (7, NULL, 1, 1)
+
+query II
+SELECT id, g FROM bigint_series, generate_series(lo, hi, step) AS g ORDER BY id, g
+----
+1  0
+3  9223372036854775806
+3  9223372036854775807
+4  9223372036854775800
+4  9223372036854775805
+5  -9223372036854775808
+5  -9223372036854775807
+6  0
+
+# Every bigint_series row yields at most two values, so enumerating them all
+# is cheap.
+query II
+SELECT id, g FROM bigint_series, mz_unsafe.generate_series_unoptimized(lo, hi, step) AS g ORDER BY id, g
+----
+1  0
+3  9223372036854775806
+3  9223372036854775807
+4  9223372036854775800
+4  9223372036854775805
+5  -9223372036854775808
+5  -9223372036854775807
+6  0
+
+statement ok
+CREATE TABLE bigint_series_zero_step (lo bigint, hi bigint, step bigint)
+
+statement ok
+INSERT INTO bigint_series_zero_step VALUES (0, 1, 0)
+
+query error step size cannot equal zero
+SELECT g FROM bigint_series_zero_step, generate_series(lo, hi, step) AS g
+
+query error step size cannot equal zero
+SELECT g FROM bigint_series_zero_step, mz_unsafe.generate_series_unoptimized(lo, hi, step) AS g
+
+# generate_series over timestamps
+
+statement ok
+CREATE TABLE ts_series (id int, lo timestamp, hi timestamp, step interval)
+
+statement ok
+INSERT INTO ts_series VALUES
+  (1, '2024-01-31', '2024-06-30', '1 month'),
+  (2, '2024-02-29', '2028-03-01', '1 year'),
+  (3, '2024-01-01', '2024-01-01', '1 day'),
+  (4, '2024-01-02', '2024-01-01', '1 day'),
+  (5, '2024-01-03', '2024-01-01', '-1 day'),
+  (6, '2024-01-01', '2024-03-01', '1 month 1 day 1 hour'),
+  (7, '2024-01-01 23:59:59.999999', '2024-01-02 00:00:00.000001', '0.000001 seconds'),
+  (8, '2024-03-31', '2024-01-01', '-1 month'),
+  (9, NULL, '2024-01-01', '1 day'),
+  (10, '2024-01-01', '2024-01-02', NULL)
+
+query IT
+SELECT id, g FROM ts_series, generate_series(lo, hi, step) AS g ORDER BY id, g
+----
+1  2024-01-31␠00:00:00
+1  2024-02-29␠00:00:00
+1  2024-03-29␠00:00:00
+1  2024-04-29␠00:00:00
+1  2024-05-29␠00:00:00
+1  2024-06-29␠00:00:00
+2  2024-02-29␠00:00:00
+2  2025-02-28␠00:00:00
+2  2026-02-28␠00:00:00
+2  2027-02-28␠00:00:00
+2  2028-02-28␠00:00:00
+3  2024-01-01␠00:00:00
+5  2024-01-01␠00:00:00
+5  2024-01-02␠00:00:00
+5  2024-01-03␠00:00:00
+6  2024-01-01␠00:00:00
+6  2024-02-02␠01:00:00
+7  2024-01-01␠23:59:59.999999
+7  2024-01-02␠00:00:00
+7  2024-01-02␠00:00:00.000001
+8  2024-01-29␠00:00:00
+8  2024-02-29␠00:00:00
+8  2024-03-31␠00:00:00
+
+query IT
+SELECT id, g FROM ts_series, generate_series(lo::timestamptz, hi::timestamptz, step) AS g ORDER BY id, g
+----
+1  2024-01-31␠00:00:00+00
+1  2024-02-29␠00:00:00+00
+1  2024-03-29␠00:00:00+00
+1  2024-04-29␠00:00:00+00
+1  2024-05-29␠00:00:00+00
+1  2024-06-29␠00:00:00+00
+2  2024-02-29␠00:00:00+00
+2  2025-02-28␠00:00:00+00
+2  2026-02-28␠00:00:00+00
+2  2027-02-28␠00:00:00+00
+2  2028-02-28␠00:00:00+00
+3  2024-01-01␠00:00:00+00
+5  2024-01-01␠00:00:00+00
+5  2024-01-02␠00:00:00+00
+5  2024-01-03␠00:00:00+00
+6  2024-01-01␠00:00:00+00
+6  2024-02-02␠01:00:00+00
+7  2024-01-01␠23:59:59.999999+00
+7  2024-01-02␠00:00:00+00
+7  2024-01-02␠00:00:00.000001+00
+8  2024-01-29␠00:00:00+00
+8  2024-02-29␠00:00:00+00
+8  2024-03-31␠00:00:00+00
+
+statement ok
+CREATE TABLE ts_series_zero_step (lo timestamp, hi timestamp, step interval)
+
+statement ok
+INSERT INTO ts_series_zero_step VALUES ('2024-01-01', '2024-01-02', '0 days')
+
+query error step size cannot equal zero
+SELECT g FROM ts_series_zero_step, generate_series(lo, hi, step) AS g
+
+# generate_subscripts
+
+statement ok
+CREATE TABLE subscripts (id int, a int[], d int)
+
+statement ok
+INSERT INTO subscripts VALUES
+  (1, '{}', 1),
+  (2, '{1,2,3}', 1),
+  (3, '{1,2,3}', 0),
+  (4, '{1,2,3}', 2),
+  (5, '{1,2,3}', -1),
+  (6, '{{1,2},{3,4},{5,6}}', 1),
+  (7, '{{1,2},{3,4},{5,6}}', 2),
+  (8, '{NULL}', 1),
+  (9, NULL, 1),
+  (10, '{1,2,3}', NULL)
+
+query II
+SELECT id, s FROM subscripts, generate_subscripts(a, d) AS s ORDER BY id, s
+----
+2  1
+2  2
+2  3
+6  1
+6  2
+6  3
+7  1
+7  2
+8  1
+
+# regexp_matches
+
+statement ok
+CREATE TABLE matches (id int, s text, p text, f text)
+
+statement ok
+INSERT INTO matches VALUES
+  (1, 'abc', 'x', ''),
+  (2, '', '', ''),
+  (3, 'aXbXc', '(X)', 'g'),
+  (4, 'aXbXc', '(X)', ''),
+  (5, 'b', '(a)|(b)', ''),
+  (6, 'AbA', 'a', 'gi'),
+  (7, 'ééé', '(é+)', ''),
+  (8, 'abc', '', 'g'),
+  (9, NULL, 'a', ''),
+  (10, 'a', NULL, ''),
+  (11, 'a', 'a', NULL)
+
+query IT
+SELECT id, m FROM matches, regexp_matches(s, p, f) AS m ORDER BY id, m
+----
+2  {}
+3  {X}
+3  {X}
+4  {X}
+5  {NULL,b}
+6  {}
+6  {}
+7  {ééé}
+8  {}
+8  {}
+8  {}
+8  {}
+
+query IT
+SELECT id, m FROM matches, regexp_matches(s, p) AS m ORDER BY id, m
+----
+2  {}
+3  {X}
+4  {X}
+5  {NULL,b}
+7  {ééé}
+8  {}
+11  {}
+
+statement ok
+CREATE TABLE matches_bad_regex (s text, p text)
+
+statement ok
+INSERT INTO matches_bad_regex VALUES ('a', '(')
+
+query error invalid regular expression: regex parse error:
+SELECT m FROM matches_bad_regex, regexp_matches(s, p) AS m
+
+statement ok
+CREATE TABLE matches_bad_flag (s text, p text, f text)
+
+statement ok
+INSERT INTO matches_bad_flag VALUES ('a', 'a', 'z')
+
+query error invalid regular expression flag: z
+SELECT m FROM matches_bad_flag, regexp_matches(s, p, f) AS m
+
+# regexp_extract, whose pattern must be a literal
+
+statement ok
+CREATE TABLE haystacks (id int, s text)
+
+statement ok
+INSERT INTO haystacks VALUES
+  (1, 'ab'),
+  (2, 'a'),
+  (3, ''),
+  (4, 'xxab'),
+  (5, 'ééb'),
+  (6, NULL)
+
+query ITT
+SELECT id, first, second FROM haystacks, regexp_extract('(?P<first>a|é+)(?P<second>b)?', s) ORDER BY id
+----
+1  a  b
+2  a  NULL
+4  a  b
+5  éé  b
+
+# csv_extract, whose column count must be a literal
+
+statement ok
+CREATE TABLE csv_lines (id int, s text)
+
+statement ok
+INSERT INTO csv_lines VALUES
+  (1, 'a,b'),
+  (2, ''),
+  (3, 'a'),
+  (4, 'a,b,c'),
+  (5, '"q,1",x'),
+  (6, '"a""b",c'),
+  (7, 'a,'),
+  (8, ',,'),
+  (9, ' a , b '),
+  (10, NULL)
+
+query ITT
+SELECT id, column1, column2 FROM csv_lines, csv_extract(2, s) ORDER BY id
+----
+1  a  b
+5  q,1  x
+6  a"b  c
+7  a  (empty)
+9  ␠a␠  ␠b␠
+
+# repeat_row, repeat_row_non_negative
+
+statement ok
+CREATE TABLE repeats (id int, n bigint)
+
+statement ok
+INSERT INTO repeats VALUES (1, 0), (2, 1), (3, 3), (4, -2), (5, NULL)
+
+query II
+SELECT id, count(*) FROM repeats, repeat_row(n) GROUP BY id ORDER BY id
+----
+2  1
+3  3
+4  -2
+
+query II
+SELECT id, count(*) FROM repeats, repeat_row_non_negative(n) WHERE id <> 4 GROUP BY id ORDER BY id
+----
+2  1
+3  3
+
+query II
+SELECT id, o FROM repeats, repeat_row_non_negative(n) WITH ORDINALITY AS t(o) WHERE id <> 4 ORDER BY id, o
+----
+2  1
+3  1
+3  2
+3  3
+
+statement ok
+CREATE TABLE repeats_negative (n bigint)
+
+statement ok
+INSERT INTO repeats_negative VALUES (-2)
+
+query error repeat_row_non_negative got \-2
+SELECT count(*) FROM repeats_negative, repeat_row_non_negative(n)
+
+# unnest over arrays, lists and maps
+
+statement ok
+CREATE TABLE containers (id int, a int[], l int list, m map[text=>int])
+
+statement ok
+INSERT INTO containers VALUES
+  (1, '{}', '{}', '{}'),
+  (2, '{NULL}', '{NULL}', '{a=>NULL}'),
+  (3, '{{1,2},{3,4}}', '{1,2,1}', '{b=>2,a=>1}'),
+  (4, NULL, NULL, NULL)
+
+query II
+SELECT id, e FROM containers, unnest(a) AS e ORDER BY id, e
+----
+2  NULL
+3  1
+3  2
+3  3
+3  4
+
+query II
+SELECT id, e FROM containers, unnest(l) AS e ORDER BY id, e
+----
+2  NULL
+3  1
+3  1
+3  2
+
+query ITI
+SELECT id, key, value FROM containers, unnest(m) ORDER BY id, key
+----
+2  a  NULL
+3  a  1
+3  b  2
+
+query III
+SELECT id, e, n FROM containers, unnest(l) WITH ORDINALITY AS t(e, n) ORDER BY id, n
+----
+2  NULL  1
+3  1  1
+3  2  2
+3  1  3
+
+# ROWS FROM pads the shorter function with NULLs
+
+query III
+SELECT id, e, g FROM containers, ROWS FROM (unnest(l), generate_series(1, id)) AS t(e, g) ORDER BY id, g
+----
+1  NULL  1
+2  NULL  1
+2  NULL  2
+3  1  1
+3  2  2
+3  1  3
+4  NULL  1
+4  NULL  2
+4  NULL  3
+4  NULL  4
+
+# A scalar function in FROM, and VALUES over columns
+
+query II
+SELECT id, x FROM int_series, abs(lo) AS x WHERE id <= 9 ORDER BY id
+----
+1  0
+2  1
+3  3
+4  0
+5  2147483646
+6  2147483640
+7  2147483647
+8  2147483642
+9  0
+
+query II
+SELECT id, x FROM int_series, LATERAL (VALUES (lo), (hi)) AS t(x) ORDER BY id, x
+----
+1  0
+1  0
+2  0
+2  1
+3  1
+3  3
+4  0
+4  10
+5  2147483646
+5  2147483647
+6  2147483640
+6  2147483647
+7  -2147483648
+7  -2147483647
+8  -2147483648
+8  -2147483642
+9  0
+9  5
+10  1
+10  NULL
+11  1
+11  NULL
+12  1
+12  2
+
+# A scalar subquery that produces more than one row
+
+statement ok
+CREATE TABLE subquery_rows (k int)
+
+statement ok
+INSERT INTO subquery_rows VALUES (1), (1), (2)
+
+query II
+SELECT s.k, (SELECT r.k FROM subquery_rows r WHERE r.k = s.k AND r.k = 2) FROM subquery_rows s ORDER BY s.k
+----
+1  NULL
+1  NULL
+2  2
+
+query error more than one record produced in subquery
+SELECT s.k, (SELECT r.k FROM subquery_rows r WHERE r.k = s.k) FROM subquery_rows s
