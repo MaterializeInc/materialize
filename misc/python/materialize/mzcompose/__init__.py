@@ -176,6 +176,8 @@ def get_minimal_system_parameters(
         config["enable_columnar_lgalloc"] = "false"
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
+    if version < MzVersion.parse_mz("v26.26.0-dev"):
+        config["enable_iceberg_sink"] = "true"
 
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
