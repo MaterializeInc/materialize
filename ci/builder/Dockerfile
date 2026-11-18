@@ -106,7 +106,7 @@ ARG DOCKER_COMPOSE_VERSION=v5.0.1
 # renovate: datasource=github-releases depName=christian-korneck/docker-pushrm
 ARG DOCKER_PUSHRM_VERSION=v1.9.0
 # renovate: datasource=github-releases depName=docker/buildx
-ARG DOCKER_BUILDX_VERSION=v0.30.1
+ARG DOCKER_BUILDX_VERSION=v0.39.0
 
 RUN \
     # 1. autouseradd
@@ -622,7 +622,7 @@ RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/$
 # renovate: datasource=github-releases depName=docker/compose
 ARG DOCKER_COMPOSE_VERSION=v5.0.1
 # renovate: datasource=github-releases depName=docker/buildx
-ARG DOCKER_BUILDX_VERSION=v0.30.1
+ARG DOCKER_BUILDX_VERSION=v0.39.0
 
 RUN mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
