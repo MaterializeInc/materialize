@@ -7,17 +7,18 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Finish the focused startup comparison now running on scratch, then commit the
-reviewed startup repairs if verification supports them. The before-run passed.
-Instrumentation reproduced the 20s gap: a 56.8ms check discarded revision 1 after
-observing revision 7, between two 10s sleeps. The repair refreshes a known-stale
-local snapshot before sampling, preserving cadence and final certification.
-Restart configuration publication now belongs to the existing tick. Clippy and
-targeted catalog initialization/activation tests passed. After timings are pending.
+The focused startup comparison passed before and after the reviewed repairs.
+The first completed-check gap fell from 20.170s to 10.063s, with no overall startup
+speedup demonstrated. A stale revision caused a discarded 56.8ms check, not a
+long read. Refreshing known-stale local state preserves cadence and certification.
+Restart publication now belongs to the tick. Clippy, targeted catalog tests and
+the focused debug runtime checks passed. See `startup-readiness-comparison.md`.
 
 Release-version cache pruning and removal of non-native MV/REFRESH admission
-alternatives are separate uncommitted work. They are excluded from the timing
-comparison and still need compilation and targeted checks. Cache review found an
+alternatives are separate uncommitted work. They were excluded from the timing
+comparison and still need completed targeted checks. The first combined check
+found a moved REFRESH input bundle, reproduced before restoring its required clone.
+The bounded recheck is running. Cache review found an
 empty stale-cache case, now covered by incremental refresh and a regression.
 The cache test also gates a real peer CAS and checks retry without another request.
 
@@ -71,8 +72,8 @@ The remaining architecture-generated load is assessed in the
 ## Worker and evidence
 
 Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 16:00 UTC,
-tag expiry 16:05. The after-run uses `aj-native-startup-readiness`, observed by
-background task 658. Never overlap builds and runtimes. Builds use one job,
+tag expiry 16:05. Timing runtimes are stopped. The current build/test unit is
+`aj-native-cache-mv-recheck`. Never overlap builds and runtimes. Builds use one job,
 four CPUs, 32 GiB, no swap and a 30 GiB disk reserve. Runtime uses a 28 GiB/6-CPU
 user slice plus an 8 GiB/2-CPU root slice. Extend the worker within these caps
 without asking when needed. Restore caps and stop owned runtimes after each run.
@@ -85,8 +86,9 @@ source overlays. Verify hashes, not the displayed Git revision.
 Essential current pointers:
 - `startup-before-evidence.tar.gz`, extracted `startup-before-evidence/`, and
   `startup-before-phase-summary.json` preserve the completed baseline.
-- `startup-after-timing-run.log` is the current run. Use
-  `summarize-startup-timings.py` after collecting its evidence.
+- `startup-after-evidence.tar.gz`, extracted `startup-after-evidence/`,
+  `startup-after-phase-summary.json` and `startup-readiness-comparison.md` contain
+  the completed comparison. `summarize-startup-timings.py` extracts log-linked phases.
 - Scratch `controller-followups/startup-timing-{before,after}/` contains private
   debug binaries and exact source/binary manifests. Both generations use the same
   26.46 build in this timing experiment, not the accepted distinct-version pair.
