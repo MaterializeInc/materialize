@@ -16,53 +16,47 @@ import {
   ownerFilterLabel,
 } from "./ownerFilters";
 
-/** A row reporting `owner` in the owner column, which is all the filter reads. */
-const rowOwnedBy = (owner: string | null) =>
-  ({
-    getValue: () => owner,
-  }) as unknown as Row<unknown>;
+const rowOwnedBy = (ownerId: string) =>
+  ({ original: { cluster: { ownerId } } }) as Row<{
+    cluster: { ownerId: string };
+  }>;
 
-const keeps = (owner: string | null, selected: string[]) =>
-  ownerFilterFn(rowOwnedBy(owner), OWNER_COLUMN_ID, selected);
+const keeps = (ownerId: string, selected: string[]) =>
+  ownerFilterFn(rowOwnedBy(ownerId), OWNER_COLUMN_ID, selected);
 
 describe("ownerFilterFn", () => {
   it("keeps a row whose owner is selected", () => {
-    expect(keeps("ana", ["ana"])).toBe(true);
+    expect(keeps("u1", ["u1"])).toBe(true);
   });
 
   it("drops a row whose owner is not selected", () => {
-    expect(keeps("ben", ["ana"])).toBe(false);
+    expect(keeps("u2", ["u1"])).toBe(false);
   });
 
   it("keeps a row matching any one of several selected owners", () => {
-    expect(keeps("ben", ["ana", "ben"])).toBe(true);
-    expect(keeps("cy", ["ana", "ben"])).toBe(false);
+    expect(keeps("u2", ["u1", "u2"])).toBe(true);
+    expect(keeps("u3", ["u1", "u2"])).toBe(false);
   });
 
-  it("matches the whole name, not a part of it", () => {
-    expect(keeps("ana_dev", ["ana"])).toBe(false);
+  it("matches the whole id, not a part of it", () => {
+    expect(keeps("u12", ["u1"])).toBe(false);
   });
 
   it("filters nothing when the selection is empty or absent", () => {
-    expect(keeps("ana", [])).toBe(true);
-    expect(keeps(null, [])).toBe(true);
+    expect(keeps("u1", [])).toBe(true);
     expect(
       ownerFilterFn(
-        rowOwnedBy("ana"),
+        rowOwnedBy("u1"),
         OWNER_COLUMN_ID,
         undefined as unknown as string[],
       ),
     ).toBe(true);
   });
-
-  it("keeps a cluster whose owner isn't known yet, as while the roles load", () => {
-    expect(keeps(null, ["ana"])).toBe(true);
-  });
 });
 
 describe("ownerFilterFromUrl", () => {
-  it("reads the named roles, without repeats", () => {
-    expect(ownerFilterFromUrl(["ben", "ana", "ben"])).toEqual(["ben", "ana"]);
+  it("reads the roles' ids, without repeats", () => {
+    expect(ownerFilterFromUrl(["u2", "u1", "u2"])).toEqual(["u2", "u1"]);
   });
 
   it("reads no filter from a URL that names no role", () => {
@@ -71,7 +65,7 @@ describe("ownerFilterFromUrl", () => {
   });
 
   it("keeps a role it can't check, so its chip can remove it", () => {
-    expect(ownerFilterFromUrl(["dropped_role"])).toEqual(["dropped_role"]);
+    expect(ownerFilterFromUrl(["u404"])).toEqual(["u404"]);
   });
 });
 

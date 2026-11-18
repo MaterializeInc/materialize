@@ -19,33 +19,24 @@ export const OWNER_COLUMN_ID = "owner";
 export const OWNER_URL_KEY = "owner[]";
 
 /**
- * Keeps rows whose cluster is owned by one of `selected`, by role name. An
- * empty selection filters nothing.
- *
- * NOTE: a cluster whose owner isn't known is kept. Owners are unknown only
- * until the roles load, and dropping those rows shows a bookmarked filter as
- * matching nothing in the meantime.
+ * Keeps rows whose cluster is owned by one of `selected`, by role id. An empty
+ * selection filters nothing.
  */
-export const ownerFilterFn = <TData>(
+export const ownerFilterFn = <TData extends { cluster: { ownerId: string } }>(
   row: Row<TData>,
-  columnId: string,
+  _columnId: string,
   selected: string[],
-) => {
-  if (!selected?.length) return true;
-
-  const owner = row.getValue<string | null>(columnId);
-  return owner === null || selected.includes(owner);
-};
+) => !selected?.length || selected.includes(row.original.cluster.ownerId);
 
 /**
- * The roles a URL asks for, or undefined when it names none.
+ * The role ids a URL asks for, or undefined when it names none.
  *
- * NOTE: names are kept as given. The roles load after the URL is read, so a
- * name can't be checked against them here. One that owns nothing matches no
- * row, and its chip is the way to remove it.
+ * NOTE: ids are kept as given. The roles load after the URL is read, so an id
+ * can't be checked against them here. One that owns nothing matches no row,
+ * and its chip is the way to remove it.
  */
 export const ownerFilterFromUrl = (raw: string[]) => {
-  const owners = [...new Set(raw.filter((name) => name !== ""))];
+  const owners = [...new Set(raw.filter((id) => id !== ""))];
   return owners.length ? owners : undefined;
 };
 

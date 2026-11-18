@@ -2763,43 +2763,47 @@ describe("ClustersList owner column", () => {
     expect(rowOrder()).toEqual(["a-1"]);
   });
 
-  it("writes the selection to the URL, one parameter per role", async () => {
+  it("writes the selection to the URL by role id, one parameter per role", async () => {
     const user = userEvent.setup();
     await renderAt(knownOwnerClusters());
 
     await toggleOwners(user, "ana", "ben");
 
     await waitFor(() =>
-      expect(currentSearch().getAll("owner[]")).toEqual(["ana", "ben"]),
+      expect(currentSearch().getAll("owner[]")).toEqual(["u1", "u2"]),
     );
   });
 
   it("restores a bookmarked selection, in the rows and in the panel", async () => {
     const user = userEvent.setup();
-    await renderAt(knownOwnerClusters(), "/?owner[]=ben");
+    await renderAt(knownOwnerClusters(), "/?owner[]=u2");
 
     expect(rowOrder()).toEqual(["a-1"]);
+    expect(chipLabels()).toEqual(["Replicas ≥ 1", "Owner: ben"]);
     await user.click(filterTrigger("Owner"));
     expect(await screen.findByRole("checkbox", { name: "ben" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "ana" })).not.toBeChecked();
   });
 
-  it("keeps a cluster listed under a bookmarked filter until its owner is known", async () => {
-    // The roles load after the clusters do. Until then every owner is unknown,
-    // as `charlie`'s is here, and dropping those rows would show the bookmark
-    // as matching nothing.
-    await renderAt(ownedClusters(), "/?owner[]=ben");
+  it("leaves out a cluster whose owner's name isn't known when another role is selected", async () => {
+    await renderAt(ownedClusters(), "/?owner[]=u2");
 
-    expect(rowOrder()).toEqual(["a-1", "c-1"]);
+    expect(rowOrder()).toEqual(["a-1"]);
+  });
+
+  it("finds a known owner in the search when the first cluster's owner isn't known", async () => {
+    await renderAt(ownedClusters().reverse(), "/?q=ben");
+
+    expect(rowOrder()).toEqual(["a-1"]);
   });
 
   it("leaves a chip to remove a bookmarked role that owns nothing", async () => {
     const user = userEvent.setup();
-    await renderAt(knownOwnerClusters(), "/?owner[]=gone");
+    await renderAt(knownOwnerClusters(), "/?owner[]=u999");
 
     expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Remove Owner: gone" }),
+      screen.getByRole("button", { name: "Remove Owner: u999" }),
     );
 
     expect(rowOrder()).toEqual(["a-1", "b-1", "b-2"]);

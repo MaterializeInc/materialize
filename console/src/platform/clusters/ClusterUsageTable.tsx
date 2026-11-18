@@ -51,7 +51,6 @@ import {
 } from "~/platform/maintained-objects/filters";
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
-import { notNullOrUndefined } from "~/util";
 import {
   DATE_FORMAT,
   formatDate,
@@ -259,8 +258,11 @@ const latestReplicaStatusAt = (replica: Replica | null) =>
 const columnHelper = createColumnHelper<ClusterReplicaRow>();
 
 interface ClusterUsageTableMeta extends ClusterTableMeta {
-  /** The roles that own a listed cluster, sorted, for the owner filter. */
-  ownerNames: string[];
+  /**
+   * The roles that own a listed cluster, by id, in name order, for the owner
+   * filter.
+   */
+  ownerNames: Map<string, string>;
 }
 
 interface UtilizationColumn {
@@ -382,13 +384,23 @@ const columns = [
     sortDescFirst: true,
     cell: (info) => info.getValue() ?? "-",
   }),
-  columnHelper.accessor((row) => row.owner, {
+  // NOTE: an unknown owner reads as "". TanStack searches a column only if
+  // its value on the first row is a string or a number, so a null there would
+  // take every owner out of the search.
+  columnHelper.accessor((row) => row.owner ?? "", {
     id: OWNER_COLUMN_ID,
     header: "Owner",
-    sortingFn: sortingFunctions.nullsLast,
+    sortingFn: (rowA, rowB) => {
+      const a = rowA.original.owner;
+      const b = rowB.original.owner;
+      if (a === null || b === null) {
+        return Number(a === null) - Number(b === null);
+      }
+      return a.localeCompare(b, undefined, { numeric: true });
+    },
     filterFn: ownerFilterFn,
     cell: (info) => {
-      const owner = info.getValue();
+      const { owner } = info.row.original;
       // Role names are often email addresses. A long one is cut short, with
       // the whole name on hover.
       return owner === null ? (
@@ -406,7 +418,9 @@ const columns = [
         return (
           <MultiSelectFilterPanel<string, ClusterReplicaRow>
             column={column}
-            items={meta.ownerNames}
+            items={[...meta.ownerNames.keys()]}
+            getLabel={(ownerId) => meta.ownerNames.get(ownerId)}
+            getSearchText={(ownerId) => meta.ownerNames.get(ownerId) ?? ""}
             searchable
             searchPlaceholder="Search roles..."
             emptyMessage="No roles match"
@@ -539,9 +553,13 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const meta = React.useMemo<ClusterUsageTableMeta>(
     () => ({
       offlineReplicaMap,
-      ownerNames: [
-        ...new Set(rows.map(({ owner }) => owner).filter(notNullOrUndefined)),
-      ].sort((a, b) => a.localeCompare(b)),
+      ownerNames: new Map(
+        rows
+          .flatMap(({ cluster, owner }): [string, string][] =>
+            owner === null ? [] : [[cluster.ownerId, owner]],
+          )
+          .sort(([, a], [, b]) => a.localeCompare(b)),
+      ),
     }),
     [offlineReplicaMap, rows],
   );
@@ -646,6 +664,7 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
       <ClusterFilterChips
         table={table}
         utilizationColumns={UTILIZATION_COLUMNS}
+        ownerName={ownerName}
       />
       {noMatches ? (
         <EmptyListWrapper>

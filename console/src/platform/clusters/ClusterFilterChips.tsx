@@ -66,8 +66,14 @@ const hydrationChips = <TData,>(table: Table<TData>): Chip[] => {
   }));
 };
 
-/** The owner selection: one chip per selected role, as for hydration. */
-const ownerChips = <TData,>(table: Table<TData>): Chip[] => {
+/**
+ * The owner selection: one chip per selected role, as for hydration. A role
+ * whose name isn't known, as while the roles load, goes by its id.
+ */
+const ownerChips = <TData,>(
+  table: Table<TData>,
+  ownerName: (ownerId: string) => string | undefined,
+): Chip[] => {
   const column = table.getColumn(OWNER_COLUMN_ID);
   if (!column) return [];
 
@@ -75,7 +81,7 @@ const ownerChips = <TData,>(table: Table<TData>): Chip[] => {
 
   return selected.map((owner) => ({
     key: `${OWNER_COLUMN_ID}:${owner}`,
-    label: ownerFilterLabel(owner),
+    label: ownerFilterLabel(ownerName(owner) ?? owner),
     onRemove: () => {
       const next = selected.filter((other) => other !== owner);
       column.setFilterValue(next.length ? next : undefined);
@@ -101,6 +107,8 @@ export interface ClusterFilterChipsProps<TData> {
   table: Table<TData>;
   /** The utilization columns, in the order their chips should appear. */
   utilizationColumns: readonly { id: string; header: string }[];
+  /** The name of the role with this id, for the owner filter's chips. */
+  ownerName: (ownerId: string) => string | undefined;
 }
 
 /**
@@ -114,10 +122,11 @@ export interface ClusterFilterChipsProps<TData> {
 export const ClusterFilterChips = <TData,>({
   table,
   utilizationColumns,
+  ownerName,
 }: ClusterFilterChipsProps<TData>) => {
   const chips = [
     ...replicaCountChips(table),
-    ...ownerChips(table),
+    ...ownerChips(table, ownerName),
     ...utilizationChips(table, utilizationColumns),
     ...hydrationChips(table),
   ];
