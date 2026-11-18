@@ -1100,8 +1100,6 @@ impl StorageCollectionsImpl {
         as_of: Timestamp,
         txns_read: &TxnsRead<Timestamp>,
     ) -> BoxFuture<'static, Result<SourceDataStream, StorageError>> {
-        use futures::stream::StreamExt;
-
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
             Err(e) => return async { Err(e.into()) }.boxed(),
@@ -1111,6 +1109,18 @@ impl StorageCollectionsImpl {
             txns_read.clone()
         });
         let persist = Arc::clone(&self.persist);
+        Self::snapshot_and_stream_inner(persist, metadata, id, as_of, txns_read)
+    }
+
+    /// [Self::snapshot_and_stream] without `self`, so tests can call it.
+    fn snapshot_and_stream_inner(
+        persist: Arc<PersistClientCache>,
+        metadata: CollectionMetadata,
+        id: GlobalId,
+        as_of: Timestamp,
+        txns_read: Option<TxnsRead<Timestamp>>,
+    ) -> BoxFuture<'static, Result<SourceDataStream, StorageError>> {
+        use futures::stream::StreamExt;
 
         async move {
             let mut read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
@@ -1135,7 +1145,19 @@ impl StorageCollectionsImpl {
             };
 
             // Map our stream, unwrapping Persist internal errors.
-            let stream = stream.map(|((data, _v), t, d)| (data, t, d)).boxed();
+            //
+            // The stream fetches parts lazily, after this function returns, so it
+            // must own `read_handle`. Dropping the handle expires the reader, which
+            // releases its seqno hold, and GC can then delete parts the stream has
+            // yet to fetch. That fetch finds the reader gone and halts as a lost
+            // lease. The closure only references `read_handle` to move it into the
+            // stream: don't remove it as unused.
+            let stream = stream
+                .map(move |((data, _v), t, d)| {
+                    let _read_handle = &read_handle;
+                    (data, t, d)
+                })
+                .boxed();
             Ok(stream)
         }
         .boxed()
@@ -3533,6 +3555,73 @@ mod tests {
 
         // Make sure it runs until at least here.
         drop(background_task);
+    }
+
+    // The snapshot's reader must outlive the call, or GC can delete parts the
+    // stream has yet to read.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
+    async fn test_snapshot_and_stream_keeps_reader() {
+        let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
+        let location = PersistLocation::new_in_mem();
+        let persist = persist_clients.open(location.clone()).await.unwrap();
+        let metadata = CollectionMetadata {
+            persist_location: location,
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::empty(),
+            txns_shard: None,
+        };
+
+        let mut write_handle = persist
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        let data = ((SourceData(Ok(Row::default())), ()), Timestamp::MIN, 1i64);
+        let () = write_handle
+            .compare_and_append(
+                &[data],
+                Antichain::from_elem(0.into()),
+                Antichain::from_elem(1.into()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let readers = || async {
+            let state = persist
+                .inspect_shard::<mz_repr::Timestamp>(&metadata.data_shard)
+                .await
+                .unwrap();
+            let state = serde_json::to_value(state).unwrap();
+            state["leased_readers"].as_object().unwrap().len()
+        };
+
+        let stream = StorageCollectionsImpl::snapshot_and_stream_inner(
+            Arc::clone(&persist_clients),
+            metadata.clone(),
+            GlobalId::User(1),
+            0.into(),
+            None,
+        )
+        .await
+        .unwrap();
+        // A dropped handle's reader would be gone by now.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(readers().await, 1);
+
+        assert_eq!(stream.collect::<Vec<_>>().await.len(), 1);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while readers().await > 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("reader expires with the stream");
     }
 
     async fn snapshot_stats(
