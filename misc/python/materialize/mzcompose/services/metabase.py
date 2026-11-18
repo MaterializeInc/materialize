@@ -23,7 +23,7 @@ class Metabase(Service):
                 # `test/metabase/smoketest`. Leaving at v0.41 until the
                 # smoketest is updated for the new API.
                 # renovate: datasource=docker depName=metabase/metabase versioning=docker
-                "image": "metabase/metabase:v0.41.4",
+                "image": "metabase/metabase:v0.41.9@sha256:d99e8263b9233782f6b8dd98e6f3d2db6e41c52510fbf405ea730577715417d9",
                 "ports": ["3000"],
                 "healthcheck": {
                     "test": ["CMD", "curl", "-f", "localhost:3000/api/health"],
