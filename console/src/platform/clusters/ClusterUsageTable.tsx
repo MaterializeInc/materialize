@@ -344,7 +344,7 @@ const columns = [
     sortingFn: "alphanumeric",
     cell: (info) => <ClusterNameCell cluster={info.row.original.cluster} />,
     meta: {
-      minWidth: { md: "240px", sm: "auto" },
+      minWidth: { md: "180px", sm: "auto" },
       cellProps: truncateMaxWidth,
     },
   }),
@@ -375,7 +375,10 @@ const columns = [
     filterFn: ownerFilterFn,
     cell: (info) => info.getValue() ?? "-",
     meta: {
-      cellProps: truncateMaxWidth,
+      // Role names are often email addresses, so a long one wraps within the
+      // column, at any character.
+      minWidth: "130px",
+      cellProps: { maxW: "180px", overflowWrap: "anywhere" },
       renderFilter: (column, table) => {
         const meta = table.options.meta as ClusterUsageTableMeta;
         return (
