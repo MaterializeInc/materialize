@@ -72,8 +72,7 @@ column in `mz_sink_statuses`, which can provide more information.
 
 An Iceberg sink reports `stalled` with `schema does not match expected schema`
 when the Iceberg table's schema differs from the schema of the object the sink
-exports. Materialize does not retry this error. How you recover depends on
-which side changed:
+exports. How you recover depends on which side changed:
 
 - **The object's schema changed in Materialize.** Drop the sink and recreate it
   with a new `TABLE` name. The existing table keeps the old schema, so a sink
