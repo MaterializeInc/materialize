@@ -70,9 +70,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
 
 # renovate: datasource=github-release-attachments depName=trufflesecurity/trufflehog
-ARG TRUFFLEHOG_AMD64=v3.91.0@694c5c8791c9a30d8ee295cbe991fc6e7c5f4bd8f5dbe8ada100dfe2ece9a628
+ARG TRUFFLEHOG_AMD64=v3.99.9@12050095c8063bf4d34f9f6cbce6ba9fa8d0deea9d503d0570364feba093658e
 # renovate: datasource=github-release-attachments depName=trufflesecurity/trufflehog
-ARG TRUFFLEHOG_ARM64=v3.91.0@58f627f07e7b94c5269db2958c57209f190a7f15c01d8126eac9b3b1d7ae23b3
+ARG TRUFFLEHOG_ARM64=v3.99.9@778b1913196dc9b9234e8fd366f64387efeb08c01930a1d2110dcb2ffd07e68b
 
 RUN TRUFFLEHOG_VERSION=${TRUFFLEHOG_AMD64%@*} \
     && curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION#v}_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
