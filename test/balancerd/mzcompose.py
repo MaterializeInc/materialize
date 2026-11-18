@@ -163,7 +163,7 @@ SERVICES = [
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
             "--tls-mode=require",
-            "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+            "--default-config=balancerd_inject_proxy_protocol_header_http=true,balancerd_https_enable_http2_alpn=true",
             # Nonsensical but we don't need cancellations here
             "--cancellation-resolver-dir=/secrets/",
         ],

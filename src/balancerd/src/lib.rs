@@ -309,10 +309,6 @@ impl BalancerService {
     pub async fn serve(self) -> Result<(), anyhow::Error> {
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
-                // Controlled by dyncfg: only advertise HTTP/2 via ALPN when the
-                // upstream environmentd is known to support it. balancerd is a
-                // byte proxy, so if we advertise h2 before environmentd supports
-                // it, clients send h2 frames that environmentd cannot parse.
                 let enable_http2_alpn = HTTPS_ENABLE_HTTP2_ALPN.get(&self.configs);
                 let context = tls.reloading_context(self.cfg.reload_certs, enable_http2_alpn)?;
                 (

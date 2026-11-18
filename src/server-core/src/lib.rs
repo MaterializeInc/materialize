@@ -504,12 +504,9 @@ pub struct TlsCertConfig {
 impl TlsCertConfig {
     /// Returns the SSL context to use in TlsConfigs.
     ///
-    /// When `enable_http2_alpn` is true, the context advertises both HTTP/2 and
-    /// HTTP/1.1 via ALPN. Callers that terminate TLS but proxy the decrypted
-    /// bytes to an upstream server (like balancerd) should pass `false` unless
-    /// the upstream is known to support HTTP/2. Otherwise, clients negotiate
-    /// HTTP/2 with the proxy but the upstream receives h2 frames it cannot
-    /// parse.
+    /// ALPN offers `h2, http/1.1` when `enable_http2_alpn` is set and only
+    /// `http/1.1` otherwise. A TLS-terminating proxy must not enable it unless
+    /// its upstream speaks HTTP/2, since the client then sends h2 frames.
     pub fn load_context(&self, enable_http2_alpn: bool) -> Result<SslContext, anyhow::Error> {
         // Mozilla publishes three presets: old, intermediate, and modern. They
         // recommend the intermediate preset for general purpose servers, which
