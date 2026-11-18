@@ -250,12 +250,10 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateDatabase(plan) => {
-                    let result = self.sequence_create_database(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_create_database(ctx, plan).await;
                 }
                 Plan::CreateSchema(plan) => {
-                    let result = self.sequence_create_schema(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_create_schema(ctx, plan).await;
                 }
                 Plan::CreateAdapter(plan) => {
                     if let Err(error) = mz_catalog::catalog::Catalog::validate_adapter_size(

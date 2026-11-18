@@ -264,6 +264,67 @@ fn test_read_many_rows() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[allow(clippy::disallowed_methods)]
+async fn test_namespace_create_if_not_exists() {
+    let server = test_util::TestHarness::default().start().await;
+    let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+    let client = server
+        .connect()
+        .options("--current_object_missing_warnings=off --welcome_message=off")
+        .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+        .await
+        .unwrap();
+
+    for (create, repeat, code, message, error_message) in [
+        (
+            "CREATE DATABASE namespace_notice_db",
+            "CREATE DATABASE IF NOT EXISTS namespace_notice_db",
+            SqlState::DUPLICATE_DATABASE,
+            "database \"namespace_notice_db\" already exists, skipping",
+            "database 'namespace_notice_db' already exists",
+        ),
+        (
+            "CREATE SCHEMA namespace_notice_schema",
+            "CREATE SCHEMA IF NOT EXISTS namespace_notice_schema",
+            SqlState::DUPLICATE_SCHEMA,
+            "schema \"namespace_notice_schema\" already exists, skipping",
+            "schema 'namespace_notice_schema' already exists",
+        ),
+    ] {
+        client.batch_execute(create).await.unwrap();
+        assert!(notice_rx.try_recv().is_err());
+        client.batch_execute(repeat).await.unwrap();
+        let notice = tokio::time::timeout(Duration::from_secs(5), notice_rx.recv())
+            .await
+            .expect("terminal namespace notice")
+            .expect("notice channel remains open");
+        assert_eq!(notice.code(), &code);
+        assert_eq!(notice.message(), message);
+        assert!(notice_rx.try_recv().is_err(), "emit the notice only once");
+        let error = client.batch_execute(create).await.unwrap_err();
+        // Catalog errors use the generic SQLSTATE, unlike duplicate notices.
+        assert_eq!(
+            error.as_db_error().unwrap().code(),
+            &SqlState::INTERNAL_ERROR
+        );
+        assert_eq!(error.as_db_error().unwrap().message(), error_message);
+        assert!(
+            notice_rx.try_recv().is_err(),
+            "ordinary errors are not notices"
+        );
+    }
+    for query in [
+        "SELECT count(*) FROM mz_catalog.mz_databases WHERE name = 'namespace_notice_db'",
+        "SELECT count(*) FROM mz_catalog.mz_schemas WHERE name = 'namespace_notice_schema'",
+    ] {
+        assert_eq!(
+            client.query_one(query, &[]).await.unwrap().get::<_, i64>(0),
+            1
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_conn_startup() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();

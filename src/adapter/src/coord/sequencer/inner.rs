@@ -934,48 +934,48 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_database(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan: plan::CreateDatabasePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind: ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
-            })) if plan.if_not_exists => {
-                session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
-                Ok(ExecuteResponse::CreatedDatabase)
-            }
-            Err(err) => Err(err),
-        }
+        let notice = plan
+            .if_not_exists
+            .then_some(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
+        self.sequence_catalog_commit_with_exists_notice(
+            ctx,
+            ops,
+            ExecuteResponse::CreatedDatabase,
+            notice,
+        )
+        .await;
     }
 
     #[instrument]
     pub(super) async fn sequence_create_schema(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan: plan::CreateSchemaPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedSchema),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind: ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
-            })) if plan.if_not_exists => {
-                session.add_notice(AdapterNotice::SchemaAlreadyExists {
-                    name: plan.schema_name,
-                });
-                Ok(ExecuteResponse::CreatedSchema)
-            }
-            Err(err) => Err(err),
-        }
+        let notice = plan
+            .if_not_exists
+            .then_some(AdapterNotice::SchemaAlreadyExists {
+                name: plan.schema_name,
+            });
+        self.sequence_catalog_commit_with_exists_notice(
+            ctx,
+            vec![op],
+            ExecuteResponse::CreatedSchema,
+            notice,
+        )
+        .await;
     }
 
     /// Validates the role attributes for a `CREATE ROLE` statement.

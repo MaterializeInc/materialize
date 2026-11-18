@@ -9,12 +9,14 @@
 
 use std::collections::BTreeSet;
 
+use mz_catalog::memory::error::ErrorKind;
+use mz_sql::catalog::CatalogError;
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::{CatalogCommitStage, Coordinator, Message, PlanValidity, StageResult, Staged};
-use crate::{AdapterError, ExecuteContext, catalog};
+use crate::{AdapterError, AdapterNotice, ExecuteContext, catalog};
 
 impl Staged for CatalogCommitStage {
     type Ctx = ExecuteContext;
@@ -59,7 +61,23 @@ impl Staged for CatalogCommitStage {
         {
             ctx.session().add_notice(notice);
         }
-        result?;
+        match (result, self.already_exists_notice) {
+            (
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
+                })),
+                Some(notice @ AdapterNotice::DatabaseAlreadyExists { .. }),
+            )
+            | (
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
+                })),
+                Some(notice @ AdapterNotice::SchemaAlreadyExists { .. }),
+            ) => ctx.session().add_notice(notice),
+            (result, _) => {
+                result?;
+            }
+        }
         Ok(StageResult::Response(self.response))
     }
 
@@ -86,6 +104,19 @@ impl Coordinator {
         ops: Vec<catalog::Op>,
         response: ExecuteResponse,
     ) {
+        self.sequence_catalog_commit_with_exists_notice(ctx, ops, response, None)
+            .await;
+    }
+
+    /// Converts only the matching terminal namespace-exists error to a notice.
+    /// Contention and structural replanning retain the notice without emitting it.
+    pub(super) async fn sequence_catalog_commit_with_exists_notice(
+        &mut self,
+        ctx: ExecuteContext,
+        ops: Vec<catalog::Op>,
+        response: ExecuteResponse,
+        already_exists_notice: Option<AdapterNotice>,
+    ) {
         let stage = CatalogCommitStage {
             validity: PlanValidity::new(
                 self.catalog(),
@@ -98,6 +129,7 @@ impl Coordinator {
             ops,
             prepared: None,
             response,
+            already_exists_notice,
         };
         self.sequence_staged(ctx, Span::current(), stage).await;
     }

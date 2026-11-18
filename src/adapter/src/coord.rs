@@ -784,6 +784,7 @@ pub struct CatalogCommitStage {
     ops: Vec<crate::catalog::Op>,
     prepared: Option<ddl::CatalogTransactionState>,
     response: ExecuteResponse,
+    already_exists_notice: Option<AdapterNotice>,
 }
 
 #[derive(Debug)]
