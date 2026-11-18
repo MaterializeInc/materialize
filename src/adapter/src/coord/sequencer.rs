@@ -737,10 +737,17 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterDefaultPrivileges(plan) => {
-                    let result = self
-                        .sequence_alter_default_privileges(ctx.session_mut(), plan)
-                        .await;
-                    ctx.retire(result);
+                    match self.prepare_alter_default_privileges(ctx.session(), plan) {
+                        Ok(ops) => {
+                            self.sequence_catalog_commit(
+                                ctx,
+                                ops,
+                                ExecuteResponse::AlteredDefaultPrivileges,
+                            )
+                            .await
+                        }
+                        Err(error) => ctx.retire(Err(error)),
+                    }
                 }
                 Plan::GrantRole(plan) => {
                     let result = self.sequence_grant_role(ctx.session_mut(), plan).await;
@@ -754,10 +761,13 @@ impl Coordinator {
                     let result = self.sequence_alter_owner(ctx.session_mut(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::ReassignOwned(plan) => {
-                    let result = self.sequence_reassign_owned(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
-                }
+                Plan::ReassignOwned(plan) => match self.prepare_reassign_owned(plan) {
+                    Ok(ops) => {
+                        self.sequence_catalog_commit(ctx, ops, ExecuteResponse::ReassignOwned)
+                            .await
+                    }
+                    Err(error) => ctx.retire(Err(error)),
+                },
                 Plan::ValidateConnection(plan) => {
                     let connection = plan
                         .connection

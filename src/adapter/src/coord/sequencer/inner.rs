@@ -3988,15 +3988,15 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_alter_default_privileges(
-        &mut self,
+    pub(super) fn prepare_alter_default_privileges(
+        &self,
         session: &Session,
         plan::AlterDefaultPrivilegesPlan {
             privilege_objects,
             privilege_acl_items,
             is_grant,
         }: plan::AlterDefaultPrivilegesPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
         let variant = if is_grant {
             UpdatePrivilegeVariant::Grant
@@ -4034,8 +4034,7 @@ impl Coordinator {
             }
         }
 
-        self.catalog_transact(Some(session), ops).await?;
-        Ok(ExecuteResponse::AlteredDefaultPrivileges)
+        Ok(ops)
     }
 
     #[instrument]
@@ -4198,15 +4197,14 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_reassign_owned(
-        &mut self,
-        session: &Session,
+    pub(super) fn prepare_reassign_owned(
+        &self,
         plan::ReassignOwnedPlan {
             old_roles,
             new_role,
             reassign_ids,
         }: plan::ReassignOwnedPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
         for role_id in old_roles.iter().chain(iter::once(&new_role)) {
             self.catalog().ensure_not_reserved_role(role_id)?;
         }
@@ -4219,9 +4217,7 @@ impl Coordinator {
             })
             .collect();
 
-        self.catalog_transact(Some(session), ops)
-            .await
-            .map(|_| ExecuteResponse::ReassignOwned)
+        Ok(ops)
     }
 
     /// Reenter ordinary DDL admission after a definitive failed attempt.
