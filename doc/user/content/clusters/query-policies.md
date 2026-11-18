@@ -21,15 +21,22 @@ attach a policy to a cluster, and it applies to every role that runs queries on
 that cluster. A cluster can have at most one policy, and many clusters can share
 a policy.
 
-## Background: What's the lifecycle of a query in Materialize?
+## How Materialize runs a query
 
-Materialize answers a `SELECT` in one of two ways. An indexed read returns
-results directly from an existing index on the cluster, which is cheap. Any
-other query builds a temporary dataflow on the cluster, which can read inputs
-from object storage and hold intermediate state in memory until the query
-finishes. Query policies inspect the plan before execution and decide which of
-these plans the cluster accepts. See [Understand the query
-lifecycle](/serve-results/query-lifecycle/).
+Materialize answers a `SELECT` in one of three ways:
+
+- **Indexed read.** The query reads directly from an index on the cluster.
+  This is a fast path query and builds no dataflow.
+- **Direct storage read.** The query reads directly from object storage, for
+  example a small `LIMIT` query on an unindexed materialized view. This is also
+  a fast path query and builds no dataflow, but it reads from storage.
+- **Temporary dataflow.** Any other query builds a temporary dataflow on the
+  cluster. The dataflow can read inputs from object storage and holds
+  intermediate state in memory until the query finishes.
+
+Queries that return a constant result do none of these. Query policies inspect
+the plan before execution and decide which of these plans the cluster accepts.
+See [Understand the query lifecycle](/serve-results/query-lifecycle/).
 
 ## Choosing a rule
 
@@ -37,7 +44,7 @@ Each rule rejects queries whose execution plan includes one feature.
 
 | Rule value | Rejects |
 |------------|---------|
-| `temporary_dataflow` | Queries that build a [temporary dataflow](/sql/explain-plan/#fast-path-queries), even if the dataflow reads only from indexes. For example, aggregations, joins, and `SUBSCRIBE`. |
+| `temporary_dataflow` | Queries that build a [temporary dataflow](#how-materialize-runs-a-query), even if the dataflow reads only from indexes. For example, aggregations, joins, and `SUBSCRIBE`. |
 | `storage_read` | Queries that read from object storage. For example, reads from a table, source, or materialized view that is not indexed on the cluster. |
 
 To pick rules for a common goal, see [Recommended rules](#recommended-rules).

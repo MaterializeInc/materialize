@@ -1700,9 +1700,6 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policies -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policy_attachments -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policy_rules -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_replacements -->
