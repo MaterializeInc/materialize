@@ -293,7 +293,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version "=0.9.152" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.8.7" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.9.1" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
