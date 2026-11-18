@@ -88,9 +88,8 @@ WHERE data->>'kind' <> 'AuditLog'",
 /// they would need to parse DDL statements of all items in the durable catalog
 /// then filter down to their specific object type.
 ///
-/// A relation reading this filters on `type` and if a row's DDL fails to parse,
-/// it populates the column `details` as null and `decode_error` with an error message. Readers of this
-/// should raise the error through `mz_unsafe.mz_error_if_null`.
+/// A `create_sql` that fails to decode errors this relation and every reader. Once SQL-795
+/// is implemented, per-row errors can be raised in readers through `mz_unsafe.mz_error_if_null`.
 pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
     LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_catalog_items",
@@ -106,11 +105,10 @@ pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
-            .with_column("type", SqlScalarType::String.nullable(true))
+            .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("create_sql", SqlScalarType::String.nullable(false))
-            .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-            .with_column("details", SqlScalarType::Jsonb.nullable(true))
-            .with_column("decode_error", SqlScalarType::String.nullable(true))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_column("details", SqlScalarType::Jsonb.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -122,7 +120,10 @@ WITH (
     ASSERT NOT NULL name,
     ASSERT NOT NULL owner_id,
     ASSERT NOT NULL privileges,
-    ASSERT NOT NULL create_sql
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql,
+    ASSERT NOT NULL details
 ) AS
 WITH
     items AS (
@@ -140,7 +141,7 @@ WITH
     decoded AS (
         SELECT
             items.*,
-            mz_internal.try_decode_catalog_create_sql(create_sql) AS decoded
+            mz_internal.parse_catalog_create_sql(create_sql) AS details
         FROM items
     )
 SELECT
@@ -150,11 +151,10 @@ SELECT
     name,
     owner_id,
     privileges,
-    decoded->>'type' AS type,
+    details->>'type' AS type,
     create_sql,
-    decoded->'ok'->>'redacted_create_sql' AS redacted_create_sql,
-    decoded->'ok'->'details' AS details,
-    decoded->>'error' AS decode_error
+    mz_internal.redact_sql(create_sql) AS redacted_create_sql,
+    details
 FROM decoded",
         is_retained_metrics_object: false,
         access: vec![],
@@ -177,9 +177,8 @@ pub static MZ_CATALOG_ITEM_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| Bu
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
-        .with_column("type", SqlScalarType::String.nullable(true))
+        .with_column("type", SqlScalarType::String.nullable(false))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
-        .with_column("decode_error", SqlScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
@@ -191,8 +190,7 @@ SELECT
     owner_id,
     privileges,
     type,
-    details - 'definition' AS details,
-    decode_error
+    details - 'definition' AS details
 FROM mz_internal.mz_catalog_items",
     access: vec![],
     ontology: None,
