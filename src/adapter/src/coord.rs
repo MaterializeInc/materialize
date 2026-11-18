@@ -2612,9 +2612,9 @@ impl Coordinator {
                             // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
                             // and must never reach here.
                             //
-                            // A *new* builtin MV gets no such treatment: its shard allocation
-                            // lives only in this read-only savepoint, so the promoted leader
-                            // allocates a different shard and discards whatever we wrote.
+                            // A *new* builtin MV is not write-enabled here. Its dataflow still
+                            // hydrates, and survives promotion because the leader reuses its shard
+                            // (see `builtin_schema_migration`), but it writes nothing until then.
                             self.controller
                                 .compute
                                 .allow_writes_in_read_only(mview.cluster_id, gid)
