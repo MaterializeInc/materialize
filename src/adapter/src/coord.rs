@@ -2607,7 +2607,7 @@ impl Coordinator {
         initialized_catalog: bool,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
-    ) -> Result<Option<Arc<crate::query_client::QueryClient>>, AdapterError> {
+    ) -> Result<Arc<crate::query_client::QueryClient>, AdapterError> {
         let mut builtin_table_updates = BootstrapBuiltinTableUpdates {
             snapshot: initial_builtin_table_updates,
             ..Default::default()
@@ -2749,9 +2749,10 @@ impl Coordinator {
                     (owner == incarnation).then_some((id, frontier))
                 })
                 .collect();
-            Some(self.build_query_client(incarnation, requirements).await?)
+            self.build_query_client(incarnation, requirements).await?
         };
-        if let Some(client) = &bootstrap_client {
+        {
+            let client = &bootstrap_client;
             let indexes: BTreeSet<_> = entries
                 .iter()
                 .filter_map(|entry| match entry.item() {
@@ -2824,7 +2825,7 @@ impl Coordinator {
                 &entries,
                 candidates,
                 &written_ids,
-                bootstrap_client.as_ref(),
+                Some(&bootstrap_client),
                 &mut builtin_table_updates,
                 &mut plan_holds,
             )
@@ -2850,9 +2851,7 @@ impl Coordinator {
                 index_timeline_holds.extend(
                     self.commit_bootstrap_plans(
                         prepared,
-                        bootstrap_client
-                            .as_ref()
-                            .expect("writable protected bootstrap"),
+                        &bootstrap_client,
                         planning_revision,
                         None,
                         &mut builtin_table_updates,
@@ -2862,11 +2861,8 @@ impl Coordinator {
             }
         }
         drop(plan_holds);
-        self.publish_bootstrap_read_protection(
-            bootstrap_client.as_ref(),
-            &mut builtin_table_updates,
-        )
-        .await?;
+        self.publish_bootstrap_read_protection(Some(&bootstrap_client), &mut builtin_table_updates)
+            .await?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
             optimize_dataflows_start.elapsed()
@@ -2891,7 +2887,7 @@ impl Coordinator {
 
         for entry in &entries {
             self.publish_bootstrap_read_protection(
-                bootstrap_client.as_ref(),
+                Some(&bootstrap_client),
                 &mut builtin_table_updates,
             )
             .await?;
@@ -3086,11 +3082,8 @@ impl Coordinator {
         let builtin_update_start = Instant::now();
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
 
-        self.publish_bootstrap_read_protection(
-            bootstrap_client.as_ref(),
-            &mut builtin_table_updates,
-        )
-        .await?;
+        self.publish_bootstrap_read_protection(Some(&bootstrap_client), &mut builtin_table_updates)
+            .await?;
         if self.catalog().state().catalog_read_protection_enabled() && !initialized_catalog {
             // Only the fresh initializer seeds shared projections. Originating
             // bootstrap transaction diffs remain in the separate committed bucket.

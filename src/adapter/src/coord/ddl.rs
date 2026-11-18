@@ -55,9 +55,8 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog};
 use mz_catalog::memory::implications::ParsedStateUpdate;
 
-/// Client identities and exact grants acknowledged by a completed catalog write.
+/// Exact client grants acknowledged by a completed catalog write.
 pub(crate) struct ClientProtectionResult {
-    pub(crate) incarnations: Vec<u64>,
     pub(crate) grants: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
 
@@ -1809,7 +1808,7 @@ impl Coordinator {
             builtin_table_updates,
             catalog_updates,
             audit_events,
-            created_client_incarnations,
+            created_client_incarnations: _,
             granted_client_read_requirements,
         } = result;
 
@@ -1887,7 +1886,6 @@ impl Coordinator {
             builtin_update_notify,
             catalog_updates,
             ClientProtectionResult {
-                incarnations: created_client_incarnations,
                 grants: granted_client_read_requirements,
             },
             admission_holds,

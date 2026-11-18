@@ -425,12 +425,6 @@ impl Coordinator {
         }
     }
 
-    async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
-        self.transact_client_protection_inner(op, false)
-            .await
-            .map(|result| result.incarnations)
-    }
-
     /// Checks execution retirement against the applied main-catalog prefix.
     pub(super) fn validate_query_client_execution(&self) {
         if let Some(client) = &self.query_client {
@@ -528,45 +522,14 @@ impl Coordinator {
         )))
     }
 
+    /// Activates the execution created by bootstrap after revalidating its fencing.
     pub(super) async fn initialize_query_client(
         &mut self,
-        prepared: Option<Arc<QueryClient>>,
+        client: Arc<QueryClient>,
     ) -> Result<(), AdapterError> {
-        use mz_ore::collections::CollectionExt;
-
-        if !self.catalog().state().catalog_read_protection_enabled() {
-            return Ok(());
-        }
-        let client = match prepared {
-            Some(client) => {
-                // Serving adopts the bootstrap execution, never replaces it.
-                self.refresh_catalog(None).await?;
-                self.validate_client_execution(&client);
-                client
-            }
-            None => {
-                let expected = Self::adapter_execution_predecessor(self.catalog(), self.adapter_id);
-                let incarnation = self
-                    .transact_client_protection(Op::CreateClientIncarnation {
-                        realization: mz_catalog::durable::objects::ClientRealization::Adapter(
-                            self.adapter_id,
-                        ),
-                        expected,
-                    })
-                    .await?
-                    .into_element();
-                let requirements = self
-                    .catalog()
-                    .state()
-                    .client_read_requirements()
-                    .iter()
-                    .filter_map(|(&(owner, id), &frontier)| {
-                        (owner == incarnation).then_some((id, frontier))
-                    })
-                    .collect();
-                self.build_query_client(incarnation, requirements).await?
-            }
-        };
+        // Serving adopts the bootstrap execution, never replaces it.
+        self.refresh_catalog(None).await?;
+        self.validate_client_execution(&client);
         self.query_client = Some(client);
 
         // Keep bootstrap constraints until the client has secured its readable
@@ -875,7 +838,6 @@ impl Coordinator {
                 .bootstrap_catalog_transact(vec![op], updates)
                 .await
                 .map(|result| ClientProtectionResult {
-                    incarnations: result.created_client_incarnations,
                     grants: result.granted_client_read_requirements,
                 }),
         };
