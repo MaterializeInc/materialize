@@ -67,6 +67,13 @@ preservation pass. Evidence: `bootstrap-reset-test.log` and scratch
 `controller-followups/remove-bootstrap-reset-build.log`. No load reduction has
 been measured for this removal.
 
+Coordinator bootstrap now uses native plan protection and maintained sink bounds
+without unprotected alternatives. The unreachable late table-registration path
+and its redundant schema preparation are removed. Independent review, Clippy and
+unchanged configuration/restart-preservation checks pass. Evidence:
+`native-bootstrap-only-test.log` and scratch
+`controller-followups/native-bootstrap-only-build.log`.
+
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
 code. Bring changes to write guarantees or public behavior to the user before
