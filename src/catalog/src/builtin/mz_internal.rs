@@ -88,6 +88,9 @@ WHERE data->>'kind' <> 'AuditLog'",
 /// they would need to parse DDL statements of all items in the durable catalog
 /// then filter down to their specific object type.
 ///
+/// A temporary item has its owning session in `ephemeral_owner_session`, and its
+/// `schema_id` is the placeholder `u0`.
+///
 /// A `create_sql` that fails to decode errors this relation and every reader. Once SQL-795
 /// is implemented, per-row errors can be raised in readers through `mz_unsafe.mz_error_if_null`.
 pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
@@ -97,6 +100,7 @@ pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
         oid: oid::MV_MZ_CATALOG_ITEMS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("global_id", SqlScalarType::String.nullable(false))
             .with_column("oid", SqlScalarType::Oid.nullable(false))
             .with_column("schema_id", SqlScalarType::String.nullable(false))
             .with_column("name", SqlScalarType::String.nullable(false))
@@ -104,6 +108,10 @@ pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column(
+                "ephemeral_owner_session",
+                SqlScalarType::Uuid.nullable(true),
             )
             .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("create_sql", SqlScalarType::String.nullable(false))
@@ -115,6 +123,7 @@ pub static MZ_CATALOG_ITEMS: LazyLock<BuiltinMaterializedView> =
 IN CLUSTER mz_catalog_server
 WITH (
     ASSERT NOT NULL id,
+    ASSERT NOT NULL global_id,
     ASSERT NOT NULL oid,
     ASSERT NOT NULL schema_id,
     ASSERT NOT NULL name,
@@ -129,11 +138,13 @@ WITH
     items AS (
         SELECT
             mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_id(data->'value'->'global_id') AS global_id,
             (data->'value'->>'oid')::oid AS oid,
             mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
             data->'value'->>'name' AS name,
             mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
             mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            (data->'value'->>'ephemeral_owner_session')::uuid AS ephemeral_owner_session,
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql
         FROM mz_internal.mz_catalog_state
         WHERE kind = 'Item'
@@ -146,11 +157,13 @@ WITH
     )
 SELECT
     id,
+    global_id,
     oid,
     schema_id,
     name,
     owner_id,
     privileges,
+    ephemeral_owner_session,
     details->>'type' AS type,
     create_sql,
     mz_internal.redact_sql(create_sql) AS redacted_create_sql,
@@ -169,6 +182,7 @@ pub static MZ_CATALOG_ITEM_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     oid: oid::VIEW_MZ_CATALOG_ITEM_METADATA_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
         .with_column("schema_id", SqlScalarType::String.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
@@ -177,6 +191,10 @@ pub static MZ_CATALOG_ITEM_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| Bu
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
+        .with_column(
+            "ephemeral_owner_session",
+            SqlScalarType::Uuid.nullable(true),
+        )
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
         .finish(),
@@ -184,11 +202,13 @@ pub static MZ_CATALOG_ITEM_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| Bu
     sql: "
 SELECT
     id,
+    global_id,
     oid,
     schema_id,
     name,
     owner_id,
     privileges,
+    ephemeral_owner_session,
     type,
     details - 'definition' AS details
 FROM mz_internal.mz_catalog_items",
