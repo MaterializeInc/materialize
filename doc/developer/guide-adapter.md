@@ -665,7 +665,7 @@ the full prefix. A cached projection grants no authority and must be discarded
 when the request's retry sequence ends. Finish submitted writes before releasing
 that preparation, including when the HTTP caller disconnects.
 
-Shared configuration rows describe the active deployment. Writable bootstrap
+Shared configuration rows describe the active deployment. Controller initialization
 reconciles desired-minus-current at the WAL fence timestamp B and conditionally
 appends the differences at B+1, after advancing the catalog upper to B+2. Check
 active authority at that synchronized catalog prefix before appending. Later
@@ -674,9 +674,9 @@ writers. Losing active authority skips the write, not the retained controller.
 The newly active controller reconciles its own local configuration on promotion.
 Success excludes intervening WAL writes. A definitive conflict requires fresh snapshots,
 not replayed differences. Reconciliation completes before readiness and does not
-depend on compute queries. Prewarming skips shared reconciliation even though its
-catalog handle can write protection. Private replacement-shard backfill remains
-separate, and planning continues to use deployment-local configuration.
+depend on compute queries. Adapters join the controller-initialized catalog and
+never publish these configuration snapshots, even though their catalog handles
+can write protection. Planning continues to use deployment-local configuration.
 
 Initial seed reconciliation must freshly certify pending initialization after
 each table snapshot. An entry check cannot authorize a delayed initializer after

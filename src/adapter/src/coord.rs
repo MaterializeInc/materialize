@@ -219,7 +219,6 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
-mod builtin_configuration;
 pub mod catalog_implications;
 mod catalog_reads;
 mod caught_up;
@@ -3092,25 +3091,6 @@ impl Coordinator {
         }
         self.adopt_admission_timeline_holds(index_timeline_holds);
 
-        // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.snapshot.extend(
-            self.catalog().state().resolve_builtin_table_updates(
-                self.catalog().state().pack_all_replica_size_updates(),
-            ),
-        );
-
-        debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
-        // Joiners reconstruct local configuration but cannot replace the active
-        // deployment's shared rows with their own launch inputs.
-        let initialize_configuration = self.catalog().state().catalog_read_protection_enabled()
-            && !self.catalog().storage().await.is_join();
-        let builtin_configuration = initialize_configuration.then(|| {
-            builtin_configuration::Reconciliation::new(
-                self.catalog(),
-                &builtin_table_updates.snapshot,
-            )
-        });
-
         info!(
             "startup: coordinator init: bootstrap: postamble complete in {:?}",
             postamble_start.elapsed()
@@ -3124,23 +3104,13 @@ impl Coordinator {
             &mut builtin_table_updates,
         )
         .await?;
-        if builtin_configuration.is_some() {
-            let configuration_ids = builtin_configuration::table_ids(self.catalog());
-            builtin_table_updates
-                .snapshot
-                .retain(|update| !configuration_ids.contains(&update.id));
-        }
         if self.catalog().state().catalog_read_protection_enabled() && !initialized_catalog {
             // Only the fresh initializer seeds shared projections. Originating
             // bootstrap transaction diffs remain in the separate committed bucket.
             builtin_table_updates.snapshot.clear();
         }
-        self.bootstrap_tables(
-            &entries,
-            builtin_table_updates.into_updates(),
-            builtin_configuration,
-        )
-        .await;
+        self.bootstrap_tables(&entries, builtin_table_updates.into_updates())
+            .await;
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
             builtin_update_start.elapsed()
@@ -3234,7 +3204,6 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-        builtin_configuration: Option<builtin_configuration::Reconciliation>,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -3401,9 +3370,6 @@ impl Coordinator {
         for retractions in retractions_res {
             builtin_table_updates.push(retractions);
         }
-
-        self.reconcile_builtin_configuration(builtin_configuration, &reader, txns_shard, read_ts)
-            .await;
 
         info!("coordinator init: sending builtin table updates");
         let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
