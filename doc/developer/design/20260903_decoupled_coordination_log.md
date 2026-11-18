@@ -7,14 +7,13 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-The current 26.46/26.47 debug pair built successfully, restored its source inputs
-and passed the local lifecycle, unchanged DDL and adapter-loss workflows.
-Subscription identity is rerunning as `aj-native-parallel-5ab10002.service` after
-a scratch-wrapper provenance failure. Inspect its result and cleanup. The pair shares
-implementation and plan encoding, not release-skew or migration coverage.
-The optimized comparison and 60s four-index acceptance are complete. Finish the
-remaining pair checks before further readiness tuning. Debug builds remain
-required for the local demo and phase-level restart/startup measurements.
+The current 26.46/26.47 debug pair passed local lifecycle, DDL, adapter-loss and
+subscription-identity coverage. All owned runtimes are stopped. Review the pending
+`native_frontier_restart_measurement.py` fixture, then measure adapter and full
+native-process restarts with retained metadata/blob state. Keep its existing
+resource and time limits. The pair shares implementation and plan encoding, not
+release-skew or migration coverage. Optimized comparison and 60s four-index
+acceptance are complete. Debug remains required for startup measurements.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -23,34 +22,20 @@ landing. Current-head broad CI and combined ingestion coverage remain open.
 
 ## Completed outcomes and limits
 
-Native ownership, execution-qualified temporary objects/subscriptions, current-
-transaction protection derivation, incremental table registration and retirement
-are implemented. External sinks use catalog-selected replicas. Expression caches
-preserve other build namespaces. Earlier binaries passed PostgresCdc, both Timely
-topologies and compatible-version lifecycle coverage.
+Native execution ownership, temporary-object/subscription identities, protection
+derivation, incremental registration, external execution selection and expression
+cache namespace preservation are implemented. Current debug acceptance covers
+both writers across promotion, warmed execution, relay transfer, explicit
+retirement, Kafka/PostgreSQL/MySQL/SQL Server/webhook ingestion, Kafka sink
+handover, adapter-loss recovery and colliding subscription identities. The latter
+covers joins, independent cleanup, incumbent continuity across promotion and
+survivor progress after retirement. See the linked audits for exact scope.
 
-The current debug local walkthrough verified full writers before and after
-promotion, warmed execution, shared-relay transfer, retirement isolation and
-retired-reopen rejection. The surviving held snapshot remained protected across
-retirement. The candidate adapter restarted at promotion as permitted. This does
-not establish SQL SUBSCRIBE continuity or a panic-free lifecycle: the running
-old controller panicked during explicit retirement. See
-`current-frontier-lifecycle-audit.md` for phase timings and limits. Initial
-provisioning waits exclude the separate, roughly ten-minute candidate catch-up.
-
-The complete current-pair DDL workflow passed with Kafka, PostgreSQL, MySQL,
-SQL Server and webhook ingestion, Kafka sink handover, both versions writing
-across promotion, warmed indexes and explicit retirement. The independent log
-audit found no Materialize panic or OOM event. A PostgreSQL connection-level FATAL
-was followed by successful CDC recovery. This is local debug coverage, not full
-CI. See `current-frontier-ddl-audit.md` for evidence and limits.
-
-Current debug adapter-loss coverage passed source-fed execution during SQL
-absence, history protection, physical compaction after replacement, replica
-reconstruction without SQL and final source/table/webhook catch-up. No Materialize
-panic or OOM was observed. Successful compaction states were not saved separately,
-so that claim rests on executed assertions, not replayable numerical evidence.
-See `current-frontier-adapter-loss-audit.md`.
+These are targeted local checks, not full CI. The host walkthrough still exposes
+a live-retirement controller panic. Candidate adapter restart at promotion remains
+permitted. DDL, adapter-loss and subscription log audits found no Materialize panic
+or OOM. Successful SQL/compaction values are not all saved separately, so some
+claims rely on executed unchanged assertions rather than numerical replay.
 
 The frontier rewrite derives execution keys from catalog records rather than
 frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
@@ -134,11 +119,12 @@ Essential pointers:
   `current-frontier-ddl-evidence.tar.gz` and `current-frontier-ddl-result.log`.
 - `current-frontier-adapter-loss-audit.md` and `.json`, plus the locally verified
   `current-frontier-adapter-loss-evidence.tar.gz`.
-- `current-frontier-subscriptions-retry-driver.log`. The first workflow returned,
-  but its wrapper missed the asynchronously started candidate's SQL-version
-  receipt. The retry records that version at the existing ReadyToPromote boundary.
-  Assertions, workload and limits are unchanged. Do not count the first run as
-  an acceptance pass.
+- `current-frontier-subscriptions-audit.md` and `.json`, plus locally verified
+  `current-frontier-subscriptions-evidence.tar.gz`. An earlier wrapper-only
+  version-receipt failure is retained in `current-frontier-subscriptions-driver.log`.
+- `current-builtin-cache-startup-survey.md` and `current-cache-build-identities.log`.
+  Controllers and adapters have distinct cache namespaces in the pinned pair.
+  Controllers discard misses. Same-binary whole-restart misses remain unproven.
 - `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
   `current-pair-worker-provenance.log`. Pair artifacts are in sibling
   `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed
