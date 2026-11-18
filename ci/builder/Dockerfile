@@ -422,9 +422,9 @@ RUN arch_helm_docs=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x8
     && rm helm-docs.tar.gz
 
 # renovate: datasource=github-release-attachments depName=helm-unittest/helm-unittest
-ARG HELM_UNITTEST_AMD64=v1.0.2@c3fa443e21860549120cc43455e7fe517f80e5878aff4aa3fee8f8b803eb00fa
+ARG HELM_UNITTEST_AMD64=v1.2.1@48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
 # renovate: datasource=github-release-attachments depName=helm-unittest/helm-unittest
-ARG HELM_UNITTEST_ARM64=v1.0.2@f543a40777e45a63aaf2808a3395e72027a53d3daef10520a9aba65dbf13ff91
+ARG HELM_UNITTEST_ARM64=v1.2.1@c66062713cd3cbb1a80d7098bd1d4a48db8438f56b43fb6377df65447f93f8de
 
 RUN mkdir -p /usr/local/share/helm/plugins/unittest \
     && HELM_UNITTEST_VERSION=${HELM_UNITTEST_AMD64%@*} \
