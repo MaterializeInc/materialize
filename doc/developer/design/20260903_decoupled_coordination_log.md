@@ -52,6 +52,14 @@ the failure modes. Targeted Clippy and writer/committer suites pass. Evidence:
 `controller-followups/registration-certificate-red.log` and
 `registration-finalization-red.log`. No end-to-end latency claim is made.
 
+The obsolete adapter bootstrap configuration publisher is removed. Every current
+serving path, including TestHarness and sqllogictest, joins controller-initialized
+storage. Controller publication remains, as does suppression of the joining
+adapter's full positive snapshot. Targeted Clippy and unchanged initial,
+changed-restart and unchanged-restart configuration assertions pass. Evidence:
+`adapter-config-removal-test.log` and scratch
+`controller-followups/remove-adapter-config-build.log`.
+
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
 code. Bring changes to write guarantees or public behavior to the user before
