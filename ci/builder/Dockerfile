@@ -229,7 +229,7 @@ ARG BUF_VERSION=v1.75.0
 # renovate: datasource=github-releases depName=boz/kail
 ARG KAIL_VERSION=v0.17.4
 # renovate: datasource=github-releases depName=parca-dev/parca-debuginfo
-ARG PARCA_DEBUGINFO_VERSION=v0.12.2
+ARG PARCA_DEBUGINFO_VERSION=v0.13.0
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-${SHELLCHECK_VERSION}/shellcheck \
