@@ -101,8 +101,8 @@ Detailed historical outcomes and caveats are preserved in the
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 13:00 UTC,
-tag expiry 13:05. All owned runtimes are stopped. Builds use one job, four CPUs,
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 16:00 UTC,
+tag expiry 16:05. All owned runtimes are stopped. Builds use one job, four CPUs,
 32 GiB, no swap and a 30 GiB disk reserve. Never overlap builds and runtimes.
 Host lifecycle/tests use a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
 Docker workload caps remain eight CPUs/40 GiB aggregate and four CPUs/6 GiB per
