@@ -96,8 +96,9 @@
         {{< private-preview-inline />}}
 
         Optional. The [query policy](/clusters/query-policies/) that checks
-        queries on this cluster. Requires `USAGE` privileges on the policy.
-        Specify `NULL` to detach the current policy.
+        queries on this cluster. Requires `CREATE` privileges on the cluster
+        and `USAGE` privileges on the policy. Specify `NULL` to detach the
+        current policy.
 
     - name: "`WITH (<with_option>[,...])`"
       description: |
@@ -154,7 +155,8 @@
         {{< private-preview-inline />}}
 
         Optional. Resetting detaches the [query
-        policy](/clusters/query-policies/) from the cluster.
+        policy](/clusters/query-policies/) from the cluster. Requires `CREATE`
+        privileges on the cluster.
 
         Default: no query policy.
 
