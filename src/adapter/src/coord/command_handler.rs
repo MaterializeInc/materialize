@@ -2059,19 +2059,12 @@ impl Coordinator {
             .any(|wo| matches!(wo.value, Some(WithOptionValue::Refresh(..))))
         {
             let catalog = query_catalog.for_session(session);
-            let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
+            // Validate placement even though protection follows logical inputs.
+            mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
             let logical_inputs =
                 self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
-            let ids = if self.query_client.is_some() {
-                logical_inputs.clone()
-            } else {
-                let mut ids = self
-                    .index_oracle(cluster)
-                    .sufficient_collections(resolved_ids.collections().copied());
-                ids.extend(&logical_inputs);
-                ids
-            };
+            let ids = logical_inputs.clone();
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later

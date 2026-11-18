@@ -163,22 +163,20 @@ impl Coordinator {
         ids: impl IntoIterator<Item = GlobalId>,
     ) -> Result<Antichain<Timestamp>, AdapterError> {
         let mut permission = Antichain::from_elem(Timestamp::MIN);
-        if self.catalog().state().catalog_read_protection_enabled() {
-            for id in ids {
-                let bound = self
-                    .catalog()
-                    .state()
-                    .storage_metadata()
-                    .compaction_bounds
-                    .get(&id)
-                    .ok_or_else(|| {
-                        AdapterError::internal(
-                            "create materialized view",
-                            format!("logical input {id} has no committed compaction bound"),
-                        )
-                    })?;
-                permission.join_assign(bound);
-            }
+        for id in ids {
+            let bound = self
+                .catalog()
+                .state()
+                .storage_metadata()
+                .compaction_bounds
+                .get(&id)
+                .ok_or_else(|| {
+                    AdapterError::internal(
+                        "create materialized view",
+                        format!("logical input {id} has no committed compaction bound"),
+                    )
+                })?;
+            permission.join_assign(bound);
         }
         Ok(permission)
     }
@@ -497,14 +495,9 @@ impl Coordinator {
                         ));
                     }
                 }
-                // Purification must cover the admission inputs. In protected
-                // mode these are logical dependencies, independent of indexes.
-                let ids = if self.catalog().state().catalog_read_protection_enabled() {
-                    self.materialized_view_logical_inputs(query_ids.collections().copied())?
-                } else {
-                    self.index_oracle(*cluster_id)
-                        .sufficient_collections(query_ids.collections().copied())
-                };
+                // Purification must cover logical dependencies, independent of indexes.
+                let ids =
+                    self.materialized_view_logical_inputs(query_ids.collections().copied())?;
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -691,9 +684,7 @@ impl Coordinator {
         }
 
         let mv = &stage.plan.materialized_view;
-        let automatic_birth = self.catalog().state().catalog_read_protection_enabled()
-            && mv.refresh_schedule.is_none()
-            && mv.as_of.is_none();
+        let automatic_birth = mv.refresh_schedule.is_none() && mv.as_of.is_none();
         let cluster_id = mv.cluster_id;
         if automatic_birth
             && stage
@@ -725,11 +716,7 @@ impl Coordinator {
         )?;
         // Admission promises logical history, not a candidate index's availability.
         // Physical paths are selected at the admitted timestamp below.
-        let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
-            logical_inputs.clone()
-        } else {
-            dataflow_import_id_bundle(stage.global_lir_plan.df_desc(), cluster_id)
-        };
+        let id_bundle = logical_inputs.clone();
         // Purification may have fixed REFRESH timestamps. Its grants stay owned
         // by the transaction while the stage waits for any additional inputs.
         let txn_reads = self.txn_read_holds.get(ctx.session().conn_id()).cloned();
@@ -737,9 +724,9 @@ impl Coordinator {
             // Planning does not fix a historical read. The content transaction
             // admits the birth against its logical inputs and selected imports.
             (crate::ReadHolds::new(), crate::ReadHolds::new())
-        } else if let Some(client) = &self.query_client {
+        } else {
+            let client = self.query_client.as_ref().expect("serving query client");
             let mut inputs = id_bundle.clone();
-            inputs.extend(&logical_inputs);
             if let Some(holds) = &txn_reads {
                 inputs = inputs.difference(&holds.id_bundle());
             }
@@ -772,17 +759,6 @@ impl Coordinator {
                 Some(txn_reads) => (txn_reads, holds),
                 None => (holds, crate::ReadHolds::new()),
             }
-        } else {
-            let read_holds = match txn_reads {
-                Some(holds) => holds,
-                None => self.acquire_query_read_holds(&id_bundle).await?,
-            };
-            let mut additional_inputs = id_bundle.clone();
-            additional_inputs.extend(&logical_inputs);
-            let additional = self
-                .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
-                .await?;
-            (read_holds, additional)
         };
 
         let CreateMaterializedViewFinish {
@@ -904,9 +880,7 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
-        if self.catalog().state().catalog_read_protection_enabled()
-            && let Some((dataflow_as_of, _, _)) = &birth
-        {
+        if let Some((dataflow_as_of, _, _)) = &birth {
             ops.push(catalog::Op::SetReadProtection {
                 requirements: vec![MaintainedReadRequirement {
                     id: global_id,
@@ -919,9 +893,8 @@ impl Coordinator {
 
         // A fixed REFRESH timestamp cannot move with compaction. Protect its
         // selected imports through commit, not just its logical inputs.
-        let physical_read_holds = if let Some(client) = self.query_client.clone()
-            && let Some((dataflow_as_of, initial_as_of, _)) = &birth
-        {
+        let physical_read_holds = if let Some((dataflow_as_of, initial_as_of, _)) = &birth {
+            let client = self.query_client.clone().expect("serving query client");
             let planning_revision = self.catalog().transient_revision();
             let (candidate, _) = loop {
                 match self
@@ -1311,7 +1284,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        if self.catalog().state().catalog_read_protection_enabled() && storage_as_of.is_empty() {
+        if storage_as_of.is_empty() {
             return Err(AdapterError::internal(
                 "create materialized view",
                 "no readable timestamp for materialized view inputs",
