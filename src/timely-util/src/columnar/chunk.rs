@@ -90,6 +90,10 @@ thread_local! {
     #[cfg(test)]
     static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
+    /// The same for the floor of bodies spilled through [`try_spill_ref`].
+    #[cfg(test)]
+    static SINK_COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
+
     /// Reusable staging for call-scoped reads of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
@@ -196,12 +200,41 @@ fn compress_min_depth() -> u8 {
     COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
 }
 
+/// The compression floor of bodies spilled through [`try_spill_ref`]. See
+/// [`set_sink_compress_min_depth`].
+static SINK_COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
+
+/// Set the youngest generational depth whose bodies spilled through
+/// [`try_spill_ref`] are compressed. Those bodies take this floor in place of
+/// [`set_compress_min_depth`]'s, with the same meaning.
+///
+/// Applies to bodies spilled after the change. A body already spilled keeps
+/// its codec: the consumer owns its chunks, so no survival re-spills it.
+pub fn set_sink_compress_min_depth(depth: u8) {
+    SINK_COMPRESS_MIN_DEPTH.store(depth, Ordering::Relaxed);
+}
+
+/// Set or unset a thread-scoped override of [`set_sink_compress_min_depth`].
+#[cfg(test)]
+pub fn set_sink_compress_min_depth_override(depth: Option<u8>) {
+    SINK_COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.set(depth));
+}
+
+/// The sink depth floor in effect for this thread's spills.
+fn sink_compress_min_depth() -> u8 {
+    #[cfg(test)]
+    if let Some(depth) = SINK_COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.get()) {
+        return depth;
+    }
+    SINK_COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
+}
+
 /// The codec a body at `depth` stores under, identity below the compression
-/// floor and lz4 at and past it, paired with whether that codec compresses.
-/// One read of the floor, so the pair cannot disagree with itself when the
-/// floor moves under a concurrent commit.
-fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
-    if depth < compress_min_depth() {
+/// floor `floor` and lz4 at and past it, paired with whether that codec
+/// compresses. Callers read the floor once and pass it, so the pair cannot
+/// disagree with itself when the floor moves under a concurrent commit.
+fn codec_for_depth(depth: u8, floor: u8) -> (&'static dyn ExtentCodec, bool) {
+    if depth < floor {
         (&IDENTITY_CODEC, false)
     } else {
         (&LZ4_CODEC, true)
@@ -564,7 +597,7 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G
         T: Timestamp + PoolColumnar,
         R: PoolColumnar,
     {
-        let (codec, compressed) = codec_for_depth(depth);
+        let (codec, compressed) = codec_for_depth(depth, compress_min_depth());
         let len_bytes = body.length_in_bytes();
         let view = body.borrow();
         let records = view.len();
@@ -850,7 +883,8 @@ fn spill_serialized<C: Columnar>(
 ///
 /// A body stays resident when the gate [`set_sink_spill_enabled`] sets is off, when no pool is
 /// installed, or when it is smaller than `SPILL_MIN_BYTES`. `depth` is the body's generational
-/// depth: it selects the stored codec and the pool's eviction band.
+/// depth: against the floor [`set_sink_compress_min_depth`] sets, it selects the stored codec,
+/// and it selects the pool's eviction band.
 ///
 /// For consumers that keep their own chunk representation and so cannot use [`ColumnChunk`];
 /// the two share the spill decision through `spill_target`. The encode writes straight into
@@ -860,7 +894,7 @@ fn spill_serialized<C: Columnar>(
 pub fn try_spill_ref<C: Columnar>(body: &ColumnBody<C>, depth: u8) -> Option<ChunkHandle> {
     let len_bytes = body.length_in_bytes();
     let pool = spill_target(SINK_SPILL_ENABLED.load(Ordering::Relaxed), len_bytes)?;
-    let (codec, _) = codec_for_depth(depth);
+    let (codec, _) = codec_for_depth(depth, sink_compress_min_depth());
     Some(spill_serialized(
         body,
         &pool,
@@ -2863,7 +2897,7 @@ mod tests {
         // pointer comparison unreliable. The flag must agree with the codec,
         // since it is what decides whether a body wants migrating.
         let codec_name = |depth: u8| {
-            let (codec, compressed) = codec_for_depth(depth);
+            let (codec, compressed) = codec_for_depth(depth, compress_min_depth());
             let name = format!("{:?}", codec);
             assert_eq!(compressed, name == "Lz4Codec", "flag tracks the codec");
             name
@@ -2889,6 +2923,50 @@ mod tests {
         assert_eq!(codec_name(0), "IdentityCodec");
         assert_eq!(codec_name(1), "Lz4Codec");
         set_compress_min_depth_override(None);
+    }
+
+    /// Bodies spilled through `try_spill_ref` store under the codec the sink
+    /// floor picks, whatever the chunk floor says. A zero-budget pool writes
+    /// every insert straight to an extent, so the written bytes show the codec.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn sink_spill_codec_follows_sink_floor() {
+        static POOL: std::sync::OnceLock<Pool> = std::sync::OnceLock::new();
+        let pool = POOL
+            .get_or_init(|| {
+                let pool = Pool::new().expect("pool creation");
+                pool.set_budget(0);
+                pool
+            })
+            .clone();
+        set_spill_override(Some(pool.clone()));
+        // Identical records, which lz4 shrinks far below their length.
+        let mut col: ColumnBody<Tuple> = ColumnBody::default();
+        while col.length_in_bytes() < SPILL_MIN_BYTES {
+            col.push_into(((0, 0), 0, 1));
+        }
+        let len = u64::cast_from(col.length_in_bytes());
+        let written = |chunk_floor: u8, sink_floor: u8| {
+            set_compress_min_depth_override(Some(chunk_floor));
+            set_sink_compress_min_depth_override(Some(sink_floor));
+            let before = pool.stats().extent_bytes_written;
+            let handle = try_spill_ref(&col, 1).expect("the override pool takes the body");
+            let written = pool.stats().extent_bytes_written - before;
+            drop(handle);
+            written
+        };
+        assert_eq!(
+            written(0, u8::MAX),
+            len,
+            "below the sink floor, the body stores uncompressed"
+        );
+        assert!(
+            written(u8::MAX, 0) < len / 2,
+            "at the sink floor, the body stores compressed"
+        );
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+        set_sink_compress_min_depth_override(None);
     }
 
     /// A chunk a merge carries forward untouched ages a generation, and a
