@@ -480,6 +480,10 @@ SQL dependencies can strand reads.
 
 ### Remaining unified compute introspection
 
+Deferred beyond M3. Same-deployment adapters can publish overlapping deployment
+partitions. Preserve the current producers until a complete ownership replacement
+is designed.
+
 `src/adapter/src/coord/introspection.rs` subscribes to replicas and relays batches
 into storage. Reinstallation deletes prior rows by replica ID. Error counts,
 hydration times and arrangement sizes remain examples of indirect publication.
@@ -497,6 +501,8 @@ observations do not contain hydration durations or operator-level status.
 
 ### Storage statistics and webhook contributions
 
+Deferred beyond M3, including overlap between same-deployment adapter scrapers.
+
 `src/storage-controller/src/lib.rs` receives replica statistics, and
 `src/storage-controller/src/collection_mgmt.rs` starts scrapers that publish
 controller maps.
@@ -509,6 +515,10 @@ retention and webhook accounting. The relay boundary is clear. The smallest
 complete conversion still needs investigation.
 
 ### Maintained physical dependencies and MV refresh state
+
+M3 requires a two-adapter reproduction before deciding scope. If one adapter
+retracts another's rows, repair row scoping using the frontier ownership model.
+Otherwise retain this as a follow-up. Source inspection alone is not reproduction.
 
 `src/adapter/src/coord/introspection/frontiers.rs` publishes selected physical
 imports and refresh observations through differential introspection collections.

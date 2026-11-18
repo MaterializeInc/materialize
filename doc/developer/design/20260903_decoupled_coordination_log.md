@@ -45,19 +45,27 @@ Namespace-specific forced-contention coverage remains missing: the existing glob
 failpoint cannot distinguish these operations from background transactions without
 another test hook. See `namespace-ddl-verification.md`.
 
-Next, finish the remaining conditional-write survey, especially sessionless cluster
-policy/login synchronization and SQL owners with separate completion effects. Recheck `multi-writer-retry-survey.md` and
-`native-only/native-ci-recovery/current-remaining-retry-sites.md` against source.
-Runtime-level activation exhaustion/tick continuation coverage remains outstanding.
-Bring changes to write guarantees or public semantics to the user before landing.
+Managed-cluster policy writes now return bounded contention to their existing
+background task, retaining guarded operations, allocated IDs and read holds.
+Independent review, Clippy, task-boundary tests and unchanged managed/unified
+cluster SQL checks passed. Boundary tests use real tokens and a simulated
+coordinator, not real CAS interference. Declaration reconciliation, login sync and
+SQL owners with separate completion effects remain in the retry survey.
+
+Next, reproduce dependency/refresh-row interference with two adapters. Prepare the
+pinned-base debug startup comparison in parallel, without overlapping heavy jobs.
+Measure the same comparable phases on upstream `d9a2c5dc`, distinguishing monolithic
+phases from controller-only operations. Then investigate cold adapter catalog open
+and the promotion relaunch sleep. No cadence or resource-limit changes.
 
 ## Steering and live gaps
 
-- Scope decision requested: the introspection audit found live overlapping adapter
-  publishers for statistics, compute observations, and dependency/refresh rows.
-  Their SQL consumers still need them. Replacing ownership goes beyond deleting
-  dead alternatives and may exceed the earlier frontier-only scope. Leave these
-  publishers intact pending that decision. See `remaining-introspection-ownership.md`.
+- Storage statistics and compute introspection overlap are follow-ups, not M3
+  implementation work. Dependency/refresh rows are conditional M3 work: reproduce
+  retractions with two adapters, then scope rows like frontier observations if
+  confirmed. Otherwise record a follow-up. Keep producers until replacements exist.
+- Include the refresh-scheduled MV case in final acceptance. Its next intermittent
+  failure requires diagnosis, not another rerun.
 - Restart admission retains its guards and fresh initialization still precedes
   children. HTTP and reconciliation may proceed while restart configuration is
   pending. Adapter readiness does not certify configuration publication.
@@ -111,6 +119,8 @@ Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recove
 source overlays. Verify hashes, not the displayed Git revision.
 
 Essential current pointers:
+- Scratch `controller-followups/policy-retry-final-build.log`, local
+  `policy-retry-tests.log` and `policy-retry-source.sha256` record policy verification.
 - `namespace-ddl-verification.md` links the accepted namespace SQL/protocol evidence
   and documents the missing operation-specific contention fixture.
 - Scratch `controller-followups/native-recency-verified-build.log` and local
