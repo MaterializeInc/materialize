@@ -2825,7 +2825,7 @@ impl Coordinator {
                 &entries,
                 candidates,
                 &written_ids,
-                Some(&bootstrap_client),
+                &bootstrap_client,
                 &mut builtin_table_updates,
                 &mut plan_holds,
             )
@@ -2861,7 +2861,7 @@ impl Coordinator {
             }
         }
         drop(plan_holds);
-        self.publish_bootstrap_read_protection(Some(&bootstrap_client), &mut builtin_table_updates)
+        self.publish_bootstrap_read_protection(&bootstrap_client, &mut builtin_table_updates)
             .await?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
@@ -2886,11 +2886,8 @@ impl Coordinator {
         let mut privatelink_connections = BTreeMap::new();
 
         for entry in &entries {
-            self.publish_bootstrap_read_protection(
-                Some(&bootstrap_client),
-                &mut builtin_table_updates,
-            )
-            .await?;
+            self.publish_bootstrap_read_protection(&bootstrap_client, &mut builtin_table_updates)
+                .await?;
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
@@ -3082,7 +3079,7 @@ impl Coordinator {
         let builtin_update_start = Instant::now();
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
 
-        self.publish_bootstrap_read_protection(Some(&bootstrap_client), &mut builtin_table_updates)
+        self.publish_bootstrap_read_protection(&bootstrap_client, &mut builtin_table_updates)
             .await?;
         if self.catalog().state().catalog_read_protection_enabled() && !initialized_catalog {
             // Only the fresh initializer seeds shared projections. Originating
@@ -3906,7 +3903,7 @@ impl Coordinator {
         ordered_catalog_entries: &[CatalogEntry],
         mut cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         written_ids: &BTreeSet<GlobalId>,
-        bootstrap_client: Option<&Arc<crate::query_client::QueryClient>>,
+        bootstrap_client: &Arc<crate::query_client::QueryClient>,
         builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
         plan_holds: &mut Vec<ReadHolds>,
     ) -> Result<
@@ -3959,7 +3956,7 @@ impl Coordinator {
                         .state()
                         .cluster_scoped_optimizer_overrides(cluster_id),
                 );
-            let prepare = bootstrap_client.is_some() && !written_ids.contains(&global_id);
+            let prepare = !written_ids.contains(&global_id);
             // Absence is initial admission, not permission to read at MIN.
             // A selected pending import must be admitted before acquisition.
             let mut required = if prepare {
@@ -4067,7 +4064,8 @@ impl Coordinator {
                         (expressions, true)
                     }
                 };
-                if let (Some(client), Some(requested)) = (bootstrap_client, required) {
+                if let Some(requested) = required {
+                    let client = bootstrap_client;
                     let bundle = CollectionIdBundle {
                         storage_ids: expressions
                             .global_mir
@@ -4273,10 +4271,9 @@ impl Coordinator {
 
     async fn publish_bootstrap_read_protection(
         &mut self,
-        client: Option<&Arc<crate::query_client::QueryClient>>,
+        client: &Arc<crate::query_client::QueryClient>,
         builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
     ) -> Result<(), AdapterError> {
-        let Some(client) = client else { return Ok(()) };
         let Some(requirements) = client.protection.prepare_updates_if_needed() else {
             return Ok(());
         };
