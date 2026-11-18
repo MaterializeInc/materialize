@@ -8793,6 +8793,8 @@ async fn test_http2_tls() {
         alpn_selected(addr, b"\x08http/1.1").await.as_deref(),
         Some(&b"http/1.1"[..])
     );
+    // libpq 17+ offers `postgresql`; the handshake must still succeed.
+    assert_eq!(alpn_selected(addr, b"\x0apostgresql").await, None);
 
     let https_url = Url::parse(&format!("https://{addr}/api/sql")).unwrap();
     let json: serde_json::Value = serde_json::from_str(r#"{ "query": "SELECT 42;" }"#).unwrap();
@@ -8895,8 +8897,6 @@ async fn test_http2_cleartext() {
 async fn test_http2_websocket_auth() {
     use futures::{SinkExt, StreamExt};
     use mz_auth::password::Password;
-    // NOTE: `tokio_tungstenite` re-exports its own `tungstenite`, which is a
-    // different major than the workspace `tungstenite` the sync half below uses.
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     type WsStream =

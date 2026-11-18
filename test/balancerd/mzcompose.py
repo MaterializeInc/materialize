@@ -346,7 +346,7 @@ def workflow_plaintext(c: Composition) -> None:
                 "--https-resolver-template=materialized:6876",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
-                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true,balancerd_https_enable_http2_alpn=true",
                 # Nonsensical but we don't need cancellations here
                 "--cancellation-resolver-dir=/secrets/",
             ],
@@ -721,7 +721,7 @@ def workflow_user(c: Composition) -> None:
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
                 "--tls-mode=require",
-                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true,balancerd_https_enable_http2_alpn=true",
                 # Nonsensical but we don't need cancellations here
                 "--cancellation-resolver-dir=/secrets/",
             ],
@@ -907,7 +907,7 @@ def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
                 "--tls-mode=require",
-                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true,balancerd_https_enable_http2_alpn=true",
                 # Nonsensical but we don't need cancellations here
                 "--cancellation-resolver-dir=/secrets/",
             ],

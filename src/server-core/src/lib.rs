@@ -505,8 +505,7 @@ impl TlsCertConfig {
     /// Returns the SSL context to use in TlsConfigs.
     ///
     /// ALPN offers `h2, http/1.1` when `enable_http2_alpn` is set and only
-    /// `http/1.1` otherwise. A TLS-terminating proxy must not enable it unless
-    /// its upstream speaks HTTP/2, since the client then sends h2 frames.
+    /// `http/1.1` otherwise.
     pub fn load_context(&self, enable_http2_alpn: bool) -> Result<SslContext, anyhow::Error> {
         // Mozilla publishes three presets: old, intermediate, and modern. They
         // recommend the intermediate preset for general purpose servers, which
@@ -515,10 +514,9 @@ impl TlsCertConfig {
         // ciphers. We once tried to use the modern preset, but it was
         // incompatible with Fivetran, and presumably other JDBC-based tools.
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-        // Negotiate HTTP/2 or HTTP/1.1 via ALPN for clients that request it.
-        // This context is shared with pgwire listeners, but pgwire clients do
-        // not send the ALPN extension, in which case `NOACK` omits ALPN from
-        // the handshake entirely rather than rejecting the connection.
+        // This context is shared with pgwire listeners. Clients offering no
+        // ALPN, or no HTTP protocol (libpq 17+ offers `postgresql`), get
+        // `NOACK`, which completes the handshake without ALPN.
         let alpn_list: &[u8] = if enable_http2_alpn {
             b"\x02h2\x08http/1.1"
         } else {

@@ -752,12 +752,10 @@ impl Server for HttpServer {
                 .into_make_service_with_connect_info::<SocketAddr>();
             let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
             let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
-            // Serve HTTP/1.1 or HTTP/2, detected via TLS ALPN or, on
-            // plaintext connections, by sniffing the HTTP/2 preface.
+            // Serves HTTP/1.1 or HTTP/2, chosen by sniffing for the HTTP/2
+            // preface (ALPN is not consulted).
             let mut http = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-            // Advertise RFC 8441 extended CONNECT so that clients can open
-            // WebSockets over HTTP/2. Clients that don't support it (or that
-            // negotiated HTTP/1.1) still use the HTTP/1.1 upgrade path.
+            // Advertise RFC 8441 extended CONNECT for WebSockets over HTTP/2.
             http.http2().enable_connect_protocol();
             http.serve_connection_with_upgrades(conn, hyper_svc)
                 .await

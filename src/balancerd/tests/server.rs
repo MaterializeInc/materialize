@@ -212,9 +212,6 @@ async fn test_balancer() {
             None,
             None,
             TracingHandle::disabled(),
-            // Advertise HTTP/2 via ALPN. This defaults off in production so a
-            // balancerd that upgrades ahead of environmentd does not offer h2
-            // to clients before environmentd can parse it.
             vec![(
                 "balancerd_https_enable_http2_alpn".to_string(),
                 "true".to_string(),
