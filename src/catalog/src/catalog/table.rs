@@ -196,7 +196,12 @@ impl Catalog {
             {
                 return Ok(prepared.finish(completed_at));
             }
-            tokio::task::yield_now().await;
+            // This wrapper belongs to startup, before a serving owner loop exists.
+            // Retain preparation while giving competing writers time to progress.
+            tokio::time::sleep(crate::retry::periodic_delay(
+                std::time::Duration::from_millis(100),
+            ))
+            .await;
         }
     }
 

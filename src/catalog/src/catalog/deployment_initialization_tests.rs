@@ -134,11 +134,13 @@ impl OvertakingBootstrapOracle {
 #[async_trait::async_trait]
 impl TimestampOracle<Timestamp> for OvertakingBootstrapOracle {
     async fn write_ts(&self) -> WriteTimestamp {
-        self.allocations.fetch_add(1, Ordering::SeqCst);
         let write = self.inner.write_ts().await;
         if self.enabled.load(Ordering::SeqCst) {
             self.advance_peer().await;
         }
+        // Observers may stop interference only after this allocation's peer
+        // advancement completed, so a requested rejected round is deterministic.
+        self.allocations.fetch_add(1, Ordering::SeqCst);
         write
     }
 
@@ -805,6 +807,67 @@ async fn table_registration_retains_preparation_across_peer_progress() {
         .expect("retry")
         .expect("registration completes after contention");
     let mut infrastructure = prepared.finish(completed);
+    assert_eq!(infrastructure.routes[&gid], shard);
+    let (_, registered) = infrastructure.txns.registration_status([shard]).await;
+    assert!(registered.contains(&shard));
+    drop(infrastructure);
+    let (peer, infrastructure) = oracle.peer.into_inner();
+    drop(infrastructure);
+    peer.expire().await;
+    catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn startup_table_registration_recovers_after_peer_contention() {
+    let fixture = Fixture::new().await;
+    let mut catalog = fixture
+        .initialize(fixture.open(fixture.durable(true).await).await)
+        .await;
+    let storage = fixture
+        .builder()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("peer join");
+    let mut peer = fixture.open(storage).await.catalog;
+    let infrastructure = fixture.infrastructure(&mut peer).await;
+    let (_, gid) = fixture.create_table(&mut catalog).await;
+    let shard = catalog
+        .state()
+        .storage_metadata()
+        .get_collection_shard(gid)
+        .expect("table shard");
+    let oracle = OvertakingBootstrapOracle {
+        inner: Arc::clone(&fixture.oracle),
+        peer: tokio::sync::Mutex::new((peer, infrastructure)),
+        enabled: AtomicBool::new(true),
+        allocations: AtomicUsize::new(0),
+        completions: AtomicUsize::new(0),
+    };
+    let registration = catalog.complete_table_infrastructure(
+        fixture.persist.clone(),
+        Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+        &oracle,
+    );
+    let peer_progress = async {
+        // Exhaust a complete bounded round through real catalog and WAL writes.
+        // Startup must retain the operation instead of surfacing contention.
+        while oracle.allocations.load(Ordering::SeqCst) < 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert_eq!(oracle.completions.load(Ordering::SeqCst), 0);
+        oracle.enabled.store(false, Ordering::SeqCst);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::join!(registration, peer_progress)
+    })
+    .await
+    .expect("startup resumes after peer contention");
+    let mut infrastructure = result.expect("ordinary contention does not fail startup");
+    assert!(oracle.allocations.load(Ordering::SeqCst) >= 4);
+    assert_eq!(oracle.completions.load(Ordering::SeqCst), 1);
     assert_eq!(infrastructure.routes[&gid], shard);
     let (_, registered) = infrastructure.txns.registration_status([shard]).await;
     assert!(registered.contains(&shard));
