@@ -1255,12 +1255,9 @@ describe("SupportPage", () => {
       await user.click(screen.getByRole("radio", { name: /^High/ }));
       await user.click(screen.getByRole("radio", { name: /^Staging/ }));
       const details = screen.getByRole("textbox", { name: /What happened/ });
-      expect(details).toHaveValue(TICKET_TEMPLATE);
-      // Clearing the template doesn't count as a description either.
-      await user.clear(details);
-      await user.click(screen.getByRole("button", { name: "Open ticket" }));
-      expect(screen.getByText("Describe what happened.")).toBeVisible();
-      expect(createdWith).toBeUndefined();
+      // The prompts are a placeholder, so the box starts empty.
+      expect(details).toHaveValue("");
+      expect(details).toHaveAttribute("placeholder", TICKET_TEMPLATE);
       await user.type(details, "Kafka sink is 10 minutes behind.");
       await user.click(screen.getByRole("button", { name: "Open ticket" }));
 
@@ -1530,7 +1527,7 @@ describe("SupportPage", () => {
       ).toHaveTextContent("Production");
       expect(
         screen.getByRole("textbox", { name: /What happened/ }),
-      ).toHaveValue(OUTAGE_TEMPLATE);
+      ).toHaveAttribute("placeholder", OUTAGE_TEMPLATE);
       expect(
         screen.getByRole("link", { name: "How to run mz-debug ↗" }),
       ).toHaveAttribute("href", MZ_DEBUG_SELF_MANAGED_URL);

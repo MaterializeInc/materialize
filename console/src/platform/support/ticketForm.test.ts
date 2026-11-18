@@ -11,8 +11,6 @@ import {
   buildCreateTicketRequest,
   buildTicketTargets,
   defaultTicketTarget,
-  isUnchangedTemplate,
-  TICKET_TEMPLATE,
 } from "./ticketForm";
 
 const values = {
@@ -101,20 +99,5 @@ describe("buildTicketTargets", () => {
       ["org-1", "aws/us-east-1"],
       ["org-2", undefined],
     ]);
-  });
-});
-
-describe("isUnchangedTemplate", () => {
-  it("treats the untouched template, or only whitespace changes, as empty", () => {
-    expect(isUnchangedTemplate(TICKET_TEMPLATE, TICKET_TEMPLATE)).toBe(true);
-    expect(
-      isUnchangedTemplate(`\n${TICKET_TEMPLATE}\n\n `, TICKET_TEMPLATE),
-    ).toBe(true);
-    expect(
-      isUnchangedTemplate(
-        TICKET_TEMPLATE.replace("What's affected:", "What's affected: a sink"),
-        TICKET_TEMPLATE,
-      ),
-    ).toBe(false);
   });
 });

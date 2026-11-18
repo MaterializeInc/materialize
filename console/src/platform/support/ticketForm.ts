@@ -61,28 +61,19 @@ export const ENVIRONMENT_OPTIONS: {
   { value: "development", label: "Development" },
 ];
 
-/** What the description box starts with, so tickets arrive with the basics. */
-export const TICKET_TEMPLATE = `What's affected:
-When it started (with time zone):
-Is it still happening?
-What changed recently (upgrade, deploy, upstream change):
-Error messages, if available:`;
+/** Placeholder prompts for a regular support ticket. */
+export const TICKET_TEMPLATE = `Include what you can:
+• What's affected
+• When it started (with time zone), and whether it's still happening
+• What changed recently: an upgrade, deploy, or upstream change
+• Any error messages`;
 
-export const OUTAGE_TEMPLATE = `What's down (whole environment, or specific clusters, sources, sinks, or queries):
-When it started (with time zone):
-What changed right before (upgrade, deploy, upstream change):
-Error messages, if available:`;
-
-const withoutBlankLines = (text: string) =>
-  text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-
-/** Whether a description adds nothing to the template it started from. */
-export const isUnchangedTemplate = (description: string, template: string) =>
-  withoutBlankLines(description) === withoutBlankLines(template);
+/** Placeholder prompts for an outage report. */
+export const OUTAGE_TEMPLATE = `Include what you can:
+• What's down: the whole environment, or specific clusters, sources, sinks, or queries
+• When it started (with time zone)
+• What changed right before: an upgrade, deploy, or upstream change
+• Any error messages`;
 
 export type TicketFormValues = {
   title: string;
