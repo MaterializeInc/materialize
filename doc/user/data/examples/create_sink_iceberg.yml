@@ -197,7 +197,7 @@
 
 - name: "restrictions-limitations-schema-evolution"
   content: |
-    Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink. If the table's schema is changed outside of Materialize, the sink stalls until the change is undone and the sink is restarted.
+    Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink.
 
 - name: "restrictions-limitations-gcp-maintenance-lakehouse"
   content: |

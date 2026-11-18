@@ -203,9 +203,9 @@ For most causes, Materialize restarts the sink's dataflow to retry, so
 [`mz_sink_status_history`](#reviewing-the-full-history) as it does. If the
 underlying cause has not cleared, the retry fails and the sink stalls again.
 
-The exception is an Iceberg table whose schema no longer matches the sink,
-which Materialize does not retry. See [Sink stalls on a table schema
-mismatch](/export-data/iceberg-troubleshooting/#sink-stalls-on-a-table-schema-mismatch).
+When retrying is not expected to help the sink recover, Materialize may not
+retry, and the sink stays `stalled`. To recover, fix the cause in the external
+system, then restart the replicas of the cluster that hosts the sink.
 
 For Iceberg sinks specifically, an unreachable or unhealthy catalog is a
 common stall cause in practice. Iceberg tables need periodic maintenance
