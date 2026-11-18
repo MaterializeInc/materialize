@@ -604,6 +604,9 @@ export function useLargestClusterReplica(
  */
 export function useClusterUsagePrivilege(params: ClusterUsagePrivilegeParams) {
   return useQuery({
+    // Each run builds a dataflow on the catalog server, and grants change
+    // rarely, so a window focus doesn't ask again.
+    staleTime: 5 * millisecondsInMinute,
     queryKey: clusterQueryKeys.usagePrivilege(params),
     queryFn: async ({ queryKey, signal }) => {
       const [, paramsFromKey] = queryKey;
