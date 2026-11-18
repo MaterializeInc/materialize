@@ -763,6 +763,45 @@ describe("ClusterWorkers", () => {
 
     afterEach(() => allObjectsCollection.reset());
 
+    it("enables Start measuring once a role that lacked USAGE is granted it", async () => {
+      await renderWorkers(
+        { r2: "100cc" },
+        "?replica=r2",
+        { replica: createReplica(EVEN) },
+        { canUse: false },
+      );
+      await advanceUntil(() =>
+        expect(
+          screen.getByText(/privilege on this cluster to measure/),
+        ).toBeVisible(),
+      );
+
+      server.use(
+        buildSqlQueryHandlerV2({
+          queryKey: clusterQueryKeys.usagePrivilege({ clusterId: "u9" }),
+          results: mapKyselyToTabular({
+            rows: [{ canUse: true }],
+            columns: [
+              buildColumn({ name: "canUse", type_oid: MzDataType.bool }),
+            ],
+          }),
+        }),
+      );
+      // A denial is always stale, so a focus asks again.
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await advanceUntil(() =>
+        expect(
+          screen.getByRole("button", { name: "Start measuring" }),
+        ).toBeEnabled(),
+      );
+      expect(
+        screen.queryByText(/privilege on this cluster to measure/),
+      ).not.toBeInTheDocument();
+    });
+
     it("shows a first look while it measures the first minute, then names the overloaded worker and the object behind it", async () => {
       await renderReplica(SKEWED);
       await advance(30_000);

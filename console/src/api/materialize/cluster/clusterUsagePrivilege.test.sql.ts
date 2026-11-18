@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { inject } from "vitest";
+
 import {
   executeSqlHttp,
   getMaterializeClient,
@@ -15,25 +17,47 @@ import { testdrive } from "~/test/sql/mzcompose";
 
 import { buildClusterUsagePrivilegeQuery } from "./clusterUsagePrivilege";
 
-// NOTE: RBAC checks are off in this environment, so every role can use every
-// cluster and a denial can't be produced here.
+const CLUSTER_NAME = "serving.blue green";
+const ROLE_NAME = "usage_privilege_test_role";
+
 describe("buildClusterUsagePrivilegeQuery", () => {
-  it("says the role can use a cluster, whatever characters its name holds", async () => {
+  it("follows a USAGE grant on the cluster, whatever characters its name holds", async () => {
     await testdrive(`
-      > CREATE CLUSTER "serving.blue green" (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
+      > CREATE CLUSTER "${CLUSTER_NAME}" (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
     `);
-    const client = await getMaterializeClient();
-    const {
-      rows: [cluster],
-    } = await client.query(
-      "select id from mz_clusters where name = 'serving.blue green'",
-    );
+    const system = await getMaterializeClient();
+    try {
+      const {
+        rows: [cluster],
+      } = await system.query("select id from mz_clusters where name = $1", [
+        CLUSTER_NAME,
+      ]);
+      const query = buildClusterUsagePrivilegeQuery(cluster.id).compile();
+      // NOTE: This environment runs with RBAC checks off, which the query
+      // reads as access to every cluster. Only the internal port takes
+      // mz_system, and the external one creates the role on first login.
+      await system.query("ALTER SYSTEM SET enable_rbac_checks = true");
+      const role = await getMaterializeClient({
+        ...inject("materializeEndpoints").externalSql,
+        user: ROLE_NAME,
+      });
+      try {
+        const canUse = async () =>
+          (await role.query(query.sql, [...query.parameters])).rows;
 
-    const result = await executeSqlHttp(
-      buildClusterUsagePrivilegeQuery(cluster.id).compile(),
-    );
+        expect(await canUse()).toEqual([{ canUse: false }]);
 
-    expect(result.rows).toEqual([{ canUse: true }]);
+        await system.query(
+          `GRANT USAGE ON CLUSTER "${CLUSTER_NAME}" TO ${ROLE_NAME}`,
+        );
+        expect(await canUse()).toEqual([{ canUse: true }]);
+      } finally {
+        await role.end();
+      }
+    } finally {
+      await system.query("ALTER SYSTEM SET enable_rbac_checks = false");
+      await system.end();
+    }
   });
 
   it("returns no row for a cluster that doesn't exist", async () => {

@@ -605,8 +605,12 @@ export function useLargestClusterReplica(
 export function useClusterUsagePrivilege(params: ClusterUsagePrivilegeParams) {
   return useQuery({
     // Each run builds a dataflow on the catalog server, and grants change
-    // rarely, so a window focus doesn't ask again.
-    staleTime: 5 * millisecondsInMinute,
+    // rarely, so a window focus doesn't ask again. A denial is the exception:
+    // it's asked again until a grant made elsewhere lifts it.
+    staleTime: ({ state }) =>
+      state.data === false ? 0 : 5 * millisecondsInMinute,
+    refetchInterval: ({ state }) =>
+      state.data === false ? millisecondsInMinute : false,
     queryKey: clusterQueryKeys.usagePrivilege(params),
     queryFn: async ({ queryKey, signal }) => {
       const [, paramsFromKey] = queryKey;
