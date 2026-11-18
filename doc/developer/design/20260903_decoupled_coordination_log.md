@@ -72,6 +72,13 @@ reader and non-native bootstrap/writer alternatives are removed. Unchanged
 configuration startup/restart, adapter restart preservation and CREATE/ALTER
 infrastructure recovery checks pass. No performance improvement is claimed.
 
+ALTER DEFAULT PRIVILEGES and REASSIGN OWNED now use the existing staged commit
+owner instead of inline retries. Independent review, Clippy and unchanged
+`default_privileges.slt`/`object_ownership.slt` pass with standard repository SLT
+parameters. The initial direct invocation omitted those parameters and failed at
+load-generator feature gates, not assertions. No forced-conflict/cancellation
+coverage for these two dispatches is claimed. Other inline DDL owners remain.
+
 Candidate promotion in the latest lifecycle run waited on the existing 600000ms
 stability gate after catching up. Do not classify that wait as unexplained replay
 or CPU work. The earlier statistics replay audit separately found zero-holding
@@ -102,7 +109,9 @@ Essential pointers:
 - Current retry checks: remote `registration-certificate-red.log`,
   `registration-finalization-red.log`, `append-wal-final.log`,
   `controller-unit.log`, `retirement-red.log`, `cache-red.log` and
-  `native-table-writer-only.log`.
+  `native-table-writer-only.log` and `staged-owner-ddl-build.log`.
+  Local `staged-owner-ddl-defaults-test.log` records the complete SQL suite pass,
+  with the applied parameter receipt in remote `staged-owner-ddl-parameters.txt`.
 - Recent runtime cleanup: local `native-clean-exit-audit.md`,
   `native-clean-exit-evidence.tar.gz`, `adapter-config-removal-test.log`,
   `bootstrap-reset-test.log` and `native-bootstrap-only-test.log`.
