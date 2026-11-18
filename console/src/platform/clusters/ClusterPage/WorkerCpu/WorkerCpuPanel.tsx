@@ -425,6 +425,7 @@ export const WorkerCpuPanel = ({
         ((measurement.endMs - measurement.startMs) * 1e6),
     );
 
+  const hasReport = measurement && verdict && queryHistory;
   return (
     <VStack spacing={7} alignItems="stretch">
       <Flex
@@ -467,7 +468,7 @@ export const WorkerCpuPanel = ({
               size="sm"
               variant="outline"
               onClick={measure}
-              isDisabled={!measure || isMeasuringAgain}
+              isDisabled={!measure || isMeasuringAgain || isUsageDenied}
             >
               Measure again
             </Button>
@@ -494,7 +495,7 @@ export const WorkerCpuPanel = ({
           variant="error"
           message={`Couldn't read worker CPU on ${replica.name}: ${state.error}`}
         />
-      ) : measurement && verdict && queryHistory ? (
+      ) : hasReport ? (
         <Verdict
           clusterName={clusterName}
           replica={replica}
@@ -597,7 +598,8 @@ export const WorkerCpuPanel = ({
             `Couldn't load ${clusterName}'s objects, so rows show ids instead of names.`}
         </Text>
       )}
-      {state.status !== "idle" && !isUsageDenied && (
+      {/* Without a report, the first look states a denial instead. */}
+      {state.status !== "idle" && !(isUsageDenied && !hasReport) && (
         <SamplingStatus
           replicaName={replica.name}
           state={state}
@@ -625,7 +627,13 @@ const SamplingStatus = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   let message: string;
-  if (state.status === "error") {
+  if (
+    state.status === "error" &&
+    state.errorCode === ErrorCode.INSUFFICIENT_PRIVILEGE
+  ) {
+    message =
+      "You'll need USAGE privilege on this cluster to measure its workers.";
+  } else if (state.status === "error") {
     // With no readings, the error shows in place of the report instead.
     message =
       state.readings.length > 0

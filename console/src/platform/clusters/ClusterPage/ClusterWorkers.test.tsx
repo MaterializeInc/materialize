@@ -927,6 +927,28 @@ describe("ClusterWorkers", () => {
       ).not.toBeInTheDocument();
     });
 
+    it("keeps its report, says why, and disables Measure again when a later read is denied for lack of USAGE", async () => {
+      const replica = await renderReplica(SKEWED);
+      await advance(60_000);
+      const span = `Measured ${clockTime(0)} to ${clockTime(60_000)}`;
+      expect(screen.getByText(span)).toBeVisible();
+
+      openSessions(replica.sessions)[0].connection.error(
+        'permission denied for CLUSTER "prod"',
+        "42501",
+      );
+      await advance(1_000);
+
+      expect(screen.getByText(span)).toBeVisible();
+      expect(
+        screen.getByText(/privilege on this cluster to measure/),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "Measure again" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    });
+
     it("keeps its report while counters arrive, and on Measure again reports the minute after the click", async () => {
       const replica = await renderReplica(SKEWED);
       await advance(60_000);
