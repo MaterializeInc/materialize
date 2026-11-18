@@ -54,10 +54,6 @@ import {
   fetchClusters,
 } from "~/api/materialize/cluster/clusterList";
 import {
-  ClusterUsagePrivilegeParams,
-  fetchClusterUsagePrivilege,
-} from "~/api/materialize/cluster/clusterUsagePrivilege";
-import {
   fetchClusterHydrationEpisodes,
   fetchClusterReplicaHistory,
   fetchEpisodeObjectHydrations,
@@ -181,11 +177,6 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("largestClusterReplica", params),
-    ] as const,
-  usagePrivilege: (params: ClusterUsagePrivilegeParams) =>
-    [
-      ...clusterQueryKeys.all(),
-      buildQueryKeyPart("usagePrivilege", params),
     ] as const,
   largestMaintainedQueries: (
     params: UseLargestMaintainedQueriesParams & { unifiedSizes: boolean },
@@ -594,32 +585,6 @@ export function useLargestClusterReplica(
       });
       assertNoMoreThanOneRow(result.rows.length, { skipQueryRetry: true });
       return result.rows.at(0) ?? null;
-    },
-  });
-}
-
-/**
- * Whether the current role can run queries on the cluster, as the reads that
- * run on its replicas do. Null for a cluster that no longer exists.
- */
-export function useClusterUsagePrivilege(params: ClusterUsagePrivilegeParams) {
-  return useQuery({
-    // Each run builds a dataflow on the catalog server, and grants change
-    // rarely, so a window focus doesn't ask again. A denial is the exception:
-    // it's asked again until a grant made elsewhere lifts it.
-    staleTime: ({ state }) =>
-      state.data === false ? 0 : 5 * millisecondsInMinute,
-    refetchInterval: ({ state }) =>
-      state.data === false ? millisecondsInMinute : false,
-    queryKey: clusterQueryKeys.usagePrivilege(params),
-    queryFn: async ({ queryKey, signal }) => {
-      const [, paramsFromKey] = queryKey;
-      const result = await fetchClusterUsagePrivilege({
-        queryKey,
-        params: paramsFromKey,
-        requestOptions: { signal },
-      });
-      return result.rows.at(0)?.canUse ?? null;
     },
   });
 }

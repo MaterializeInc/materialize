@@ -149,6 +149,8 @@ export interface WorkerCpuState {
    */
   waitingMs?: number;
   error?: string;
+  /** The failed read's SQLSTATE, where the server gave one. */
+  errorCode?: string;
 }
 
 const INITIAL_WORKER_CPU_STATE: WorkerCpuState = {
@@ -379,11 +381,12 @@ export function createWorkerCpuSampler({
     });
   };
 
-  const fail = (message: string) => {
+  const fail = (message: string, code?: string) => {
     setState({
       ...breakReading(),
       status: "error",
       error: message,
+      errorCode: code,
       waitingMs: undefined,
     });
   };
@@ -540,7 +543,7 @@ export function createWorkerCpuSampler({
       const { error, snapshotComplete, isComplete } =
         read.manager.getSnapshot();
       if (error) {
-        fail(error.message);
+        fail(error.message, error.code);
         return;
       }
       if (isComplete || (awaitingSnapshot && snapshotComplete)) {
@@ -561,6 +564,7 @@ export function createWorkerCpuSampler({
       status: "reading",
       pauseReason: undefined,
       error: undefined,
+      errorCode: undefined,
       lagMs: undefined,
       waitingMs: 0,
       stretchStartMs: undefined,

@@ -24,12 +24,10 @@ import React from "react";
 import { Link } from "react-router-dom";
 
 import { ProcessMetricsSample } from "~/api/materialize/cluster/replicaProcessMetrics";
+import { ErrorCode } from "~/api/materialize/types";
 import Alert from "~/components/Alert";
 import TextLink from "~/components/TextLink";
-import {
-  useClusterUsagePrivilege,
-  useMaterializationLag,
-} from "~/platform/clusters/queries";
+import { useMaterializationLag } from "~/platform/clusters/queries";
 import { queryHistoryPath } from "~/platform/query-history/queryHistoryUtils";
 import { useClusterObjectsLive } from "~/store/allObjectsCollection";
 import { useRegionSlug } from "~/store/environments";
@@ -247,9 +245,12 @@ export const WorkerCpuPanel = ({
       replicaName: replica.name,
       workerCount,
     });
-  // Reading runs on the cluster as the signed-in role. Unknown counts as
-  // allowed, so a failed check leaves the button to report the real error.
-  const isUsageDenied = useClusterUsagePrivilege({ clusterId }).data === false;
+  // Reading runs on the cluster as the signed-in role, so the read itself is
+  // the privilege check. Asking the catalog up front costs it a dataflow on
+  // every visit.
+  const isUsageDenied =
+    state.status === "error" &&
+    state.errorCode === ErrorCode.INSUFFICIENT_PRIVILEGE;
   const processSamples = useReplicaProcessSamples({
     replicaId: replica.id,
     windowMinutes: REPLICA_CPU_WINDOW_MINUTES,
@@ -488,7 +489,7 @@ export const WorkerCpuPanel = ({
           }
         />
       )}
-      {state.status === "error" && readings.length === 0 ? (
+      {state.status === "error" && readings.length === 0 && !isUsageDenied ? (
         <Alert
           variant="error"
           message={`Couldn't read worker CPU on ${replica.name}: ${state.error}`}
@@ -517,7 +518,7 @@ export const WorkerCpuPanel = ({
               ? last.atMs - state.stretchStartMs
               : 0
           }
-          status={state.status}
+          status={isUsageDenied ? "idle" : state.status}
           latestCpu={replicaCpu.at(-1)}
           lastReading={last}
           lifetimeObjects={lifetimeObjects}
@@ -596,7 +597,7 @@ export const WorkerCpuPanel = ({
             `Couldn't load ${clusterName}'s objects, so rows show ids instead of names.`}
         </Text>
       )}
-      {state.status !== "idle" && (
+      {state.status !== "idle" && !isUsageDenied && (
         <SamplingStatus
           replicaName={replica.name}
           state={state}

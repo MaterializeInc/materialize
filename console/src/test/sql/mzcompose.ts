@@ -37,16 +37,14 @@ export async function getMaterializeEndpoints() {
         host: process.env.MZ_INTERNAL_HTTP_HOST,
         port: parseInt(process.env.MZ_INTERNAL_HTTP_PORT ?? "6878"),
       },
-      externalSql: { host: process.env.MZ_INTERNAL_SQL_HOST, port: 6875 },
     };
   }
 
   // Fallback: resolve host-mapped ports via mzcompose (for local development).
   const internalSql = await getMaterializeEndpoint(6877);
   const internalHttp = await getMaterializeEndpoint(6878);
-  const externalSql = await getMaterializeEndpoint(6875);
 
-  return { internalSql, internalHttp, externalSql };
+  return { internalSql, internalHttp };
 }
 
 export const dedenterWithEscapeSpecialCharacters = dedent.withOptions({

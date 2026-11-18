@@ -211,8 +211,11 @@ const serveSubscribes = ({
   holdSnapshot?: boolean;
   replica?: ServedReplica;
   metrics?: ServedMetrics;
-  /** Fails the worker CPU or the process metrics subscribe. */
-  failing?: "workerCpu" | "metrics";
+  /**
+   * Fails the worker CPU or the process metrics subscribe. `usageDenied` fails
+   * the worker CPU one as for a role without USAGE on the cluster.
+   */
+  failing?: "workerCpu" | "metrics" | "usageDenied";
 } = {}) => {
   const sessions = replica?.sessions ?? [];
   server.use(
@@ -222,6 +225,10 @@ const serveSubscribes = ({
           connection,
           replicaName: connection.options.cluster_replica,
         });
+        if (failing === "usageDenied") {
+          connection.error('permission denied for CLUSTER "prod"', "42501");
+          return undefined;
+        }
         if (failing === "workerCpu") {
           connection.error(
             "permission denied for SOURCE mz_scheduling_elapsed_raw",
@@ -320,7 +327,6 @@ const renderWorkers = async (
   replicas: Record<string, string>,
   search = "",
   options: Parameters<typeof serveSubscribes>[0] = {},
-  { canUse = true }: { canUse?: boolean } = {},
 ) => {
   await setFakeEnvironment(getStore().set, "aws/us-east-1", ENVIRONMENT);
   const cluster = buildCluster(replicas);
@@ -351,13 +357,6 @@ const renderWorkers = async (
             memoryBytes: String(8 * 2 ** 30),
             diskBytes: "0",
           })),
-      }),
-    }),
-    buildSqlQueryHandlerV2({
-      queryKey: clusterQueryKeys.usagePrivilege({ clusterId: cluster.id }),
-      results: mapKyselyToTabular({
-        rows: [{ canUse }],
-        columns: [buildColumn({ name: "canUse", type_oid: MzDataType.bool })],
       }),
     }),
     buildSqlQueryHandlerV2({
@@ -425,17 +424,6 @@ const optionsOf = (select: HTMLElement) =>
     .map((option) => option.textContent);
 
 describe("ClusterWorkers", () => {
-  it("disables Start measuring, and says why, for a role without USAGE on the cluster", async () => {
-    await renderWorkers({ r1: "100cc" }, "", {}, { canUse: false });
-
-    expect(
-      await screen.findByText(/privilege on this cluster to measure/),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Start measuring" }),
-    ).toBeDisabled();
-  });
-
   it("explains what workers are and why skew matters", async () => {
     await renderWorkers({ r1: "100cc" });
 
@@ -616,6 +604,22 @@ describe("ClusterWorkers", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
   });
 
+  it("greys out Start measuring, and says why, once a read is denied for lack of USAGE", async () => {
+    await renderWorkers({ r1: "100cc" }, "?replica=r1", {
+      failing: "usageDenied",
+    });
+    await startMeasuring();
+
+    expect(
+      await screen.findByText(/privilege on this cluster to measure/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Start measuring" }),
+    ).toBeDisabled();
+    expect(screen.queryByText(/^Couldn't read worker CPU/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
   it("says the finding leaves the replica's CPU out when its metrics can't be read", async () => {
     await renderWorkers({ r1: "100cc" }, "?replica=r1", { failing: "metrics" });
 
@@ -762,45 +766,6 @@ describe("ClusterWorkers", () => {
     });
 
     afterEach(() => allObjectsCollection.reset());
-
-    it("enables Start measuring once a role that lacked USAGE is granted it", async () => {
-      await renderWorkers(
-        { r2: "100cc" },
-        "?replica=r2",
-        { replica: createReplica(EVEN) },
-        { canUse: false },
-      );
-      await advanceUntil(() =>
-        expect(
-          screen.getByText(/privilege on this cluster to measure/),
-        ).toBeVisible(),
-      );
-
-      server.use(
-        buildSqlQueryHandlerV2({
-          queryKey: clusterQueryKeys.usagePrivilege({ clusterId: "u9" }),
-          results: mapKyselyToTabular({
-            rows: [{ canUse: true }],
-            columns: [
-              buildColumn({ name: "canUse", type_oid: MzDataType.bool }),
-            ],
-          }),
-        }),
-      );
-      // A denial is always stale, so a focus asks again.
-      act(() => {
-        focusManager.setFocused(false);
-        focusManager.setFocused(true);
-      });
-      await advanceUntil(() =>
-        expect(
-          screen.getByRole("button", { name: "Start measuring" }),
-        ).toBeEnabled(),
-      );
-      expect(
-        screen.queryByText(/privilege on this cluster to measure/),
-      ).not.toBeInTheDocument();
-    });
 
     it("shows a first look while it measures the first minute, then names the overloaded worker and the object behind it", async () => {
       await renderReplica(SKEWED);
