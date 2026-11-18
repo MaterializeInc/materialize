@@ -9,12 +9,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZero;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use futures::stream::BoxStream;
 use mz_catalog::catalog::{Catalog, Op, ReplicaCreateDropReason};
-use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+use mz_catalog::durable::{
+    BootstrapArgs, CatalogTimestampOracle, TestCatalogStateBuilder, test_bootstrap_args,
+};
 use mz_controller::clusters::ReplicaServiceName;
 use mz_controller::clusters::provisioning::ReplicaProvisioningConfig;
 use mz_controller_types::ReplicaId;
@@ -28,9 +30,10 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_repr::AdapterId;
+use mz_repr::{AdapterId, Timestamp};
 use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_server_core::listeners::v26_32_0::ListenersConfig;
+use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
 use uuid::Uuid;
 
 use super::provisioning::{AdapterProvisioningConfig, service_name};
@@ -95,6 +98,148 @@ async fn disconnected_catalogs() -> (Catalog, Catalog, MetricsRegistry) {
     .expect("reconstruct controller catalog")
     .catalog;
     (writer, controller, registry)
+}
+
+// Admission, catalog commits, and table WAL initialization share one clock.
+#[derive(Debug)]
+struct InitializationOracle(Mutex<(Timestamp, Timestamp)>);
+
+#[async_trait::async_trait]
+impl TimestampOracle<Timestamp> for InitializationOracle {
+    async fn write_ts(&self) -> WriteTimestamp {
+        let mut state = self.0.lock().unwrap();
+        state.1 = state.0.max(state.1).step_forward();
+        WriteTimestamp {
+            timestamp: state.1,
+            advance_to: state.1.step_forward(),
+        }
+    }
+
+    async fn peek_write_ts(&self) -> Timestamp {
+        self.0.lock().unwrap().1
+    }
+
+    async fn read_ts(&self) -> Timestamp {
+        self.0.lock().unwrap().0
+    }
+
+    async fn apply_write(&self, timestamp: Timestamp) {
+        let mut state = self.0.lock().unwrap();
+        state.0 = state.0.max(timestamp);
+        state.1 = state.1.max(timestamp);
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn controller_initialization_publishes_expression_cache() {
+    let (template, observer, _) = disconnected_catalogs().await;
+    let replica_config = template.replica_config();
+    let build_info = template.config().build_info;
+    let connection_context = template.config().connection_context.clone();
+    observer.expire().await;
+    template.expire().await;
+
+    // Exercise configured defaults and overrides that disagree with those defaults.
+    for (default, cache_override, enabled) in [
+        (true, None, true),
+        (false, None, false),
+        (false, Some(true), true),
+        (true, Some(false), false),
+    ] {
+        let registry = MetricsRegistry::new();
+        let mut persist_config = PersistConfig::new_for_tests();
+        persist_config.configs =
+            Arc::new(mz_txn_wal::all_dyncfgs((*persist_config.configs).clone()));
+        // The debug template cannot warm this environment's expression shard.
+        let persist = PersistClientCache::new(persist_config, &registry, |_, _| {
+            PubSubClientConnection::noop()
+        })
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("isolated controller Persist");
+        let organization = Uuid::new_v4();
+        let now = SYSTEM_TIME().into();
+        let oracle = Arc::new(InitializationOracle(Mutex::new((now, now))));
+        let builder = || {
+            TestCatalogStateBuilder::new(persist.clone())
+                .with_organization_id(organization)
+                .with_default_deploy_generation()
+                .with_timestamp_oracle(CatalogTimestampOracle::new(
+                    Arc::<InitializationOracle>::clone(&oracle),
+                    SYSTEM_TIME.clone(),
+                ))
+        };
+        let state = |boot_ts, cache_override| {
+            let mut state = replica_config.clone().into_state(
+                build_info,
+                format!("local-az1-{organization}-0").parse().unwrap(),
+                connection_context.clone(),
+                persist.clone(),
+            );
+            state.read_only = false;
+            state.skip_migrations = false;
+            state.builtin_item_migration_config.read_only = false;
+            state.boot_ts = boot_ts;
+            state.enable_expression_cache_override = cache_override;
+            state
+                .system_parameter_defaults
+                .insert("enable_expression_cache".into(), default.to_string());
+            state
+        };
+        let mut storage = builder()
+            .unwrap_build()
+            .await
+            .open(
+                oracle.write_ts().await.timestamp,
+                &BootstrapArgs {
+                    controller_initialization: true,
+                    ..test_bootstrap_args()
+                },
+            )
+            .await
+            .expect("fresh controller admission");
+        oracle.apply_write(storage.current_upper().await).await;
+        let catalog = super::initialize_fresh(
+            mz_catalog::config::Config {
+                storage,
+                metrics_registry: &registry,
+                state: state(oracle.write_ts().await.timestamp, cache_override),
+            },
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&registry)),
+            oracle.as_ref(),
+        )
+        .await
+        .expect("controller-only initialization");
+        // FIFO barrier only: all expressions must come from initialize_fresh.
+        catalog
+            .update_expression_cache(Vec::new(), Vec::new(), BTreeSet::new())
+            .await;
+        catalog.expire().await;
+
+        let mut storage = builder()
+            .unwrap_build()
+            .await
+            .open(oracle.write_ts().await.timestamp, &test_bootstrap_args())
+            .await
+            .expect("reopen completed deployment");
+        oracle.apply_write(storage.current_upper().await).await;
+        // Always enable reads, including for the disabled-publication controls.
+        // Catalog::open uses this build and the catalog's current item versions.
+        let reopened = Catalog::open(mz_catalog::config::Config {
+            storage,
+            metrics_registry: &MetricsRegistry::new(),
+            state: state(oracle.write_ts().await.timestamp, Some(true)),
+        })
+        .await
+        .expect("read controller expression cache");
+        assert_eq!(
+            reopened.uncached_local_exprs.is_empty(),
+            enabled,
+            "default={default}, override={cache_override:?}, misses={}",
+            reopened.uncached_local_exprs.len(),
+        );
+        reopened.catalog.expire().await;
+    }
 }
 
 fn upper_reads(registry: &MetricsRegistry) -> f64 {
