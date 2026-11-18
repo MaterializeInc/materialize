@@ -204,7 +204,7 @@ For most causes, Materialize restarts the sink's dataflow to retry, so
 underlying cause has not cleared, the retry fails and the sink stalls again.
 
 When retrying is not expected to help the sink recover, Materialize may not
-retry, and the sink stays `stalled`. To recover, drop and recreate the sink.
+retry, and the sink stays `stalled`.
 
 For Iceberg sinks specifically, an unreachable or unhealthy catalog is a
 common stall cause in practice. Iceberg tables need periodic maintenance
