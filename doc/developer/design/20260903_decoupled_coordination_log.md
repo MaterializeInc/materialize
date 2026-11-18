@@ -76,7 +76,9 @@ configuration/restart and independent-oracle bootstrap checks pass. No dedicated
 supersession race was added. Persisted-object EXPLAIN now has only the native
 selected-plan path. Clippy and unchanged materialized-view/physical-plan SQL
 suites pass. No new join/replacement EXPLAIN race coverage is claimed.
-No performance improvement is claimed.
+The monolithic cluster-policy write alternative is removed. Clippy and unchanged
+managed/unified cluster SQL suites pass. Fresh multi-deployment policy/promotion
+coverage remains outstanding. No performance improvement is claimed.
 
 ALTER DEFAULT PRIVILEGES, REASSIGN OWNED and ALTER OWNER use the existing staged commit
 owner instead of inline retries. Independent review, Clippy and unchanged
@@ -112,6 +114,8 @@ source overlays. Verify hashes, not just its Git revision. Remote logs are under
 `~/.local/share/aj/m3-evidence/controller-followups/`.
 
 Essential pointers:
+- Cluster policy: local `native-cluster-policy-test.log`, including the build
+  result and standard-parameter SQL run.
 - Persisted EXPLAIN: local `native-selected-explain-test.log`, including the
   build result and standard-parameter SQL run.
 - Client adoption: local `mandatory-bootstrap-client-test.log` and remote
