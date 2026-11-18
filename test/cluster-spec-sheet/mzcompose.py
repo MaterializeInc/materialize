@@ -1980,7 +1980,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             for repeat in range(3):
                 for disable_statement_logging in (False, True):
                     for protocol in self.options.protocols:
-                        for concurrency in (512, 1024):
+                        for concurrency in (256, 512):
                             self.measure(
                                 runner,
                                 size,
