@@ -15,13 +15,20 @@ The accepted version pair predates this isolated cache repair. Its implementatio
 and plan encoding are shared, not release-skew or migration coverage. Optimized
 comparison and 60s four-index acceptance are complete.
 
-Next, resolve the configuration-retry scope with the user. Source review found
-that retained WAL state can distinguish unrelated progress from configuration
-writes, but validation must occur inside every WAL CAS attempt. The proposed
-controller-only non-seed repair retains snapshot diffs across unrelated writes
-and rejects changed inputs. Initial seeding and adapter bootstrap stay unchanged.
-This commit-contract change awaits approval. No retry-policy or retirement-exit
-changes have landed.
+Next, resume the group-commit repair and live retirement verification. The user rejected the
+configuration commit-contract change. The committed repair preserves fresh
+snapshots and B/B+1 validation, returns exhaustion to a later controller tick, and
+does not skip unrelated tick work. Retirement drops invalid preparation without
+losing consumed catalog updates, backs off between attempts, and treats confirmed
+retirement of the running controller's own deployment as normal shutdown.
+
+Initialization, retirement and controller unit coverage, controller compilation,
+and targeted Clippy pass. Configuration and retirement regressions fail for the
+expected reasons without their repairs. Registration adoption racing DROP and
+Forget passes. Live process retirement and full-tick continuation still need
+integration coverage. The separate group-commit repair remains uncommitted.
+Controller-only cache publication is covered for enabled and disabled defaults
+and overrides. Removing publication reproduces cold misses on reopening.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -93,17 +100,16 @@ data was removed, leaving 155 GiB free on scratch.
 
 ## Live blockers and boundaries
 
-- Outgoing controllerd panics on catalog-confirmed retirement in both optimized
-  and current debug runs. Workflow success does not establish crash-free
-  acceptance. Clean shutdown of an already-running retired controller awaits
-  approval for the exit-behavior change. Keep retired-reopen rejection distinct.
-- Configuration reconciliation still retries conflicts inline. The proposed
-  controller repair validates every selected table, including empty-diff tables,
-  against each attempted WAL prefix. Changed writes or registration invalidate
-  the retained snapshot. Readiness, authority and retirement checks remain.
-  See `current-config-convergence-survey.md` and
-  `current-config-wal-validation-survey.md`. The latter refines the earlier
-  assumption that every unrelated conflict requires a new snapshot.
+- Outgoing controllerd panics remain in the accepted workflow evidence. The
+  committed clean-exit repair has not yet passed live-process verification. Keep
+  unexpected errors fatal and retired-reopen rejection distinct.
+- Cache reclamation needs a scope decision: membership records release versions,
+  whereas development cache keys include executable identities. Pruning unused
+  release namespaces can preserve all variants of live versions. Exact variant
+  reclamation needs additional membership metadata. Written plans are excluded.
+- Sticky sink placement needs shared, per-sink ownership. A deployment-qualified
+  catalog placement record was proposed for approval. Keeping only local running
+  state would permit a newly added lower-ID replica to start a competing writer.
 - Promoted-adapter storage initialization can return `CatalogOutOfSync` when
   catch-up changes its captured transient revision. Revalidate preparation rather
   than removing that guard.
@@ -140,6 +146,18 @@ systemd ExecStopPost hook restores source only after the build cgroup has draine
 Do not bypass `run-current-frontier-pair.sh` or use incomplete artifacts.
 
 Essential pointers:
+- Current follow-up verification uses worker worktree
+  `/home/ubuntu/materialize-m3-controller-followups`, based on `17da75c2` with
+  explicit source overlays. Worker logs are under
+  `~/.local/share/aj/m3-evidence/controller-followups/`: `ci-stack.log` and
+  `red.log` establish the exhaustion regression, `reviewed.log` covers
+  initialization and the failed retirement assertion, and `snapshot-fix.log`
+  records an initial assertion correction. `public-trait.log` records passing
+  retirement coverage and controller compilation. `controller-unit.log` records
+  controller tests and Clippy, and `retirement-red.log` confirms the original
+  assertion failure. `cache-red.log` confirms that the controller-only cache test
+  detects missing publication. Unit tests use CI's
+  `RUST_MIN_STACK=4194304`, serial execution and the unchanged build caps.
 - `current-frontier-restart-audit.md` and `.json`, plus locally verified
   `current-frontier-restart-evidence.tar.gz` and `current-frontier-restart-result.log`.
 - `controller-cache-enabled-build-driver.log`, `controller-cache-pinning.log`,
