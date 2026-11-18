@@ -508,6 +508,21 @@ append / register / detach / forget -> FIFO group committer -> table-write worke
 FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
 the only local exception because it runs before the process serves.
 
+Ordinary group commits encode rows into timestampless batches before allocating
+their oracle timestamp. Preparation uses locally adopted schemas and grants no
+shared write authority. Every commit attempt still validates WAL membership at
+its CAS prefix and follows the catalog/WAL/oracle ordering below. Retain the
+original prepared batches across definitive upper conflicts, not rewritten
+attempt-local batches. A missing target invalidates that preparation: rebuild
+from the surviving transactions' original contributions.
+
+Peer contention backs off in the existing committer task without releasing its
+FIFO slot. Re-enqueueing could let a queued Forget or compensating builtin update
+overtake the pending write. Only a definitive rejection permits shutdown or
+backoff between attempts. Do not cancel a submitted write or its completion.
+Fixed-timestamp OCC retains its single-attempt path and returns conflicts to the
+session owner rather than reusing its diffs at a new timestamp.
+
 Detaching local handles does not retire shared txn-WAL membership. Physical
 finalization requires definitive shard-addressed Forget, including applying prior
 transactions, through the writer's fenced path. Install that path only after

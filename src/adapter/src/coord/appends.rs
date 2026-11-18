@@ -49,9 +49,7 @@ use crate::table_writer::{TableRegistration, TableWriteHandle};
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
 use mz_catalog::builtin::{Builtin, BuiltinTable, MZ_SESSIONS, MZ_SESSIONS_RAW};
-use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::CollectionPlan;
 use mz_ore::halt;
 use mz_ore::instrument;
@@ -64,6 +62,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_storage_types::controller::StorageError;
 use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
+use rand::RngExt;
 use smallvec::SmallVec;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tracing::{Instrument, Span, info, warn};
@@ -317,7 +316,6 @@ pub(crate) struct GroupCommitter {
     /// Timestamp policy can use the shared fixture clock without changing throttling.
     timestamp_oracle_now: NowFn,
     metrics: Metrics,
-    max_attempts: ConfigValHandle<usize>,
 }
 
 /// Outcome of one txns-shard write attempt.
@@ -392,7 +390,7 @@ impl GroupCommitter {
                         let catalog_upper = &self.catalog_upper;
                         let table_write_handle = &self.table_write_handle;
                         let Some(write_ts) = self
-                            .write_to_txns(None, |ts, _advance_to| {
+                            .write_to_txns(|ts, _advance_to| {
                                 let tables = &tables;
                                 let ids = &ids;
                                 async move {
@@ -432,7 +430,7 @@ impl GroupCommitter {
                     }
                     TableWriteCmd::Forget { shards, result } => {
                         let Some(write_ts) = self
-                            .write_to_txns(None, |ts, _advance_to| {
+                            .write_to_txns(|ts, _advance_to| {
                                 self.table_write_handle.forget(ts, shards.clone())
                             })
                             .await
@@ -547,36 +545,24 @@ impl GroupCommitter {
     /// Writes at a fresh oracle timestamp, retrying an upper conflict at a new
     /// timestamp, and applies a successful write to the oracle.
     ///
-    /// Returns `Ok(None)` when the table write worker shuts down. A missing
-    /// target rejects the whole write and is not retried.
+    /// Returns `Ok(None)` when the worker is lost or the coordinator shuts down
+    /// between definitively rejected attempts. A missing target rejects the
+    /// whole write and is not retried.
     async fn write_to_txns<F>(
         &self,
-        op_duration_metric: Option<&prometheus::Histogram>,
         mut op: impl FnMut(Timestamp, Timestamp) -> F,
     ) -> Result<Option<WriteTimestamp>, GlobalId>
     where
         F: Future<Output = Result<Result<(), StorageError>, oneshot::error::RecvError>>,
     {
-        // Persistent conflicts indicate an unexpected writer. Halt instead of spinning forever.
-        let mut attempt = 0;
+        let mut attempt: u64 = 0;
         loop {
-            let max_attempts = self.max_attempts.get().max(1);
-            if attempt >= max_attempts {
-                halt!(
-                    "txns-shard write reached attempt limit {max_attempts} after {attempt} conflicts, rebuilding"
-                );
-            }
-            attempt += 1;
+            attempt = attempt.saturating_add(1);
             let write_ts = self.oracle.write_ts().await;
 
             // A post-fence retry has an advance frontier above this handle's stale upper, so the
             // advance inside reaches Persist and observes the fence.
-            match self
-                .attempt_write_to_txns(&write_ts, op_duration_metric, |ts, advance_to| {
-                    op(ts, advance_to)
-                })
-                .await
-            {
+            match self.attempt_write_to_txns(&write_ts, None, &mut op).await {
                 TxnsWriteAttempt::Applied => return Ok(Some(write_ts)),
                 TxnsWriteAttempt::UpperConflict { .. } => {
                     warn!(
@@ -584,6 +570,14 @@ impl GroupCommitter {
                         attempt,
                         "txns-shard write conflicted with another writer, retrying at a fresh timestamp"
                     );
+                    // Retain the FIFO slot: re-enqueueing could let a Forget or
+                    // a compensating builtin update overtake this write. Only a
+                    // definitive rejection may yield to shutdown or retry backoff.
+                    let delay = Duration::from_millis(rand::rng().random_range(1..=10));
+                    tokio::select! {
+                        _ = self.internal_cmd_tx.closed() => return Ok(None),
+                        _ = tokio::time::sleep(delay) => {},
+                    }
                     continue;
                 }
                 TxnsWriteAttempt::TargetMissing(id) => return Err(id),
@@ -772,13 +766,48 @@ impl GroupCommitter {
                     (id, batches)
                 })
                 .collect();
-            match self
-                .write_to_txns(Some(&append_metric), |ts, advance_to| {
-                    self.table_write_handle
-                        .append(ts, advance_to, appends.clone())
-                })
-                .await
-            {
+            let preparation_started = Instant::now();
+            let prepared = if appends.iter().any(|(_, data)| {
+                data.iter()
+                    .any(|d| matches!(d, TableData::Rows(rows) if !rows.is_empty()))
+            }) {
+                self.table_write_handle.prepare(appends).await
+            } else {
+                Ok(Ok(appends))
+            };
+            let mut preparation_duration = preparation_started.elapsed();
+            let (result, appends) = match prepared {
+                Ok(Ok(appends)) => {
+                    let result = self
+                        .write_to_txns(|ts, advance_to| {
+                            let started = Instant::now();
+                            let pending =
+                                self.table_write_handle
+                                    .append(ts, advance_to, appends.clone());
+                            // Encoding moved before allocation, but remains part
+                            // of append latency. Charge it once, not on each retry.
+                            let preparation = std::mem::take(&mut preparation_duration);
+                            let metric = append_metric.clone();
+                            async move {
+                                let result = pending.await;
+                                metric.observe((preparation + started.elapsed()).as_secs_f64());
+                                result
+                            }
+                        })
+                        .await;
+                    (result, appends)
+                }
+                Ok(Err(StorageError::IdentifierMissing(id))) => {
+                    append_metric.observe(preparation_duration.as_secs_f64());
+                    (Err(id), Vec::new())
+                }
+                Ok(Err(error)) => panic!("unexpected table preparation error: {error}"),
+                Err(_) => {
+                    append_metric.observe(preparation_duration.as_secs_f64());
+                    return ControlFlow::Break(());
+                }
+            };
+            match result {
                 Ok(Some(write_ts)) => break (write_ts, appends),
                 Ok(None) => return ControlFlow::Break(()),
                 Err(id) => {
@@ -873,7 +902,6 @@ pub(crate) fn spawn_group_committer(
     now: NowFn,
     timestamp_oracle_now: NowFn,
     metrics: Metrics,
-    dyncfgs: &ConfigSet,
 ) {
     let committer = GroupCommitter {
         rx,
@@ -884,7 +912,6 @@ pub(crate) fn spawn_group_committer(
         now,
         timestamp_oracle_now,
         metrics,
-        max_attempts: GROUP_COMMIT_MAX_ATTEMPTS.handle(dyncfgs),
     };
     task::spawn(|| "group_committer", committer.run());
 }
@@ -1478,6 +1505,7 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct MemTimestampOracle {
+        events: Arc<Mutex<Vec<&'static str>>>,
         read_write_ts: Mutex<(Timestamp, Timestamp)>,
         apply_writes: AtomicUsize,
         applied_timestamps: Mutex<Vec<Timestamp>>,
@@ -1486,6 +1514,7 @@ mod tests {
     impl MemTimestampOracle {
         fn starting_at(ts: Timestamp) -> Self {
             Self {
+                events: Arc::default(),
                 read_write_ts: Mutex::new((ts, ts)),
                 apply_writes: AtomicUsize::new(0),
                 applied_timestamps: Mutex::new(Vec::new()),
@@ -1496,6 +1525,7 @@ mod tests {
     #[async_trait]
     impl TimestampOracle<Timestamp> for MemTimestampOracle {
         async fn write_ts(&self) -> WriteTimestamp {
+            self.events.lock().expect("events").push("allocate");
             let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
             let new_write_ts = std::cmp::max(*read_ts, *write_ts).step_forward();
             *write_ts = new_write_ts;
@@ -1516,6 +1546,7 @@ mod tests {
         }
 
         async fn apply_write(&self, lower_bound: Timestamp) {
+            self.events.lock().expect("events").push("apply");
             self.apply_writes.fetch_add(1, Ordering::SeqCst);
             self.applied_timestamps
                 .lock()
@@ -1529,6 +1560,7 @@ mod tests {
 
     #[derive(Debug)]
     struct ConflictingTableWriteHandle {
+        events: Arc<Mutex<Vec<&'static str>>>,
         conflicts: usize,
         conflict_upper: Option<Timestamp>,
         missing_target: Option<GlobalId>,
@@ -1540,6 +1572,7 @@ mod tests {
     impl ConflictingTableWriteHandle {
         fn new(conflicts: usize) -> Self {
             Self {
+                events: Arc::default(),
                 conflicts,
                 conflict_upper: None,
                 missing_target: None,
@@ -1577,12 +1610,23 @@ mod tests {
     }
 
     impl TableWriteHandle for ConflictingTableWriteHandle {
+        fn prepare(
+            &self,
+            commands: Vec<(GlobalId, Vec<TableData>)>,
+        ) -> oneshot::Receiver<Result<Vec<(GlobalId, Vec<TableData>)>, StorageError>> {
+            self.events.lock().expect("events").push("prepare");
+            let (tx, rx) = oneshot::channel();
+            tx.send(Ok(commands)).expect("receiver still in scope");
+            rx
+        }
+
         fn append(
             &self,
             write_ts: Timestamp,
             _advance_to: Timestamp,
             commands: Vec<(GlobalId, Vec<TableData>)>,
         ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.events.lock().expect("events").push("append");
             self.appends.lock().expect("lock poisoned").push(commands);
             self.respond(write_ts)
         }
@@ -1592,10 +1636,12 @@ mod tests {
             register_ts: Timestamp,
             _tables: Vec<TableRegistration>,
         ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.events.lock().expect("events").push("register");
             self.respond(register_ts)
         }
 
         fn detach(&self, _ids: Vec<GlobalId>) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.events.lock().expect("events").push("detach");
             let (tx, rx) = oneshot::channel();
             let _ = tx.send(Ok(()));
             rx
@@ -1606,8 +1652,96 @@ mod tests {
             forget_ts: Timestamp,
             _shards: BTreeSet<mz_persist_client::ShardId>,
         ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.events.lock().expect("events").push("forget");
             self.respond(forget_ts)
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn group_commit_prepares_once_before_allocation_and_preserves_fifo() {
+        Catalog::with_debug(|catalog| async move {
+            let oracle = Arc::new(MemTimestampOracle::starting_at(
+                catalog.current_upper().await,
+            ));
+            let handle = Arc::new(ConflictingTableWriteHandle {
+                events: Arc::clone(&oracle.events),
+                ..ConflictingTableWriteHandle::new(2)
+            });
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: Arc::<MemTimestampOracle>::clone(&oracle),
+                table_write_handle: Arc::<ConflictingTableWriteHandle>::clone(&handle),
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                timestamp_oracle_now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+            };
+            let (notify, completion) = oneshot::channel();
+            tx.send(TableWriteCmd::GroupCommit(GroupCommitRequest {
+                txns: vec![StagedWriteTxn::System {
+                    appends: vec![(
+                        GlobalId::System(1),
+                        vec![TableData::Rows(vec![(
+                            mz_repr::Row::default(),
+                            mz_repr::Diff::ONE,
+                        )])],
+                    )],
+                    notify,
+                }],
+                permits: Vec::new(),
+                contains_internal_system_write: true,
+                span: Span::none(),
+            }))
+            .expect("queue append");
+            let (registered, registration) = oneshot::channel();
+            tx.send(TableWriteCmd::Register {
+                tables: Vec::new(),
+                result: registered,
+            })
+            .expect("queue registration");
+            tx.send(TableWriteCmd::Detach { ids: Vec::new() })
+                .expect("queue detachment");
+            let (forgotten, retirement) = oneshot::channel();
+            tx.send(TableWriteCmd::Forget {
+                shards: BTreeSet::new(),
+                result: forgotten,
+            })
+            .expect("queue retirement");
+            drop(tx);
+            committer.run().await;
+            completion.await.expect("append completed");
+            let registration = registration.await.expect("registration completed");
+            let retirement = retirement.await.expect("retirement completed");
+            assert!(retirement > registration);
+            assert!(matches!(
+                internal_cmd_rx.recv().await,
+                Some(Message::GroupCommitApplied { .. })
+            ));
+            assert_eq!(
+                *oracle.events.lock().expect("events"),
+                vec![
+                    "prepare", "allocate", "append", "allocate", "append", "allocate", "append",
+                    "apply", "allocate", "register", "apply", "detach", "allocate", "forget",
+                    "apply",
+                ]
+            );
+            {
+                let appends = handle.appends.lock().expect("appends");
+                assert_eq!(appends.len(), 3);
+                for append in appends.iter() {
+                    let TableData::Rows(rows) = &append[0].1[0] else {
+                        panic!("mock retains rows")
+                    };
+                    assert_eq!(rows, &vec![(mz_repr::Row::default(), mz_repr::Diff::ONE)]);
+                }
+            }
+            catalog.expire().await;
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1633,7 +1767,7 @@ mod tests {
                 now: SYSTEM_TIME.clone(),
                 timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
-                max_attempts: ConfigValHandle::disconnected(2),
+
             };
             let (user1, result1) = oneshot::channel();
             let (user2, result2) = oneshot::channel();
@@ -1717,6 +1851,11 @@ mod tests {
             assert!(matches!(result2.await.expect("unrelated frontend receives success"), WriteResult::Success { timestamp } if timestamp == write_ts));
             assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
             assert_eq!(oracle.read_ts().await, write_ts);
+            assert_eq!(
+                handle.events.lock().expect("events").iter().filter(|event| **event == "prepare").count(),
+                2,
+                "a missing target must discard preparation and rebuild surviving contributions"
+            );
             {
             let appends = handle.appends.lock().expect("lock poisoned");
             assert_eq!(appends.len(), 2);
@@ -1759,7 +1898,6 @@ mod tests {
                 now: SYSTEM_TIME.clone(),
                 timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
-                max_attempts: ConfigValHandle::disconnected(2),
             };
             let (tx, result) = oneshot::channel();
             assert!(
@@ -1813,7 +1951,6 @@ mod tests {
                     now: SYSTEM_TIME.clone(),
                     timestamp_oracle_now: SYSTEM_TIME.clone(),
                     metrics: Metrics::register_into(&MetricsRegistry::new()),
-                    max_attempts: ConfigValHandle::disconnected(2),
                 };
                 let (result_tx, mut result_rx) = oneshot::channel();
                 assert_eq!(
@@ -1901,7 +2038,6 @@ mod tests {
                 now: SYSTEM_TIME.clone(),
                 timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
-                max_attempts: ConfigValHandle::disconnected(2),
             };
             let (result_tx, mut result_rx) = oneshot::channel();
             assert_eq!(
@@ -1950,7 +2086,7 @@ mod tests {
             // Start beyond the catalog upper to exercise the durable advance path.
             let initial_upper = catalog.current_upper().await;
             let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
-            let handle = Arc::new(ConflictingTableWriteHandle::new(1));
+            let handle = Arc::new(ConflictingTableWriteHandle::new(101));
             let oracle_dyn: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
                 Arc::<MemTimestampOracle>::clone(&oracle);
             let handle_dyn: Arc<dyn TableWriteHandle> =
@@ -1966,11 +2102,10 @@ mod tests {
                 now: SYSTEM_TIME.clone(),
                 timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
-                max_attempts: ConfigValHandle::disconnected(2),
             };
 
             let write_ts = committer
-                .write_to_txns(None, |ts, advance_to| {
+                .write_to_txns(|ts, advance_to| {
                     assert_eq!(advance_to, ts.step_forward());
                     handle.append(ts, advance_to, Vec::new())
                 })
@@ -1983,16 +2118,20 @@ mod tests {
                 .lock()
                 .expect("lock poisoned")
                 .clone();
-            assert_eq!(attempts.len(), 2, "one conflict, one success");
+            assert_eq!(
+                attempts.len(),
+                102,
+                "peer contention must not exhaust retries"
+            );
             assert!(
                 attempts[0] > initial_upper,
                 "attempts start past the initial catalog upper: {attempts:?} vs {initial_upper}"
             );
             assert!(
-                attempts[0] < attempts[1],
+                attempts.windows(2).all(|pair| pair[0] < pair[1]),
                 "retry must use a fresh, larger timestamp: {attempts:?}"
             );
-            assert_eq!(write_ts.timestamp, attempts[1]);
+            assert_eq!(Some(&write_ts.timestamp), attempts.last());
 
             assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
             assert_eq!(oracle.read_ts().await, write_ts.timestamp);
@@ -2011,17 +2150,17 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    async fn test_write_to_txns_zero_limit_allows_one_attempt() {
+    async fn test_write_to_txns_stops_after_coordinator_shutdown() {
         Catalog::with_debug(|catalog| async move {
             let initial_upper = catalog.current_upper().await;
             let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
-            let handle = Arc::new(ConflictingTableWriteHandle::new(0));
+            let handle = Arc::new(ConflictingTableWriteHandle::new(usize::MAX));
             let oracle_dyn: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
                 Arc::<MemTimestampOracle>::clone(&oracle);
             let handle_dyn: Arc<dyn TableWriteHandle> =
                 Arc::<ConflictingTableWriteHandle>::clone(&handle);
             let (_tx, rx) = mpsc::unbounded_channel();
-            let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
             let committer = GroupCommitter {
                 rx,
                 oracle: oracle_dyn,
@@ -2031,24 +2170,22 @@ mod tests {
                 now: SYSTEM_TIME.clone(),
                 timestamp_oracle_now: SYSTEM_TIME.clone(),
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
-                max_attempts: ConfigValHandle::disconnected(0),
             };
 
+            drop(internal_cmd_rx);
             let write_ts = committer
-                .write_to_txns(None, |ts, advance_to| {
-                    handle.append(ts, advance_to, Vec::new())
-                })
+                .write_to_txns(|ts, advance_to| handle.append(ts, advance_to, Vec::new()))
                 .await
-                .expect("targets stay registered in this test")
-                .expect("zero limit permits one successful attempt");
+                .expect("targets stay registered in this test");
 
             let attempts = handle
                 .write_timestamps
                 .lock()
                 .expect("lock poisoned")
                 .clone();
-            assert_eq!(attempts, vec![write_ts.timestamp]);
-            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
+            assert!(write_ts.is_none());
+            assert_eq!(attempts.len(), 1);
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 0);
 
             catalog.expire().await;
         })

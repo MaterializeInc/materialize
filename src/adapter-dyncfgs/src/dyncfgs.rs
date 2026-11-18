@@ -372,13 +372,13 @@ pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Maximum number of txns-shard write attempts before rebuilding `environmentd`.
+/// Maximum attempts in a bootstrap configuration reconciliation round.
 ///
 /// The effective minimum is one attempt.
 pub const GROUP_COMMIT_MAX_ATTEMPTS: Config<usize> = Config::new(
     "group_commit_max_attempts",
     100,
-    "Maximum number of txns-shard write attempts before rebuilding environmentd. Values below 1 are treated as 1.",
+    "Maximum attempts in a bootstrap configuration reconciliation round. Values below 1 are treated as 1. Runtime group commits retry ordinary contention without this limit.",
     ParameterScope::Environment,
 );
 

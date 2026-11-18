@@ -9275,6 +9275,7 @@ dependencies = [
 name = "mz-txn-wal"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "crossbeam-channel",
  "differential-dataflow",
@@ -9283,6 +9284,7 @@ dependencies = [
  "mz-build-tools",
  "mz-dyncfg",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
  "mz-persist-types",
  "mz-timely-util",

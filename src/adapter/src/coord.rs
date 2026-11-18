@@ -5880,7 +5880,6 @@ pub fn serve(
                         coord.catalog().config().now.clone(),
                         coord.timestamp_oracle_now.clone(),
                         coord.metrics.clone(),
-                        coord.catalog().system_config().dyncfgs(),
                     );
                 });
 

@@ -184,14 +184,16 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let data_write = handle.datas.take_write_for_commit(&data_id).unwrap_or_else(
-                        || {
-                            panic!(
-                                "data shard {} must be registered with this Txn handle to commit",
-                                data_id
-                            )
-                        },
-                    );
+                    let data_write =
+                        handle
+                            .datas
+                            .take_write_for_commit(&data_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "data shard {} must have an adopted write handle to commit",
+                                    data_id
+                                )
+                            });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches =
@@ -426,6 +428,173 @@ mod tests {
     use crate::txn_cache::TxnsCache;
 
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn staged_batch_retry_after_lost_wal_cas() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use mz_persist::location::{
+            CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+        };
+        use mz_persist::mem::{MemBlob, MemConsensus};
+        use mz_persist_client::async_runtime::IsolatedRuntime;
+        use mz_persist_client::cache::{PersistClientCache, StateCache};
+        use mz_persist_client::rpc::PubSubClientConnection;
+        use tokio::sync::Notify;
+
+        use crate::operator::DataSubscribeTask;
+
+        // Only this client's next WAL CAS is gated. The peer shares storage,
+        // but not the gate, state cache, or pubsub, so it cannot short-circuit
+        // the writer's backend CAS by updating its cached upper.
+        #[derive(Debug)]
+        struct GatedConsensus {
+            inner: Arc<MemConsensus>,
+            wal_key: String,
+            armed: AtomicBool,
+            entered: Notify,
+            release: Notify,
+            lost: AtomicBool,
+        }
+
+        #[async_trait::async_trait]
+        impl Consensus for GatedConsensus {
+            fn list_keys(&self) -> ResultStream<'_, String> {
+                self.inner.list_keys()
+            }
+
+            async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+                self.inner.head(key).await
+            }
+
+            async fn compare_and_set(
+                &self,
+                key: &str,
+                new: VersionedData,
+            ) -> Result<CaSResult, ExternalError> {
+                let gated = key == self.wal_key && self.armed.swap(false, Ordering::SeqCst);
+                if gated {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+                let result = self.inner.compare_and_set(key, new).await;
+                if gated {
+                    assert_eq!(result.as_ref().unwrap(), &CaSResult::ExpectationMismatch);
+                    self.lost.store(true, Ordering::SeqCst);
+                }
+                result
+            }
+
+            async fn scan(
+                &self,
+                key: &str,
+                from: SeqNo,
+                limit: usize,
+            ) -> Result<Vec<VersionedData>, ExternalError> {
+                self.inner.scan(key, from, limit).await
+            }
+
+            async fn truncate(
+                &self,
+                key: &str,
+                seqno: SeqNo,
+            ) -> Result<Option<usize>, ExternalError> {
+                self.inner.truncate(key, seqno).await
+            }
+        }
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let wal_id = ShardId::new();
+            let consensus = Arc::new(MemConsensus::default());
+            let blob = Arc::new(MemBlob::open(Default::default()));
+            let gate = Arc::new(GatedConsensus {
+                inner: Arc::clone(&consensus),
+                wal_key: wal_id.to_string(),
+                armed: AtomicBool::new(false),
+                entered: Notify::new(),
+                release: Notify::new(),
+                lost: AtomicBool::new(false),
+            });
+            let new_client = |consensus: Arc<dyn Consensus>| {
+                let cache = PersistClientCache::new_no_metrics();
+                let cfg = cache.cfg().clone();
+                let metrics = Arc::clone(cache.metrics());
+                let sender = PubSubClientConnection::noop().sender;
+                let states = Arc::new(StateCache::new(
+                    &cfg,
+                    Arc::clone(&metrics),
+                    Arc::clone(&sender),
+                ));
+                PersistClient::new(
+                    cfg,
+                    Arc::<MemBlob>::clone(&blob),
+                    consensus,
+                    metrics,
+                    Arc::new(IsolatedRuntime::new_for_tests()),
+                    states,
+                    sender,
+                )
+                .unwrap()
+            };
+            let client = new_client(Arc::<GatedConsensus>::clone(&gate));
+            let peer_client = new_client(consensus);
+            let mut first = TxnsHandle::expect_open_id(client.clone(), wal_id).await;
+            let data_id = first.expect_register(1).await;
+            let mut peer = TxnsHandle::expect_open_id(peer_client.clone(), wal_id).await;
+            peer.adopt([writer(&peer_client, data_id).await]);
+            let mut listen = DataSubscribeTask::new(peer_client.clone(), wal_id, data_id, 1).await;
+            let original = first
+                .stage_batch(&data_id, vec![("staged".into(), (), 1)])
+                .await;
+            let mut attempt = first.begin();
+            attempt.write_batch(&data_id, original.clone());
+
+            // Reaching the backend CAS means commit_at has already rewritten
+            // the staged clone to timestamp 2. Do not reuse that transaction.
+            gate.armed.store(true, Ordering::SeqCst);
+            let (result, ()) = tokio::join!(attempt.commit_at(&mut first, 2), async {
+                gate.entered.notified().await;
+                let mut txn = peer.begin();
+                txn.write(&data_id, "peer".into(), (), 1).await;
+                txn.commit_at(&mut peer, 2)
+                    .await
+                    .expect("peer wins WAL CAS");
+                gate.release.notify_one();
+            });
+            assert!(gate.lost.load(Ordering::SeqCst));
+            assert_eq!(result, Err(CommitError::UpperMismatch(3)));
+            drop(attempt);
+
+            let mut retry = first.begin();
+            retry.write_batch(&data_id, original);
+            retry
+                .commit_at(&mut first, 3)
+                .await
+                .expect("fresh batch retry");
+            let tidy = first.apply_le(&3).await;
+            first.tidy_at(4, tidy).await.expect("tidy both commits");
+            let mut snapshot = TxnsCache::expect_open(0, &peer).await;
+            assert_eq!(
+                snapshot.expect_snapshot(&peer_client, data_id, 2).await,
+                vec!["peer"]
+            );
+            assert_eq!(
+                snapshot.expect_snapshot(&peer_client, data_id, 4).await,
+                vec!["peer", "staged"]
+            );
+            assert!(listen.step_past(4).await > 4);
+            let mut updates = listen.finish().await;
+            updates.sort();
+            assert_eq!(
+                updates,
+                vec![("peer".into(), 2, 1), ("staged".into(), 3, 1)]
+            );
+        })
+        .await
+        .expect("staged batch CAS conflict, retry, snapshot and listen progress");
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow

@@ -28,7 +28,9 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+async-trait.workspace = true
 crossbeam-channel.workspace = true
+mz-persist = { path = "../persist" }
 rand.workspace = true
 
 [build-dependencies]

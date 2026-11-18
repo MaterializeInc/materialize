@@ -21,7 +21,7 @@ use futures::stream::FuturesUnordered;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle, ParameterScope};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::write::WriteHandle;
@@ -30,7 +30,7 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::TxnsCodecDefault;
@@ -180,12 +180,38 @@ where
         }
     }
 
-    /// Returns a new, empty transaction that can involve the data shards
-    /// registered with this handle.
+    /// Returns an empty transaction. Committing writes requires locally adopted
+    /// handles and validates shared membership at the attempted WAL prefix.
     pub fn begin(&self) -> Txn<K, V, T, D> {
-        // TODO: This is a method on the handle because we'll need WriteHandles
-        // once we start spilling to s3.
         Txn::new()
+    }
+
+    /// Encodes updates with the locally adopted schema, without allocating a
+    /// commit timestamp or changing WAL membership or progress.
+    ///
+    /// The caller must have adopted a write handle for `data_id`. Commit still
+    /// validates shared membership. The returned batch can be cloned into new
+    /// transactions after definitive upper conflicts. Retain the original batch,
+    /// not a batch already rewritten to a failed attempt's timestamp.
+    pub async fn stage_batch(&self, data_id: &ShardId, updates: Vec<(K, V, D)>) -> ProtoBatch {
+        let write = self
+            .datas
+            .data_write_for_commit
+            .get(data_id)
+            .expect("batch preparation requires an adopted write handle");
+        let timestamp = T::minimum();
+        let mut batch = write.builder(Antichain::from_elem(timestamp.clone()));
+        for (key, value, diff) in updates {
+            batch
+                .add(&key, &value, &timestamp, &diff)
+                .await
+                .expect("valid usage");
+        }
+        batch
+            .finish(Antichain::from_elem(timestamp.step_forward()))
+            .await
+            .expect("valid usage")
+            .into_transmittable_batch()
     }
 
     /// Adopts local write handles without changing shared txn-WAL membership or
@@ -262,11 +288,11 @@ where
     /// to register the data at the requested time, an Err will be returned with
     /// the minimum time the data shards could be registered.
     ///
-    /// This method is idempotent. Data shards currently registered at
-    /// `register_ts` will not be registered a second time. Specifically, this
-    /// method will return success when the most recent register ts `R` is
-    /// less_equal to `register_ts` AND there is no forget ts between `R` and
-    /// `register_ts`.
+    /// Already-registered shards do not get duplicate membership entries, but
+    /// every successful call advances the WAL past `register_ts`. A timestamp
+    /// below the observed WAL upper is rejected even when all shards are already
+    /// registered. To attach without advancing the WAL, use [`Self::adopt`] and
+    /// validate [`Self::registration_status`] against the caller's authority.
     ///
     /// As a side effect all txns <= register_ts are applied, including the
     /// registration itself.
