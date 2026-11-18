@@ -20,8 +20,12 @@ peer contention while serving cache commands. Clippy and cache API tests passed,
 including a forced peer CAS and stale empty-cache regression. Independent review
 found no remaining safety issue. Catalog enqueue-path runtime coverage is limited.
 
-MV/REFRESH admission cleanup is the remaining uncommitted change. Clippy and
-independent review passed. The unchanged materialized-view SQL checks are running.
+Native MV/REFRESH admission cleanup is committed after Clippy, independent review
+and the unchanged SQL rerun passed. The first run failed two related compaction-
+scheduling assertions after a fixed 5s wait, missing a replica and its audit row.
+The exact rerun passed both suites without source, fixture or setting changes.
+This intermittent scheduling failure is not resolved. Preserve it in final-head
+acceptance tracking rather than treating the rerun as proof of stability.
 
 Then finish the remaining conditional-write survey, including startup wrappers and
 inline DDL owners. Recheck `multi-writer-retry-survey.md` and
@@ -73,8 +77,7 @@ The remaining architecture-generated load is assessed in the
 ## Worker and evidence
 
 Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 16:00 UTC,
-tag expiry 16:05. Timing runtimes are stopped. The current focused SQL test unit is
-`aj-native-mv-admission-test`. Never overlap builds and runtimes. Builds use one job,
+tag expiry 16:05. Timing and focused SQL runtimes are stopped. Never overlap builds and runtimes. Builds use one job,
 four CPUs, 32 GiB, no swap and a 30 GiB disk reserve. Runtime uses a 28 GiB/6-CPU
 user slice plus an 8 GiB/2-CPU root slice. Extend the worker within these caps
 without asking when needed. Restore caps and stop owned runtimes after each run.
@@ -88,7 +91,9 @@ Essential current pointers:
 - Scratch `controller-followups/native-cache-mv-final-build.log` records passing
   Clippy, cache tests and the SQL test binary build. Local
   `native-cache-mv-source.sha256` matches every tested changed source.
-- Local `native-mv-admission-test.log` is the focused MV runtime check.
+- Local `native-mv-admission-test.log` preserves the failed compaction-scheduling
+  assertions. `native-mv-admission-reproduction.log` records the passing unchanged
+  rerun. No assertion, cadence or timeout was changed.
 - `startup-before-evidence.tar.gz`, extracted `startup-before-evidence/`, and
   `startup-before-phase-summary.json` preserve the completed baseline.
 - `startup-after-evidence.tar.gz`, extracted `startup-after-evidence/`,
