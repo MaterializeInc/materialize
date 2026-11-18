@@ -4127,16 +4127,18 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
+    /// Returns no mutation for an index, whose ownership follows its parent,
+    /// after emitting the existing notice.
     #[instrument]
-    pub(super) async fn sequence_alter_owner(
-        &mut self,
+    pub(super) fn prepare_alter_owner(
+        &self,
         session: &Session,
         plan::AlterOwnerPlan {
             id,
-            object_type,
+            object_type: _,
             new_owner,
         }: plan::AlterOwnerPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Option<Vec<catalog::Op>> {
         let mut ops = vec![catalog::Op::UpdateOwner {
             id: id.clone(),
             new_owner,
@@ -4153,7 +4155,7 @@ impl Coordinator {
                         .resolve_full_name(entry.name(), Some(session.conn_id()))
                         .to_string();
                     session.add_notice(AdapterNotice::AlterIndexOwner { name });
-                    return Ok(ExecuteResponse::AlteredObject(object_type));
+                    return None;
                 }
 
                 // Alter owner cascades down to dependent indexes.
@@ -4191,9 +4193,7 @@ impl Coordinator {
             _ => {}
         }
 
-        self.catalog_transact(Some(session), ops)
-            .await
-            .map(|_| ExecuteResponse::AlteredObject(object_type))
+        Some(ops)
     }
 
     #[instrument]

@@ -758,8 +758,11 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterOwner(plan) => {
-                    let result = self.sequence_alter_owner(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                    let response = ExecuteResponse::AlteredObject(plan.object_type);
+                    match self.prepare_alter_owner(ctx.session(), plan) {
+                        Some(ops) => self.sequence_catalog_commit(ctx, ops, response).await,
+                        None => ctx.retire(Ok(response)),
+                    }
                 }
                 Plan::ReassignOwned(plan) => match self.prepare_reassign_owned(plan) {
                     Ok(ops) => {
