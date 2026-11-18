@@ -14,11 +14,9 @@ use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::AsCollection;
 use itertools::Itertools;
-use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::GlobalId;
 use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableDesc};
@@ -27,9 +25,7 @@ use mz_storage_types::sources::{
     SourceExport, SourceExportDetails, SourceTimestamp, SqlServerSourceConnection,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
-use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
@@ -52,8 +48,8 @@ struct SourceOutputInfo {
     decoder: Arc<SqlServerRowDecoder>,
     /// Upper to resume replication from.
     resume_upper: Antichain<Lsn>,
-    /// An index to split the timely stream.
-    partition_index: u64,
+    /// The position of this export's data port among the replication operator's outputs.
+    output_index: usize,
     /// The basis for the resumption LSN when snapshotting.
     initial_lsn: Lsn,
 }
@@ -165,7 +161,7 @@ impl SourceRender for SqlServerSourceConnection {
                 upstream_desc,
                 decoder: Arc::new(decoder),
                 resume_upper: Antichain::from_iter(resume_upper),
-                partition_index: u64::cast_from(idx),
+                output_index: idx,
                 initial_lsn: details.initial_lsn,
             };
             source_outputs.insert(*id, output_info);
@@ -192,21 +188,12 @@ impl SourceRender for SqlServerSourceConnection {
             self.extras.clone(),
         );
 
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = repl_updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                move |((partition_idx, data), time, diff): (
-                    (u64, Result<SourceMessage, DataflowError>),
-                    Lsn,
-                    Diff,
-                )| { (partition_idx, (data, time, diff)) },
-            );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
+        let data_collections = config
+            .source_exports
+            .keys()
+            .copied()
+            .zip_eq(repl_updates)
+            .collect();
 
         let export_ids = config.source_exports.keys().copied();
         let health_init = export_ids
