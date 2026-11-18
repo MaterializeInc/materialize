@@ -693,7 +693,6 @@ pub const NAMES: &[(u32, &str)] = &[
     (17131, "pg_catalog.max"),
     (17132, "pg_catalog.min"),
     (17138, "jq"),
-    (17149, "mz_internal.try_decode_catalog_create_sql"),
     // END GENERATED
 ];
 

@@ -499,9 +499,9 @@ mz_internal.mz_builtin_object_mappings:
   →Read mz_internal.mz_catalog_state
 
 Source mz_internal.mz_catalog_state
-  project=(#3..=#5, #7, #8)
-  filter=((#0{kind} = "GidMapping"))
-  map=((#1{data} -> "key"), coalesce((#2 ->> "schema_name"), ""), coalesce((#2 ->> "object_name"), ""), coalesce((#2 ->> "object_type"), ""), (#1{data} -> "value"), coalesce(("s" || (#6 ->> "catalog_id")), ""), coalesce(("s" || (#6 ->> "global_id")), ""))
+  project=(#4..=#8)
+  filter=((#0{kind} = "GidMapping") AND ("<RUNTIME-ALTERABLE>" != (#2 ->> "fingerprint")))
+  map=((#1{data} -> "value"), (#1{data} -> "key"), coalesce((#3 ->> "schema_name"), ""), coalesce((#3 ->> "object_name"), ""), coalesce((#3 ->> "object_type"), ""), coalesce(("s" || (#2 ->> "catalog_id")), ""), coalesce(("s" || (#2 ->> "global_id")), ""))
 
 Target cluster: mz_catalog_server
 
@@ -531,8 +531,8 @@ mz_internal.mz_catalog_item_metadata:
   →Read mz_internal.mz_catalog_items
 
 Source mz_internal.mz_catalog_items
-  project=(#0..=#6, #11, #10)
-  map=((#9{details} - "definition"))
+  project=(#0..=#8, #12)
+  map=((#11{details} - "definition"))
 
 Target cluster: mz_catalog_server
 
@@ -4986,7 +4986,7 @@ mz_catalog.mz_columns:
           Project: #6, #0..=#3, #7, #4, #5
           Map: null
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1983 rows)
+          →Constant (1985 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -5846,9 +5846,9 @@ mz_internal.mz_catalog_items:
   →Read mz_internal.mz_catalog_state
 
 Source mz_internal.mz_catalog_state
-  project=(#2, #4..=#8, #11, #9, #13..=#15)
+  project=(#2, #4..=#10, #13, #11, #14, #12)
   filter=((#0{kind} = "Item"))
-  map=(parse_catalog_id(((#1{data} -> "key") -> "gid")), (#1{data} -> "value"), text_to_oid((#3 ->> "oid")), parse_catalog_id((#3 -> "schema_id")), (#3 ->> "name"), parse_catalog_id((#3 -> "owner_id")), parse_catalog_privileges((#3 -> "privileges")), (((#3 -> "definition") -> "V1") ->> "create_sql"), try_decode_catalog_create_sql(#9{create_sql}), (#10{decoded} ->> "type"), (#10{decoded} -> "ok"), (#12 ->> "redacted_create_sql"), (#12 -> "details"), (#10{decoded} ->> "error"))
+  map=(parse_catalog_id(((#1{data} -> "key") -> "gid")), (#1{data} -> "value"), parse_catalog_id((#3 -> "global_id")), text_to_oid((#3 ->> "oid")), parse_catalog_id((#3 -> "schema_id")), (#3 ->> "name"), parse_catalog_id((#3 -> "owner_id")), parse_catalog_privileges((#3 -> "privileges")), text_to_uuid((#3 ->> "ephemeral_owner_session")), (((#3 -> "definition") -> "V1") ->> "create_sql"), parse_catalog_create_sql(#11{create_sql}), (#12{details} ->> "type"), redact_sql(#11{create_sql}))
 
 Target cluster: mz_catalog_server
 
@@ -6316,7 +6316,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1116 rows)
+            →Constant (1118 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8929,7 +8929,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1983 rows)
+  →Constant (1985 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10978,7 +10978,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1116 rows)
+            →Constant (1118 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

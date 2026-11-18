@@ -1275,6 +1275,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17146  mz_catalog_items
 17147  mz_catalog_item_metadata
 17148  mz_catalog_item_metadata_ind
-17149  try_decode_catalog_create_sql
 17150  mz_builtin_object_mappings
 17151  mz_builtin_object_mappings_ind
