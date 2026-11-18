@@ -73,7 +73,10 @@ configuration startup/restart, adapter restart preservation and CREATE/ALTER
 infrastructure recovery checks pass. Serving now requires the bootstrap-created
 client, with no alternative registration. Independent review, Clippy, native
 configuration/restart and independent-oracle bootstrap checks pass. No dedicated
-supersession race was added. No performance improvement is claimed.
+supersession race was added. Persisted-object EXPLAIN now has only the native
+selected-plan path. Clippy and unchanged materialized-view/physical-plan SQL
+suites pass. No new join/replacement EXPLAIN race coverage is claimed.
+No performance improvement is claimed.
 
 ALTER DEFAULT PRIVILEGES, REASSIGN OWNED and ALTER OWNER use the existing staged commit
 owner instead of inline retries. Independent review, Clippy and unchanged
@@ -109,6 +112,8 @@ source overlays. Verify hashes, not just its Git revision. Remote logs are under
 `~/.local/share/aj/m3-evidence/controller-followups/`.
 
 Essential pointers:
+- Persisted EXPLAIN: local `native-selected-explain-test.log`, including the
+  build result and standard-parameter SQL run.
 - Client adoption: local `mandatory-bootstrap-client-test.log` and remote
   `mandatory-bootstrap-client-recheck.log`.
 - Current retry checks: remote `registration-certificate-red.log`,
