@@ -243,7 +243,12 @@ pub static MZ_BUILTIN_OBJECT_MAPPINGS: LazyLock<BuiltinView> = LazyLock::new(|| 
     // Although these values should never be nullable, JSONB lookup
     // types are inferred as nullable. Thus we coalesce to infer as
     // non-nullable.
-    sql: "
+    //
+    // We exclude runtime-alterable builtins to avoid duplicate entries when
+    // unioning this view with item records in the durable catalog.
+    sql: Box::leak(
+        format!(
+            "
 SELECT
     COALESCE(data->'key'->>'schema_name', '') AS schema_name,
     COALESCE(data->'key'->>'object_name', '') AS name,
@@ -251,7 +256,12 @@ SELECT
     COALESCE('s' || (data->'value'->>'catalog_id'), '') AS id,
     COALESCE('s' || (data->'value'->>'global_id'), '') AS global_id
 FROM mz_internal.mz_catalog_state
-WHERE kind = 'GidMapping'",
+WHERE
+    kind = 'GidMapping' AND
+    data->'value'->>'fingerprint' <> '{RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL}'"
+        )
+        .into_boxed_str(),
+    ),
     access: vec![],
     ontology: None,
 });
