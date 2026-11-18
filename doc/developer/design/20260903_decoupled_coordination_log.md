@@ -31,13 +31,26 @@ Startup table registration now backs off between rejected rounds while retaining
 preparation. Clippy and deployment initialization tests passed, including recovery
 after a peer overtakes a complete round and existing DROP-ordering coverage.
 
-Next, finish the remaining conditional-write survey, particularly inline DDL owners. Recheck `multi-writer-retry-survey.md` and
+Finish verification of the uncommitted controller RTR fallback removal first.
+The native request-owned recency path and shared kernel are unchanged. Independent
+review confirmed serving invariants and off-coordinator polling. Clippy exposed
+obsolete async wrappers and a test-only import, now corrected. The bounded build
+unit is `aj-native-recency-verified-build`. Earlier stale-binary SQL runs were
+stopped and are excluded from evidence. The runtime wrapper now rejects failed
+builds itself. Run transactions and bounded-staleness checks after the build passes.
+
+Then finish the remaining conditional-write survey, particularly inline DDL owners. Recheck `multi-writer-retry-survey.md` and
 `native-only/native-ci-recovery/current-remaining-retry-sites.md` against source.
 Runtime-level activation exhaustion/tick continuation coverage remains outstanding.
 Bring changes to write guarantees or public semantics to the user before landing.
 
 ## Steering and live gaps
 
+- Scope decision requested: the introspection audit found live overlapping adapter
+  publishers for statistics, compute observations, and dependency/refresh rows.
+  Their SQL consumers still need them. Replacing ownership goes beyond deleting
+  dead alternatives and may exceed the earlier frontier-only scope. Leave these
+  publishers intact pending that decision. See `remaining-introspection-ownership.md`.
 - Restart admission retains its guards and fresh initialization still precedes
   children. HTTP and reconciliation may proceed while restart configuration is
   pending. Adapter readiness does not certify configuration publication.
