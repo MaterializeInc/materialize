@@ -918,11 +918,21 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-The database user must be granted the `rds_iam` role, and the IAM role assumed
-by the [AWS connection](#aws) must be allowed the `rds-db:connect` action for
-that user. See the [Amazon RDS User Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
-for instructions on enabling IAM database authentication, creating IAM
-policies, and creating a database account.
+Before you create the connection, configure the database for IAM
+authentication:
+
+* Enable IAM database authentication on the DB instance or cluster.
+* Set the `rds.iam_auth_for_replication` parameter to `1` in the DB parameter
+  group (or the DB cluster parameter group, for Multi-AZ clusters).
+  Materialize ingests data over a replication connection, and Amazon RDS does
+  not accept IAM authentication on replication connections unless this
+  parameter is set. `rds.logical_replication` must also be set to `1`.
+* Grant the database user the `rds_iam` and `rds_replication` roles.
+* Allow the IAM role assumed by the [AWS connection](#aws) to perform the
+  `rds-db:connect` action for that database user.
+
+See the Amazon RDS User Guide for instructions on [IAM database authentication](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
+and on [IAM authentication for logical replication connections](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.FeatureSupport.IAMLogicalReplication.html).
 
 {{< /tab >}}
 {{< /tabs >}}
