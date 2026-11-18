@@ -277,6 +277,22 @@ Wait for `ReadyToPromote`. SQL readiness alone does not establish upgrade
 readiness. The candidate must also satisfy the configured catch-up and replica
 stability requirements. Do not skip catch-up when verifying an upgrade.
 
+The default stability period is **10 minutes** of continuous catch-up and healthy
+replicas. A candidate can serve SQL while still waiting for this period. For a
+short local demonstration, lower the period before waiting for promotion:
+
+```sh
+candidate_sql_internal=$(curl -fsS "$candidate_controller/api/adapters" |
+  jq -r '.[] | select(.id == "a1") | .endpoints["sql-internal"][0]')
+psql "postgres://mz_system@$candidate_sql_internal/materialize" -v ON_ERROR_STOP=1 \
+  -c "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '20s'"
+```
+
+This environment-wide setting still requires catch-up and healthy replicas. It
+changes the demonstration's stability requirement, so record it with the result.
+Restore the default afterward with `ALTER SYSTEM RESET
+with_0dt_caught_up_check_stability_period` on the same connection.
+
 ```sh
 curl -fsS -X POST "http://$candidate_http/api/leader/promote"
 curl -fsS "$candidate_controller/api/inventory" |

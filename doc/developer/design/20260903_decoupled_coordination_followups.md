@@ -672,3 +672,16 @@ skips this adapter delivery path and is not affected.
 Audit retirement of never-installed permissions before changing this behavior.
 Preserve legitimate staging before collection creation. This is an ownership and
 lifetime follow-up, not permission to weaken catalog or storage validation.
+
+## Approved M3 scope limits
+
+Expression-cache reclamation uses release-version membership. Executable-specific
+cache variants of a live development release can still accumulate. Reclaiming
+those variants needs more precise live-build information and is deferred. Written
+plans remain authoritative and are not cache garbage.
+
+Sink selection retains the current rule rather than adding a durable placement
+record. Unlike upstream's sticky running-sink selection, introducing a lower-ID
+eligible replica can change the selected execution. Do not retain placement only
+locally: different replicas could then select competing sink writers. Revisit
+stickiness separately if this handover cost warrants shared placement metadata.

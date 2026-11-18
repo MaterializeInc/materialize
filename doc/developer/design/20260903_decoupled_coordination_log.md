@@ -19,19 +19,19 @@ Bring changes to write guarantees or public behavior to the user before landing.
 
 ## Live decisions and boundaries
 
-- Restart scheduling awaits approval. Active-controller restart currently retries
-  configuration publication before serving HTTP. Proposed change uses the existing
-  runtime tick, retaining admission checks before serving and fresh initialization
-  before children. HTTP and process reconciliation could proceed while restart
-  publication remains pending, as during promotion. Existing configuration tests
-  require correct rows when SQL readiness returns. Do not silently relax that.
-- Cache reclamation needs a scope decision. Membership records release versions,
-  while development cache keys include executable identities. Pruning unused release
-  namespaces can preserve all variants of live versions. Exact variant reclamation
-  needs more membership metadata. Never reclaim authoritative Written plans.
-- Sticky sink selection needs shared per-sink ownership. A deployment-qualified
-  catalog placement record was proposed for approval. Local retention alone would
-  let a new lower-ID replica start a competing writer.
+- Approved: move restart-time configuration publication into the existing runtime
+  tick, retaining admission checks before serving and fresh initialization before
+  children. Preserve SQL-readiness configuration guarantees and tick continuation.
+- Approved: reclaim expression-cache namespaces for release versions unused by
+  live deployments. Keep dev-build variants of live releases and never reclaim
+  authoritative Written plans. Implementation remains outstanding.
+- Keep the current sink selection rule. Do not add durable placement records.
+  The difference from upstream and dev-build cache accumulation are recorded in
+  the [follow-ups](20260903_decoupled_coordination_followups.md#approved-m3-scope-limits).
+- Run full lifecycle, DDL and adapter-loss acceptance once on the final head after
+  removal and retry work, not per cleanup. That final run remains outstanding.
+- Startup timing work proceeds alongside cleanup: attribute the 20s gap between
+  readiness checks and report before/after per-phase restart and promotion timing.
 - Promoted-adapter storage initialization can return `CatalogOutOfSync` after
   structural catch-up. Revalidate preparation rather than removing the guard.
 - Debug upsert OOM also reproduces on pinned upstream. No native-specific cause
