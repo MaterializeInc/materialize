@@ -20,6 +20,7 @@ use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::desc::SqlServerRowDecoder;
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SqlServerSourceConnection;
 use mz_storage_types::sources::sql_server::MAX_LSN_WAIT;
@@ -88,6 +89,14 @@ pub(crate) fn render<'scope>(
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
+
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
 
     // The operator collects every rewind request before it streams any change, so the rewind
     // input needs no connection to the data ports.
@@ -249,19 +258,27 @@ pub(crate) fn render<'scope>(
                     // downgrade our capability.
                     CdcEvent::Progress { next_lsn } => {
                         tracing::debug!(?config.id, ?next_lsn, "got a closed lsn");
-                        // cannot downgrade capability until rewinds have been processed,
-                        // we must be able to produce data at the minimum offset.
+                        // A pending rewind emits negated snapshot data at the minimum offset. Its
+                        // port has to keep the minimum capability until the rewind resolves.
+                        // Without concurrent replication every port stays there until no rewind
+                        // is pending.
                         rewinds.retain(|_, (_, snapshot_lsn)| next_lsn <= *snapshot_lsn);
-                        if rewinds.is_empty() {
-                            if log_rewinds_complete {
-                                tracing::debug!("rewinds complete");
-                                log_rewinds_complete = false;
+                        if rewinds.is_empty() && log_rewinds_complete {
+                            tracing::debug!("rewinds complete");
+                            log_rewinds_complete = false;
+                        } else if !rewinds.is_empty() {
+                            tracing::debug!("rewinds remaining: {:?}", rewinds);
+                        }
+                        if concurrent_replication {
+                            for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                                if !rewinds.contains_key(&output_index) {
+                                    cap_set.downgrade([next_lsn]);
+                                }
                             }
+                        } else if rewinds.is_empty() {
                             for cap_set in data_cap_sets.iter_mut() {
                                 cap_set.downgrade([next_lsn]);
                             }
-                        } else {
-                            tracing::debug!("rewinds remaining: {:?}", rewinds);
                         }
 
                         // Events are emitted in LSN order for a given capture instance, if any
