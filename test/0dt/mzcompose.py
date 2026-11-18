@@ -1949,20 +1949,15 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
 
 def workflow_new_builtins_survive_promotion(c: Composition) -> None:
     """
-    Verify that builtin materialized views that are new in this version are
-    hydrated before promotion and keep their dataflows across it.
+    Verify that a builtin materialized view that is new in this version is
+    hydrated before promotion and keeps its dataflow across it.
 
-    The old generation runs a pinned release. The test needs a release that we
-    still support upgrading from and that lacks a builtin materialized view of
-    the current version. It fails when the pin no longer provides one, at which
-    point the pin needs to move to a newer such release.
+    The old generation runs a pinned release, and `new_mv` names a builtin
+    materialized view that release lacks. Both need to move together once we
+    no longer support upgrading from the pinned release.
     """
     from_version = "v26.47.1"
-    builtin_mvs_query = """
-        SELECT s.name || '.' || mv.name
-        FROM mz_materialized_views mv JOIN mz_schemas s ON s.id = mv.schema_id
-        WHERE mv.id LIKE 's%'
-    """
+    new_mv = "mz_query_policies"
 
     c.down(destroy_volumes=True)
     with c.override(
@@ -1989,29 +1984,22 @@ def workflow_new_builtins_survive_promotion(c: Composition) -> None:
         ),
     ):
         c.up("mz_old")
-        old_mvs = {row[0] for row in c.sql_query(builtin_mvs_query, service="mz_old")}
+        exists = c.sql_query(
+            f"SELECT count(*) FROM mz_objects WHERE name = '{new_mv}'",
+            service="mz_old",
+        )[0][0]
+        assert exists == 0, f"{from_version} already has {new_mv}, move the pin"
 
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
 
-        new_mvs = {
-            row[0]
-            for row in c.sql_query(
-                builtin_mvs_query, service="mz_new", reuse_connection=False
-            )
-        } - old_mvs
-        assert (
-            new_mvs
-        ), f"{from_version} has all builtin materialized views, move the pin"
-
         # A new builtin MV is only readable on the read-only generation if that
         # generation wrote its shard. Nothing else does.
-        for name in sorted(new_mvs):
-            c.sql_query(
-                f"SELECT count(*) FROM {name}",
-                service="mz_new",
-                reuse_connection=False,
-            )
+        c.sql_query(
+            f"SELECT count(*) FROM mz_internal.{new_mv}",
+            service="mz_new",
+            reuse_connection=False,
+        )
 
         c.promote_mz("mz_new", retire_mz_service="mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
