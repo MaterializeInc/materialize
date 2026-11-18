@@ -300,9 +300,9 @@ def workflow_snapshot_consistency(
 ) -> None:
     """
     Tests the scenario where a new source creates a snapshot and transitions to replication
-    while the upstream source table is seeing updates. This test validates that the source snapshot
-    sees a consistent view of the table during snapshot and identifies the correct LSN to start
-    replication.
+    while the upstream source tables are seeing updates. This test validates that the source
+    snapshot sees a consistent view of the tables during snapshot and identifies the correct LSN
+    to start replication. Each update transaction writes both tables.
     """
     # Start with a fresh state
     c.kill("sql-server")
@@ -327,7 +327,9 @@ def workflow_snapshot_consistency(
                 $ sql-server-execute name=sql-server
                 USE test;
                 CREATE TABLE t1 (id bigint, val bigint);
+                CREATE TABLE t2 (id bigint, val bigint);
                 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
+                EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0;
 
                 WITH nums AS (SELECT 1 as n UNION ALL SELECT n+1 FROM nums where n < {initial_rows}) INSERT INTO t1 SELECT n, n+1000 FROM nums;
 
@@ -345,10 +347,11 @@ def workflow_snapshot_consistency(
     # Create a concurrent workload with 2 variaties of updates
     # - insert of new rows
     # - insert and delete of a row (the same row)
+    # Each transaction is a single line, so a deadlock retry reruns all of it.
     update_id_offset = 10000
     update_val_offset = 100000
     insert_delete = lambda i: dedent(f"""
-        INSERT INTO t1 VALUES (999999999,666666666), ({i + update_id_offset}, {i + update_val_offset});
+        BEGIN TRANSACTION; INSERT INTO t2 VALUES ({i + update_id_offset}, {i + update_val_offset}); INSERT INTO t1 VALUES (999999999,666666666), ({i + update_id_offset}, {i + update_val_offset}); COMMIT TRANSACTION;
         DELETE FROM t1 WHERE id = 999999999;
         """)
 
@@ -378,7 +381,7 @@ def workflow_snapshot_consistency(
         input=dedent("""
             > CREATE SOURCE mssql_source
               FROM SQL SERVER CONNECTION mssql_connection
-              FOR TABLES (dbo.t1);
+              FOR TABLES (dbo.t1, dbo.t2);
             """),
     )
 
@@ -390,6 +393,9 @@ def workflow_snapshot_consistency(
         input=dedent(f"""
             > SELECT COUNT(*) >= {update_rows + initial_rows}, MIN(id), MAX(id) >= {update_rows + update_id_offset - 1} FROM t1;
             true 1 true
+
+            > SELECT COUNT(*), MIN(id), MAX(id) FROM t2;
+            {update_rows} {update_id_offset} {update_rows + update_id_offset - 1}
             """),
     )
 

@@ -412,6 +412,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     sql_server_cdc_cleanup_change_table
     sql_server_cdc_cleanup_change_table_max_deletes
     sql_server_max_lsn_wait
+    sql_server_snapshot_lock_wait_timeout
     sql_server_snapshot_progress_report_interval
     sql_server_source_validate_restore_history
     ssh_check_interval

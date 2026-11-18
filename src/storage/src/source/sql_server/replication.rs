@@ -37,8 +37,8 @@ use timely::progress::Timestamp;
 use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
-    DataOutputs, DefiniteError, PrometheusSqlServerCdcMetrics, ReplicationError, SourceOutputInfo,
-    TransientError, decode, return_definite_error, validate_upstream,
+    DataOutputs, DefiniteError, ReplicationError, SourceOutputInfo, TransientError, decode,
+    return_definite_error, validate_upstream,
 };
 use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 
@@ -160,9 +160,8 @@ pub(crate) fn render<'scope>(
                 return Ok(());
             }
 
-            let cdc_metrics = PrometheusSqlServerCdcMetrics{inner: &metrics};
             let mut cdc_handle = client
-                .cdc(capture_instances.keys().cloned(), cdc_metrics)
+                .cdc(capture_instances.keys().cloned())
                 .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
             cdc_handle.wait_for_ready().await?;
 

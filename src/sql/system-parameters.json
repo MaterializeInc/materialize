@@ -3937,6 +3937,15 @@
       "dyncfg": true
     },
     {
+      "name": "sql_server_snapshot_lock_wait_timeout",
+      "typeName": "duration",
+      "default": "1 h",
+      "description": "Maximum amount of time a snapshot waits for each upstream table lock. A snapshot that times out fails and is retried.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "sql_server_snapshot_progress_report_interval",
       "typeName": "duration",
       "default": "2 s",
