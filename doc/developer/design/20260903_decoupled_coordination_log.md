@@ -14,13 +14,14 @@ long read. Refreshing known-stale local state preserves cadence and certificatio
 Restart publication now belongs to the tick. Clippy, targeted catalog tests and
 the focused debug runtime checks passed. See `startup-readiness-comparison.md`.
 
-Release-version cache pruning and removal of non-native MV/REFRESH admission
-alternatives are separate uncommitted work. They were excluded from the timing
-comparison and still need completed targeted checks. The first combined check
-found a moved REFRESH input bundle, reproduced before restoring its required clone.
-The bounded recheck is running. Cache review found an
-empty stale-cache case, now covered by incremental refresh and a regression.
-The cache test also gates a real peer CAS and checks retry without another request.
+Release-version cache pruning is verified and committed. It preserves live build
+variants, unknown namespaces and Written plans, refreshes incrementally, and retries
+peer contention while serving cache commands. Clippy and cache API tests passed,
+including a forced peer CAS and stale empty-cache regression. Independent review
+found no remaining safety issue. Catalog enqueue-path runtime coverage is limited.
+
+MV/REFRESH admission cleanup is the remaining uncommitted change. Clippy and
+independent review passed. The unchanged materialized-view SQL checks are running.
 
 Then finish the remaining conditional-write survey, including startup wrappers and
 inline DDL owners. Recheck `multi-writer-retry-survey.md` and
@@ -72,8 +73,8 @@ The remaining architecture-generated load is assessed in the
 ## Worker and evidence
 
 Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 16:00 UTC,
-tag expiry 16:05. Timing runtimes are stopped. The current build/test unit is
-`aj-native-cache-mv-recheck`. Never overlap builds and runtimes. Builds use one job,
+tag expiry 16:05. Timing runtimes are stopped. The current focused SQL test unit is
+`aj-native-mv-admission-test`. Never overlap builds and runtimes. Builds use one job,
 four CPUs, 32 GiB, no swap and a 30 GiB disk reserve. Runtime uses a 28 GiB/6-CPU
 user slice plus an 8 GiB/2-CPU root slice. Extend the worker within these caps
 without asking when needed. Restore caps and stop owned runtimes after each run.
@@ -84,6 +85,10 @@ Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recove
 source overlays. Verify hashes, not the displayed Git revision.
 
 Essential current pointers:
+- Scratch `controller-followups/native-cache-mv-final-build.log` records passing
+  Clippy, cache tests and the SQL test binary build. Local
+  `native-cache-mv-source.sha256` matches every tested changed source.
+- Local `native-mv-admission-test.log` is the focused MV runtime check.
 - `startup-before-evidence.tar.gz`, extracted `startup-before-evidence/`, and
   `startup-before-phase-summary.json` preserve the completed baseline.
 - `startup-after-evidence.tar.gz`, extracted `startup-after-evidence/`,
