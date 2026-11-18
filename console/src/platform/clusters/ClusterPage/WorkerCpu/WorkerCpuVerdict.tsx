@@ -248,7 +248,9 @@ export const FirstLook = ({
             <HStack>
               <Button
                 size="sm"
-                variant="primary"
+                // A disabled primary button stays purple, which reads as
+                // clickable beside the reason it isn't.
+                variant={isUsageDenied ? "tertiary" : "primary"}
                 onClick={onStart}
                 isDisabled={!onStart || isUsageDenied}
               >
