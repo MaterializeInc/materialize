@@ -254,6 +254,14 @@ impl Catalog {
         }
         let ids: BTreeSet<_> = prepared.bindings.keys().copied().collect();
         let (upper, registered) = prepared.txns.registration_status(ids.iter().copied()).await;
+        #[cfg(test)]
+        if registered == ids
+            && let Some(observer) = self.before_table_registration.take()
+        {
+            let (resume, wait) = tokio::sync::oneshot::channel();
+            observer.send(resume).expect("registration observer");
+            wait.await.expect("resume registration adoption");
+        }
         // Synchronization validates deployment admission as well as bindings.
         // Skipping registration must not let a retired writer complete bootstrap.
         self.sync_to_current_updates().await?;

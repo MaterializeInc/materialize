@@ -41,7 +41,7 @@ impl Catalog {
     /// Does not initialize shared catalog projections or replace serving adapters.
     /// Only the four configuration tables are needed here. Initial seeding and
     /// adapter recovery complete other table registrations, not promotion.
-    /// Returns false on definitive table-registration contention. The caller must
+    /// Returns false on definitive registration or configuration contention. The caller must
     /// yield to its scheduling loop before retrying and must not mark activation
     /// complete until this returns true.
     pub async fn complete_deployment_activation(
@@ -98,21 +98,22 @@ impl Catalog {
             );
         }
         self.reconcile_deployment_configuration(&persist, &mut infrastructure, &snapshot, oracle)
-            .await?;
-        Ok(true)
+            .await
     }
 
     /// Reconciles the active initializer's configuration tables after WAL setup.
     /// `snapshot` supplies desired egress and license rows. Replica sizes come
     /// from local configuration. Pending, savepoint and read-only callers are
     /// rejected. Losing authority during reconciliation skips the stale write.
+    /// Returns false when the bounded attempt budget is exhausted. The controller
+    /// must retry on a later tick without withholding unrelated reconciliation.
     pub async fn reconcile_deployment_configuration(
         &self,
         persist: &mz_persist_client::PersistClient,
         infrastructure: &mut TableInfrastructure,
         snapshot: &[BuiltinTableUpdate],
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
-    ) -> Result<(), CatalogError> {
+    ) -> Result<bool, CatalogError> {
         self.reconcile_bootstrap_tables(persist, infrastructure, snapshot, oracle, false)
             .await
     }
@@ -127,7 +128,11 @@ impl Catalog {
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
     ) -> Result<(), CatalogError> {
         self.reconcile_bootstrap_tables(persist, infrastructure, snapshot, oracle, true)
-            .await
+            .await?
+            .then_some(())
+            .ok_or_else(|| {
+                anyhow::anyhow!("initial builtin reconciliation exhausted its attempts").into()
+            })
     }
 
     async fn reconcile_bootstrap_tables(
@@ -137,7 +142,7 @@ impl Catalog {
         snapshot: &[BuiltinTableUpdate],
         oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
         initial_seed: bool,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<bool, CatalogError> {
         {
             let storage = self.storage().await;
             if self.diagnostic_config.read_only
@@ -223,7 +228,7 @@ impl Catalog {
                 .expect("valid configuration schema");
             readers.push((shard, rows, reader));
         }
-        let result: Result<(), CatalogError> = async {
+        let result: Result<bool, CatalogError> = async {
             let mut lower_bound = infrastructure.completed_at.step_forward();
             for (_, _, reader) in &readers {
                 let since = reader
@@ -303,7 +308,7 @@ impl Catalog {
                     );
                 }
                 if !changed {
-                    return Ok(());
+                    return Ok(true);
                 }
                 let timestamp = fence.step_forward();
                 self.advance_upper(timestamp.step_forward()).await?;
@@ -315,7 +320,7 @@ impl Catalog {
                     && self.storage().await.active_deployment_generation()
                         != self.state().deployment_generation()
                 {
-                    return Ok(());
+                    return Ok(true);
                 }
                 txn.tidy(std::mem::take(&mut infrastructure.tidy));
                 // Snapshot at B requires WAL upper > B. Success at B+1 proves
@@ -329,7 +334,7 @@ impl Catalog {
                         let tidy = infrastructure.txns.apply_le(&timestamp).await;
                         infrastructure.tidy.merge(tidy);
                         infrastructure.completed_at = timestamp;
-                        return Ok(());
+                        return Ok(true);
                     }
                     Err(mz_txn_wal::txn_write::CommitError::UpperMismatch(upper)) => {
                         infrastructure.tidy.merge(txn.take_tidy());
@@ -340,10 +345,7 @@ impl Catalog {
                 // Discard this transaction. Diffs must never be replayed at a
                 // later timestamp without a new fence and fresh snapshots.
             }
-            Err(
-                anyhow::anyhow!("deployment configuration reconciliation exhausted its attempts")
-                    .into(),
-            )
+            Ok(false)
         }
         .await;
         for (_, _, reader) in readers {
