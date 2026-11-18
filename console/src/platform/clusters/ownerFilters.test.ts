@@ -55,8 +55,8 @@ describe("ownerFilterFn", () => {
     ).toBe(true);
   });
 
-  it("drops a cluster whose owner is unknown from any active selection", () => {
-    expect(keeps(null, ["ana"])).toBe(false);
+  it("keeps a cluster whose owner isn't known yet, as while the roles load", () => {
+    expect(keeps(null, ["ana"])).toBe(true);
   });
 });
 

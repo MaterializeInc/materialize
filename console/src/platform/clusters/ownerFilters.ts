@@ -22,8 +22,9 @@ export const OWNER_URL_KEY = "owner[]";
  * Keeps rows whose cluster is owned by one of `selected`, by role name. An
  * empty selection filters nothing.
  *
- * NOTE: a cluster whose owner is unknown is dropped by any active selection,
- * as `hydrationFilterFn` drops a replica it cannot place in a bucket.
+ * NOTE: a cluster whose owner isn't known is kept. Owners are unknown only
+ * until the roles load, and dropping those rows shows a bookmarked filter as
+ * matching nothing in the meantime.
  */
 export const ownerFilterFn = <TData>(
   row: Row<TData>,
@@ -33,7 +34,7 @@ export const ownerFilterFn = <TData>(
   if (!selected?.length) return true;
 
   const owner = row.getValue<string | null>(columnId);
-  return owner !== null && selected.includes(owner);
+  return owner === null || selected.includes(owner);
 };
 
 /**

@@ -203,6 +203,7 @@ const ReplicaLastStatusChangeCell = ({
   <HStack>
     {updatedAt ? (
       // The date over its time, so the column is as wide as the date alone.
+      // The space between them is for the cell read as text.
       <Text as="span" whiteSpace="nowrap">
         <Text as="span" display="block">
           {formatDate(updatedAt, DATE_FORMAT)}
