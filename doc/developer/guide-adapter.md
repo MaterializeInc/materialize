@@ -255,6 +255,15 @@ transaction enforces resource limits against concrete creates. If a reconciler
 cannot apply those creates, it owns the response and the durable or logged
 observability for that outcome.
 
+Managed-cluster policy applies retain guarded operations, allocated replica IDs
+and transaction preparation in the existing policy task between coordinator turns.
+Metadata contention backs off there, while structural changes return to the kernel
+for fresh decisions. Input holds survive transfer and committed completion. Shutdown
+can interrupt backoff, not a submitted write or its completion. A lost reply does
+not prove that no write committed, so the kernel must reobserve state before acting.
+These sessionless writes retain catalog admission and execution fencing. SQL retries
+still check their connection's liveness.
+
 Catalog accounting and downstream side-effect ordering must agree. If one
 transaction nets replacement drops against creates, its implications must queue
 those drops before the creates. An orchestrator can retry a failed create

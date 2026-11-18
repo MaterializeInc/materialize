@@ -50,6 +50,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason};
+use crate::coord::ddl::CatalogTransactionState;
 use crate::coord::{Coordinator, Message};
 use crate::error::AdapterError;
 
@@ -62,6 +63,29 @@ fn matches_declaration_config(
         && physical.name == declaration.name
         && physical.owner_id == declaration.owner_id
         && physical.config == declaration.config
+}
+
+/// Preparation belongs to the controller task between coordinator turns.
+#[derive(Debug)]
+pub struct PreparedClusterApply {
+    revision: u64,
+    ops: Vec<Op>,
+    transaction: Option<CatalogTransactionState>,
+}
+
+#[derive(Debug)]
+pub enum ClusterApplyWork {
+    Decisions(Vec<Decision>),
+    Prepared(Box<PreparedClusterApply>),
+}
+
+#[derive(Debug)]
+pub enum ClusterApplyResponse {
+    Complete(ApplyOutcome),
+    Retry {
+        prepared: Box<PreparedClusterApply>,
+        delay: Duration,
+    },
 }
 
 /// A request the controller task marshals to the Coordinator to satisfy one
@@ -118,8 +142,8 @@ pub enum ClusterControllerRequest {
     RefreshWindowReadTs { tx: oneshot::Sender<Timestamp> },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
-        decisions: Vec<Decision>,
-        tx: oneshot::Sender<ApplyOutcome>,
+        work: ClusterApplyWork,
+        tx: oneshot::Sender<ClusterApplyResponse>,
     },
     /// The current configured reconcile cadence. Read once per tick so a runtime
     /// change to `cluster_controller_tick_interval` takes effect without a
@@ -265,11 +289,24 @@ impl ClusterControllerCtx for CoordCtx {
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
-        self.request(|tx| ClusterControllerRequest::Apply { decisions, tx })
-            .await
-            // A lost reply means shutdown; treat as rejected so we make no
-            // further claims about the catalog state.
-            .unwrap_or(ApplyOutcome::Rejected)
+        let mut work = ClusterApplyWork::Decisions(decisions);
+        loop {
+            match self
+                .request(|tx| ClusterControllerRequest::Apply { work, tx })
+                .await
+            {
+                Some(ClusterApplyResponse::Complete(outcome)) => return outcome,
+                Some(ClusterApplyResponse::Retry { prepared, delay }) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {},
+                        _ = self.internal_cmd_tx.closed() => return ApplyOutcome::Rejected,
+                    }
+                    work = ClusterApplyWork::Prepared(prepared);
+                }
+                // A lost reply does not establish whether a write committed.
+                None => return ApplyOutcome::Rejected,
+            }
+        }
     }
 }
 
@@ -392,8 +429,15 @@ impl Coordinator {
                     let _ = tx.send(read_ts);
                 });
             }
-            ClusterControllerRequest::Apply { decisions, tx } => {
-                let outcome = self.apply_cluster_decisions(decisions).await;
+            ClusterControllerRequest::Apply { work, tx } => {
+                let outcome = match work {
+                    ClusterApplyWork::Decisions(decisions) => {
+                        self.apply_cluster_decisions(decisions).await
+                    }
+                    ClusterApplyWork::Prepared(prepared) => {
+                        self.resume_cluster_apply(prepared).await
+                    }
+                };
                 let _ = tx.send(outcome);
             }
             ClusterControllerRequest::TickInterval { tx } => {
@@ -817,31 +861,31 @@ impl Coordinator {
     /// transaction (see [`Self::commit_with_checks`] for why the guard holds).
     /// Any step that finds the batch incoherent rejects it, and the controller
     /// recomputes next tick.
-    async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
+    async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ClusterApplyResponse {
         let checks = Self::partition_checks(&decisions);
         let carryover = match self.initial_replica_carryover(&decisions).await {
             Ok(ops) => ops,
             Err(error) => {
                 warn!(%error, "unable to prepare initial replica carryover");
-                return ApplyOutcome::Rejected;
+                return ClusterApplyResponse::Complete(ApplyOutcome::Rejected);
             }
         };
 
         // Pre-allocate replica ids before the apply transaction (each allocation
         // is its own durable commit, so it cannot happen inside the transaction).
         let Some(replica_ids) = self.allocate_replica_ids_for_creates(&decisions).await else {
-            return ApplyOutcome::Rejected;
+            return ClusterApplyResponse::Complete(ApplyOutcome::Rejected);
         };
 
         let Some(mut mutations) = self.build_mutation_ops(decisions, replica_ids) else {
-            return ApplyOutcome::Rejected;
+            return ClusterApplyResponse::Complete(ApplyOutcome::Rejected);
         };
         mutations.extend(carryover);
         if mutations.is_empty() {
             // Nothing to apply, so the checks guard nothing. Skip the transaction
             // rather than commit a check-only batch, which would still cost a
             // durable round-trip.
-            return ApplyOutcome::Applied;
+            return ClusterApplyResponse::Complete(ApplyOutcome::Applied);
         }
 
         self.commit_with_checks(checks, mutations).await
@@ -1081,7 +1125,7 @@ impl Coordinator {
         &mut self,
         checks: Vec<(ClusterId, ExpectedClusterState)>,
         mutations: Vec<Op>,
-    ) -> ApplyOutcome {
+    ) -> ClusterApplyResponse {
         let mut ops: Vec<Op> = checks
             .into_iter()
             .map(|(cluster_id, expected)| Op::CheckClusterState {
@@ -1091,17 +1135,36 @@ impl Coordinator {
             .collect();
         ops.extend(mutations);
 
-        match self.catalog_transact(None, ops).await {
-            Ok(()) => ApplyOutcome::Applied,
-            Err(AdapterError::ClusterStateChanged { .. }) => {
-                // A concurrent `ALTER` moved a cluster's durable state out from
-                // under the decisions. Expected, so the controller recomputes
-                // next tick.
-                ApplyOutcome::Rejected
+        self.resume_cluster_apply(Box::new(PreparedClusterApply {
+            revision: self.catalog().transient_revision(),
+            ops,
+            transaction: None,
+        }))
+        .await
+    }
+
+    async fn resume_cluster_apply(
+        &mut self,
+        mut prepared: Box<PreparedClusterApply>,
+    ) -> ClusterApplyResponse {
+        if prepared.revision != self.catalog().transient_revision() {
+            return ClusterApplyResponse::Complete(ApplyOutcome::Rejected);
+        }
+        let outcome = match self
+            .try_catalog_transact_background(&prepared.ops, &mut prepared.transaction)
+            .await
+        {
+            Ok(true) => ApplyOutcome::Applied,
+            Ok(false) => {
+                return ClusterApplyResponse::Retry {
+                    prepared,
+                    delay: self.read_protection_conflict_delay(),
+                };
             }
+            Err(AdapterError::ClusterStateChanged { .. })
+            | Err(AdapterError::CatalogSnapshotChanged)
+            | Err(AdapterError::DDLTransactionRace) => ApplyOutcome::Rejected,
             Err(AdapterError::ResourceExhaustion { .. }) => {
-                // The batch cannot fit the resource budget. Report the fact and
-                // leave the reaction (what, if anything, to shed) to the kernel.
                 debug!("cluster controller apply exceeded the resource budget");
                 ApplyOutcome::ResourceExhausted
             }
@@ -1109,7 +1172,8 @@ impl Coordinator {
                 warn!("cluster controller apply failed: {err}");
                 ApplyOutcome::Rejected
             }
-        }
+        };
+        ClusterApplyResponse::Complete(outcome)
     }
 
     /// Persist local realization separately from shared ALTER outcomes. Only the
@@ -1407,6 +1471,203 @@ fn memory_burst(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn apply_fixture() -> (
+        Vec<Decision>,
+        Box<PreparedClusterApply>,
+        mpsc::UnboundedReceiver<(mz_repr::GlobalId, timely::progress::ChangeBatch<Timestamp>)>,
+    ) {
+        use mz_adapter_types::cluster_state::ClusterSchedule;
+        use mz_compute_types::config::ComputeReplicaLogging;
+        use mz_storage_types::read_holds::ReadHold;
+        use timely::progress::Antichain;
+
+        let cluster_id = ClusterId::User(1);
+        let replica_id = ReplicaId::User(2);
+        let expected = ExpectedClusterState {
+            intent: None,
+            size: "scale=1,workers=1".into(),
+            replication_factor: 0,
+            availability_zones: AvailabilityZones::default(),
+            logging: ComputeReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            arrangement_compression: false,
+            schedule: ClusterSchedule::Manual,
+            auto_scaling_policy: None,
+            reconfiguration: None,
+            burst: None,
+        };
+        let decisions = vec![Decision::DropReplica {
+            cluster_id,
+            replica_id,
+            expected: expected.clone(),
+        }];
+        let ops = vec![
+            Op::CheckClusterState {
+                cluster_id,
+                expected,
+            },
+            Op::DropClusterReplicaRealization {
+                cluster_id,
+                replica_id,
+            },
+        ];
+        let (changes, rx) = mpsc::unbounded_channel();
+        let id = mz_repr::GlobalId::User(3);
+        let mut holds = crate::ReadHolds::new();
+        holds.storage_holds.insert(
+            id,
+            ReadHold::with_channel(id, Antichain::from_elem(Timestamp::from(42)), changes),
+        );
+        let transaction = CatalogTransactionState::with_test_protection(ops.clone(), holds, 17);
+        (
+            decisions,
+            Box::new(PreparedClusterApply {
+                revision: 17,
+                ops,
+                transaction: Some(transaction),
+            }),
+            rx,
+        )
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn policy_apply_retains_preparation_between_turns() {
+        let (decisions, mut prepared, mut changes) = apply_fixture();
+        let (internal_cmd_tx, mut requests) = mpsc::unbounded_channel();
+        let mut ctx = CoordCtx {
+            internal_cmd_tx,
+            now: Timestamp::MIN,
+        };
+        let task = spawn(
+            || "policy_apply_test",
+            async move { ctx.apply(decisions).await },
+        );
+        let Some(Message::ClusterControllerRequest(ClusterControllerRequest::Apply {
+            work: ClusterApplyWork::Decisions(decisions),
+            mut tx,
+        })) = requests.recv().await
+        else {
+            panic!("initial decision request");
+        };
+        assert!(matches!(
+            decisions.as_slice(),
+            [Decision::DropReplica {
+                cluster_id: ClusterId::User(1),
+                replica_id: ReplicaId::User(2),
+                ..
+            }]
+        ));
+        for _ in 0..2 {
+            tx.send(ClusterApplyResponse::Retry {
+                prepared,
+                delay: Duration::from_millis(100),
+            })
+            .expect("live policy owner");
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_millis(99)).await;
+            assert!(
+                requests.try_recv().is_err(),
+                "backoff must yield instead of spinning"
+            );
+            assert!(changes.try_recv().is_err(), "input hold remains owned");
+            tokio::time::advance(Duration::from_millis(1)).await;
+            let Some(Message::ClusterControllerRequest(ClusterControllerRequest::Apply {
+                work: ClusterApplyWork::Prepared(retained),
+                tx: next_tx,
+            })) = requests.recv().await
+            else {
+                panic!("retry carries preparation, not fresh decisions");
+            };
+            prepared = retained;
+            tx = next_tx;
+            assert_eq!(prepared.revision, 17);
+            assert_eq!(
+                prepared
+                    .transaction
+                    .as_ref()
+                    .expect("retained transaction")
+                    .planning_revision(),
+                17
+            );
+            assert!(matches!(
+                prepared.ops.as_slice(),
+                [
+                    Op::CheckClusterState {
+                        cluster_id: ClusterId::User(1),
+                        ..
+                    },
+                    Op::DropClusterReplicaRealization {
+                        cluster_id: ClusterId::User(1),
+                        replica_id: ReplicaId::User(2)
+                    }
+                ]
+            ));
+            assert!(
+                changes.try_recv().is_err(),
+                "transferring preparation must not release or reacquire holds"
+            );
+        }
+        drop(prepared);
+        let (id, mut release) = changes.try_recv().expect("owner drop releases input hold");
+        assert_eq!(id, mz_repr::GlobalId::User(3));
+        assert_eq!(
+            release.drain().collect::<Vec<_>>(),
+            vec![(Timestamp::from(42), -1)]
+        );
+        tx.send(ClusterApplyResponse::Complete(ApplyOutcome::Applied))
+            .expect("live policy owner");
+        assert_eq!(task.await, ApplyOutcome::Applied);
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn policy_apply_stops_on_shutdown_or_lost_reply() {
+        for during_backoff in [false, true] {
+            let (decisions, prepared, mut changes) = apply_fixture();
+            let (internal_cmd_tx, mut requests) = mpsc::unbounded_channel();
+            let mut ctx = CoordCtx {
+                internal_cmd_tx,
+                now: Timestamp::MIN,
+            };
+            let task = spawn(
+                || "policy_apply_test",
+                async move { ctx.apply(decisions).await },
+            );
+            let Some(Message::ClusterControllerRequest(ClusterControllerRequest::Apply {
+                tx, ..
+            })) = requests.recv().await
+            else {
+                panic!("apply request");
+            };
+            let now = tokio::time::Instant::now();
+            if during_backoff {
+                tx.send(ClusterApplyResponse::Retry {
+                    prepared,
+                    delay: Duration::from_secs(60),
+                })
+                .expect("live policy owner");
+                drop(requests);
+            } else {
+                drop(prepared);
+                drop(tx);
+            }
+            assert_eq!(task.await, ApplyOutcome::Rejected);
+            assert_eq!(
+                tokio::time::Instant::now(),
+                now,
+                "shutdown must not wait out backoff"
+            );
+            if during_backoff {
+                assert!(
+                    changes.try_recv().is_ok(),
+                    "shutdown releases retained holds"
+                );
+            }
+        }
+    }
 
     #[mz_ore::test]
     fn test_audit_reason_for_create() {

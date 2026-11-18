@@ -125,6 +125,25 @@ impl CatalogTransactionState {
     pub(super) fn planning_revision(&self) -> u64 {
         self.revision
     }
+
+    #[cfg(test)]
+    pub(super) fn with_test_protection(
+        ops: Vec<Op>,
+        protection: crate::ReadHolds,
+        revision: u64,
+    ) -> Self {
+        Self {
+            preparation: CatalogPreparation::Complete,
+            ops,
+            _protection: vec![protection],
+            revision,
+            incarnation: None,
+            initial_write_ts: None,
+            rewritten_objects: Vec::new(),
+            webhook_sources_to_restart: BTreeSet::new(),
+            observer: None,
+        }
+    }
 }
 
 // Expand around the awaited expression instead of owning another future. Catalog
@@ -353,7 +372,7 @@ impl Coordinator {
         let start = Instant::now();
         let conn_id = ctx.session().conn_id().clone();
         let Some(committed) = self
-            .try_catalog_transact_prepared(&conn_id, ops, prepared)
+            .try_catalog_transact_prepared(Some(&conn_id), ops, prepared)
             .await?
         else {
             return Ok(false);
@@ -374,7 +393,7 @@ impl Coordinator {
         let start = Instant::now();
         let conn_id = ctx.session().conn_id().clone();
         let Some(committed) = self
-            .try_catalog_transact_prepared(&conn_id, ops, prepared)
+            .try_catalog_transact_prepared(Some(&conn_id), ops, prepared)
             .await?
         else {
             return Ok(false);
@@ -399,18 +418,37 @@ impl Coordinator {
         Ok(true)
     }
 
+    /// Attempts a background owner's retained DDL without a SQL session. The owner
+    /// must reject stale structural preparation and schedule retry backoff itself.
+    pub(super) async fn try_catalog_transact_background(
+        &mut self,
+        ops: &[Op],
+        prepared: &mut Option<CatalogTransactionState>,
+    ) -> Result<bool, AdapterError> {
+        let start = Instant::now();
+        let Some(committed) = self
+            .try_catalog_transact_prepared(None, ops, prepared)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let _prepared = prepared.take();
+        Box::pin(self.complete_catalog_transaction(None, committed, start)).await?;
+        Ok(true)
+    }
+
     async fn try_catalog_transact_prepared(
         &mut self,
-        conn_id: &ConnectionId,
+        conn_id: Option<&ConnectionId>,
         ops: &[Op],
         prepared: &mut Option<CatalogTransactionState>,
     ) -> Result<Option<CommittedCatalogTransaction>, AdapterError> {
-        if !self.active_conns.contains_key(conn_id) {
+        if conn_id.is_some_and(|id| !self.active_conns.contains_key(id)) {
             return Err(AdapterError::Canceled);
         }
         let revision = self.catalog().transient_revision();
         let preparation = if prepared.is_none() {
-            Box::pin(self.begin_catalog_transaction(Some(conn_id), ops.to_vec()))
+            Box::pin(self.begin_catalog_transaction(conn_id, ops.to_vec()))
                 .await
                 .map(|value| *prepared = Some(value))
         } else {
@@ -419,7 +457,7 @@ impl Coordinator {
         let preparation = match preparation {
             Ok(()) => {
                 Box::pin(self.resume_catalog_preparation(
-                    Some(conn_id),
+                    conn_id,
                     prepared.as_mut().expect("initialized above"),
                 ))
                 .await
@@ -430,7 +468,7 @@ impl Coordinator {
             Ok(false) => return Ok(None),
             Ok(true) => {
                 Box::pin(self.commit_prepared_catalog_transaction(
-                    Some(conn_id),
+                    conn_id,
                     prepared.as_mut().expect("prepared above"),
                     false,
                 ))
