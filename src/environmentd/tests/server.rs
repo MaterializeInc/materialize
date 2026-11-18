@@ -4392,10 +4392,10 @@ fn webhook_max_request_size() {
         })
     };
 
-    // Default is 5 MiB: a 6 MiB body must be rejected with 413.
-    assert_eq!(post(6 * 1024 * 1024).as_u16(), 413);
+    const DEFAULT_LIMIT: usize = 5 * 1024 * 1024;
+    assert_eq!(post(DEFAULT_LIMIT + 1).as_u16(), 413);
 
-    // Raise the limit to 10 MiB and confirm the 6 MiB body is now accepted.
+    // Raise the limit to 10 MiB and confirm the same body is now accepted.
     mz_client
         .batch_execute("ALTER SYSTEM SET webhook_max_request_size_bytes = 10485760")
         .unwrap();
@@ -4404,13 +4404,13 @@ fn webhook_max_request_size() {
     Retry::default()
         .max_duration(std::time::Duration::from_secs(30))
         .retry(|_| {
-            if post(6 * 1024 * 1024).is_success() {
+            if post(DEFAULT_LIMIT + 1).is_success() {
                 Ok(())
             } else {
                 Err(())
             }
         })
-        .expect("6 MiB body accepted after raising the limit to 10 MiB");
+        .expect("body over the default accepted after raising the limit to 10 MiB");
 
     // Lower the limit below the default and confirm enforcement is live: a
     // body that would have been accepted at the default is now rejected.
@@ -4420,13 +4420,13 @@ fn webhook_max_request_size() {
     Retry::default()
         .max_duration(std::time::Duration::from_secs(30))
         .retry(|_| {
-            if post(2048).as_u16() == 413 {
+            if post(1024 + 1).as_u16() == 413 {
                 Ok(())
             } else {
                 Err(())
             }
         })
-        .expect("2 KiB body rejected after lowering the limit to 1 KiB");
+        .expect("body over 1 KiB rejected after lowering the limit to 1 KiB");
 }
 
 /// A `CHECK` expression that allocates a multiple of the request body must be refused rather than
