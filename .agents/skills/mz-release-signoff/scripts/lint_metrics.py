@@ -187,10 +187,10 @@ def referenced():
 REFERENCE_NAME_COUNTS = {
     "SKILL.md": 18,
     "adapter.md": 35,
-    "compute.md": 31,
+    "compute.md": 17,
     "persist.md": 84,
     "reference-dashboards.md": 24,
-    "sources-and-sinks.md": 63,
+    "sources-and-sinks.md": 53,
 }
 
 
