@@ -12,4 +12,4 @@
 # as a string printed to stdout, for use from other tools
 
 # renovate: datasource=npm depName=pyright
-printf "1.1.407"
+printf "1.1.414"
