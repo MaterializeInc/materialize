@@ -216,9 +216,17 @@ CREATE QUERY POLICY indexed_inputs_only (
 ### Allow direct reads, without computation
 
 Include only `temporary_dataflow`. Queries cannot build a temporary dataflow,
-but can still read directly from an unindexed materialized view, for example
-`SELECT * FROM my_mv LIMIT 10`, because that read does not build a dataflow.
-Use this to block joins and aggregations while still allowing quick lookups.
+but some reads from unindexed tables, sources, and materialized views still run
+as [direct storage reads](#how-materialize-runs-a-query):
+
+- Queries with no filter and a `LIMIT` below 25, for example
+  `SELECT * FROM my_mv LIMIT 10`. Most `ORDER BY` clauses build a temporary
+  dataflow and are rejected.
+- Equality lookups on a unique key of the object.
+
+Other filters on unindexed objects build a temporary dataflow and are rejected.
+Use this to block joins, aggregations, and filtered scans while still allowing
+small samples and key lookups.
 
 ```mzsql
 CREATE QUERY POLICY no_ad_hoc_dataflows (
