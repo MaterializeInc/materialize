@@ -6497,7 +6497,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-s3",
+ "aws-sigv4",
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -6506,10 +6508,12 @@ dependencies = [
  "bytesize",
  "futures",
  "http-body-util",
+ "mz-aws-util",
  "mz-ore",
  "pin-project",
  "thiserror 2.0.21",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -7700,15 +7704,13 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "aws-config",
- "aws-credential-types",
- "aws-sigv4",
  "aws-types",
  "chrono",
  "fancy-regex",
  "itertools 0.15.0",
  "maplit",
  "mysql_async",
+ "mz-aws-util",
  "mz-build-tools",
  "mz-cloud-resources",
  "mz-mysql-util",
@@ -7728,7 +7730,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "url",
 ]
 
 [[package]]

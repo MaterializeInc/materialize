@@ -12,7 +12,7 @@
 mod tunnel;
 use std::time::Duration;
 
-use aws_rds::RdsTokenError;
+use mz_aws_util::rds::RdsTokenError;
 pub use tunnel::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
     DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_SNAPSHOT_WAIT_TIMEOUT, DEFAULT_TCP_KEEPALIVE,
@@ -50,8 +50,6 @@ pub use probe::{KeyProber, MAX_KEY_LENGTH};
 
 pub mod partition;
 pub use partition::{PartitionParams, partition_table};
-
-mod aws_rds;
 
 #[derive(Debug, Clone)]
 pub struct UnsupportedDataType {
