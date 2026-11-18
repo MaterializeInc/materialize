@@ -225,7 +225,7 @@ RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack 
 # renovate: datasource=github-releases depName=koalaman/shellcheck
 ARG SHELLCHECK_VERSION=v0.11.0
 # renovate: datasource=github-releases depName=bufbuild/buf
-ARG BUF_VERSION=v1.60.0
+ARG BUF_VERSION=v1.75.0
 # renovate: datasource=github-releases depName=boz/kail
 ARG KAIL_VERSION=v0.17.4
 # renovate: datasource=github-releases depName=parca-dev/parca-debuginfo
