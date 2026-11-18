@@ -15,12 +15,14 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use mz_ore::tracing::OpenTelemetryContext;
+#[cfg(test)]
 use mz_persist_client::critical::Opaque;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::client::TableData;
+#[cfg(test)]
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{InvalidUpper, StorageError, TxnsCodecRow};
@@ -90,10 +92,9 @@ pub(crate) trait TableWriteHandle: Debug + Send + Sync {
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 }
 
-/// Opens the table writer after the txns shard identity has been durably recorded.
-///
-/// Callers must await this before starting controller txn reads: this upgrades
-/// the txns shard version before any reader starts.
+/// Opens an independent writer for WAL tests. Serving adapters adopt completed
+/// catalog infrastructure through [`from_infrastructure`].
+#[cfg(test)]
 pub(crate) async fn open(
     persist: PersistClient,
     txns_id: ShardId,
@@ -230,6 +231,7 @@ async fn open_table_write_handles(
 }
 
 impl PersistTableWriteWorker {
+    #[cfg(test)]
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
         persist_client: PersistClient,

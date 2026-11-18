@@ -450,16 +450,11 @@ impl Catalog {
         mz_catalog::catalog::CatalogError,
     > {
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
-        let writer = if self.state().catalog_read_protection_enabled() {
-            self.initialize_storage_metadata().await?;
-            let infrastructure = self
-                .complete_table_infrastructure(persist.clone(), Arc::clone(&metrics), oracle)
-                .await?;
-            crate::table_writer::from_infrastructure(infrastructure, persist)
-        } else {
-            let shard = self.txn_wal_shard().await?;
-            crate::table_writer::open(persist, shard, Arc::clone(&metrics)).await
-        };
+        self.initialize_storage_metadata().await?;
+        let infrastructure = self
+            .complete_table_infrastructure(persist.clone(), Arc::clone(&metrics), oracle)
+            .await?;
+        let writer = crate::table_writer::from_infrastructure(infrastructure, persist);
         Ok((writer, metrics))
     }
     pub(crate) async fn initialize_controller(
