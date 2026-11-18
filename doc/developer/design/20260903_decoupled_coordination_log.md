@@ -31,13 +31,12 @@ Startup table registration now backs off between rejected rounds while retaining
 preparation. Clippy and deployment initialization tests passed, including recovery
 after a peer overtakes a complete round and existing DROP-ordering coverage.
 
-Finish verification of the uncommitted controller RTR fallback removal first.
-The native request-owned recency path and shared kernel are unchanged. Independent
-review confirmed serving invariants and off-coordinator polling. Clippy exposed
-obsolete async wrappers and a test-only import, now corrected. The bounded build
-unit is `aj-native-recency-verified-build`. Earlier stale-binary SQL runs were
-stopped and are excluded from evidence. The runtime wrapper now rejects failed
-builds itself. Run transactions and bounded-staleness checks after the build passes.
+Controller RTR fallback removal is committed and verified. Native request-owned
+protection and the shared recency kernel remain unchanged. Independent review
+confirmed construction invariants and off-coordinator polling. Clippy and the
+unchanged transaction/bounded-staleness SQL suites passed on rebuilt binaries.
+External-source RTR integration was not rerun. Earlier stale-binary attempts are
+excluded from evidence, and the runtime wrapper now rejects failed builds.
 
 Then finish the remaining conditional-write survey, particularly inline DDL owners. Recheck `multi-writer-retry-survey.md` and
 `native-only/native-ci-recovery/current-remaining-retry-sites.md` against source.
@@ -104,6 +103,9 @@ Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recove
 source overlays. Verify hashes, not the displayed Git revision.
 
 Essential current pointers:
+- Scratch `controller-followups/native-recency-verified-build.log` and local
+  `native-recency-verified-test.log` contain accepted recency verification.
+  `native-recency-source.sha256` matches the tested source.
 - Scratch `controller-followups/startup-registration-check.log` records passing
   Clippy and startup/registration boundary tests.
 - Scratch `controller-followups/native-cache-mv-final-build.log` records passing
