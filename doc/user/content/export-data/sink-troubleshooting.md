@@ -67,3 +67,18 @@ If the `*_staged` statistics are making progress, but the `*_committed` ones
 are not, there may be a configuration issues with the external service that is
 preventing Materialize from committing transactions. Check the `reason`
 column in `mz_sink_statuses`, which can provide more information.
+
+## How do I recover an Iceberg sink from a schema mismatch?
+
+An Iceberg sink reports `stalled` with `schema does not match expected schema`
+when the Iceberg table's schema no longer matches what the sink writes.
+Materialize does not retry this error. How you recover depends on which side
+changed:
+
+- **The schema changed in Materialize.** Drop the sink and recreate it with a
+  new `TABLE` name. The existing table keeps the old schema, so a sink
+  recreated against it stalls again.
+- **The table's schema was changed in Iceberg.** Drop the sink, delete the
+  table from the Iceberg catalog, then recreate the sink.
+
+In both cases, the recreated sink writes a full snapshot to its table.
