@@ -49,9 +49,7 @@ impl Staged for ExplainTimestampStage {
         match self {
             ExplainTimestampStage::Optimize(stage) => coord.explain_timestamp_optimize(stage),
             ExplainTimestampStage::RealTimeRecency(stage) => {
-                coord
-                    .explain_timestamp_real_time_recency(ctx.session(), stage)
-                    .await
+                coord.explain_timestamp_real_time_recency(ctx.session(), stage)
             }
             ExplainTimestampStage::LinearizeTimestamp(stage) => {
                 coord
@@ -169,7 +167,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    async fn explain_timestamp_real_time_recency(
+    fn explain_timestamp_real_time_recency(
         &self,
         session: &Session,
         ExplainTimestampRealTimeRecency {
@@ -182,8 +180,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let source_ids = optimized_plan.depends_on();
         let fut = self
-            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())
-            .await?;
+            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())?;
 
         match fut {
             Some(fut) => {

@@ -439,12 +439,10 @@ impl Coordinator {
                     real_time_recency_timeout,
                     tx,
                 } => {
-                    let result = self
-                        .determine_real_time_recent_timestamp(
-                            source_ids.iter().copied(),
-                            real_time_recency_timeout,
-                        )
-                        .await;
+                    let result = self.determine_real_time_recent_timestamp(
+                        source_ids.iter().copied(),
+                        real_time_recency_timeout,
+                    );
 
                     match result {
                         Ok(Some(fut)) => {

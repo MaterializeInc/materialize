@@ -12,11 +12,8 @@
 //! Replicas enact maintained compute and storage from the protected catalog.
 //! Process provisioning is exposed separately for controllerd.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
-use futures::future::BoxFuture;
 use mz_cluster_client::WallclockLagFn;
 use mz_cluster_client::metrics::ControllerMetrics;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator};
@@ -25,13 +22,11 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Timestamp};
 use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_storage_client::controller::{StorageController, StorageTxn};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 
 pub mod clusters;
@@ -170,24 +165,6 @@ impl Controller {
     #[mz_ore::instrument(level = "debug")]
     pub fn process(&mut self) -> Result<(), anyhow::Error> {
         self.storage.process()
-    }
-
-    /// Determine the "real-time recency" timestamp for all `ids`.
-    ///
-    /// Real-time recency is defined as the minimum value of `T` that all
-    /// objects can be queried at to return all data visible in the upstream
-    /// system the query was issued. In this case, "the upstream systems" are
-    /// any user sources that connect to objects outside of Materialize, such as
-    /// Kafka sources.
-    ///
-    /// If no items in `ids` connect to external systems, this function will
-    /// return `Ok(T::minimum)`.
-    pub async fn determine_real_time_recent_timestamp(
-        &self,
-        ids: BTreeSet<GlobalId>,
-        timeout: Duration,
-    ) -> Result<BoxFuture<'static, Result<Timestamp, StorageError>>, StorageError> {
-        self.storage.real_time_recent_timestamp(ids, timeout).await
     }
 }
 

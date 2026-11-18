@@ -15,7 +15,7 @@ use mz_storage_types::sources::load_generator::{
 };
 use mz_storage_types::sources::mysql::{MySqlSourceConnection, MySqlSourceDetails};
 use mz_storage_types::sources::{
-    LoadGeneratorSourceConnection, SourceEnvelope, SourceExportDetails,
+    IngestionDescription, LoadGeneratorSourceConnection, SourceEnvelope, SourceExportDetails,
 };
 
 use super::*;

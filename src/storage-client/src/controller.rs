@@ -19,11 +19,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::future::Future;
 use std::num::NonZeroI64;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -333,8 +330,6 @@ pub trait StorageTxn {
     /// The implementor should error if the shard is already specified.
     fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError>;
 }
-
-pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 /// A predicate for a `Row` filter.
 pub type RowPredicate = Box<dyn Fn(&Row) -> bool + Send + Sync>;
@@ -736,12 +731,6 @@ pub trait StorageController: Debug {
         &self,
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>;
-
-    async fn real_time_recent_timestamp(
-        &self,
-        source_ids: BTreeSet<GlobalId>,
-        timeout: Duration,
-    ) -> Result<BoxFuture<Result<Timestamp, StorageError>>, StorageError>;
 
     /// Returns the state of the [`StorageController`] formatted as JSON.
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;

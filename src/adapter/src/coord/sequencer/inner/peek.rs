@@ -85,9 +85,7 @@ impl Staged for PeekStage {
             PeekStage::LinearizeTimestamp(stage) => {
                 coord.peek_linearize_timestamp(ctx, stage).await
             }
-            PeekStage::RealTimeRecency(stage) => {
-                coord.peek_real_time_recency(ctx.session(), stage).await
-            }
+            PeekStage::RealTimeRecency(stage) => coord.peek_real_time_recency(ctx.session(), stage),
             PeekStage::TimestampReadHold(stage) => coord.peek_timestamp_read_hold(ctx, stage).await,
             PeekStage::TimestampValidated(stage) => coord.peek_timestamp_validated(ctx, stage),
             PeekStage::Optimize(stage) => coord.peek_optimize(ctx, stage).await,
@@ -802,7 +800,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    async fn peek_real_time_recency(
+    fn peek_real_time_recency(
         &self,
         session: &Session,
         PeekStageRealTimeRecency {
@@ -818,8 +816,7 @@ impl Coordinator {
         }: PeekStageRealTimeRecency,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let fut = self
-            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())
-            .await?;
+            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())?;
 
         match fut {
             Some(fut) => {

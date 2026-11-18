@@ -2263,10 +2263,9 @@ impl Coordinator {
         }
     }
 
-    /// Inner method that performs the actual real-time recency timestamp determination.
-    /// This is called by both the old peek sequencing code (via `determine_real_time_recent_timestamp`)
-    /// and the new command handler for `Command::DetermineRealTimeRecentTimestamp`.
-    pub(crate) async fn determine_real_time_recent_timestamp(
+    /// Prepares request-owned recency work. Poll the returned future off the
+    /// coordinator loop because protection acquisition may require its writer.
+    pub(crate) fn determine_real_time_recent_timestamp(
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
         real_time_recency_timeout: Duration,
@@ -2308,30 +2307,21 @@ impl Coordinator {
             .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
             .collect();
 
-        if self.catalog().state().catalog_read_protection_enabled() {
-            let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
-            let catalog = self.owned_catalog();
-            let config = self.storage_configuration.clone();
-            // A grant miss sends a command back to this coordinator. Return the
-            // request future before acquiring protection so the loop can serve it.
-            return Ok(Some(Box::pin(async move {
-                client
-                    .real_time_recent_timestamp(
-                        &catalog,
-                        timestamp_objects,
-                        config,
-                        real_time_recency_timeout,
-                    )
-                    .await
-            })));
-        }
-
-        let r = self
-            .controller
-            .determine_real_time_recent_timestamp(timestamp_objects, real_time_recency_timeout)
-            .await?;
-
-        Ok(Some(r))
+        let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
+        let catalog = self.owned_catalog();
+        let config = self.storage_configuration.clone();
+        // A grant miss sends a command back to this coordinator. Return the
+        // request future before acquiring protection so the loop can serve it.
+        Ok(Some(Box::pin(async move {
+            client
+                .real_time_recent_timestamp(
+                    &catalog,
+                    timestamp_objects,
+                    config,
+                    real_time_recency_timeout,
+                )
+                .await
+        })))
     }
 
     pub(crate) async fn await_real_time_recent_timestamp<F>(
@@ -2362,7 +2352,7 @@ impl Coordinator {
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
+    pub(crate) fn determine_real_time_recent_timestamp_if_needed(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
@@ -2374,7 +2364,6 @@ impl Coordinator {
             && !session.contains_read_timestamp()
         {
             self.determine_real_time_recent_timestamp(source_ids, *vars.real_time_recency_timeout())
-                .await
         } else {
             Ok(None)
         }

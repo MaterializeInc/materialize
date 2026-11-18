@@ -30,14 +30,12 @@ use itertools::Itertools;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_RECORDING_INTERVAL;
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
@@ -46,9 +44,8 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, StatusUpdate, StorageResponse};
 use mz_storage_client::controller::{
-    BoxFuture, CollectionDescription, DataSource, ExportDescription, IntrospectionType,
-    StorageController, StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag,
-    WallclockLagHistogramPeriod,
+    CollectionDescription, DataSource, ExportDescription, IntrospectionType, StorageController,
+    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -66,8 +63,8 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-    SourceExport, SourceExportDataConfig,
+    GenericSourceConnection, SourceConnection, SourceData, SourceDesc, SourceExport,
+    SourceExportDataConfig,
 };
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -77,7 +74,6 @@ use timely::progress::Antichain;
 use tokio::sync::watch::{Sender, channel};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
-use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
 pub mod adapter_storage;
@@ -1603,122 +1599,6 @@ impl StorageController for Controller {
             .expect("introspection collection is registered")
     }
 
-    async fn real_time_recent_timestamp(
-        &self,
-        timestamp_objects: BTreeSet<GlobalId>,
-        timeout: Duration,
-    ) -> Result<BoxFuture<Result<Timestamp, StorageError>>, StorageError> {
-        use mz_storage_types::sources::GenericSourceConnection;
-
-        let mut rtr_futures = BTreeMap::new();
-
-        // Only user sources can be read from w/ RTR.
-        for id in timestamp_objects.into_iter().filter(GlobalId::is_user) {
-            let collection = match self.collection(id) {
-                Ok(c) => c,
-                // Not a storage item, which we accept.
-                Err(_) => continue,
-            };
-
-            let (source_conn, remap_id) = match &collection.data_source {
-                DataSource::Ingestion(IngestionDescription {
-                    desc: SourceDesc { connection, .. },
-                    remap_collection_id,
-                    ..
-                }) => match connection {
-                    GenericSourceConnection::Kafka(_)
-                    | GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_)
-                    | GenericSourceConnection::SqlServer(_) => {
-                        (connection.clone(), *remap_collection_id)
-                    }
-
-                    // These internal sources do not yet (and might never)
-                    // support RTR. However, erroring if they're selected from
-                    // poses an annoying user experience, so instead just skip
-                    // over them.
-                    GenericSourceConnection::LoadGenerator(_) => continue,
-                },
-                // Skip over all other objects
-                _ => {
-                    continue;
-                }
-            };
-
-            // Prepare for getting the external system's frontier.
-            let config = self.config().clone();
-
-            // Determine the remap collection we plan to read from.
-            //
-            // Note that the process of reading from the remap shard is the same
-            // as other areas in this code that do the same thing, but we inline
-            // it here because we must prove that we have not taken ownership of
-            // `self` to move the stream of data from the remap shard into a
-            // future.
-            let read_handle = self.read_handle_for_snapshot(remap_id).await?;
-
-            // Have to acquire a read hold to prevent the since from advancing
-            // while we read.
-            let remap_read_hold = self
-                .storage_collections
-                .acquire_read_holds(vec![remap_id])
-                .map_err(|_e| StorageError::ReadBeforeSince(remap_id))?
-                .expect_element(|| "known to be exactly one");
-
-            let remap_as_of = remap_read_hold
-                .since()
-                .to_owned()
-                .into_option()
-                .ok_or(StorageError::ReadBeforeSince(remap_id))?;
-
-            rtr_futures.insert(
-                id,
-                tokio::time::timeout(timeout, async move {
-                    use mz_storage_types::sources::SourceConnection as _;
-
-                    // Fetch the remap shard's contents; we must do this first so
-                    // that the `as_of` doesn't change.
-                    let as_of = Antichain::from_elem(remap_as_of);
-                    let remap_subscribe = read_handle
-                        .subscribe(as_of.clone())
-                        .await
-                        .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
-
-                    tracing::debug!(?id, type_ = source_conn.name(), upstream = ?source_conn.external_reference(), "fetching real time recency");
-
-                    let result = rtr::real_time_recency_ts(
-                        source_conn,
-                        id,
-                        config,
-                        as_of,
-                        remap_subscribe,
-                    )
-                    .await
-                    .map_err(|e| {
-                            tracing::debug!(?id, "real time recency error: {:?}", e);
-                            e
-                        });
-
-                    // Drop once we have read succesfully.
-                    drop(remap_read_hold);
-
-                    result
-                }),
-            );
-        }
-
-        Ok(Box::pin(async move {
-            let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
-            ids.into_iter()
-                .zip_eq(futures::future::join_all(futs).await)
-                .try_fold(Timestamp::MIN, |curr, (id, per_source_res)| {
-                    let new =
-                        per_source_res.map_err(|_e: Elapsed| StorageError::RtrTimeout(id))??;
-                    Ok::<_, StorageError>(std::cmp::max(curr, new))
-                })
-        }))
-    }
-
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
@@ -2127,14 +2007,6 @@ where
         self.collection_manager.differential_append(id, updates);
     }
 
-    async fn read_handle_for_snapshot(
-        &self,
-        id: GlobalId,
-    ) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
-        let metadata = self.storage_collections.collection_metadata(id)?;
-        read_handle_for_snapshot(&self.persist, id, &metadata).await
-    }
-
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
     fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
@@ -2479,36 +2351,6 @@ async fn snapshot_statistics(
         // or don't need to truncate (respectively).
         _ => Vec::new(),
     }
-}
-
-async fn read_handle_for_snapshot(
-    persist: &PersistClientCache,
-    id: GlobalId,
-    metadata: &CollectionMetadata,
-) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
-    let persist_client = persist
-        .open(metadata.persist_location.clone())
-        .await
-        .unwrap();
-
-    // We create a new read handle every time someone requests a snapshot and then immediately
-    // expire it instead of keeping a read handle permanently in our state to avoid having it
-    // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
-    // worth it to always create a new handle.
-    let read_handle = persist_client
-        .open_leased_reader::<SourceData, (), _, _>(
-            metadata.data_shard,
-            Arc::new(metadata.relation_desc.clone()),
-            Arc::new(UnitSchema),
-            Diagnostics {
-                shard_name: id.to_string(),
-                handle_purpose: format!("snapshot {}", id),
-            },
-            USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
-        )
-        .await
-        .expect("invalid persist usage");
-    Ok(read_handle)
 }
 
 /// State maintained about individual collections.
