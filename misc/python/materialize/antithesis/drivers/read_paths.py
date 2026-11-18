@@ -72,7 +72,9 @@ from materialize.antithesis.rng import rng
 STATE_DB = "read_paths"
 SCHEMA = "read_paths"
 CLUSTER = "read_paths_c"
-CLUSTER_SIZE = "antithesis-1"
+CLUSTER_SIZES = ("antithesis-1", "antithesis-2")
+"""Drawn when a timeline creates the cluster. With two workers the dataflows
+exchange data between workers."""
 REPLICATION_FACTOR = 2
 OTHER_CLUSTER = configure.SHARED_CLUSTER
 GROUPS = 8
@@ -202,7 +204,7 @@ def ensure_objects(host: str) -> bool:
             ):
                 _ddl(
                     conn,
-                    f"CREATE CLUSTER {CLUSTER} (SIZE {quote_literal(CLUSTER_SIZE)},"
+                    f"CREATE CLUSTER {CLUSTER} (SIZE {quote_literal(rng.choice(CLUSTER_SIZES))},"
                     f" REPLICATION FACTOR {REPLICATION_FACTOR})",
                 )
             _ddl(
@@ -517,8 +519,8 @@ class Round:
             "rows": sum(ref.values()),
             "diffs": diffs,
             "restarted_replicas": restarted,
-            "frontend_peek_sequencing": _flag("enable_frontend_peek_sequencing"),
-            "frontend_subscribes": _flag("enable_frontend_subscribes"),
+            "sync_mv_sink": _flag("enable_compute_sync_mv_sink"),
+            "columnar_merge_batcher": _flag("enable_columnar_merge_batcher"),
         }
         if rel.name == "t":
             always(

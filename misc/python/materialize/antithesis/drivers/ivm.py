@@ -88,7 +88,9 @@ from materialize.antithesis.rng import rng
 STATE_DB = "ivm"
 SCHEMA = model.SCHEMA
 CLUSTER = "ivm_c"
-CLUSTER_SIZE = "antithesis-1"
+CLUSTER_SIZES = ("antithesis-1", "antithesis-2")
+"""Drawn when a timeline creates the cluster. With two workers the dataflows
+exchange data between workers."""
 META_CLUSTER = configure.SHARED_CLUSTER
 """Catalog and frontier reads run here, so they answer while `ivm_c` rehydrates."""
 RETAIN_MENU = ("2m", "10m")
@@ -250,7 +252,7 @@ def ensure_objects(host: str, db: sqlite3.Connection) -> bool:
             ):
                 _ddl(
                     conn,
-                    f"CREATE CLUSTER {CLUSTER} (SIZE {quote_literal(CLUSTER_SIZE)},"
+                    f"CREATE CLUSTER {CLUSTER} (SIZE {quote_literal(rng.choice(CLUSTER_SIZES))},"
                     " REPLICATION FACTOR 1)",
                 )
             for t in model.TABLES:
