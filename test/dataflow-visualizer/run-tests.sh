@@ -14,8 +14,7 @@ set -euo pipefail
 cd /workdir
 
 echo "Installing npm dependencies..."
-npm cache clean --force 2>/dev/null || true
-npm install
+npm ci
 
 echo "Running Playwright tests..."
 TEST_EXIT_CODE=0
