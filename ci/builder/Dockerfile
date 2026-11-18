@@ -288,7 +288,7 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.9.0" --locked --features=cli cargo-about \
+    && cargo install --root /usr/local --version "=0.9.3" --locked --features=cli cargo-about \
     && cargo install --root /usr/local --version "=3.7.0" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
