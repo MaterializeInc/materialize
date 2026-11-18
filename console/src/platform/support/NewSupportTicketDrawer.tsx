@@ -67,11 +67,10 @@ import {
   buildTicketTargets,
   defaultTicketTarget,
   ENVIRONMENT_OPTIONS,
-  isUnchangedTemplate,
-  OUTAGE_TEMPLATE,
+  OUTAGE_DESCRIPTION_PLACEHOLDER,
   SEVERITY_OPTIONS,
+  TICKET_DESCRIPTION_PLACEHOLDER,
   TICKET_SEVERITY_OPTIONS,
-  TICKET_TEMPLATE,
   TicketFormValues,
   TicketSeverity,
 } from "./ticketForm";
@@ -166,7 +165,9 @@ const NewTicketForm = ({
   const supportOrganizations = useSupportOrganizations();
   // One choice per organization and active region.
   const targets = buildTicketTargets(supportOrganizations.data ?? [], signedIn);
-  const template = isOutage ? OUTAGE_TEMPLATE : TICKET_TEMPLATE;
+  const descriptionPlaceholder = isOutage
+    ? OUTAGE_DESCRIPTION_PLACEHOLDER
+    : TICKET_DESCRIPTION_PLACEHOLDER;
   const { register, handleSubmit, formState, watch } =
     useForm<TicketFormValues>({
       mode: "onTouched",
@@ -174,7 +175,7 @@ const NewTicketForm = ({
         title: "",
         severity: isOutage ? "urgent" : "normal",
         environmentType: "production",
-        description: template,
+        description: "",
         target: defaultTicketTarget(targets, signedIn)?.key ?? "",
       },
     });
@@ -362,17 +363,16 @@ const NewTicketForm = ({
             <FormLabel fontWeight="600">What happened?</FormLabel>
             <Textarea
               {...register("description", {
-                // Neither empty nor just the template.
                 validate: (value) =>
-                  (value.trim().length > 0 &&
-                    !isUnchangedTemplate(value, template)) ||
-                  "Describe what happened.",
+                  value.trim().length > 0 || "Describe what happened.",
                 maxLength: {
                   value: 10000,
                   message: "Keep the description under 10,000 characters.",
                 },
               })}
+              placeholder={descriptionPlaceholder}
               rows={6}
+              lineHeight="1.4"
               resize="vertical"
             />
             <FormErrorMessage>{errors.description?.message}</FormErrorMessage>
