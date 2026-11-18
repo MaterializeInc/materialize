@@ -7,12 +7,13 @@ Preserve compatible full writers, explicit retirement, durable protection and
 adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
-The current 26.46/26.47 debug pair is building. Wait for successful unit exit and
-both build and source-restoration receipts, then run the reviewed local lifecycle
-fixture, DDL, adapter-loss and version-upgrade walkthrough. The pair shares
-implementation and plan encoding. It is not release-skew or migration coverage.
-The optimized comparison and 60s four-index acceptance are complete. Finish this
-pair before further readiness tuning. Debug builds remain required for the local
+The current 26.46/26.47 debug pair built successfully, restored its source inputs
+and passed the local lifecycle assertions. The unchanged DDL workflow is running
+as `aj-native-parallel-d408e16b.service`. Inspect its result and cleanup before
+running adapter-loss. The pair shares implementation and plan encoding. It is
+not release-skew or migration coverage.
+The optimized comparison and 60s four-index acceptance are complete. Finish the
+remaining pair checks before further readiness tuning. Debug builds remain required for the local
 demo and phase-level restart/startup measurements.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
@@ -26,8 +27,16 @@ Native ownership, execution-qualified temporary objects/subscriptions, current-
 transaction protection derivation, incremental table registration and retirement
 are implemented. External sinks use catalog-selected replicas. Expression caches
 preserve other build namespaces. Earlier binaries passed PostgresCdc, both Timely
-topologies and compatible-version lifecycle coverage. Latest-build lifecycle is
-still pending.
+topologies and compatible-version lifecycle coverage.
+
+The current debug local walkthrough verified full writers before and after
+promotion, warmed execution, shared-relay transfer, retirement isolation and
+retired-reopen rejection. The surviving held snapshot remained protected across
+retirement. The candidate adapter restarted at promotion as permitted. This does
+not establish SQL SUBSCRIBE continuity or a panic-free lifecycle: the running
+old controller panicked during explicit retirement. See
+`current-frontier-lifecycle-audit.md` for phase timings and limits. Initial
+provisioning waits exclude the separate, roughly ten-minute candidate catch-up.
 
 The frontier rewrite derives execution keys from catalog records rather than
 frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
@@ -62,9 +71,10 @@ Detailed older outcomes and evidence remain in the
 
 ## Live blockers and boundaries
 
-- Outgoing controllerd panics on catalog-confirmed retirement in the optimized
-  run. Workflow success does not establish crash-free acceptance. Retired-reopen
-  rejection must remain distinct from shutdown of a running controller.
+- Outgoing controllerd panics on catalog-confirmed retirement in both optimized
+  and current debug runs. Workflow success does not establish crash-free
+  acceptance. Clean shutdown of an already-running retired controller awaits
+  approval for the exit-behavior change. Keep retired-reopen rejection distinct.
 - Promoted-adapter storage initialization can return `CatalogOutOfSync` when
   catch-up changes its captured transient revision. Revalidate preparation rather
   than removing that guard.
@@ -98,6 +108,12 @@ systemd ExecStopPost hook restores source only after the build cgroup has draine
 Do not bypass `run-current-frontier-pair.sh` or use incomplete artifacts.
 
 Essential pointers:
+- `current-frontier-lifecycle-audit.md` and `.json`, plus
+  `current-frontier-lifecycle-result.log`. The worker archive is
+  `current-frontier-lifecycle-evidence.tar.gz`.
+- `current-frontier-ddl-retry-driver.log`. Initial DDL preflight stopped on
+  missing dependency images. Exact dependencies are now cached, including the
+  source-resolved MySQL image rather than the scratch fixture's stale alias.
 - `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
   `current-pair-worker-provenance.log`. Pair artifacts are in sibling
   `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed
