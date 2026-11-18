@@ -38,7 +38,7 @@ def create_mysql_server_args(
 class MySql(Service):
     DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
     # renovate: datasource=docker depName=mysql versioning=docker
-    DEFAULT_VERSION = "9.7.0"
+    DEFAULT_VERSION = "9.7.4@sha256:df90258da46f6e7ff8574ff84f17618aba0765cac749928299c69fd4e7cb8ad8"
 
     DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 
