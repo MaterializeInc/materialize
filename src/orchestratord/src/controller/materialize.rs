@@ -10,7 +10,7 @@
 //! Reconciler for Materialize resources.
 //!
 //! Each reconcile takes one step of a state machine: read `status.phase`,
-//! derive a single [`Step`] with the pure [`plan_step`], execute it. A step
+//! derive a single `Step` with the pure `plan_step`, execute it. A step
 //! performs at most one action and at most one status write. The write is the
 //! step's last effect, so a step that fails partway is planned again from the
 //! same status, and every action has to be idempotent.
@@ -22,7 +22,7 @@
 //! rollout records what was promoted.
 //!
 //! Conditions are for display. Planning never reads them back, apart from
-//! [`current_status`].
+//! `current_status`.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -303,8 +303,16 @@ fn plan_step(mz: &Materialize, status: &MaterializeStatus, observed: &Observed) 
                 return Step::BeginRollout;
             }
             match phase {
-                MaterializePhase::TearingDownActiveGeneration => Step::TearDownActiveGeneration,
-                MaterializePhase::ApplyingCandidate => Step::ApplyCandidate,
+                // Leaving the strategy mid-teardown must not delete an active
+                // generation that the new strategy keeps serving from.
+                MaterializePhase::TearingDownActiveGeneration
+                    if mz.spec.rollout_strategy
+                        == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime =>
+                {
+                    Step::TearDownActiveGeneration
+                }
+                MaterializePhase::TearingDownActiveGeneration
+                | MaterializePhase::ApplyingCandidate => Step::ApplyCandidate,
                 MaterializePhase::ReadyToPromote
                     if mz.spec.rollout_strategy == MaterializeRolloutStrategy::ManuallyPromote
                         && !mz.should_force_promote() =>
@@ -866,16 +874,24 @@ impl Context {
                 Ok(timeout_in.map(Action::requeue))
             }
             Step::BeginRollout => {
+                let tear_down_active = mz.spec.rollout_strategy
+                    == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime;
                 let next = MaterializeStatus {
-                    phase: Some(
-                        if mz.spec.rollout_strategy
-                            == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
-                        {
-                            MaterializePhase::TearingDownActiveGeneration
-                        } else {
-                            MaterializePhase::ApplyingCandidate
-                        },
-                    ),
+                    phase: Some(if tear_down_active {
+                        MaterializePhase::TearingDownActiveGeneration
+                    } else {
+                        MaterializePhase::ApplyingCandidate
+                    }),
+                    // Cleared before the teardown starts. A teardown whose
+                    // status write fails has already deleted the active
+                    // generation, and a spec reverted at that point would
+                    // otherwise match the stale hash and settle as up to
+                    // date with nothing running.
+                    resources_hash: if tear_down_active {
+                        String::new()
+                    } else {
+                        status.resources_hash.clone()
+                    },
                     rollout: Some(RolloutStatus {
                         generation: candidate_generation,
                         request: mz.requested_reconciliation_id(),
@@ -901,9 +917,6 @@ impl Context {
                     .await?;
                 let next = MaterializeStatus {
                     phase: Some(MaterializePhase::ApplyingCandidate),
-                    // With no active generation left, reverting the spec must
-                    // not read as up to date.
-                    resources_hash: String::new(),
                     ..status
                 };
                 self.update_status(metadata, &mz_api, mz, next).await?;
@@ -1513,7 +1526,7 @@ mod tests {
         for (phase, step) in [
             (
                 MaterializePhase::TearingDownActiveGeneration,
-                Step::TearDownActiveGeneration,
+                Step::ApplyCandidate,
             ),
             (MaterializePhase::ApplyingCandidate, Step::ApplyCandidate),
             (MaterializePhase::AwaitingCandidate, Step::AwaitCandidate),
@@ -1525,6 +1538,16 @@ mod tests {
         ] {
             assert_eq!(plan(&mz_rolling_out(phase), &observed()), step, "{phase:?}");
         }
+    }
+
+    #[mz_ore::test]
+    fn active_generation_is_torn_down_only_under_its_strategy() {
+        let mut mz = mz_rolling_out(MaterializePhase::TearingDownActiveGeneration);
+        mz.spec.rollout_strategy = MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime;
+        assert_eq!(plan(&mz, &observed()), Step::TearDownActiveGeneration);
+
+        mz.spec.rollout_strategy = MaterializeRolloutStrategy::WaitUntilReady;
+        assert_eq!(plan(&mz, &observed()), Step::ApplyCandidate);
     }
 
     #[mz_ore::test]
