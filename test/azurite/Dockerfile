@@ -14,7 +14,7 @@ FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21
 FROM node:26-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS azurite-build
 
 # renovate: datasource=github-digest depName=Azure/Azurite currentValue=main
-ARG AZURITE_REVISION=9b08276a0b4c912e8d84d6e0a27a29f33ff950b3
+ARG AZURITE_REVISION=f049fde4517aa76917266dc637ff525f8990210b
 
 ADD https://github.com/Azure/Azurite/archive/${AZURITE_REVISION}.tar.gz /azurite-src.tar.gz
 
