@@ -17,6 +17,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
 
+use mz_aws_util::rds::rds_auth_token;
 use mz_ore::future::{InTask, OreFutureExt, TimeoutError};
 use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
@@ -27,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::MySqlError;
-use crate::aws_rds::rds_auth_token;
 
 /// Configures an optional tunnel for use when connecting to a MySQL
 /// database.

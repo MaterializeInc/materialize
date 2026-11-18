@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! AWS RDS IAM database authentication.
+//!
+//! The tokens generated here are not specific to a database engine: the same
+//! token authenticates against RDS and Aurora for MySQL and PostgreSQL. The
+//! caller passes the token as the password when it connects, over TLS.
+
 use aws_config::{Region, SdkConfig};
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::provider::error::CredentialsError;
@@ -44,9 +50,15 @@ pub enum RdsTokenError {
     InvalidEndpoint(#[from] url::ParseError),
 }
 
-// Generate an RDS authentication token.  This should mirror what can be found
-// in aws_sdk_rds::auth_token, but without restricted creates.
-pub(crate) async fn rds_auth_token(
+/// Generates an RDS IAM authentication token for `username` connecting to the
+/// database at `host:port`.
+///
+/// `host` and `port` must be the endpoint of the RDS instance or cluster
+/// itself, not of a tunnel or proxy in front of it, because the token is a
+/// signature over that endpoint. The token is valid for 15 minutes.
+///
+/// This mirrors `aws_sdk_rds::auth_token`, without depending on `aws-sdk-rds`.
+pub async fn rds_auth_token(
     host: &str,
     port: u16,
     username: &str,
