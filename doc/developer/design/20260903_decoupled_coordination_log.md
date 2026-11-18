@@ -2,247 +2,121 @@
 
 ## Objective and next action
 
-Finish native-only M3 under the current [prompt](20260903_decoupled_coordination_prompt.md).
-Preserve compatible full writers, explicit retirement, durable protection and
-adapter-owned policy. M2, including its 60s publication default, remains closed.
-Do not restore legacy execution or weaken validation to make tests pass.
+Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.md).
+Preserve compatible full writers, explicit retirement, durable protection,
+adapter-owned policy, shared query transport and required formats. M2 and the
+60s publication default remain closed. Do not restore legacy execution or weaken
+validation to make checks pass.
 
-The current 26.46/26.47 debug pair passed local lifecycle, DDL, adapter-loss and
-subscription-identity coverage and debug restart measurements. All owned runtimes
-are stopped. Controller cache publication is committed in `240f174b`, with source
-review, debug build, matched restart probes and a disabled-then-enabled check.
-The accepted version pair predates this isolated cache repair. Its implementation
-and plan encoding are shared, not release-skew or migration coverage. Optimized
-comparison and 60s four-index acceptance are complete.
+Next, finish conditional-write convergence: controller configuration publication,
+remaining startup retry wrappers, and inline DDL owners. Recheck
+`~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` and
+`native-only/native-ci-recovery/current-remaining-retry-sites.md` against current
+source. The adapter configuration twin was unreachable and is now removed, not a
+remaining retry target. Verify controller tick continuation under activation
+contention. Then complete startup phase attribution and current-head acceptance.
+Bring changes to write guarantees or public behavior to the user before landing.
 
-Next, resume the remaining conditional-write retry survey and verify full-tick
-continuation under activation contention. The user rejected the
-configuration commit-contract change. The committed repair preserves fresh
-snapshots and B/B+1 validation, returns exhaustion to a later controller tick, and
-does not skip unrelated tick work. Retirement drops invalid preparation without
-losing consumed catalog updates, backs off between attempts, and treats confirmed
-retirement of the running controller's own deployment as normal shutdown.
+## Live decisions and boundaries
 
-Initialization, retirement and controller unit coverage, controller compilation,
-and targeted Clippy pass. Configuration and retirement regressions fail for the
-expected reasons without their repairs. Registration adoption racing DROP and
-Forget passes. Same-build live retirement now passes: the outgoing controller
-exits naturally with status zero before launcher cleanup, retired reopening is
-rejected, and survivor SQL, snapshot protection and warmed execution persist.
-Full-tick continuation still needs integration coverage. See
-`native-clean-exit-audit.md` and `native-clean-exit-evidence.tar.gz`.
-Controller-only cache publication is covered for enabled and disabled defaults
-and overrides. Removing publication reproduces cold misses on reopening.
+- Restart scheduling awaits approval. Active-controller restart currently retries
+  configuration publication before serving HTTP. Proposed change uses the existing
+  runtime tick, retaining admission checks before serving and fresh initialization
+  before children. HTTP and process reconciliation could proceed while restart
+  publication remains pending, as during promotion. Existing configuration tests
+  require correct rows when SQL readiness returns. Do not silently relax that.
+- Cache reclamation needs a scope decision. Membership records release versions,
+  while development cache keys include executable identities. Pruning unused release
+  namespaces can preserve all variants of live versions. Exact variant reclamation
+  needs more membership metadata. Never reclaim authoritative Written plans.
+- Sticky sink selection needs shared per-sink ownership. A deployment-qualified
+  catalog placement record was proposed for approval. Local retention alone would
+  let a new lower-ID replica start a competing writer.
+- Promoted-adapter storage initialization can return `CatalogOutOfSync` after
+  structural catch-up. Revalidate preparation rather than removing the guard.
+- Debug upsert OOM also reproduces on pinned upstream. No native-specific cause
+  is established. Do not increase memory or shrink the workload.
+- Broad current-head CI and combined ingestion coverage remain open. The last
+  inspected [CI build](https://buildkite.com/materialize/test/builds/143929), at
+  `6e7a3107`, passed Linux/macOS Clippy, formatting, docs and doctests. Image builds
+  were blocked by public `materialize/pubsubd` visibility, requiring team-testing.
+  Merge-skew failed before compilation. Dependent runtime jobs did not run.
+  See `current-ci-143929.md`. Do not merge main without approval.
+- Positive builtin migrations, pre-native conversion, Kubernetes, operator and
+  Terraform integration remain deferred. Preserve rejection guards and historical
+  coverage. No Persist redesign, cadence changes or unrelated optimization.
 
-Group commits now prepare rows before timestamp allocation and reuse original
-batches across definitive upper conflicts (`613902c2`). FIFO ordering, missing-
-target transaction rejection and fixed-timestamp OCC semantics remain intact.
-Clippy, the full txn-WAL unit suite and append tests pass, including a gated
-backend-CAS loss with snapshot and listen assertions. Independent source review
-found no remaining concrete issue. Evidence: scratch
-`controller-followups/append-wal-final.log` and `append-tests.log`. End-to-end
-latency has not been remeasured, and inline coordinator registration waits remain
-in the retry survey.
+## Verified outcomes and limits
 
-Runtime registration now prepares handles once before allocation (`a46d99ff`),
-retains them across WAL conflicts, certifies bindings on every attempt, and releases
-filtered preparation after completion. Real peer binding deletion/Forget and
-finalized-before-preparation regressions pass, with negative controls confirming
-the failure modes. Targeted Clippy and writer/committer suites pass. Evidence:
-`controller-followups/registration-certificate-red.log` and
-`registration-finalization-red.log`. No end-to-end latency claim is made.
+Native ownership, temporary/subscription identities, protection derivation,
+compatible full writers and explicit retirement have targeted debug lifecycle
+coverage. The accepted 26.46/26.47 pair shares implementation and plan encoding.
+It is not arbitrary-release or migration coverage, and predates recent cleanup.
+Optimized KafkaSources completed on native and pinned upstream with final
+validation and backup/restore. The debug four-index 60s workflow passed. The 1s
+variant remains stress, not acceptance.
 
-The obsolete adapter bootstrap configuration publisher is removed. Every current
-serving path, including TestHarness and sqllogictest, joins controller-initialized
-storage. Controller publication remains, as does suppression of the joining
-adapter's full positive snapshot. Targeted Clippy and unchanged initial,
-changed-restart and unchanged-restart configuration assertions pass. Evidence:
-`adapter-config-removal-test.log` and scratch
-`controller-followups/remove-adapter-config-build.log`.
+Recent checks cover controller cache publication, configuration exhaustion,
+retirement preparation and natural controller exit. Same-build live retirement
+exited zero before cleanup, rejected retired reopening, and preserved survivor
+SQL, held snapshots and warmed execution. Historical version-pair and Kafka logs
+still contain the old outgoing-controller panic. They have not been rerun with
+the repair. Retired reopening remains a fatal startup rejection.
 
-The legacy adapter system-table reset path and its unconditional WAL reader are
-removed. The completed-WAL barrier and committed builtin updates remain. Clippy,
-unchanged configuration startup/restart coverage and adapter-only restart
-preservation pass. Evidence: `bootstrap-reset-test.log` and scratch
-`controller-followups/remove-bootstrap-reset-build.log`. No load reduction has
-been measured for this removal.
+Group commits prepare batches before allocation and reuse them across conflicts.
+Runtime registration likewise retains adopted handles, freshly certifies catalog
+bindings and handles finalized targets. Real WAL/certificate races, snapshot/listen
+assertions, negative controls, targeted Clippy and independent review passed.
+The obsolete adapter configuration publisher, system-table resets, extra reset WAL
+reader and non-native bootstrap/writer alternatives are removed. Unchanged
+configuration startup/restart, adapter restart preservation and CREATE/ALTER
+infrastructure recovery checks pass. No performance improvement is claimed.
 
-Coordinator bootstrap now uses native plan protection and maintained sink bounds
-without unprotected alternatives. The unreachable late table-registration path
-and its redundant schema preparation are removed. Independent review, Clippy and
-unchanged configuration/restart-preservation checks pass. Evidence:
-`native-bootstrap-only-test.log` and scratch
-`controller-followups/native-bootstrap-only-build.log`.
+Candidate promotion in the latest lifecycle run waited on the existing 600000ms
+stability gate after catching up. Do not classify that wait as unexplained replay
+or CPU work. The earlier statistics replay audit separately found zero-holding
+leases plus a 30-day critical retention bound. No retention change was made.
+The post-cleanup resource comparison still found more native CPU, memory and I/O.
+Attribution and proposals are in the [follow-ups](20260903_decoupled_coordination_followups.md#native-only-resource-comparison),
+not implemented optimizations.
 
-Afterward, finish the prompt's conditional-write convergence and startup work.
-Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
-code. Bring changes to write guarantees or public behavior to the user before
-landing. Current-head broad CI and combined ingestion coverage remain open.
-
-## Completed outcomes and limits
-
-Native execution ownership, temporary-object/subscription identities, protection
-derivation, incremental registration, external execution selection and expression
-cache namespace preservation are implemented. Current debug acceptance covers
-both writers across promotion, warmed execution, relay transfer, explicit
-retirement, Kafka/PostgreSQL/MySQL/SQL Server/webhook ingestion, Kafka sink
-handover, adapter-loss recovery and colliding subscription identities. The latter
-covers joins, independent cleanup, incumbent continuity across promotion and
-survivor progress after retirement. See the linked audits for exact scope.
-
-These are targeted local checks, not full CI. The earlier host walkthrough exposed
-a live-retirement controller panic, now repaired and verified in the same-build
-debug lifecycle check. Candidate adapter restart at promotion remains
-permitted. DDL, adapter-loss and subscription log audits found no Materialize panic
-or OOM. Successful SQL/compaction values are not all saved separately, so some
-claims rely on executed unchanged assertions rather than numerical replay.
-
-Debug measurements passed at unchanged limits: adapter-only restart 9.2s,
-promotion request to serving 12.6s excluding catch-up, and whole-native relaunch
-24.4s after a separate 10.4s stop. PostgreSQL remained alive. The adapter did not
-repeat the observed builtin optimization events after retained-state restart,
-while the controller did. This supports the controller-cache repair, not a claim
-that all adapter items hit. See `current-frontier-restart-audit.md`.
-
-The frontier rewrite derives execution keys from catalog records rather than
-frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
-checks and independent source review passed. It removes two joins and one
-DISTINCT, with no demonstrated whole-workflow speedup.
-
-Native and pinned upstream `d9a2c5dc` both completed optimized KafkaSources with
-`--actions=10000 --max-execution-time=20m`, seed 42, unchanged resource limits and
-a 60-minute job cap. Final validation, backup/restore and postrestore validation
-passed. Native retained controller retirement panics. Neither run had observed
-OOM kills, but both had memory-limit pressure. The timed budget produced unequal
-completed work, and the storage topologies differ. Common-generation observed
-readiness averaged 26.8s upstream and 40.3s native. See
-`optimized-kafka-comparison.md` for every generation, provenance and caveats.
-
-The current debug four-index workflow passed at 60s, including pause-cap,
-peer-DROP and final unpause assertions. All observed derived publication attempts
-in the measured unpaused windows succeeded. The windows are short, not a steady-
-state capacity measurement. See `current-four-index-60s-audit.md`.
-The 18-publisher, 1s variant remains stress, not an acceptance gate.
-
-The statistics replay question has measured physical evidence. Its Persist upper
-was current, physical since was zero with three zero-holding leased readers, and
-an independent critical-reader bound retained 30 days of history. Removing the
-zero leases would not compact away this short run's history. Candidates kept the
-historical index's as-of near environment creation, so reconstruction grew with
-environment age. This explains replay span, not CPU cost or the native/upstream
-readiness difference. No retention or Persist change was made.
-
-Detailed older outcomes and evidence remain in the
-[previous handoff](https://github.com/aljoscha/materialize/blob/a92b058ebb45/doc/developer/design/20260903_decoupled_coordination_log.md).
-
-The post-cleanup debug resource comparison passed with matched settings and no
-measured aggregate throttling. Native still uses more CPU, memory and backend
-I/O. The [follow-ups](20260903_decoupled_coordination_followups.md#native-only-resource-comparison)
-separate measured attribution from proposed optimizations. No performance or
-Persist change was implemented. See `native-only-load-report.md` in the evidence
-root for the full report. Owned runtimes stopped and expendable comparison build
-data was removed, leaving 155 GiB free on scratch.
-
-## Live blockers and boundaries
-
-- Historical distinct-version and Kafka workflow evidence retains outgoing
-  controller panics. The repair now passes same-build live verification, not a
-  rerun of those workflows. Retired reopening remains a fatal startup rejection.
-- Restart scheduling needs approval: active-controller restart currently retries
-  configuration publication before serving HTTP. Proposed change moves publication
-  into the existing runtime tick, retaining admission checks before serving and
-  fresh initialization before children. HTTP and reconciliation could proceed
-  while restart configuration publication remains pending, as during promotion.
-- Cache reclamation needs a scope decision: membership records release versions,
-  whereas development cache keys include executable identities. Pruning unused
-  release namespaces can preserve all variants of live versions. Exact variant
-  reclamation needs additional membership metadata. Written plans are excluded.
-- Sticky sink placement needs shared, per-sink ownership. A deployment-qualified
-  catalog placement record was proposed for approval. Keeping only local running
-  state would permit a newly added lower-ID replica to start a competing writer.
-- Promoted-adapter storage initialization can return `CatalogOutOfSync` when
-  catch-up changes its captured transient revision. Revalidate preparation rather
-  than removing that guard.
-- Debug upsert OOM also reproduces on the pinned upstream base. No native-specific
-  cause is established. Do not increase memory or shrink the workload.
-- The last inspected CI failure is
-  [Build143929](https://buildkite.com/materialize/test/builds/143929), at `6e7a3107`.
-  Linux and macOS Clippy, lint/rustfmt, docs lint and doctests passed. The only
-  failed jobs are the image build gate and merge-skew check. Dependent runtime
-  jobs did not run, so broad runtime CI remains unverified. DockerHub
-  `materialize/pubsubd` visibility needs team-testing intervention. Merge-skew
-  checking conflicts before compilation. Do not merge main without approval.
-  See `current-ci-143929.md` and its terminal metadata, annotation and merge log.
-- Positive builtin-schema migrations, pre-native conversion, Kubernetes, operator
-  and Terraform integration remain deferred. Keep rejection guards and unsupported
-  coverage explicit. Unrelated tracing/performance changes need separate scope.
-- Statistics publisher overlap and retired partition cleanup remain source-reading
-  leads in the [follow-ups](20260903_decoupled_coordination_followups.md).
+Detailed historical outcomes and caveats are preserved in the
+[previous handoff](https://github.com/aljoscha/materialize/blob/01ceb94c/doc/developer/design/20260903_decoupled_coordination_log.md).
 
 ## Worker and evidence
 
-Worker: `i-02f17d8a7d9534f5e`, 16 CPUs, 61 GiB RAM. Shutdown is
-2026-11-18 13:00 UTC, tag expiry 13:05. Docker runtime caps are eight CPUs/40 GiB
-aggregate and four CPUs/6 GiB per deployment container. The host lifecycle uses
-its separate reviewed system/user slice envelope. Builds use one job, four
-CPUs/32 GiB. Never overlap builds and runtimes. Keep heavy work off the local VM.
-Extension within these caps needs no approval.
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 13:00 UTC,
+tag expiry 13:05. All owned runtimes are stopped. Builds use one job, four CPUs,
+32 GiB, no swap and a 30 GiB disk reserve. Never overlap builds and runtimes.
+Host lifecycle/tests use a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
+Docker workload caps remain eight CPUs/40 GiB aggregate and four CPUs/6 GiB per
+deployment. Extend the worker within these caps without asking when needed.
 
-Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
-`remote.py` accesses the worker. Worker source is base `59a59d89`, the exact
-frontier overlay and the two controller files in `controller-cache-source-inputs.json`.
-The accepted pair remains unchanged. Pair building temporarily changes package versions. Its required
-systemd ExecStopPost hook restores source only after the build cgroup has drained.
-Do not bypass `run-current-frontier-pair.sh` or use incomplete artifacts.
+Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
+`remote.py` accesses scratch. Current verification worktree is
+`/home/ubuntu/materialize-m3-controller-followups`, base `17da75c2` plus explicit
+source overlays. Verify hashes, not just its Git revision. Remote logs are under
+`~/.local/share/aj/m3-evidence/controller-followups/`.
 
 Essential pointers:
-- Current follow-up verification uses worker worktree
-  `/home/ubuntu/materialize-m3-controller-followups`, based on `17da75c2` with
-  explicit source overlays. Worker logs are under
-  `~/.local/share/aj/m3-evidence/controller-followups/`: `ci-stack.log` and
-  `red.log` establish the exhaustion regression, `reviewed.log` covers
-  initialization and the failed retirement assertion, and `snapshot-fix.log`
-  records an initial assertion correction. `public-trait.log` records passing
-  retirement coverage and controller compilation. `controller-unit.log` records
-  controller tests and Clippy, and `retirement-red.log` confirms the original
-  assertion failure. `cache-red.log` confirms that the controller-only cache test
-  detects missing publication. Unit tests use CI's
-  `RUST_MIN_STACK=4194304`, serial execution and the unchanged build caps.
-- `current-frontier-restart-audit.md` and `.json`, plus locally verified
-  `current-frontier-restart-evidence.tar.gz` and `current-frontier-restart-result.log`.
-- `controller-cache-enabled-build-driver.log`, `controller-cache-pinning.log`,
-  `controller-cache-publication-review.md` and its `-followup.md`. The initial
-  build was stopped to honor disabled caching even when native plan storage
-  retains a cache handle. The corrected build passed. Candidate artifacts and
-  `native-controller-cache-binaries.json` are in `upsert-oom-investigation/`.
-  `controller-cache-comparison-audit.md`, `controller-cache-disabled-result.log`
-  and locally verified `controller-cache-probes-evidence.tar.gz` record the tests.
-- `current-frontier-lifecycle-audit.md` and `.json`, plus
-  `current-frontier-lifecycle-result.log`. The locally verified archive is
-  `current-frontier-lifecycle-evidence.tar.gz`.
-- `current-frontier-ddl-audit.md` and `.json`, plus locally verified
-  `current-frontier-ddl-evidence.tar.gz` and `current-frontier-ddl-result.log`.
-- `current-frontier-adapter-loss-audit.md` and `.json`, plus the locally verified
-  `current-frontier-adapter-loss-evidence.tar.gz`.
-- `current-frontier-subscriptions-audit.md` and `.json`, plus locally verified
-  `current-frontier-subscriptions-evidence.tar.gz`. An earlier wrapper-only
-  version-receipt failure is retained in `current-frontier-subscriptions-driver.log`.
-- `current-builtin-cache-startup-survey.md` and `current-cache-build-identities.log`.
-  Controllers and adapters have distinct cache namespaces. The controller repair
-  preserves that isolation. Same-binary adapter whole-restart misses were not
-  reproduced.
-- `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
-  `current-pair-worker-provenance.log`. Pair artifacts are in sibling
-  `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed
-  `native_frontier_lifecycle.py` is in `upsert-oom-investigation/`.
-- `optimized-kafka-comparison.md` and `.json`, plus
-  `native-optimized-kafka-evidence.tar.gz` and `base-optimized-kafka-evidence.tar.gz`.
-  Both optimized pins and the original debug pin are preserved separately.
-- `current-four-index-60s-audit.md` and `.json`,
-  `current-four-index-60s-evidence.tar.gz`, and `current-four-index-60s-result.log`.
-- `source-statistics-physical-since.md`, `source-statistics-live-evidence.tar.gz`
-  and `source-statistics-current-asofs.log`.
-- `frontier-static-key-verification.md` and `source-review-frontier-static-keys.md`.
-  Earlier debug timing evidence had no valid before/after operator pair.
+- Current retry checks: remote `registration-certificate-red.log`,
+  `registration-finalization-red.log`, `append-wal-final.log`,
+  `controller-unit.log`, `retirement-red.log`, `cache-red.log` and
+  `native-table-writer-only.log`.
+- Recent runtime cleanup: local `native-clean-exit-audit.md`,
+  `native-clean-exit-evidence.tar.gz`, `adapter-config-removal-test.log`,
+  `bootstrap-reset-test.log` and `native-bootstrap-only-test.log`.
+- Accepted pair and lifecycle: `current-frontier-{lifecycle,ddl,adapter-loss,
+  subscriptions,restart}-audit.md` and their evidence archives. Preserve accepted
+  artifacts under `upsert-oom-investigation/native-compatible-frontier-current/`.
+  Pair rebuilding changes versions and requires the reviewed restoration hook in
+  `run-current-frontier-pair.sh`. Do not bypass it or use incomplete artifacts.
+- Latest same-build debug artifacts: scratch
+  `controller-followups/native-debug-inputs/`, with source and binary provenance.
+  They predate runtime-registration and subsequent bootstrap removals.
+- Performance/acceptance: `optimized-kafka-comparison.md`,
+  `current-four-index-60s-audit.md`, `source-statistics-physical-since.md`,
+  `controller-cache-comparison-audit.md`, `current-builtin-cache-startup-survey.md`
+  and `native-only-load-report.md`.
 
 Preserve `tmp_dec1fdd35343b4a99fe5b65d9e20e2b4b7085ecc719a42c7915575284b56c512.toml`.
