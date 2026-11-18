@@ -45,10 +45,26 @@ pub async fn initialize_fresh(
         .into());
     }
     let persist = config.state.persist_client.clone();
-    mz_catalog::catalog::Catalog::open(config)
-        .await?
+    let cache_override = config.state.enable_expression_cache_override;
+    let mut opened = mz_catalog::catalog::Catalog::open(config).await?;
+    let local_expressions = std::mem::take(&mut opened.uncached_local_exprs);
+    let catalog = opened
         .complete_fresh_deployment_initialization(persist, txns_metrics, oracle)
-        .await
+        .await?;
+    // Controllers have their own development-build cache namespace. Enqueue
+    // misses after successful initialization, without delaying readiness for
+    // best-effort cache durability.
+    let cache_enabled = cache_override.unwrap_or_else(|| {
+        mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE.get(catalog.system_config().dyncfgs())
+    });
+    if cache_enabled && !local_expressions.is_empty() {
+        let _completion = catalog.update_expression_cache(
+            local_expressions.into_iter().collect(),
+            Vec::new(),
+            Default::default(),
+        );
+    }
+    Ok(catalog)
 }
 
 fn serialize_id<T: std::fmt::Display, S: serde::Serializer>(

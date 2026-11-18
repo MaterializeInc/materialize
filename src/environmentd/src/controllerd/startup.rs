@@ -212,16 +212,33 @@ pub async fn open_catalog(
     let catalog = if initialize {
         super::initialize_fresh(catalog_config, Arc::clone(&txns_metrics), oracle.as_ref()).await?
     } else {
-        let catalog = Catalog::open(catalog_config).await?;
-        if catalog.catalog.state().active_deployment_generation()
+        let cache_override = catalog_config.state.enable_expression_cache_override;
+        let mut opened = Catalog::open(catalog_config).await?;
+        let local_expressions = std::mem::take(&mut opened.uncached_local_exprs);
+        let catalog = if opened.catalog.state().active_deployment_generation()
             == Some(config.controller.deploy_generation)
         {
-            catalog
+            opened
                 .complete_deployment_restart(persist, Arc::clone(&txns_metrics), oracle.as_ref())
                 .await?
         } else {
-            catalog.catalog
+            opened.catalog
+        };
+        // Publishing these misses warms this controller's exact-build namespace,
+        // not the adapter's. The call enqueues work even when its completion
+        // future is dropped, as in adapter bootstrap.
+        let cache_enabled = cache_override.unwrap_or_else(|| {
+            mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE
+                .get(catalog.system_config().dyncfgs())
+        });
+        if cache_enabled && !local_expressions.is_empty() {
+            let _completion = catalog.update_expression_cache(
+                local_expressions.into_iter().collect(),
+                Vec::new(),
+                Default::default(),
+            );
         }
+        catalog
     };
     ensure!(
         catalog.state().catalog_read_protection_enabled(),
