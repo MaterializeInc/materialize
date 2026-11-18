@@ -104,6 +104,9 @@ pub async fn run(
         progress.for_each(|_| tokio::task::consume_budget()),
     )
     .abort_on_drop();
+    // Admission above remains fallible, including reopening a retired deployment.
+    // Only catalog-confirmed retirement of this running controller is normal exit.
+    let result: anyhow::Result<()> = async {
     loop {
         tokio::select! {
             _ = &mut catalog_progress => {
@@ -153,20 +156,21 @@ pub async fn run(
                 if !active {
                     activation_preparation = None;
                 }
-                if active && !was_active {
-                    if !catalog.complete_deployment_activation(
+                let activation_complete = if active && !was_active {
+                    let complete = catalog.complete_deployment_activation(
                         persist.clone(), Arc::clone(&txns_metrics), oracle.as_ref(),
                         &mut activation_preparation,
-                    ).await? {
-                        // A definitive registration conflict is ordinary contention,
-                        // not a failed controller. Leave activation pending and give
-                        // administrative commands a turn before retrying. Reset an
-                        // overdue tick rather than immediately entering another round.
+                    ).await?;
+                    if !complete {
+                        // Retry contention on a later tick, while still reconciling
+                        // processes, configuration and observations below.
                         interval.reset();
-                        continue;
                     }
-                }
-                was_active = active;
+                    complete
+                } else {
+                    true
+                };
+                was_active = active && activation_complete;
                 if let Some(relay) = &mut pubsub { relay.reconcile(); }
                 // This also releases Persist's initial-configuration barrier,
                 // allowing its PubSub client to connect with the catalog settings.
@@ -228,6 +232,17 @@ pub async fn run(
             }
         }
     }
+    }.await;
+    match result {
+        Err(error) if own_deployment_retired(&error, config.controller.deploy_generation) => {
+            tracing::info!(
+                generation = config.controller.deploy_generation,
+                "controller deployment retired"
+            );
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 #[expect(
@@ -284,7 +299,10 @@ async fn administer(
                             "environment_id": catalog.config().environment_id.to_string(),
                         }));
                     }
-                    Ok(false) if attempt < 2 => continue,
+                    Ok(false) if attempt < 2 => {
+                        tokio::time::sleep(Duration::from_millis(10 * (attempt + 1))).await;
+                        continue;
+                    }
                     Ok(false) => {
                         return Err(ApiError {
                             status: StatusCode::CONFLICT,
@@ -358,6 +376,30 @@ async fn administer(
     unreachable!("last attempt returns its result")
 }
 
+fn own_deployment_retired(error: &anyhow::Error, generation: u64) -> bool {
+    use mz_catalog::durable::{CatalogError as DurableError, DurableCatalogError, FenceError};
+
+    error.chain().any(|cause| {
+        // Sync returns durable errors directly. Reconciliation wraps them in the
+        // in-memory catalog error, whose transparent sources omit these wrappers.
+        let durable = match cause.downcast_ref::<DurableError>() {
+            Some(DurableError::Durable(error)) => Some(error),
+            _ => match cause.downcast_ref::<CatalogError>() {
+                Some(CatalogError::Catalog(inner)) => match &inner.kind {
+                    ErrorKind::Durable(error) => Some(error),
+                    _ => None,
+                },
+                _ => None,
+            },
+        };
+        matches!(durable,
+            Some(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+                generation: retired,
+            })) if *retired == generation
+        )
+    })
+}
+
 fn catalog_out_of_sync(error: &CatalogError) -> bool {
     matches!(error, CatalogError::Catalog(inner) if matches!(
         inner.kind,
@@ -410,5 +452,31 @@ fn catalog_error(error: CatalogError) -> ApiError {
                 message: "catalog operation unavailable".into(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn retirement_exit_requires_own_typed_catalog_error() {
+        let retired = mz_catalog::durable::FenceError::DeploymentRetired { generation: 7 };
+        for error in [
+            anyhow::Error::new(mz_catalog::durable::CatalogError::from(retired.clone())),
+            anyhow::Error::new(CatalogError::from(
+                mz_catalog::durable::DurableCatalogError::from(retired),
+            )),
+        ] {
+            assert!(own_deployment_retired(&error, 7));
+            assert!(!own_deployment_retired(&error, 8));
+            assert!(own_deployment_retired(&error.context("reconciliation"), 7));
+        }
+        assert!(!own_deployment_retired(
+            &anyhow::anyhow!("catalog deployment generation 7 has been retired"),
+            7,
+        ));
+        let unexpected: anyhow::Error = CatalogError::Internal("unexpected failure".into()).into();
+        assert!(!own_deployment_retired(&unexpected, 7));
     }
 }

@@ -453,7 +453,10 @@ struct RetirementSnapshot {
 }
 
 impl RetirementSnapshot {
-    fn apply(&mut self, updates: &[StateUpdate<StateUpdateKindJson>]) {
+    fn apply(
+        &mut self,
+        updates: &[StateUpdate<StateUpdateKindJson>],
+    ) -> Result<(), DurableCatalogError> {
         let mut changes: Vec<_> = updates
             .iter()
             .filter(|update| update.ts > self.as_of)
@@ -462,13 +465,20 @@ impl RetirementSnapshot {
             .collect();
         differential_dataflow::consolidation::consolidate(&mut changes);
         for (row, diff) in changes {
-            if diff == Diff::ONE {
-                assert!(self.rows.insert(row), "duplicate retirement input");
+            let valid = if diff == Diff::ONE {
+                self.rows.insert(row)
+            } else if diff == Diff::MINUS_ONE {
+                self.rows.remove(&row)
             } else {
-                assert_eq!(diff, Diff::MINUS_ONE);
-                assert!(self.rows.remove(&row), "missing retirement input");
+                false
+            };
+            if !valid {
+                return Err(DurableCatalogError::Internal(
+                    "invalid retained retirement input; retry with a fresh snapshot".into(),
+                ));
             }
         }
+        Ok(())
     }
 }
 
@@ -915,7 +925,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     /// Listen and apply all updates that are currently in persist.
     ///
-    /// Returns fencing or bootstrap-bound runtime recovery errors.
+    /// Returns fencing, bootstrap-bound runtime recovery, or retained-retirement
+    /// preparation errors. A preparation failure discards that optional snapshot
+    /// after applying the consumed prefix to ordinary catalog state.
     #[mz_ore::instrument]
     pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
         let started = Instant::now();
@@ -928,7 +940,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     /// Listen and apply all updates up to `target_upper`.
     ///
-    /// Returns fencing or bootstrap-bound runtime recovery errors.
+    /// Returns fencing, bootstrap-bound runtime recovery, or retained-retirement
+    /// preparation errors. A preparation failure discards that optional snapshot
+    /// after applying the consumed prefix to ordinary catalog state.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sync(
         &mut self,
@@ -982,6 +996,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let mut fetches = 0_u64;
         let mut fetch_elapsed = Duration::ZERO;
         let mut apply_elapsed = Duration::ZERO;
+        let mut retirement_error = None;
 
         // Reset the amortized consolidation tracker so it picks up the
         // current snapshot size as its baseline.
@@ -1007,8 +1022,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         // before attempting to deserialize the new updates.
                         while let Some((ts, updates)) = updates.pop_first() {
                             assert!(ts < self.upper, "expected {} < {}", ts, self.upper);
-                            if let Some(retirement) = retirement.as_mut() {
-                                retirement.apply(&updates);
+                            if let Some(snapshot) = retirement.as_mut() {
+                                if let Err(error) = snapshot.apply(&updates) {
+                                    *retirement = None;
+                                    retirement_error = Some(error);
+                                }
                             }
                             let updates = updates.into_iter().map(
                                 |update: StateUpdate<StateUpdateKindJson>| {
@@ -1054,7 +1072,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
         // Compare the effective final prefix, not individual retractions or
         // intermediate values. Consuming fences first preserves their precedence.
-        let result = self.validate_runtime();
+        // The listener already consumed this prefix. Finish applying it even if
+        // the optional retirement snapshot failed, so retrying cannot skip data.
+        // Runtime fencing takes precedence over a discarded preparation.
+        let result = self
+            .validate_runtime()
+            .and_then(|()| retirement_error.map_or(Ok(()), Err));
         apply_elapsed += started.elapsed();
         if fetches > 0 {
             debug!(target: "mz_adapter::frontend_read_then_write",

@@ -17,11 +17,12 @@ use mz_repr::Diff;
 use uuid::Uuid;
 
 use super::UnopenedPersistCatalogState;
+use crate::durable::objects::serialization::RustType;
 use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
 use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_id};
 use crate::durable::{
-    CatalogError, DurableCatalogError, DurableCatalogState, FenceError, TestCatalogStateBuilder,
-    test_bootstrap_args,
+    CatalogError, DurableCatalogError, DurableCatalogState, FenceError,
+    ReadOnlyDurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
 };
 
 #[mz_ore::test(tokio::test)]
@@ -816,6 +817,104 @@ async fn test_exact_prefix_append_rebases_only_empty_progress() {
         Box::new(peer).expire().await;
         active.expire().await;
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_invalid_retirement_preparation_preserves_consumed_catalog_updates() {
+    let version = semver::Version::new(26, 1, 0);
+    let mut cache = PersistClientCache::new_no_metrics();
+    let (_, builder) = admission_participant(&mut cache, Uuid::new_v4(), 7, &version).await;
+    let active = bootstrap_admission(builder.clone()).await;
+    let row = |value| {
+        StateUpdateKindJson::from_serde(serde_json::json!({
+            "kind": "ReplicaSystemConfiguration",
+            "key": {
+                "replica_id": {"User": 23},
+                "deployment_generation": 7,
+                "name": "max_result_size"
+            },
+            "value": {"value": value}
+        }))
+    };
+    let old = row("1GB");
+    let intermediate = row("2GB");
+    let new = row("3GB");
+    let mut peer = raw_catalog(&builder).await;
+    peer.compare_and_append(vec![(old.clone(), Diff::ONE)], peer.upper)
+        .await
+        .expect("seed configuration");
+    let mut candidate = raw_catalog(&builder)
+        .await
+        .open_inner(
+            super::Mode::Writable,
+            mz_repr::Timestamp::MIN,
+            super::OpenPurpose::Join,
+        )
+        .await
+        .expect("join");
+    candidate
+        .prepare_retirement_snapshot()
+        .await
+        .expect("prepare");
+    // Only damage the optional preparation, not durable or ordinary catalog state.
+    assert!(
+        candidate
+            .retirement_snapshot
+            .as_mut()
+            .expect("prepared")
+            .rows
+            .remove(&old)
+    );
+    peer.sync_to_current_upper().await.expect("observe join");
+    peer.compare_and_append(
+        vec![
+            (old.clone(), Diff::MINUS_ONE),
+            (intermediate.clone(), Diff::ONE),
+        ],
+        peer.upper,
+    )
+    .await
+    .expect("replace configuration");
+    peer.compare_and_append(
+        vec![(intermediate, Diff::MINUS_ONE), (new.clone(), Diff::ONE)],
+        peer.upper,
+    )
+    .await
+    .expect("advance another timestamp before catch-up");
+    assert!(matches!(
+        candidate.sync_to_current_upper().await,
+        Err(DurableCatalogError::Internal(_))
+    ));
+    assert!(candidate.retirement_snapshot.is_none());
+    candidate.sync_to_current_upper().await.expect("retry sync");
+    // Opened catalogs expose their typed snapshot through the durable API. The
+    // generic trace is only retained for historical-schema open and migration.
+    let snapshot = candidate
+        .snapshot()
+        .await
+        .expect("current catalog snapshot");
+    let rows: Vec<_> = snapshot
+        .replica_system_configurations
+        .iter()
+        .map(|(key, value)| {
+            StateUpdateKindJson::from(StateUpdateKind::ReplicaSystemConfiguration(
+                key.into_proto(),
+                value.into_proto(),
+            ))
+        })
+        .collect();
+    assert_eq!(rows, vec![new.clone()]);
+    candidate
+        .prepare_retirement_snapshot()
+        .await
+        .expect("fresh preparation");
+    let prepared = candidate.retirement_snapshot.as_ref().expect("reseeded");
+    assert!(prepared.rows.contains(&new));
+    assert!(!prepared.rows.contains(&old));
+    candidate.expire().await;
+    Box::new(peer).expire().await;
+    active.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
