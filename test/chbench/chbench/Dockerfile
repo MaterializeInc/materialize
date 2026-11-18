@@ -28,7 +28,7 @@ RUN apt-get update \
 COPY mysql.asc .
 
 # renovate: datasource=github-tags depName=mysql/mysql-connector-odbc
-ARG MYSQL_ODBC_VERSION=9.6.0
+ARG MYSQL_ODBC_VERSION=9.7.0
 
 RUN arch_mysql=$(echo "$ARCH_GCC" | sed -e "s/x86_64/x86-64bit/") \
     && archive="mysql-connector-odbc-$MYSQL_ODBC_VERSION-linux-glibc2.28-$arch_mysql.tar.gz" \
