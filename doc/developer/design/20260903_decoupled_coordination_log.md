@@ -21,8 +21,15 @@ by shutdown, not catalog reconstruction. These are single observations with
 explicit topology/readiness differences, not current-head acceptance or a speedup
 claim. See `startup-readiness-comparison.md` for phase timings and qualifications.
 
-Next, attribute cold catalog work using the completed comparison. A proposed
-promotion-only immediate relaunch needs approval: status 166 is a general halt,
+Cold profiling found about 17.6 CPU-seconds within the adapter's 22.7s catalog
+open and about 78.3 CPU-seconds across four replicas in the captured startup
+window. Parallel builtin reconstruction coincided with runtime-slice throttling.
+Caller attribution remains unreliable, so no parser optimization is selected.
+Investigate a narrower replica catalog boundary without skipping validation or
+weakening cache compatibility. See `startup-readiness-comparison.md`.
+
+Next, resolve the observation reduction contract and implement its scoped repair.
+The proposed promotion-only immediate relaunch also needs approval: status 166 is a general halt,
 so skipping its backoff would also accelerate failure loops. A distinct planned
 restart status would preserve failure backoff. Adopted-process polling is separate.
 No publication cadence, readiness interval or resource-limit changes are approved.
@@ -73,7 +80,8 @@ limits and the architecture-generated load assessment.
 ## Worker and evidence
 
 Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 19:00 UTC,
-tag expiry 19:05. Both completed runtimes stopped and restored caps. Never overlap
+tag expiry 2026-11-19 18:05 UTC. Shutdown stops the instance and preserves its
+disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
 reserve. Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
 Baseline environmentd uses each native adapter's 4 GiB/1-CPU allocation within
@@ -96,6 +104,9 @@ Essential pointers:
   retained. Those timings predate cache pruning and MV admission cleanup.
 - Scratch `controller-followups/{dependency-refresh-repro,startup-base-debug}/`
   contains private binaries and manifests for the completed witnesses.
+- `cold-catalog-profile-evidence/` and its archive contain completed CPU capture,
+  raw samples, PID mappings and throttling. The comparison report records profiler
+  limitations and the failed initial capture.
 - `native-mv-admission-test.log` preserves the intermittent assertions and
   `native-mv-admission-reproduction.log` the unchanged passing rerun.
 - Preserve accepted pair artifacts under
