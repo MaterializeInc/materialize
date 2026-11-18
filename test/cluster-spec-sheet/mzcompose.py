@@ -3568,9 +3568,6 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
             "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
-            "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
-            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
-            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
