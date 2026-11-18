@@ -100,11 +100,13 @@ bin/pyactivate -m materialize.antithesis.templates \
 
 ## Resumable rollouts
 
-Ordinary rollout invocations advance one persisted scenario step. Request
-intent, phase waits, delays, absolute deadlines, targeted kills, checks, and
-cleanup survive command interruption. Lost responses retry the same request.
-The CR lease is released between invocations. A scenario's DDL hold survives
-scheduler gaps and expires at the scenario deadline if it is never resumed.
+A rollout invocation follows its scenario for up to two minutes, one persisted
+step at a time. Request intent, phase waits, delays, absolute deadlines,
+targeted kills, checks, and cleanup survive command interruption, and the next
+invocation resumes at the interrupted step. Lost responses retry the same
+request. The CR lease is released between invocations. A scenario's DDL hold
+survives scheduler gaps and expires at the scenario deadline if it is never
+resumed. The terminal recovery check releases it once the CR is up to date.
 
 Spec-phase cells share that journal ownership. Their watch resource version,
 cell choice, targeted patch, promotion, claim recheck, and cleanup also resume
@@ -114,7 +116,9 @@ phase arrives, preserving short promotion windows.
 The paced-DDL scenario needs a continuous quiet interval to measure its
 timing property. The ordinary driver selects it through the same swarm
 weights as the other scenarios, then a dedicated command claims and runs
-that trial. Its quiet period still renews in short chunks.
+that trial. A trial that command does not claim within three minutes is
+dropped, so the ordinary driver can go on. Its quiet period still renews in
+short chunks.
 
 ## Efficiency and interleaving measurements
 

@@ -23,6 +23,9 @@ from materialize.antithesis.drivers import rollouts as r
 
 OBSERVE_SECONDS = 5.0
 SCENARIO_SECONDS = 6 * r.FOLLOW_TIMEOUT_SECONDS
+# How long a paced trial waits for its dedicated command. The composer leaves
+# that command out of many timelines, and a pending trial parks this driver.
+PACED_CLAIM_SECONDS = 180.0
 
 
 @dataclass
@@ -556,7 +559,13 @@ def step(ctx: r.Ctx) -> str:
         _complete(ctx, s)
         return "expired"
     if s.stage == "paced":
-        return "paced_pending"
+        if time.monotonic() - s.created < PACED_CLAIM_SECONDS:
+            return "paced_pending"
+        # The dedicated command holds the CR lease for a whole trial, and so
+        # does this caller, so no trial is running.
+        s.outcome = "Unclaimed"
+        _complete(ctx, s)
+        return "expired"
     _hold(s)
     r.log(f"step {s.action}:{s.stage}")
     if s.stage == "start":

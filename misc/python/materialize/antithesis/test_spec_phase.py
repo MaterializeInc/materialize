@@ -284,7 +284,7 @@ def test_claim_recheck_delay_and_key_survive_invocation_exit(
         assert r.assert_status_claim.call_args.args[1] is False
 
 
-def test_spec_driver_advances_one_step_and_releases_its_lease(
+def test_spec_driver_follows_its_trial_and_releases_its_lease(
     phase_fleet: Fleet,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,11 +293,11 @@ def test_spec_driver_advances_one_step_and_releases_its_lease(
     monkeypatch.setattr(r, "timeline_params", lambda _: phase_fleet.params)
     lease = Mock()
     monkeypatch.setattr(spec_phase, "CrLease", lambda _: lease)
-    advance = Mock()
+    advance = Mock(side_effect=["normalized", "settled", "done"])
     monkeypatch.setattr(steps, "step", advance)
     monkeypatch.setattr(spec_phase, "run_cell", Mock(), raising=False)
     assert spec_phase.driver_main() == 0
-    advance.assert_called_once()
+    assert advance.call_count == 3
     lease.release.assert_called_once()
 
 

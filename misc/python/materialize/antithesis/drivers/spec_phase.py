@@ -235,7 +235,7 @@ def driver_main() -> int:
             log("another invocation holds the CR lease")
             return 0
         ctx.lease = lease
-        spec_phase_steps.step(ctx)
+        rollouts.follow_scenario(lambda: spec_phase_steps.step(ctx))
     except LeaseLost as e:
         log(f"stopping: {e}")
     except TRANSIENT_ERRORS as e:

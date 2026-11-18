@@ -152,6 +152,17 @@ OVERLAP_OPS_SCAN = 5000
 # Wall time of one observer invocation, and the minimum interval between its
 # pod and leader samples. Needs calibration on one simulated core.
 OBSERVER_DURATION_SECONDS = 2 * 60
+# How long one driver invocation follows its scenario. Every step is persisted
+# before its effect, so a killed invocation resumes where it stopped.
+# NOTE: One step per invocation starved rollouts. The composer started this
+# command about once in two timelines of an 8 h run, where 9 rollouts reached
+# Applied and no phase-targeted action saw its phase.
+DRIVER_BUDGET_SECONDS = 120.0
+STEP_PAUSE_SECONDS = 1.0
+# Step results after which the same invocation cannot make progress.
+SCENARIO_STOP_RESULTS = frozenset(
+    {"done", "expired", "unavailable", "paced_pending", "other_command"}
+)
 OBSERVER_INTERVAL_SECONDS = 1.0
 # Server-side timeout of one watch request. Watches resume from the last
 # resourceVersion, so this only bounds how long one watch blocks the observer
@@ -1380,6 +1391,19 @@ def normalize(ctx: Ctx, action: str) -> bool:
     return True
 
 
+def follow_scenario(step: Callable[[], str]) -> None:
+    """Call `step` until its scenario ends, cannot progress, or the budget runs out."""
+    deadline = time.monotonic() + DRIVER_BUDGET_SECONDS
+    while True:
+        started = time.monotonic()
+        result = step()
+        if result in SCENARIO_STOP_RESULTS or time.monotonic() >= deadline:
+            return
+        # A step with nothing to observe yet returns at once.
+        if time.monotonic() - started < STEP_PAUSE_SECONDS:
+            time.sleep(STEP_PAUSE_SECONDS)
+
+
 def driver_main() -> int:
     from materialize.antithesis import rollout_steps
 
@@ -1399,7 +1423,7 @@ def driver_main() -> int:
         return 0
     ctx.lease = lease
     try:
-        rollout_steps.step(ctx)
+        follow_scenario(lambda: rollout_steps.step(ctx))
     except LeaseLost as e:
         log(f"stopping: {e}")
         return 0

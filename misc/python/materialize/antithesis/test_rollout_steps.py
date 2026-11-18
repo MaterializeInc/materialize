@@ -325,7 +325,7 @@ def test_interrupted_delete_does_not_kill_a_replacement_again(
     delete.assert_called_once()
 
 
-def test_driver_runs_one_step_and_releases_its_lease(
+def test_driver_follows_its_scenario_and_releases_its_lease(
     fleet: Fleet, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(r, "Environment", lambda: fleet.env)
@@ -336,10 +336,10 @@ def test_driver_runs_one_step_and_releases_its_lease(
     monkeypatch.setattr(r, "CrLease", lambda env: lease)
     monkeypatch.setattr(r, "ACTION_FNS", {a: Mock() for a in r.ACTIONS}, raising=False)
     monkeypatch.setattr(r.rng, "choices", lambda *args, **kwargs: ["same_version"])
-    advance = Mock(return_value="observed")
+    advance = Mock(side_effect=["observed", "checked", "done"])
     monkeypatch.setattr(steps, "step", advance)
     assert r.driver_main() == 0
-    advance.assert_called_once()
+    assert advance.call_count == 3
     lease.release.assert_called_once()
 
 
@@ -384,6 +384,59 @@ def test_paced_trial_is_selected_once_and_claimed_by_its_command(
     assert fleet.db.execute(
         "SELECT action, outcome FROM rollout_outcomes"
     ).fetchall() == [("paced_ddl", "Completed")]
+
+
+def test_unclaimed_paced_trial_stops_parking_the_driver(
+    fleet: Fleet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(r.rng, "choices", lambda *args, **kwargs: ["paced_ddl"])
+    assert steps.step(fleet.ctx()) == "paced_pending"
+    fleet.now[0] = steps.PACED_CLAIM_SECONDS - 1
+    assert steps.step(fleet.ctx()) == "paced_pending"
+    fleet.now[0] = steps.PACED_CLAIM_SECONDS
+    assert steps.step(fleet.ctx()) == "expired"
+    assert steps.load(fleet.db) is None
+    assert fleet.db.execute(
+        "SELECT action, outcome FROM rollout_outcomes"
+    ).fetchall() == [("paced_ddl", "Unclaimed")]
+
+
+def test_one_invocation_follows_its_scenario_to_the_end(fleet: Fleet) -> None:
+    results = iter(["planned", "patched", "waiting", "waiting", "checked", "done"])
+    calls = []
+
+    def step() -> str:
+        calls.append(fleet.now[0])
+        return next(results)
+
+    r.follow_scenario(step)
+    assert len(calls) == 6, "done ends the invocation"
+    assert calls == [
+        i * r.STEP_PAUSE_SECONDS for i in range(6)
+    ], "a step that returns at once must not spin"
+
+
+@pytest.mark.parametrize("result", sorted(r.SCENARIO_STOP_RESULTS))
+def test_an_invocation_returns_when_it_cannot_progress(
+    fleet: Fleet, result: str
+) -> None:
+    step = Mock(return_value=result)
+    r.follow_scenario(step)
+    step.assert_called_once()
+    assert fleet.now[0] == 0
+
+
+def test_an_invocation_stops_following_at_its_budget(fleet: Fleet) -> None:
+    def step() -> str:
+        fleet.now[0] += steps.OBSERVE_SECONDS
+        return "waiting"
+
+    r.follow_scenario(step)
+    assert (
+        r.DRIVER_BUDGET_SECONDS
+        <= fleet.now[0]
+        < r.DRIVER_BUDGET_SECONDS + steps.OBSERVE_SECONDS
+    )
 
 
 def test_cleanup_reconciles_an_indeterminate_restore(fleet: Fleet) -> None:
