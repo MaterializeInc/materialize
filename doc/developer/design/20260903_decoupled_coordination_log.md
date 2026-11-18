@@ -70,7 +70,10 @@ assertions, negative controls, targeted Clippy and independent review passed.
 The obsolete adapter configuration publisher, system-table resets, extra reset WAL
 reader and non-native bootstrap/writer alternatives are removed. Unchanged
 configuration startup/restart, adapter restart preservation and CREATE/ALTER
-infrastructure recovery checks pass. No performance improvement is claimed.
+infrastructure recovery checks pass. Serving now requires the bootstrap-created
+client, with no alternative registration. Independent review, Clippy, native
+configuration/restart and independent-oracle bootstrap checks pass. No dedicated
+supersession race was added. No performance improvement is claimed.
 
 ALTER DEFAULT PRIVILEGES, REASSIGN OWNED and ALTER OWNER use the existing staged commit
 owner instead of inline retries. Independent review, Clippy and unchanged
@@ -106,6 +109,8 @@ source overlays. Verify hashes, not just its Git revision. Remote logs are under
 `~/.local/share/aj/m3-evidence/controller-followups/`.
 
 Essential pointers:
+- Client adoption: local `mandatory-bootstrap-client-test.log` and remote
+  `mandatory-bootstrap-client-recheck.log`.
 - Current retry checks: remote `registration-certificate-red.log`,
   `registration-finalization-red.log`, `append-wal-final.log`,
   `controller-unit.log`, `retirement-red.log`, `cache-red.log` and
