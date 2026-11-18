@@ -1115,16 +1115,24 @@ describe("ClusterHydration", () => {
       within(waterfall).getByText("customer_ltv", { selector: "title" }),
     ).toBeInTheDocument();
 
-    // A recorded hydration opens below it, as it isn't the last.
+    // The newest row, with no peaks until Materialize records it.
     const table = screen.getByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
-    await userEvent.click(within(rows[0]).getByRole("button"));
+    const cells = within(rows[0]).getAllByRole("cell");
+    expect(cells[2]).toHaveTextContent("Full · Being recorded");
+    expect(
+      within(cells[2]).getByRole("img", { name: "About being recorded" }),
+    ).toBeVisible();
+    expect(cells.slice(5).map(({ textContent }) => textContent)).toEqual([
+      "-",
+      "-",
+    ]);
+
+    await userEvent.click(within(rows[1]).getByRole("button"));
     expect(
       await screen.findByRole("heading", { name: "Selected Hydration" }),
     ).toBeVisible();
-    expect(
-      screen.getByRole("heading", { name: "Last Hydration" }),
-    ).toBeVisible();
+    expect(screen.queryByText(/^Read from r2/)).not.toBeInTheDocument();
   });
 
   it("opens a restart that ended after a hydration Materialize hasn't recorded yet", async () => {
@@ -1162,6 +1170,18 @@ describe("ClusterHydration", () => {
     ).toBeVisible();
     const ended = screen.getByRole("group", { name: "Ended" });
     expect(within(ended).getByText("Out of memory")).toBeVisible();
+
+    // r2's hydration stays in the table, and opens from it.
+    const recording = within(screen.getByRole("table")).getByText(
+      "Full · Being recorded",
+    );
+    await userEvent.click(within(recording.closest("tr")!).getByRole("button"));
+    expect(
+      await screen.findByRole("heading", { name: "Selected Hydration" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/^Read from r2, since Materialize hasn't/),
+    ).toBeVisible();
   });
 
   it("keeps the recorded last hydration when the replica can't be read", async () => {

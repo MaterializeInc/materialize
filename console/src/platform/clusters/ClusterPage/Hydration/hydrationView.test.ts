@@ -20,11 +20,13 @@ import {
   UnfinishedHydration,
 } from "./hydrationModel";
 import {
+  findSelectedRow,
   findUnrecordedHydrations,
   hydrationVerdict,
   isUnrecordedEpisode,
   summarizeReplicasNow,
   toHydrationRows,
+  unrecordedRowId,
 } from "./hydrationView";
 
 const at = (time: string) => new Date(`2026-10-20T${time}Z`);
@@ -126,14 +128,33 @@ describe("toHydrationRows", () => {
         hydration("u1", "09:00:00", 60_000),
         hydration("u1", "11:00:00", 60_000),
       ],
+      [{ hydration: hydration("u2", "10:30:00", 60_000), spans: [] }],
       [restart("u1", "10:00:00")],
     );
 
     expect(rows.map(({ type, id }) => [type, id])).toEqual([
       ["hydration", "u1|11:00:00"],
+      ["unrecorded", unrecordedRowId(hydration("u2", "10:30:00", 60_000))],
       ["unfinished", "u1|10:00:00"],
       ["hydration", "u1|09:00:00"],
     ]);
+  });
+});
+
+describe("findSelectedRow", () => {
+  it("follows a row read from its replica to the hydration Materialize recorded", () => {
+    const read = hydration("u2", "10:30:00", 60_000);
+    // Recorded with an earlier start, from the introspection indexes, and the
+    // same finish.
+    const recorded = hydration("u2", "10:29:30", 90_000);
+    const before = toHydrationRows([], [{ hydration: read, spans: [] }], []);
+    const after = toHydrationRows([recorded], [], []);
+
+    const selectedId = before[0].id;
+
+    expect(findSelectedRow(before, selectedId)?.type).toBe("unrecorded");
+    expect(findSelectedRow(after, selectedId)?.id).toBe("u2|10:29:30");
+    expect(findSelectedRow(after, "u1|09:00:00")).toBeUndefined();
   });
 });
 

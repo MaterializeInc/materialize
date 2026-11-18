@@ -39,7 +39,7 @@ import { formatDurationExact, formatPercentage } from "~/utils/format";
 
 import { percentOf } from "../ResourceUsage/processReadingsModel";
 import { InfoTip } from "./hydrationComponents";
-import { Hydration, ObjectHydrationSpan } from "./hydrationModel";
+import { Hydration, NamedSpan } from "./hydrationModel";
 import { formatPeakBytes, HYDRATION_HELP, HydrationRow } from "./hydrationView";
 import { useHydrationDetail, useShowsHeap } from "./useClusterHydrationData";
 
@@ -68,31 +68,21 @@ export interface HydrationDetailProps {
 export const HydrationDetail = (props: HydrationDetailProps) =>
   props.row.type === "unfinished" ? (
     <UnfinishedDetail {...props} row={props.row} />
+  ) : props.row.type === "unrecorded" ? (
+    <UnrecordedDetail {...props} row={props.row} />
   ) : (
     <FinishedDetail {...props} hydration={props.row} />
   );
 
-type NamedSpan = ObjectHydrationSpan & { name: string };
-
-export interface UnrecordedDetailProps {
-  replicaName: string;
-  /** Read from the replica. */
-  hydration: Hydration;
-  spans: NamedSpan[];
-  /** The replica's per-process heap limit. */
-  heapLimitBytes: number | undefined;
-  /** The replica's per-process CPU, memory and disk. */
-  allocation: SizeAllocation | undefined;
-}
-
 /** A hydration a replica finished before Materialize recorded it. */
-export const UnrecordedDetail = ({
+const UnrecordedDetail = ({
+  row: hydration,
   replicaName,
-  hydration,
-  spans,
   heapLimitBytes,
   allocation,
-}: UnrecordedDetailProps) => {
+}: HydrationDetailProps & {
+  row: Extract<HydrationRow, { type: "unrecorded" }>;
+}) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <VStack spacing={4} alignItems="stretch">
@@ -121,7 +111,7 @@ export const UnrecordedDetail = ({
       <ObjectWaterfall
         // Its page and order belong to one hydration.
         key={hydration.id}
-        spans={spans}
+        spans={hydration.spans}
         durationMs={hydration.durationMs}
       />
     </VStack>

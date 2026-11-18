@@ -54,11 +54,7 @@ import {
 import { useStatusStyles } from "../ResourceUsage/resourceUsageStyles";
 import { useSelectedReplica } from "../useSelectedReplica";
 import { InfoTip, InfoTipProps } from "./hydrationComponents";
-import {
-  HydrationDetail,
-  ObjectWaterfall,
-  UnrecordedDetail,
-} from "./HydrationDetail";
+import { HydrationDetail, ObjectWaterfall } from "./HydrationDetail";
 import {
   HydrationReplica,
   runningEpisodeSoFar,
@@ -66,6 +62,7 @@ import {
 } from "./hydrationModel";
 import { HydrationTable } from "./HydrationTable";
 import {
+  findSelectedRow,
   findUnrecordedHydrations,
   HYDRATION_HELP,
   HydrationVerdict,
@@ -80,7 +77,7 @@ import {
 } from "./hydrationView";
 import {
   useClusterHydrationData,
-  useLastUnrecordedHydration,
+  useUnrecordedHydrations,
 } from "./useClusterHydrationData";
 import { useLiveObjectHydrations } from "./useLiveHydration";
 
@@ -211,18 +208,11 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
   ];
   // Held across renders, which come every second while a replica hydrates, so
   // the table's memos keyed on them hold too.
-  const { hydrations, unfinished, rows } = React.useMemo(() => {
+  const { hydrations, unfinished } = React.useMemo(() => {
     const ids = new Set(replicas.map(({ id }) => id));
-    const shownHydrations = data.hydrations.filter(({ replicaId }) =>
-      ids.has(replicaId),
-    );
-    const shownUnfinished = data.unfinished.filter(({ replicaId }) =>
-      ids.has(replicaId),
-    );
     return {
-      hydrations: shownHydrations,
-      unfinished: shownUnfinished,
-      rows: toHydrationRows(shownHydrations, shownUnfinished),
+      hydrations: data.hydrations.filter(({ replicaId }) => ids.has(replicaId)),
+      unfinished: data.unfinished.filter(({ replicaId }) => ids.has(replicaId)),
     };
   }, [replicas, data.hydrations, data.unfinished]);
   const nowMs = Date.now();
@@ -263,7 +253,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           startMs: data.startMs,
         })
       : [];
-  const lastUnrecorded = useLastUnrecordedHydration({
+  const unrecorded = useUnrecordedHydrations({
     clusterId: cluster.id,
     clusterName: cluster.name,
     candidates,
@@ -271,24 +261,15 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     bootTimes: data.bootTimes,
     clusterObjectCount: data.objectCount,
   });
+  const rows = React.useMemo(
+    () => toHydrationRows(hydrations, unrecorded, unfinished),
+    [hydrations, unrecorded, unfinished],
+  );
   // Rows are ordered by when each began, and a long hydration can end after a
   // later one.
   const lastRow = greatest(rows, (row) => rowEndTime(row).getTime());
-  // Until the replicas answer, the recorded hydrations stand. A hydration that
-  // isn't recorded yet has no row to place it by, so it stands in for the last
-  // unless a row ended after it, such as another replica's restart.
-  const unrecorded =
-    lastUnrecorded &&
-    (lastRow === undefined ||
-      lastUnrecorded.hydration.finishedAt.getTime() >=
-        rowEndTime(lastRow).getTime())
-      ? lastUnrecorded
-      : undefined;
-  const hasUnrecorded = unrecorded !== undefined;
-  const selectedRow =
-    rows.find(({ id }) => id === selectedRowId) ??
-    (hasUnrecorded ? undefined : lastRow);
-  const isLastShown = !hasUnrecorded && selectedRow === lastRow;
+  const selectedRow = findSelectedRow(rows, selectedRowId) ?? lastRow;
+  const isLastShown = selectedRow === lastRow;
   const nameOf = (replicaId: string) => nameById.get(replicaId) ?? replicaId;
   // A replica's boot comes from its status, so its start waits for it too.
   const isTicking =
@@ -369,26 +350,6 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           <LoadingContainer />
         ) : (
           <>
-            {unrecorded && (
-              <SectionCard
-                title="Last Hydration"
-                subtitle={`${ROW_KIND_NAMES[unrecorded.hydration.kind].label} on ${unrecorded.replica.name}, ${formatDate(unrecorded.hydration.startedAt, FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`}
-                subtitleHelp={{
-                  subject: ROW_KIND_NAMES[unrecorded.hydration.kind].label,
-                  label: HYDRATION_HELP[unrecorded.hydration.kind],
-                }}
-              >
-                <UnrecordedDetail
-                  replicaName={unrecorded.replica.name}
-                  hydration={unrecorded.hydration}
-                  spans={unrecorded.spans}
-                  heapLimitBytes={data.heapLimitBytesById.get(
-                    unrecorded.replica.id,
-                  )}
-                  allocation={data.allocationById.get(unrecorded.replica.id)}
-                />
-              </SectionCard>
-            )}
             {selectedRow && (
               <SectionCard
                 title={isLastShown ? "Last Hydration" : "Selected Hydration"}

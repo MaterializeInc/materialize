@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { greatest } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 import React from "react";
 
@@ -386,12 +385,12 @@ export function useHydrationDetail({
 }
 
 /**
- * The last hydration a current replica finished that Materialize hasn't
- * recorded yet, read from the replicas that may have one, classified like a
- * recorded one, with its objects named from the catalog. Undefined while the
+ * The hydrations current replicas finished that Materialize hasn't recorded
+ * yet, read from the replicas that may have one, each classified like a
+ * recorded one, with its objects named from the catalog. Empty while the
  * replicas are read, and when none confirms one or none can be read.
  */
-export function useLastUnrecordedHydration({
+export function useUnrecordedHydrations({
   clusterId,
   clusterName,
   candidates,
@@ -421,42 +420,60 @@ export function useLastUnrecordedHydration({
     clusterId,
     COMPUTE_OBJECT_TYPES,
   );
-  const confirmed = candidates.flatMap(({ replica, since }, index) => {
-    const rows = reads[index];
-    const episode = rows && latestFinishedEpisode(rows);
-    const replicaHydrations = hydrations.filter(
-      ({ replicaId }) => replicaId === replica.id,
-    );
-    return episode &&
-      isUnrecordedEpisode({ episode, since, hydrations: replicaHydrations })
-      ? [{ replica, episode }]
-      : [];
-  });
-  const latest = greatest(confirmed, ({ episode }) =>
-    episode.finishedAt.getTime(),
+  // Candidates are rebuilt on every render, which comes every second while a
+  // replica hydrates, so the result is keyed on their content and the table's
+  // rows hold.
+  const candidatesKey = JSON.stringify(
+    candidates.map(({ replica, since }) => [replica.id, since.getTime()]),
   );
-  if (!latest) return undefined;
-  const { replica, episode } = latest;
-  const [hydration] = transformHydrations(
-    [
-      {
-        replicaId: replica.id,
-        startedAt: episode.startedAt,
-        finishedAt: episode.finishedAt,
-        objectCount: episode.objects.length,
-        peakMemoryBytes: null,
-        peakDiskBytes: null,
-      },
-    ],
-    bootTimes,
-    clusterObjectCount === undefined ? undefined : () => clusterObjectCount,
+  return React.useMemo(
+    () =>
+      (JSON.parse(candidatesKey) as Array<[string, number]>).flatMap(
+        ([replicaId, sinceMs], index) => {
+          const rows = reads[index];
+          const episode = rows && latestFinishedEpisode(rows);
+          if (
+            !episode ||
+            !isUnrecordedEpisode({
+              episode,
+              since: new Date(sinceMs),
+              hydrations: hydrations.filter(
+                (hydration) => hydration.replicaId === replicaId,
+              ),
+            })
+          ) {
+            return [];
+          }
+          const [hydration] = transformHydrations(
+            [
+              {
+                replicaId,
+                startedAt: episode.startedAt,
+                finishedAt: episode.finishedAt,
+                objectCount: episode.objects.length,
+                peakMemoryBytes: null,
+                peakDiskBytes: null,
+              },
+            ],
+            bootTimes,
+            clusterObjectCount === undefined
+              ? undefined
+              : () => clusterObjectCount,
+          );
+          return [
+            {
+              hydration,
+              spans: nameSpans(
+                transformObjectHydrationSpans(
+                  episode.objects,
+                  episode.startedAt,
+                ),
+                objects,
+              ),
+            },
+          ];
+        },
+      ),
+    [candidatesKey, reads, hydrations, bootTimes, clusterObjectCount, objects],
   );
-  return {
-    replica,
-    hydration,
-    spans: nameSpans(
-      transformObjectHydrationSpans(episode.objects, episode.startedAt),
-      objects,
-    ),
-  };
 }

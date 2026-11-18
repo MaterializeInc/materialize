@@ -24,15 +24,21 @@ import {
   HydrationReplica,
   latestBoot,
   latestFullHydration,
+  NamedSpan,
   ReplicaEpisode,
   ReplicaTransition,
   UnfinishedHydration,
 } from "./hydrationModel";
 import { ReplicaHydrationProgress } from "./useLiveHydration";
 
-/** A finished hydration or one a replica restarted before finishing. */
+/**
+ * A finished hydration, one read from its replica before Materialize recorded
+ * it, or one a replica restarted before finishing.
+ */
 export type HydrationRow =
   | ({ type: "hydration" } & Hydration)
+  // Read from its replica before Materialize recorded it, so with no peaks.
+  | ({ type: "unrecorded"; spans: NamedSpan[] } & Hydration)
   | ({ type: "unfinished" } & UnfinishedHydration);
 
 export type HydrationRowKind = "full" | "additive" | "unfinished";
@@ -57,23 +63,60 @@ export const ROW_KIND_NAMES: Record<
 export const formatPeakBytes = (bytes: number | null) =>
   bytes === null ? undefined : formatBytesShort(BigInt(Math.round(bytes)));
 
-/** When a row happened: a hydration's start, or an unfinished one's end. */
+/** When a row happened: a hydration's start, or an unfinished one's restart. */
 export const rowTime = (row: HydrationRow) =>
-  row.type === "hydration" ? row.startedAt : row.endedAt;
+  row.type === "unfinished" ? row.endedAt : row.startedAt;
 
 /** When a row ended: a hydration's finish, or an unfinished one's restart. */
 export const rowEndTime = (row: HydrationRow) =>
-  row.type === "hydration" ? row.finishedAt : row.endedAt;
+  row.type === "unfinished" ? row.endedAt : row.finishedAt;
 
-/** Hydrations and unfinished ones, newest first. */
+/**
+ * The id of a row read from its replica. Materialize can record that
+ * hydration with an earlier start, since it counts the introspection indexes
+ * the read leaves out (`src/adapter/src/coord/hydration_history.rs`), but with
+ * the same finish, so the id comes from the finish.
+ */
+export const unrecordedRowId = ({
+  replicaId,
+  finishedAt,
+}: {
+  replicaId: string;
+  finishedAt: Date;
+}) => `${replicaId}|${finishedAt.getTime()}|unrecorded`;
+
+/**
+ * Hydrations, the ones read from replicas before Materialize recorded them,
+ * and unfinished ones, newest first.
+ */
 export const toHydrationRows = (
   hydrations: Hydration[],
+  unrecorded: Array<{ hydration: Hydration; spans: NamedSpan[] }>,
   unfinished: UnfinishedHydration[],
 ): HydrationRow[] =>
   [
     ...hydrations.map((row) => ({ ...row, type: "hydration" as const })),
+    ...unrecorded.map(({ hydration, spans }) => ({
+      ...hydration,
+      id: unrecordedRowId(hydration),
+      spans,
+      type: "unrecorded" as const,
+    })),
     ...unfinished.map((row) => ({ ...row, type: "unfinished" as const })),
   ].sort((a, b) => rowTime(b).getTime() - rowTime(a).getTime());
+
+/**
+ * The row `selectedId` picks. A row read from its replica stays picked once
+ * Materialize records its hydration.
+ */
+export const findSelectedRow = (
+  rows: HydrationRow[],
+  selectedId: string | undefined,
+) =>
+  rows.find(({ id }) => id === selectedId) ??
+  rows.find(
+    (row) => row.type === "hydration" && unrecordedRowId(row) === selectedId,
+  );
 
 /**
  * `restarting` is hydrating again after restarting since it last finished.
@@ -429,6 +472,8 @@ export const HYDRATION_HELP = {
     "The most heap one process reported while it hydrated, memory plus swap, as a share of its heap limit. A process that reaches the limit runs out of memory. Materialize samples heap once a minute, so the true peak can be higher.",
   restarting:
     "Inferred from replica status: it restarted with no finished hydration recorded.",
+  recording:
+    "Read from the replica. Materialize records hydrations by visiting replicas in turn, which can take several minutes, and adds the peak memory and disk then.",
   offline: "The replica is offline, so it isn't hydrating.",
   starting: "The replica hasn't reported its objects yet.",
 };

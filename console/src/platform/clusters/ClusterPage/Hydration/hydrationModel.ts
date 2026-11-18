@@ -430,6 +430,8 @@ export interface ObjectHydrationSpan {
   workingMs: number | undefined;
 }
 
+export type NamedSpan = ObjectHydrationSpan & { name: string };
+
 /** Object hydration rows of an episode, in the order they started. */
 export function transformObjectHydrationSpans(
   rows: Array<{

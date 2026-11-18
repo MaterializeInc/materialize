@@ -28,6 +28,7 @@ import {
 import { formatDurationExact } from "~/utils/format";
 
 import { percentOf } from "../ResourceUsage/processReadingsModel";
+import { InfoTip } from "./hydrationComponents";
 import {
   formatPeakBytes,
   HYDRATION_HELP,
@@ -111,10 +112,20 @@ const COLUMNS = [
     id: "kind",
     header: "Hydration",
     meta: { tooltip: HYDRATION_HELP.kind },
-    cell: (info) => ROW_KIND_NAMES[info.getValue()].short,
+    cell: (info) =>
+      info.row.original.type === "unrecorded" ? (
+        <HStack spacing={1}>
+          <Text as="span">
+            {ROW_KIND_NAMES[info.getValue()].short} · Being recorded
+          </Text>
+          <InfoTip subject="being recorded" label={HYDRATION_HELP.recording} />
+        </HStack>
+      ) : (
+        ROW_KIND_NAMES[info.getValue()].short
+      ),
   }),
   columnHelper.accessor(
-    (row) => (row.type === "hydration" ? row.durationMs : null),
+    (row) => (row.type === "unfinished" ? null : row.durationMs),
     {
       id: "duration",
       header: "Duration",
@@ -127,7 +138,7 @@ const COLUMNS = [
     },
   ),
   columnHelper.accessor(
-    (row) => (row.type === "hydration" ? row.objectCount : null),
+    (row) => (row.type === "unfinished" ? null : row.objectCount),
     {
       id: "objects",
       header: "Objects",
@@ -163,9 +174,9 @@ const COLUMNS = [
     meta: { isNumeric: true, tooltip: HYDRATION_HELP.peakDisk },
     cell: (info) => {
       const row = info.row.original;
-      return row.type === "hydration"
-        ? (formatPeakBytes(row.peakDiskBytes) ?? "-")
-        : "-";
+      return row.type === "unfinished"
+        ? "-"
+        : (formatPeakBytes(row.peakDiskBytes) ?? "-");
     },
   }),
 ];
