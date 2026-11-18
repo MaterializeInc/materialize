@@ -83,6 +83,14 @@ readiness difference. No retention or Persist change was made.
 Detailed older outcomes and evidence remain in the
 [previous handoff](https://github.com/aljoscha/materialize/blob/a92b058ebb45/doc/developer/design/20260903_decoupled_coordination_log.md).
 
+The post-cleanup debug resource comparison passed with matched settings and no
+measured aggregate throttling. Native still uses more CPU, memory and backend
+I/O. The [follow-ups](20260903_decoupled_coordination_followups.md#native-only-resource-comparison)
+separate measured attribution from proposed optimizations. No performance or
+Persist change was implemented. See `native-only-load-report.md` in the evidence
+root for the full report. Owned runtimes stopped and expendable comparison build
+data was removed, leaving 155 GiB free on scratch.
+
 ## Live blockers and boundaries
 
 - Outgoing controllerd panics on catalog-confirmed retirement in both optimized
@@ -120,7 +128,7 @@ Detailed older outcomes and evidence remain in the
 ## Worker and evidence
 
 Worker: `i-02f17d8a7d9534f5e`, 16 CPUs, 61 GiB RAM. Shutdown is
-2026-11-18 05:29 UTC, tag expiry 05:35. Docker runtime caps are eight CPUs/40 GiB
+2026-11-18 10:00 UTC, tag expiry 10:05. Docker runtime caps are eight CPUs/40 GiB
 aggregate and four CPUs/6 GiB per deployment container. The host lifecycle uses
 its separate reviewed system/user slice envelope. Builds use one job, four
 CPUs/32 GiB. Never overlap builds and runtimes. Keep heavy work off the local VM.

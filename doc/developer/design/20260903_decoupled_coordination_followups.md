@@ -167,20 +167,63 @@ candidate. It cannot by itself remove empty completeness writes or journal bytes
 
 The 60s comparison also found legacy frontier progress retained by dynamic SQL
 branches. Native-only cleanup removed those alternatives together with their SQL
-dependencies. No matched post-cleanup load reduction has been measured. Remaining
+dependencies. The current comparison below measures remaining overhead, not an
+isolated benefit from that removal. Remaining
 native observation relays are not alternate execution owners and cannot simply
 be stopped while their SQL inputs remain.
 
+### Native-only resource comparison
+
+A fresh debug pair compares native `922ca8ed` with upstream `d9a2c5dc`, at 60s
+protection publication. Both passed two five-minute idle windows after five
+minutes of warmup, SQL validation, post-window profiles and cleanup. Common
+settings and aggregate limits match. No aggregate CPU throttling or memory-limit
+events occurred during the windows.
+
+| Metric | Upstream | Native |
+|---|---:|---:|
+| Materialize CPU, cores | 0.568 | 0.921 |
+| PSS, MiB | 1,237 | 2,788 |
+| Consensus CAS/s | 78.87 | 97.92 |
+| Consensus scans/s | 2.50 | 6.81 |
+| Blob GET KiB/s | 16.19 | 86.66 |
+| Blob SET KiB/s | 93.62 | 151.26 |
+
+The catalog replica accounts for roughly three quarters of the CPU gap. Native
+non-SQL processes retain catalog reconstruction allocations, but sampled heap
+paths do not account for every byte of PSS. Scan callers were not traced in this
+pair. The older caller distribution must not be presented as current attribution.
+
+This upstream has 47 durable catalog outputs, versus native's 51. The four extra
+outputs are adapters, adapter statuses, adapter endpoints and deployment
+authority. They account for 5.01 of the 9.87 extra output CAS/s. Shared outputs
+add 3.60 committed empty appends/s and 1.27 other CAS/s. No changed-data appends
+to these outputs occurred in the measured windows. More frequent completeness
+records do not establish faster logical-time progress.
+
+Frontier observations add a net 5.75 CAS/s over upstream's ready-made relations.
+No native legacy-frontier writer appears in the ledger. Journal traffic and
+frontier observations dominate the blob-byte gap. Backend events reconcile with
+the available counters. This is one fresh pair against a newer upstream, not a
+causal before/after estimate of the cleanup's benefit.
+
+Detailed attribution, profiles, provenance and limits are in
+`~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/native-only-load-report.md`.
+
 ### Priorities after native-only cleanup
 
-First repeat the matched-build, per-process comparison before assigning savings
-to the removal. Current correctness runs do not measure a performance benefit.
-Keep the 60s publication setting and Persist unchanged.
+Keep the 60s publication setting and Persist unchanged. Repeat measurements
+before assigning savings to a proposed optimization.
 
 Then evaluate idle completeness coalescing within existing progress-lag bounds,
 and revision-keyed caching of immutable plan-derived schemas. Prior evidence
 connects these to extra conditional writes and CPU respectively. Neither requires
 a new owner or consensus protocol. Preserve pending updates and read obligations.
+
+Separately review whether the three adapter-introspection projections need
+independent durable outputs. Preserve public semantics and the authority
+projection's durable catalog-since decoupling. Do not restore raw-catalog
+dependencies merely to reduce writes. No consolidation is approved here.
 
 For memory, investigate narrower catalog retention in non-SQL processes before
 adding shared caches or services. For remaining statistics/hydration relays,
