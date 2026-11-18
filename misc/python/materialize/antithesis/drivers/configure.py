@@ -58,6 +58,7 @@ from collections.abc import Collection
 from typing import Any
 
 import psycopg
+import urllib3
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always_or_unreachable as always,
 )
@@ -99,6 +100,10 @@ STATE_DB = "config"
 # leaves room for a slow kubelet on one simulated core.
 SYNC_TIMEOUT_S = 600
 SQL_TIMEOUT_S = 600
+SYNC_NUDGE_ANNOTATION = "antithesis.materialize.cloud/system-params-nudge"
+# A nudge can reach the kubelet before the ConfigMap update does, and the sync
+# it triggers then rewrites the old content.
+SYNC_NUDGE_INTERVAL_S = 10
 CONFIGMAP_CAS_ATTEMPTS = 20
 
 # Flags G1 needs regardless of profile. `production` keeps them at code
@@ -120,8 +125,10 @@ HARNESS_EXCLUDED = {"enable_password_auth", "enable_rbac_checks"}
 FLIP_FLAGS = (
     "enable_upsert_v2",
     "enable_upsert_chunked_stash",
-    "enable_frontend_peek_sequencing",
-    "enable_frontend_subscribes",
+    "storage_use_continual_feedback_upsert",
+    "enable_compute_sync_mv_sink",
+    "enable_columnar_merge_batcher",
+    "persist_enable_incremental_compaction",
     "enable_cluster_reconfiguration_lag_gate",
 )
 
@@ -275,6 +282,37 @@ def update_system_params(
     raise RuntimeError("system-params ConfigMap update kept conflicting")
 
 
+def nudge_config_sync(namespace: str) -> None:
+    """Ask the kubelet to refresh environmentd's ConfigMap volume now.
+
+    The kubelet rewrites a ConfigMap volume only when it syncs the pod. Without
+    a pod change that is once per sync period, about a minute. Measured under
+    Antithesis, a pod started seconds earlier saw new parameters after 73 s,
+    and one that was a sync period old after 4 s. A changed annotation is a
+    pod change. Best effort: on failure the periodic sync still delivers the
+    update.
+    """
+    api = client.CoreV1Api()
+    body = {"metadata": {"annotations": {SYNC_NUDGE_ANNOTATION: str(time.time())}}}
+    try:
+        pods = api.list_namespaced_pod(
+            namespace,
+            label_selector="materialize.cloud/app=environmentd",
+            _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        ).items
+        for pod in pods:
+            if pod.metadata is None or pod.metadata.name is None:
+                continue
+            api.patch_namespaced_pod(
+                pod.metadata.name,
+                namespace,
+                body,
+                _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+            )
+    except (ApiException, urllib3.exceptions.HTTPError, OSError) as e:
+        log(f"could not nudge the kubelet to sync system parameters: {e}")
+
+
 def show(conn: psycopg.Connection, name: str) -> str:
     row = conn.execute(f"SHOW {name}".encode()).fetchone()
     return str(row[0]) if row else ""
@@ -320,7 +358,7 @@ def roll_headline(supported_flags: Collection[str]) -> dict[str, str]:
     return {
         **{
             name: rng.choice(["true", "false"])
-            for name in ("enable_upsert_v2", "enable_frontend_peek_sequencing")
+            for name in ("enable_upsert_v2", "enable_compute_sync_mv_sink")
             if name in supported_flags
         },
         LEASE_PARAM: rng.choice(SHORT_LEASE_MENU if short else LEASE_MENU),
@@ -363,10 +401,10 @@ def report_arms(profile: str, headline: dict[str, str], arms: dict[str, str]) ->
         sometimes(upsert_v2, "configure enabled upsert v2", {})
         sometimes(not upsert_v2, "configure disabled upsert v2", {})
 
-    if "enable_frontend_peek_sequencing" in headline:
-        peek = normalize(headline["enable_frontend_peek_sequencing"]) == "true"
-        sometimes(peek, "configure enabled frontend peek sequencing", {})
-        sometimes(not peek, "configure disabled frontend peek sequencing", {})
+    if "enable_compute_sync_mv_sink" in headline:
+        sync_sink = normalize(headline["enable_compute_sync_mv_sink"]) == "true"
+        sometimes(sync_sink, "configure enabled the sync MV sink", {})
+        sometimes(not sync_sink, "configure disabled the sync MV sink", {})
 
     lease = headline["persist_reader_lease_duration"]
     sometimes(lease == "900s", "configure kept the production reader lease", {})
@@ -400,12 +438,16 @@ def report_arms(profile: str, headline: dict[str, str], arms: dict[str, str]) ->
     sometimes(ddl == "1s", "configure drew a 1s 0dt DDL check interval", {})
 
 
-def wait_until_reflected(host: str, expected: dict[str, str]) -> dict[str, str]:
+def wait_until_reflected(
+    host: str, expected: dict[str, str], namespace: str | None = None
+) -> dict[str, str]:
     """Poll `SHOW` as mz_system until every expected value is in effect.
 
+    With a `namespace`, keeps nudging the kubelet while values are outstanding.
     Return outstanding mismatches and read errors, or an empty map on success.
     """
     deadline = time.monotonic() + SYNC_TIMEOUT_S
+    next_nudge = time.monotonic() + SYNC_NUDGE_INTERVAL_S
     mismatched = {
         name: f"want {value}, not yet read" for name, value in expected.items()
     }
@@ -432,6 +474,9 @@ def wait_until_reflected(host: str, expected: dict[str, str]) -> dict[str, str]:
                 return mismatched
         if time.monotonic() >= deadline:
             return mismatched
+        if namespace is not None and time.monotonic() >= next_nudge:
+            nudge_config_sync(namespace)
+            next_nudge = time.monotonic() + SYNC_NUDGE_INTERVAL_S
         time.sleep(2)
 
 
@@ -498,6 +543,7 @@ def roll_flag(env: Environment, db: sqlite3.Connection | None = None) -> str | N
         update_system_params(
             env.endpoints.namespace, {name: new}, supported_flags=available
         )
+        nudge_config_sync(env.endpoints.namespace)
         record_flag(db, name, new, "mid-run")
         if "enable_upsert_v2" in available:
             sometimes(
@@ -511,16 +557,28 @@ def roll_flag(env: Environment, db: sqlite3.Connection | None = None) -> str | N
                 "mid-run roll flipped enable_upsert_chunked_stash",
                 {"value": new},
             )
-        if "enable_frontend_peek_sequencing" in available:
+        if "storage_use_continual_feedback_upsert" in available:
             sometimes(
-                name == "enable_frontend_peek_sequencing",
-                "mid-run roll flipped enable_frontend_peek_sequencing",
+                name == "storage_use_continual_feedback_upsert",
+                "mid-run roll flipped storage_use_continual_feedback_upsert",
                 {"value": new},
             )
-        if "enable_frontend_subscribes" in available:
+        if "enable_compute_sync_mv_sink" in available:
             sometimes(
-                name == "enable_frontend_subscribes",
-                "mid-run roll flipped enable_frontend_subscribes",
+                name == "enable_compute_sync_mv_sink",
+                "mid-run roll flipped enable_compute_sync_mv_sink",
+                {"value": new},
+            )
+        if "enable_columnar_merge_batcher" in available:
+            sometimes(
+                name == "enable_columnar_merge_batcher",
+                "mid-run roll flipped enable_columnar_merge_batcher",
+                {"value": new},
+            )
+        if "persist_enable_incremental_compaction" in available:
+            sometimes(
+                name == "persist_enable_incremental_compaction",
+                "mid-run roll flipped persist_enable_incremental_compaction",
                 {"value": new},
             )
         if "enable_cluster_reconfiguration_lag_gate" in available:
@@ -561,6 +619,7 @@ def main() -> int:
     written = update_system_params(
         env.endpoints.namespace, desired, supported_flags=defaults
     )
+    nudge_config_sync(env.endpoints.namespace)
 
     with db:
         db.execute("DELETE FROM profile")
@@ -589,7 +648,7 @@ def main() -> int:
         for name in (*headline, *HARNESS_REQUIRED, PANIC_FLAG)
         if name in written
     }
-    mismatched = wait_until_reflected(host, verify)
+    mismatched = wait_until_reflected(host, verify, env.endpoints.namespace)
     always(
         not mismatched,
         "system parameters written to the ConfigMap take effect in environmentd",

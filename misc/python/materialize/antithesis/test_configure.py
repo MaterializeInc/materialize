@@ -23,7 +23,7 @@ pytest.importorskip("antithesis")
 
 from materialize.antithesis.drivers import configure, recovery
 
-FRONTEND = "enable_frontend_peek_sequencing"
+OPTIONAL_FLAG = "enable_compute_sync_mv_sink"
 
 
 @pytest.fixture
@@ -33,20 +33,21 @@ def config_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(configure, "always", lambda *args: None)
     monkeypatch.setattr(configure, "reachable", lambda *args: None)
     monkeypatch.setattr(configure, "sometimes", lambda *args: None)
+    monkeypatch.setattr(configure, "nudge_config_sync", lambda namespace: None)
     return path
 
 
 def flag_value(conn: object, name: str) -> str:
-    if name == FRONTEND:
+    if name == OPTIONAL_FLAG:
         raise psycopg.errors.UndefinedObject(
             f'unrecognized configuration parameter "{name}"'
         )
     return "false"
 
 
-@pytest.mark.parametrize("frontend_supported", [False, True])
+@pytest.mark.parametrize("optional_supported", [False, True])
 def test_startup_requests_and_credits_only_supported_flags(
-    monkeypatch: pytest.MonkeyPatch, config_state: Path, frontend_supported: bool
+    monkeypatch: pytest.MonkeyPatch, config_state: Path, optional_supported: bool
 ) -> None:
     env = Mock(sql_host=lambda: "host", endpoints=SimpleNamespace(namespace="ns"))
     monkeypatch.setattr(configure, "Environment", lambda: env)
@@ -57,7 +58,7 @@ def test_startup_requests_and_credits_only_supported_flags(
     monkeypatch.setattr(
         configure,
         "show",
-        (lambda conn, name: "false") if frontend_supported else flag_value,
+        (lambda conn, name: "false") if optional_supported else flag_value,
     )
     monkeypatch.setattr(
         configure,
@@ -71,7 +72,7 @@ def test_startup_requests_and_credits_only_supported_flags(
 
     original_update = configure.update_system_params
     config_map = SimpleNamespace(
-        data={configure.CONFIGMAP_KEY: json.dumps({FRONTEND: "false"})}
+        data={configure.CONFIGMAP_KEY: json.dumps({OPTIONAL_FLAG: "false"})}
     )
     api = Mock()
     api.read_namespaced_config_map.return_value = config_map
@@ -82,7 +83,8 @@ def test_startup_requests_and_credits_only_supported_flags(
         written.append(merged)
         return merged
 
-    def reflected(host: str, params: dict[str, str]) -> dict[str, str]:
+    def reflected(host: str, params: dict[str, str], namespace: str) -> dict[str, str]:
+        assert namespace == "ns"
         checked.append(params)
         return {}
 
@@ -105,35 +107,33 @@ def test_startup_requests_and_credits_only_supported_flags(
 
     assert configure.main() == 0
     assert startup == ["cluster", "canary", "finished"]
-    assert (FRONTEND in written[0]) is frontend_supported
-    assert (FRONTEND in checked[0]) is frontend_supported
-    assert any("frontend peek sequencing" in name for name, _ in credits) is (
-        frontend_supported
-    )
+    assert (OPTIONAL_FLAG in written[0]) is optional_supported
+    assert (OPTIONAL_FLAG in checked[0]) is optional_supported
+    assert any("sync MV sink" in name for name, _ in credits) is (optional_supported)
     assert written[0]["enable_upsert_v2"] == "true"
     assert written[0][configure.LEASE_PARAM] == configure.LEASE_MENU[0]
     with sqlite3.connect(config_state) as db:
         assert (
             bool(
                 db.execute(
-                    "SELECT 1 FROM profile WHERE key = ?", (FRONTEND,)
+                    "SELECT 1 FROM profile WHERE key = ?", (OPTIONAL_FLAG,)
                 ).fetchone()
             )
-            is frontend_supported
+            is optional_supported
         )
         assert (
             bool(
                 db.execute(
-                    "SELECT 1 FROM flag_history WHERE name = ?", (FRONTEND,)
+                    "SELECT 1 FROM flag_history WHERE name = ?", (OPTIONAL_FLAG,)
                 ).fetchone()
             )
-            is frontend_supported
+            is optional_supported
         )
 
 
-@pytest.mark.parametrize("frontend_supported", [False, True])
+@pytest.mark.parametrize("optional_supported", [False, True])
 def test_mid_run_flip_rechecks_supported_flags(
-    monkeypatch: pytest.MonkeyPatch, config_state: Path, frontend_supported: bool
+    monkeypatch: pytest.MonkeyPatch, config_state: Path, optional_supported: bool
 ) -> None:
     env = Mock(sql_host=lambda: "host", endpoints=SimpleNamespace(namespace="ns"))
     monkeypatch.setattr(
@@ -142,13 +142,15 @@ def test_mid_run_flip_rechecks_supported_flags(
     monkeypatch.setattr(
         configure,
         "show",
-        (lambda conn, name: "false") if frontend_supported else flag_value,
+        (lambda conn, name: "false") if optional_supported else flag_value,
     )
     monkeypatch.setattr(
         configure,
         "rng",
         SimpleNamespace(
-            choice=lambda values: FRONTEND if FRONTEND in values else values[0]
+            choice=lambda values: (
+                OPTIONAL_FLAG if OPTIONAL_FLAG in values else values[0]
+            )
         ),
     )
     update = Mock()
@@ -158,23 +160,23 @@ def test_mid_run_flip_rechecks_supported_flags(
     db = configure.open_state()
     try:
         configure.record_flag(db, "enable_upsert_v2", "true", "first")
-        selected = FRONTEND if frontend_supported else "enable_upsert_v2"
-        value = "true" if frontend_supported else "false"
+        selected = OPTIONAL_FLAG if optional_supported else "enable_upsert_v2"
+        value = "true" if optional_supported else "false"
         assert configure.roll_flag(env, db) == selected
         assert update.call_args.args[1] == {selected: value}
-        assert configure.current_flag_value(db, FRONTEND) == (
-            "true" if frontend_supported else None
+        assert configure.current_flag_value(db, OPTIONAL_FLAG) == (
+            "true" if optional_supported else None
         )
         expected_credits = {
-            "mid-run roll flipped enable_upsert_v2": not frontend_supported,
-            "mid-run roll flipped enable_upsert_chunked_stash": False,
-            "mid-run roll flipped enable_frontend_subscribes": False,
-            "mid-run roll flipped enable_cluster_reconfiguration_lag_gate": False,
+            f"mid-run roll flipped {name}": False
+            for name in configure.FLIP_FLAGS
+            if name != OPTIONAL_FLAG
         }
-        if frontend_supported:
-            expected_credits["mid-run roll flipped enable_frontend_peek_sequencing"] = (
-                True
-            )
+        expected_credits["mid-run roll flipped enable_upsert_v2"] = (
+            not optional_supported
+        )
+        if optional_supported:
+            expected_credits[f"mid-run roll flipped {OPTIONAL_FLAG}"] = True
         assert {call.args[1]: call.args[0] for call in credits.call_args_list} == (
             expected_credits
         )
@@ -264,7 +266,7 @@ def test_unsupported_probe_does_not_abort_following_probes(
             if self.aborted:
                 raise psycopg.errors.InFailedSqlTransaction("transaction aborted")
             name = statement.decode().removeprefix("SHOW ")
-            if name == FRONTEND:
+            if name == OPTIONAL_FLAG:
                 self.aborted = not self.autocommit
                 raise psycopg.errors.UndefinedObject("unrecognized parameter")
             return Mock(fetchone=lambda: ("false",))
@@ -274,8 +276,8 @@ def test_unsupported_probe_does_not_abort_following_probes(
     conn = configure.sql.connect("host", internal=True)
     values = configure.implementation_flags(conn)
     assert factory.call_args.kwargs["autocommit"] is True
-    assert FRONTEND not in values
-    assert values["enable_frontend_subscribes"] == "false"
+    assert OPTIONAL_FLAG not in values
+    assert values["enable_cluster_reconfiguration_lag_gate"] == "false"
 
 
 @pytest.mark.parametrize(
@@ -316,9 +318,9 @@ def test_unknown_parameter_readback_fails_without_spending_timeout(
     monkeypatch: pytest.MonkeyPatch, readback_clock: list[float]
 ) -> None:
     monkeypatch.setattr(configure, "show", flag_value)
-    result = configure.wait_until_reflected("host", {FRONTEND: "true"})
+    result = configure.wait_until_reflected("host", {OPTIONAL_FLAG: "true"})
     assert result
-    assert FRONTEND in result
+    assert OPTIONAL_FLAG in result
     assert "unrecognized configuration parameter" in result["<readback>"]
     assert readback_clock == [0.0]
 
@@ -372,3 +374,76 @@ def test_readback_can_recover_after_a_failed_round(
 
     monkeypatch.setattr(configure, "show", show)
     assert configure.wait_until_reflected("host", {"known": "true"}) == {}
+
+
+def pod(name: str) -> SimpleNamespace:
+    return SimpleNamespace(metadata=SimpleNamespace(name=name))
+
+
+def test_nudge_changes_an_annotation_on_every_environmentd_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Mock()
+    api.list_namespaced_pod.return_value = SimpleNamespace(
+        items=[pod("environmentd-1-0"), pod("environmentd-2-0")]
+    )
+    monkeypatch.setattr(configure.client, "CoreV1Api", lambda: api)
+
+    configure.nudge_config_sync("ns")
+
+    assert api.list_namespaced_pod.call_args.args == ("ns",)
+    assert (
+        api.list_namespaced_pod.call_args.kwargs["label_selector"]
+        == "materialize.cloud/app=environmentd"
+    )
+    patched = [call.args for call in api.patch_namespaced_pod.call_args_list]
+    assert [(name, namespace) for name, namespace, _ in patched] == [
+        ("environmentd-1-0", "ns"),
+        ("environmentd-2-0", "ns"),
+    ]
+    for _, _, body in patched:
+        assert list(body["metadata"]["annotations"]) == [
+            configure.SYNC_NUDGE_ANNOTATION
+        ]
+
+
+def test_nudge_failure_leaves_the_periodic_sync_to_deliver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Mock()
+    api.list_namespaced_pod.return_value = SimpleNamespace(items=[pod("envd")])
+    api.patch_namespaced_pod.side_effect = configure.ApiException(status=403)
+    monkeypatch.setattr(configure.client, "CoreV1Api", lambda: api)
+
+    configure.nudge_config_sync("ns")
+
+
+def test_waiting_for_parameters_nudges_again_while_they_are_outstanding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(configure.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        configure.time, "sleep", lambda s: now.__setitem__(0, now[0] + s)
+    )
+    monkeypatch.setattr(
+        configure.sql, "connection", lambda *args, **kwargs: nullcontext(Mock())
+    )
+    stale_until = 2.5 * configure.SYNC_NUDGE_INTERVAL_S
+    monkeypatch.setattr(
+        configure,
+        "show",
+        lambda conn, name: "true" if now[0] >= stale_until else "false",
+    )
+    nudges = []
+    monkeypatch.setattr(
+        configure, "nudge_config_sync", lambda ns: nudges.append((ns, now[0]))
+    )
+
+    assert configure.wait_until_reflected("host", {"known": "true"}, "ns") == {}
+    assert [ns for ns, _ in nudges] == ["ns", "ns"]
+
+    nudges.clear()
+    now[0] = 0.0
+    assert configure.wait_until_reflected("host", {"known": "true"}) == {}
+    assert not nudges, "without a namespace the wait must not touch pods"

@@ -32,7 +32,9 @@ rules:
   verbs: [get, list, watch]
 - apiGroups: [""]
   resources: [pods]
-  verbs: [get, list, watch, delete]
+  # `patch` is for the annotation that makes the kubelet sync the
+  # system-params volume, see `configure.nudge_config_sync`.
+  verbs: [get, list, watch, delete, patch]
 - apiGroups: [""]
   resources: [pods/log]
   verbs: [get]
