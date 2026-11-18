@@ -108,7 +108,7 @@ The leader allocates it again, and gets a different one if another process added
 Entries for new builtins therefore also record the builtin's type, schema, and name, and an entry is only reused for the builtin it was created for.
 On a mismatch the leader allocates a fresh shard.
 
-Unlike replacement shards, the shards of new builtin collections are not written while read-only.
+The read-only process owns these shards exclusively, so it writes them before promotion under the same conditions as replacement shards.
 
 ### Supporting Concurrent Processes
 

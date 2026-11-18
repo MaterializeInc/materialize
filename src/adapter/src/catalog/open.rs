@@ -78,11 +78,10 @@ pub struct InitializeStateResult {
     /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
     /// by 0dt migration.
     ///
-    /// `Replacement`-migrated items only: derived by filtering to items with a global id in
-    /// `MigrationRunResult::new_shards`, which only `migrate_replace` populates. `Evolution`
-    /// migrates in place and reuses the leader's shard, so it never lands here. Read-only write
-    /// paths depend on that: force-writing a shard while read-only is safe only because we
-    /// exclusively own it (see `ComputeController::allow_writes_in_read_only`).
+    /// These are `Replacement`-migrated items and new builtin collections. `Evolution` migrates
+    /// in place and reuses the leader's shard, so it never lands here. Read-only write paths
+    /// depend on that: force-writing a shard while read-only is safe only because we exclusively
+    /// own it (see `ComputeController::allow_writes_in_read_only`).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,

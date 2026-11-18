@@ -661,7 +661,8 @@ enum Mechanism {
 
 /// The result of a builtin schema migration.
 pub(super) struct MigrationResult {
-    /// IDs of items whose shards have been replaced using the `Replacement` mechanism.
+    /// IDs of items that were assigned a fresh shard: those migrated using the `Replacement`
+    /// mechanism, and new builtin collections.
     pub replaced_items: BTreeSet<CatalogItemId>,
     /// A cleanup action to take once the migration has been made durable.
     pub cleanup_action: BoxFuture<'static, ()>,
@@ -746,7 +747,10 @@ pub(super) async fn run(
     let replaced_items = txn
         .get_system_object_mappings()
         .map(|m| m.unique_identifier)
-        .filter(|ids| result.new_shards.contains_key(&ids.global_id))
+        .filter(|ids| {
+            result.new_shards.contains_key(&ids.global_id)
+                || result.allocated_shards.contains_key(&ids.global_id)
+        })
         .map(|ids| ids.catalog_id)
         .collect();
 

@@ -25,6 +25,8 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
+from materialize.docker import image_registry
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.service import Service as DockerService
@@ -1937,6 +1939,82 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         new_mv_shard_id = get_persist_shard_id(mv_gid, "mz_new")
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
+
+        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        assert reused > 0
+        assert (
+            replaced == 0
+        ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+
+def workflow_new_builtins_survive_promotion(c: Composition) -> None:
+    """
+    Verify that builtin materialized views that are new in this version are
+    hydrated before promotion and keep their dataflows across it.
+
+    The old generation runs a pinned release. The test needs a release that we
+    still support upgrading from and that lacks a builtin materialized view of
+    the current version. It fails when the pin no longer provides one, at which
+    point the pin needs to move to a newer such release.
+    """
+    from_version = "v26.47.1"
+    builtin_mvs_query = """
+        SELECT s.name || '.' || mv.name
+        FROM mz_materialized_views mv JOIN mz_schemas s ON s.id = mv.schema_id
+        WHERE mv.id LIKE 's%'
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            name="mz_old",
+            image=f"{image_registry()}/materialized:{from_version}",
+            sanity_restart=False,
+            deploy_generation=0,
+            system_parameter_defaults=get_default_system_parameters(
+                version=MzVersion.parse_mz(from_version)
+            ),
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
+        ),
+    ):
+        c.up("mz_old")
+        old_mvs = {row[0] for row in c.sql_query(builtin_mvs_query, service="mz_old")}
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        new_mvs = {
+            row[0]
+            for row in c.sql_query(
+                builtin_mvs_query, service="mz_new", reuse_connection=False
+            )
+        } - old_mvs
+        assert (
+            new_mvs
+        ), f"{from_version} has all builtin materialized views, move the pin"
+
+        # A new builtin MV is only readable on the read-only generation if that
+        # generation wrote its shard. Nothing else does.
+        for name in sorted(new_mvs):
+            c.sql_query(
+                f"SELECT count(*) FROM {name}",
+                service="mz_new",
+                reuse_connection=False,
+            )
+
+        c.promote_mz("mz_new", retire_mz_service="mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
         assert reused > 0
