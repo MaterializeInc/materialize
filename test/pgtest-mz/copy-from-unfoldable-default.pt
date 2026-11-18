@@ -1,0 +1,33 @@
+# COPY FROM STDIN fills in an omitted column from its default, which it needs
+# as a constant. The optimizer does not fold a jq call, so the statement is
+# refused. This lives in pgtest-mz because jq does not exist in PostgreSQL.
+
+send
+Query {"query": "CREATE TABLE t (a int, b jsonb DEFAULT jq('1', '.'))"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t (a) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "1\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"column defaults that do not reduce to a constant in COPY FROM STDIN are not supported"}]}
+ReadyForQuery {"status":"I"}
