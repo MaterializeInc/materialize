@@ -480,6 +480,9 @@ def _recovery_with_passing_checks(monkeypatch) -> tuple[recovery.Recovery, list[
     )
     monkeypatch.setattr(recovery, "always", assert_product)
     monkeypatch.setattr(recovery, "sometimes", Mock())
+    monkeypatch.setattr(
+        recovery.ddl_hold, "release_all", lambda: observed.append("release_holds")
+    )
     monkeypatch.setattr(recovery, "observe_pods", lambda env: [])
     monkeypatch.setattr(recovery, "record_terminations", Mock())
     monkeypatch.setattr(recovery.lifecycle, "Session", Mock())
@@ -532,3 +535,19 @@ def test_recovery_restarts_pods_before_the_crash_loop_window(monkeypatch):
     check, observed = _recovery_with_passing_checks(monkeypatch)
     assert check.run() == 0
     assert observed.index("restart_and_compare") < observed.index("no_crash_loop")
+
+
+def test_recovery_releases_ddl_holds_only_after_the_rollout_settled(monkeypatch):
+    check, observed = _recovery_with_passing_checks(monkeypatch)
+    assert check.run() == 0
+    assert (
+        observed.index("cr_up_to_date")
+        < observed.index("release_holds")
+        < observed.index("cleanup_aggregate_fixtures")
+    )
+
+    check, observed = _recovery_with_passing_checks(monkeypatch)
+    monkeypatch.setattr(recovery, "always", Mock())
+    check.cr_up_to_date = lambda: (False, {})
+    assert check.run() == 0
+    assert "release_holds" not in observed, "DDL would disturb the open rollout"

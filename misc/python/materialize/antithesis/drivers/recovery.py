@@ -74,6 +74,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize.antithesis import (
     crash_loops,
+    ddl_hold,
     exit_audit,
     halt_proof,
     observations,
@@ -2032,6 +2033,17 @@ class Recovery:
             "the Materialize CR was up to date within the tight budget after faults stop",
             self.details(budget_s=CR_BUDGET_S),
         )
+        if ok:
+            # NOTE: A rollout scenario's DDL hold outlives the drivers that
+            # would release it, by up to `rollout_steps.SCENARIO_SECONDS`.
+            # The fixture cleanups below defer to any hold, and without them
+            # the hydration, frontier and restart checks are skipped. No
+            # driver resumes after a terminal check starts, and an up-to-date
+            # CR has no candidate left for DDL to restart.
+            try:
+                ddl_hold.release_all()
+            except (sqlite3.Error, OSError) as e:
+                log(f"could not release DDL holds: {e}")
 
         ok, info, took = poll(wedge, self.replicas_online, "replicas online")
         self.timings["replicas"] = took

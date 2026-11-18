@@ -117,6 +117,21 @@ def release(requester: str) -> None:
         db.close()
 
 
+def release_all() -> None:
+    """Release every hold, whoever requested it.
+
+    For terminal checks only. An owner that resumed its scenario afterwards
+    would still believe its hold is in place.
+    """
+    db = _open()
+    try:
+        with db:
+            db.execute("DELETE FROM holds")
+            db.execute("DELETE FROM owned_holds")
+    finally:
+        db.close()
+
+
 def active() -> bool:
     """Whether any hold covers the present. False if the state is unreadable."""
     return _covered(strict_only=False)
