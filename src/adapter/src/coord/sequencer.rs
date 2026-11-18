@@ -44,7 +44,6 @@ use mz_sql::session::vars;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::client::TableData;
-use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
@@ -1345,8 +1344,7 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
-    query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
+    query_client: (&crate::query_client::QueryClient, &Catalog),
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
@@ -1362,7 +1360,7 @@ pub(crate) async fn statistics_oracle(
 
     let cached_stats = mz_ore::future::timeout(
         timeout,
-        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections, query_client),
+        CachedStatisticsOracle::new(source_ids, query_as_of, query_client),
     )
     .await;
 
@@ -1390,33 +1388,24 @@ impl CachedStatisticsOracle {
     pub async fn new(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<Timestamp>,
-        storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
-        query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
+        query_client: (&crate::query_client::QueryClient, &Catalog),
     ) -> Result<Self, AdapterError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = if let Some((client, catalog)) = query_client {
-                match client.collection_metadata(catalog, *id) {
-                    Ok(metadata) => client
-                        .collection_reader()
-                        .await
-                        .snapshot_stats(*id, metadata, as_of.clone())
-                        .await
-                        .map_err(AdapterError::from),
-                    // Non-storage catalog items have no statistics, just like
-                    // collections absent from the legacy storage inventory.
-                    Err(AdapterError::CollectionUnreadable { .. }) => {
-                        Err(AdapterError::Storage(StorageError::IdentifierMissing(*id)))
-                    }
-                    Err(error) => Err(error),
-                }
-            } else {
-                storage_collections
-                    .expect("unprotected statistics require storage collections")
-                    .snapshot_stats(*id, as_of.clone())
+            let (client, catalog) = query_client;
+            let stats = match client.collection_metadata(catalog, *id) {
+                Ok(metadata) => client
+                    .collection_reader()
                     .await
-                    .map_err(AdapterError::from)
+                    .snapshot_stats(*id, metadata, as_of.clone())
+                    .await
+                    .map_err(AdapterError::from),
+                // Non-storage catalog items have no statistics.
+                Err(AdapterError::CollectionUnreadable { .. }) => {
+                    Err(AdapterError::Storage(StorageError::IdentifierMissing(*id)))
+                }
+                Err(error) => Err(error),
             };
 
             match stats {

@@ -990,8 +990,7 @@ impl PeekClient {
             &determination.timestamp_context.antichain(),
             true,
             catalog.system_config(),
-            None,
-            Some((&self.query_client, &*catalog)),
+            (&self.query_client, &*catalog),
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));

@@ -4518,12 +4518,10 @@ impl Coordinator {
             query_as_of,
             is_oneshot,
             self.catalog().system_config(),
-            self.query_client
-                .is_none()
-                .then(|| self.controller.storage_collections.as_ref()),
-            self.query_client
-                .as_deref()
-                .map(|client| (client, self.catalog())),
+            (
+                self.query_client.as_deref().expect("serving query client"),
+                self.catalog(),
+            ),
         )
         .await
     }
