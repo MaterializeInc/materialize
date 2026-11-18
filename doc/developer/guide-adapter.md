@@ -152,9 +152,12 @@ A joining adapter reconstructs the committed catalog without rerunning shared
 initialization or migrations. Durable join admission forbids migrations regardless
 of whether the adapter serves read-only SQL. Serving adapters must not apply
 initializer-supplied configuration or reconcile shared builtin identities. A
-restarting controller also uses join admission, but explicitly reconciles its
-active deployment's launch configuration before provisioning. It never replays
-the positive builtin snapshot. Pending deployments cannot publish shared configuration.
+restarting controller also uses join admission and reconciles its active deployment's
+launch configuration through bounded runtime ticks. Provisioning and HTTP handling
+continue while publication is pending. Adapter readiness does not certify that
+publication. Fresh initialization still completes before provisioning children.
+Restarts never replay the positive builtin snapshot, and pending deployments cannot
+publish shared configuration.
 
 Replacement transfers committed grants into a separate recovery guard, not ordinary
 read holds. Retain that guard through reconstruction and acquisition of successor
