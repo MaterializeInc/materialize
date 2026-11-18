@@ -1318,7 +1318,7 @@ impl<'a> RunnerInner<'a> {
                     Ok(runtime) => runtime,
                     Err(e) => {
                         server_addr_tx
-                            .send(Err(e.into()))
+                            .send(Err(e))
                             .expect("receiver should not drop first");
                         return;
                     }

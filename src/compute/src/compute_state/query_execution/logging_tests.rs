@@ -338,7 +338,7 @@ async fn qualified_subscriptions_join_and_retract_independently() {
                 .handle_query_command(&mut h.worker, None, drop_first, &mut h.sender);
             await_logs(&mut h, |h| {
                 logs.iter()
-                    .zip(&expected)
+                    .zip_eq(&expected)
                     .all(|((id, log), expected)| rows(h, *id, *log) == *expected)
             })
             .await;
