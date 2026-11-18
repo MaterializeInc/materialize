@@ -177,7 +177,10 @@ interface WorkerCpuSampler {
     endMs: number,
     annotation: Pick<Measurement, "replicaCpu" | "lag">,
   ) => void;
-  /** Pauses while `hidden`, and resumes a pause it caused once shown. */
+  /**
+   * Pauses while `hidden`, once no measurement is due, and resumes a pause it
+   * caused once shown.
+   */
   setHidden: (hidden: boolean) => void;
   stop: () => void;
 }
@@ -521,6 +524,10 @@ export function createWorkerCpuSampler({
       pauseFor("limit", update);
       return;
     }
+    if (isHidden && !(update.isMeasuring ?? state.isMeasuring)) {
+      pauseFor("hidden", update);
+      return;
+    }
     if (Object.keys(update).length > 0) setState(update);
     timer = setTimeout(tick, READ_INTERVAL_MS);
   };
@@ -607,7 +614,11 @@ export function createWorkerCpuSampler({
     },
     setHidden: (hidden) => {
       isHidden = hidden;
-      if (hidden && state.status === "reading") pauseFor("hidden");
+      // A measurement that's due is finished first, and `tick` pauses after
+      // it. Pausing here starts its minute over each time the tab is shown.
+      if (hidden && state.status === "reading" && !state.isMeasuring) {
+        pauseFor("hidden");
+      }
       if (!hidden && state.pauseReason === "hidden") resume();
     },
     stop: () => {

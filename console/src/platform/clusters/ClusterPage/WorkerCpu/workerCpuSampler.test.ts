@@ -583,10 +583,11 @@ describe("createWorkerCpuSampler", () => {
     );
   });
 
-  it("pauses while the browser tab is hidden, and resumes when it's shown", async () => {
-    const replica = createFakeReplica();
+  it("pauses while the browser tab is hidden once its minute is measured, and resumes when it's shown", async () => {
+    const replica = createSteadyReplica();
     const sampler = startSampler();
-    await advance(5_000);
+    await advance(65_000);
+    expect(sampler.getState().isMeasuring).toBe(false);
 
     sampler.setHidden(true);
     await advance(0);
@@ -603,9 +604,76 @@ describe("createWorkerCpuSampler", () => {
     expect(sampler.getState().status).toBe("reading");
     expect(replica.open()).toHaveLength(1);
     expect(sampler.getState().readings.at(-1)).toMatchObject({
-      atMs: START_MS + 35_000,
+      atMs: START_MS + 95_000,
       afterGap: true,
     });
+  });
+
+  it("finishes the first minute in a hidden tab, then pauses until it's shown", async () => {
+    const replica = createSteadyReplica();
+    const sampler = startSampler();
+    await advance(5_000);
+
+    sampler.setHidden(true);
+    await advance(50_000);
+    expect(sampler.getState()).toMatchObject({
+      status: "reading",
+      isMeasuring: true,
+    });
+    expect(replica.open()).toHaveLength(1);
+
+    await advance(5_000);
+    expect(sampler.getState()).toMatchObject({
+      status: "paused",
+      pauseReason: "hidden",
+      isMeasuring: false,
+    });
+    expect(spanSinceStart(sampler.getState().measurement)).toEqual([0, 60_000]);
+    expect(replica.open()).toEqual([]);
+
+    sampler.setHidden(false);
+    await advance(0);
+    expect(sampler.getState().status).toBe("reading");
+  });
+
+  it("finishes an asked-for minute in a hidden tab, then pauses", async () => {
+    const replica = createSteadyReplica();
+    const sampler = startSampler();
+    await advance(72_000);
+    sampler.measure();
+    await advance(3_000);
+
+    sampler.setHidden(true);
+    await advance(59_000);
+    expect(sampler.getState()).toMatchObject({
+      status: "reading",
+      measuringFromMs: START_MS + 75_000,
+    });
+
+    await advance(1_000);
+    expect(sampler.getState()).toMatchObject({
+      status: "paused",
+      pauseReason: "hidden",
+    });
+    expect(spanSinceStart(sampler.getState().measurement)).toEqual([
+      75_000, 135_000,
+    ]);
+    expect(replica.open()).toEqual([]);
+  });
+
+  it("stops at the limit in a hidden tab whose minute never lands", async () => {
+    // Counters that never advance leave no reading to measure.
+    const replica = createFakeReplica();
+    replica.isStalled = true;
+    const sampler = startSampler();
+    sampler.setHidden(true);
+    await advance(SAMPLING_LIMIT_MS);
+
+    expect(sampler.getState()).toMatchObject({
+      status: "paused",
+      pauseReason: "limit",
+    });
+    expect(replica.open()).toEqual([]);
   });
 
   it("keeps a pause it didn't cause when the tab is shown again", async () => {

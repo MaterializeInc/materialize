@@ -320,6 +320,7 @@ const renderWorkers = async (
   replicas: Record<string, string>,
   search = "",
   options: Parameters<typeof serveSubscribes>[0] = {},
+  { canUse = true }: { canUse?: boolean } = {},
 ) => {
   await setFakeEnvironment(getStore().set, "aws/us-east-1", ENVIRONMENT);
   const cluster = buildCluster(replicas);
@@ -350,6 +351,13 @@ const renderWorkers = async (
             memoryBytes: String(8 * 2 ** 30),
             diskBytes: "0",
           })),
+      }),
+    }),
+    buildSqlQueryHandlerV2({
+      queryKey: clusterQueryKeys.usagePrivilege({ clusterId: cluster.id }),
+      results: mapKyselyToTabular({
+        rows: [{ canUse }],
+        columns: [buildColumn({ name: "canUse", type_oid: MzDataType.bool })],
       }),
     }),
     buildSqlQueryHandlerV2({
@@ -417,6 +425,17 @@ const optionsOf = (select: HTMLElement) =>
     .map((option) => option.textContent);
 
 describe("ClusterWorkers", () => {
+  it("disables Start measuring, and says why, for a role without USAGE on the cluster", async () => {
+    await renderWorkers({ r1: "100cc" }, "", {}, { canUse: false });
+
+    expect(
+      await screen.findByText(/privilege on this cluster to measure/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Start measuring" }),
+    ).toBeDisabled();
+  });
+
   it("explains what workers are and why skew matters", async () => {
     await renderWorkers({ r1: "100cc" });
 
@@ -637,39 +656,6 @@ describe("ClusterWorkers", () => {
     await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
   });
 
-  describe("in a browser tab that's hidden", () => {
-    const setVisibility = (visibilityState: DocumentVisibilityState) => {
-      Object.defineProperty(document, "visibilityState", {
-        configurable: true,
-        get: () => visibilityState,
-      });
-      document.dispatchEvent(new Event("visibilitychange"));
-    };
-
-    afterEach(() => setVisibility("visible"));
-
-    it("closes its session, and reads again once the tab is shown", async () => {
-      const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
-      await startMeasuring();
-      await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
-
-      act(() => setVisibility("hidden"));
-
-      expect(
-        await screen.findByText("Paused while this browser tab is hidden."),
-      ).toBeVisible();
-      await waitFor(() => expect(openSessions(sessions)).toEqual([]));
-
-      act(() => setVisibility("visible"));
-
-      expect(
-        await screen.findByText(/^Reading worker CPU on r2 every 5s/),
-      ).toBeVisible();
-      await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
-      expect(sessions).toHaveLength(2);
-    });
-  });
-
   it("reads nothing from the replica until asked to start measuring", async () => {
     const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
 
@@ -807,6 +793,49 @@ describe("ClusterWorkers", () => {
       expect(
         screen.getByRole("button", { name: "Measure again" }),
       ).toBeEnabled();
+    });
+
+    describe("in a browser tab that's hidden", () => {
+      const setVisibility = (visibilityState: DocumentVisibilityState) => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => visibilityState,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      };
+
+      afterEach(() => setVisibility("visible"));
+
+      it("finishes measuring its minute, then closes its session until the tab is shown", async () => {
+        const replica = await renderReplica(SKEWED);
+        await advance(10_000);
+
+        act(() => setVisibility("hidden"));
+        await advance(40_000);
+
+        expect(
+          screen.getByText(
+            "Measuring r2's 2 workers for a minute (50s of 60s)",
+          ),
+        ).toBeVisible();
+        expect(openSessions(replica.sessions)).toHaveLength(1);
+
+        await advance(10_000);
+
+        expect(
+          screen.getByText(`Measured ${clockTime(0)} to ${clockTime(60_000)}`),
+        ).toBeVisible();
+        expect(
+          screen.getByText("Paused while this browser tab is hidden."),
+        ).toBeVisible();
+        expect(openSessions(replica.sessions)).toEqual([]);
+
+        act(() => setVisibility("visible"));
+        await advanceUntil(() =>
+          expect(screen.getByText(/^Reading worker CPU on r2/)).toBeVisible(),
+        );
+        expect(openSessions(replica.sessions)).toHaveLength(1);
+      });
     });
 
     it("shows each worker's time for the measured minute, and the picked object's part of it", async () => {

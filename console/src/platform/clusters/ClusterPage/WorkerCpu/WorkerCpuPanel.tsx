@@ -26,7 +26,10 @@ import { Link } from "react-router-dom";
 import { ProcessMetricsSample } from "~/api/materialize/cluster/replicaProcessMetrics";
 import Alert from "~/components/Alert";
 import TextLink from "~/components/TextLink";
-import { useMaterializationLag } from "~/platform/clusters/queries";
+import {
+  useClusterUsagePrivilege,
+  useMaterializationLag,
+} from "~/platform/clusters/queries";
 import { queryHistoryPath } from "~/platform/query-history/queryHistoryUtils";
 import { useClusterObjectsLive } from "~/store/allObjectsCollection";
 import { useRegionSlug } from "~/store/environments";
@@ -244,6 +247,9 @@ export const WorkerCpuPanel = ({
       replicaName: replica.name,
       workerCount,
     });
+  // Reading runs on the cluster as the signed-in role. Unknown counts as
+  // allowed, so a failed check leaves the button to report the real error.
+  const isUsageDenied = useClusterUsagePrivilege({ clusterId }).data === false;
   const processSamples = useReplicaProcessSamples({
     replicaId: replica.id,
     windowMinutes: REPLICA_CPU_WINDOW_MINUTES,
@@ -517,6 +523,7 @@ export const WorkerCpuPanel = ({
           lifetimeObjects={lifetimeObjects}
           objectName={objectName}
           onStart={start}
+          isUsageDenied={isUsageDenied}
         />
       )}
       {measurement && (
