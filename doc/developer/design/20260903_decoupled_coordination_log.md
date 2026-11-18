@@ -8,13 +8,13 @@ adapter-owned policy. M2, including its 60s publication default, remains closed.
 Do not restore legacy execution or weaken validation to make tests pass.
 
 The current 26.46/26.47 debug pair built successfully, restored its source inputs
-and passed the local lifecycle assertions. The unchanged DDL workflow is running
-as `aj-native-parallel-d408e16b.service`. Inspect its result and cleanup before
-running adapter-loss. The pair shares implementation and plan encoding. It is
-not release-skew or migration coverage.
+and passed the local lifecycle assertions and unchanged DDL workflow. Adapter-loss
+is running as `aj-native-parallel-a105e001.service`. Inspect its result and cleanup
+before running the prepared subscription-identity fixture. The pair shares
+implementation and plan encoding, not release-skew or migration coverage.
 The optimized comparison and 60s four-index acceptance are complete. Finish the
-remaining pair checks before further readiness tuning. Debug builds remain required for the local
-demo and phase-level restart/startup measurements.
+remaining pair checks before further readiness tuning. Debug builds remain
+required for the local demo and phase-level restart/startup measurements.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -37,6 +37,13 @@ not establish SQL SUBSCRIBE continuity or a panic-free lifecycle: the running
 old controller panicked during explicit retirement. See
 `current-frontier-lifecycle-audit.md` for phase timings and limits. Initial
 provisioning waits exclude the separate, roughly ten-minute candidate catch-up.
+
+The complete current-pair DDL workflow passed with Kafka, PostgreSQL, MySQL,
+SQL Server and webhook ingestion, Kafka sink handover, both versions writing
+across promotion, warmed indexes and explicit retirement. The independent log
+audit found no Materialize panic or OOM event. A PostgreSQL connection-level FATAL
+was followed by successful CDC recovery. This is local debug coverage, not full
+CI. See `current-frontier-ddl-audit.md` for evidence and limits.
 
 The frontier rewrite derives execution keys from catalog records rather than
 frontier rows. Debug builds, indexed semantic regressions, full catalog-plan
@@ -75,6 +82,11 @@ Detailed older outcomes and evidence remain in the
   and current debug runs. Workflow success does not establish crash-free
   acceptance. Clean shutdown of an already-running retired controller awaits
   approval for the exit-behavior change. Keep retired-reopen rejection distinct.
+- Configuration reconciliation still retries conflicts inline. The proposed
+  boundary retains handles and desired rows, rebuilds snapshot-relative diffs
+  after conflicts, and keeps startup pending with backoff rather than halting.
+  Readiness and write ordering remain unchanged. This proposal awaits approval.
+  See `current-config-convergence-survey.md` for current-source evidence.
 - Promoted-adapter storage initialization can return `CatalogOutOfSync` when
   catch-up changes its captured transient revision. Revalidate preparation rather
   than removing that guard.
@@ -109,11 +121,13 @@ Do not bypass `run-current-frontier-pair.sh` or use incomplete artifacts.
 
 Essential pointers:
 - `current-frontier-lifecycle-audit.md` and `.json`, plus
-  `current-frontier-lifecycle-result.log`. The worker archive is
+  `current-frontier-lifecycle-result.log`. The locally verified archive is
   `current-frontier-lifecycle-evidence.tar.gz`.
-- `current-frontier-ddl-retry-driver.log`. Initial DDL preflight stopped on
-  missing dependency images. Exact dependencies are now cached, including the
-  source-resolved MySQL image rather than the scratch fixture's stale alias.
+- `current-frontier-ddl-audit.md` and `.json`, plus locally verified
+  `current-frontier-ddl-evidence.tar.gz` and `current-frontier-ddl-result.log`.
+- `current-frontier-adapter-loss-driver.log`. The subsequent
+  `native_frontier_subscriptions.py` is staged in `upsert-oom-investigation/`
+  and runs unchanged `subscribe-execution-identity` on the current pair.
 - `current-frontier-pair-build-driver.log`, `current-pair-systemd-review.md` and
   `current-pair-worker-provenance.log`. Pair artifacts are in sibling
   `upsert-oom-investigation/native-compatible-frontier-current/`. The reviewed
