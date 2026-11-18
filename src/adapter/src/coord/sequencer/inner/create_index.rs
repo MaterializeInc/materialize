@@ -209,28 +209,11 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let selected = if catalog.state().catalog_read_protection_enabled() {
-            Some(
-                catalog
-                    .selected_plan(index.global_id())
-                    .await?
-                    .ok_or_else(|| {
-                        AdapterError::internal("explain index", "selected plan is missing")
-                    })?,
-            )
-        } else {
-            None
-        };
-        let metainfo = match &selected {
-            Some(plan) => Some(&plan.dataflow_metainfos),
-            None => catalog.try_get_dataflow_metainfo(&index.global_id()),
-        };
-        let Some(dataflow_metainfo) = metainfo else {
-            if !id.is_system() {
-                tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
-            }
-            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
-        };
+        let selected = catalog
+            .selected_plan(index.global_id())
+            .await?
+            .ok_or_else(|| AdapterError::internal("explain index", "selected plan is missing"))?;
+        let dataflow_metainfo = &selected.dataflow_metainfos;
 
         let target_cluster = catalog.get_cluster(index.cluster_id);
 
@@ -248,15 +231,7 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
-                let plan = match &selected {
-                    Some(plan) => Some(plan.global_mir.clone()),
-                    None => catalog.try_get_optimized_plan(&index.global_id()).cloned(),
-                };
-                let Some(plan) = plan else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
-
+                let plan = selected.global_mir.clone();
                 explain_dataflow(
                     plan,
                     format,
@@ -269,14 +244,7 @@ impl Coordinator {
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let plan = match &selected {
-                    Some(plan) => Some(plan.physical_plan.clone()),
-                    None => catalog.try_get_physical_plan(&index.global_id()).cloned(),
-                };
-                let Some(plan) = plan else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
+                let plan = selected.physical_plan.clone();
                 explain_dataflow(
                     plan,
                     format,
