@@ -79,11 +79,18 @@ beforeEach(() => {
 const replicaUtilization = new Map<string, ReplicaUtilization>();
 const replicaHydration = new Map<string, ReplicaHydrationCounts>();
 
+/** Role names by id. A cluster owned by any other id has no known owner. */
+const OWNER_NAMES = new Map([
+  ["u1", "ana"],
+  ["u2", "ben"],
+]);
+const ownerName = (ownerId: string) => OWNER_NAMES.get(ownerId);
+
 vi.mock("./queries", async () => {
   const actual = await vi.importActual("./queries");
   return {
     ...actual,
-    useOwners: () => ({ isOwner: () => true }),
+    useOwners: () => ({ isOwner: () => true, ownerName }),
     useReplicaUtilization: () => ({ data: replicaUtilization }),
     useReplicaHydration: () => ({ data: replicaHydration }),
   };
@@ -249,13 +256,14 @@ const COLUMN = {
   cluster: 0,
   replica: 1,
   size: 2,
-  cpu: 3,
-  memory: 4,
-  disk: 5,
-  heap: 6,
-  hydration: 7,
-  lastStatusChange: 8,
-  actions: 9,
+  owner: 3,
+  cpu: 4,
+  memory: 5,
+  disk: 6,
+  heap: 7,
+  hydration: 8,
+  lastStatusChange: 9,
+  actions: 10,
 } as const;
 
 // `queryAllByRole`, not `getAllByRole`: when the search or a filter excludes
@@ -303,6 +311,7 @@ const rowOrderAfter = async (
  */
 const FILTER_COLUMN_IDS: Record<string, string> = {
   Replica: "replica",
+  Owner: "owner",
   CPU: "cpuPercent",
   Memory: "memoryPercent",
   Disk: "diskPercent",
@@ -505,6 +514,7 @@ describe("ClustersList replica rows", () => {
       "compute",
       "r1",
       "50cc",
+      "ana",
       "12.5%",
       "40.0%",
       "25.0%",
@@ -1221,6 +1231,7 @@ describe("ClustersList keyboard navigation", () => {
     // One control per filterable column, in the order the table shows them.
     for (const label of [
       "Replica",
+      "Owner",
       "CPU",
       "Memory",
       "Disk",
@@ -2658,5 +2669,127 @@ describe("ClustersList hydration", () => {
         );
       }
     });
+  });
+});
+
+describe("ClustersList owner column", () => {
+  /** Two clusters owned by known roles, and one whose owner isn't known. */
+  const ownedClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      ownerId: "u2",
+      replicas: [buildReplica({ id: "u10", name: "a-1" })],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      ownerId: "u1",
+      replicas: [
+        buildReplica({ id: "u20", name: "b-1" }),
+        buildReplica({ id: "u21", name: "b-2" }),
+      ],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      ownerId: "u404",
+      replicas: [buildReplica({ id: "u30", name: "c-1" })],
+    }),
+  ];
+
+  /** Toggles each of `owners` in the Owner panel, then closes it. */
+  const toggleOwners = async (
+    user: ReturnType<typeof userEvent.setup>,
+    ...owners: string[]
+  ) => {
+    await user.click(filterTrigger("Owner"));
+    for (const owner of owners) {
+      await user.click(await screen.findByRole("checkbox", { name: owner }));
+    }
+    const trigger = queryFilterTrigger("Owner");
+    if (trigger) await user.click(trigger);
+  };
+
+  it("names each cluster's owner on its replicas' rows, and dashes an unknown one", async () => {
+    await renderClustersList(ownedClusters());
+
+    expect(rowOrder()).toEqual(["a-1", "b-1", "b-2", "c-1"]);
+    expect(columnOrder(COLUMN.owner)).toEqual(["ben", "ana", "ana", "-"]);
+  });
+
+  it("sorts by owner, with unknown owners after the known ones", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(ownedClusters());
+    const header = screen.getByRole("columnheader", { name: /Owner/ });
+
+    await user.click(within(header).getByText("Owner"));
+    expect(columnOrder(COLUMN.owner)).toEqual(["ana", "ana", "ben", "-"]);
+
+    await user.click(within(header).getByText("Owner"));
+    expect(columnOrder(COLUMN.owner)).toEqual(["-", "ben", "ana", "ana"]);
+  });
+
+  it("offers the roles that own a listed cluster, and keeps only the selected one's clusters", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(ownedClusters());
+
+    await user.click(filterTrigger("Owner"));
+    await user.click(await screen.findByRole("checkbox", { name: "ana" }));
+    expect(screen.getByRole("checkbox", { name: "ben" })).toBeVisible();
+    await user.click(filterTrigger("Owner"));
+
+    expect(rowOrder()).toEqual(["b-1", "b-2"]);
+    expect(chipLabels()).toEqual(["Replicas ≥ 1", "Owner: ana"]);
+  });
+
+  it("shows every cluster again once the owner's chip is removed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(ownedClusters());
+    await toggleOwners(user, "ben");
+    expect(rowOrder()).toEqual(["a-1"]);
+
+    await user.click(screen.getByRole("button", { name: "Remove Owner: ben" }));
+
+    expect(rowOrder()).toEqual(["a-1", "b-1", "b-2", "c-1"]);
+  });
+
+  it("finds a cluster by its owner's name in the search", async () => {
+    await renderAt(ownedClusters(), "/?q=ben");
+
+    expect(rowOrder()).toEqual(["a-1"]);
+  });
+
+  it("writes the selection to the URL, one parameter per role", async () => {
+    const user = userEvent.setup();
+    await renderAt(ownedClusters());
+
+    await toggleOwners(user, "ana", "ben");
+
+    await waitFor(() =>
+      expect(currentSearch().getAll("owner[]")).toEqual(["ana", "ben"]),
+    );
+  });
+
+  it("restores a bookmarked selection, in the rows and in the panel", async () => {
+    const user = userEvent.setup();
+    await renderAt(ownedClusters(), "/?owner[]=ben");
+
+    expect(rowOrder()).toEqual(["a-1"]);
+    await user.click(filterTrigger("Owner"));
+    expect(await screen.findByRole("checkbox", { name: "ben" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "ana" })).not.toBeChecked();
+  });
+
+  it("leaves a chip to remove a bookmarked role that owns nothing", async () => {
+    const user = userEvent.setup();
+    await renderAt(ownedClusters(), "/?owner[]=gone");
+
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Remove Owner: gone" }),
+    );
+
+    expect(rowOrder()).toEqual(["a-1", "b-1", "b-2", "c-1"]);
   });
 });

@@ -14,6 +14,7 @@ import React from "react";
 import { HydrationBucket } from "~/platform/maintained-objects/filters";
 
 import { HYDRATION_COLUMN_ID, hydrationFilterLabel } from "./hydrationFilters";
+import { OWNER_COLUMN_ID, ownerFilterLabel } from "./ownerFilters";
 import {
   REPLICA_COLUMN_ID,
   replicaCountFilterLabel,
@@ -65,6 +66,23 @@ const hydrationChips = <TData,>(table: Table<TData>): Chip[] => {
   }));
 };
 
+/** The owner selection: one chip per selected role, as for hydration. */
+const ownerChips = <TData,>(table: Table<TData>): Chip[] => {
+  const column = table.getColumn(OWNER_COLUMN_ID);
+  if (!column) return [];
+
+  const selected = (column.getFilterValue() as string[] | undefined) ?? [];
+
+  return selected.map((owner) => ({
+    key: `${OWNER_COLUMN_ID}:${owner}`,
+    label: ownerFilterLabel(owner),
+    onRemove: () => {
+      const next = selected.filter((other) => other !== owner);
+      column.setFilterValue(next.length ? next : undefined);
+    },
+  }));
+};
+
 const replicaCountChips = <TData,>(table: Table<TData>): Chip[] => {
   const column = table.getColumn(REPLICA_COLUMN_ID);
   const minimum = column?.getFilterValue() as number | undefined;
@@ -99,6 +117,7 @@ export const ClusterFilterChips = <TData,>({
 }: ClusterFilterChipsProps<TData>) => {
   const chips = [
     ...replicaCountChips(table),
+    ...ownerChips(table),
     ...utilizationChips(table, utilizationColumns),
     ...hydrationChips(table),
   ];

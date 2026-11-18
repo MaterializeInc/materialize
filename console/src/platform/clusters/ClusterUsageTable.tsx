@@ -51,6 +51,7 @@ import {
 } from "~/platform/maintained-objects/filters";
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
+import { notNullOrUndefined } from "~/util";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
@@ -69,7 +70,14 @@ import {
   hydrationFilterFromUrl,
 } from "./hydrationFilters";
 import {
+  OWNER_COLUMN_ID,
+  OWNER_URL_KEY,
+  ownerFilterFn,
+  ownerFilterFromUrl,
+} from "./ownerFilters";
+import {
   ReplicaHydrationCounts,
+  useOwners,
   useReplicaHydration,
   useReplicaUtilization,
 } from "./queries";
@@ -123,6 +131,8 @@ const NO_UTILIZATION: ReplicaUtilizationValues = {
  */
 type ClusterReplicaRow = {
   cluster: ClusterWithOwnership;
+  /** The owning role's name, null until the roles load. */
+  owner: string | null;
   replica: Replica | null;
   utilization: ReplicaUtilizationValues;
   hydration: ReplicaHydrationCounts | null;
@@ -234,6 +244,11 @@ const latestReplicaStatusAt = (replica: Replica | null) =>
 
 const columnHelper = createColumnHelper<ClusterReplicaRow>();
 
+interface ClusterUsageTableMeta extends ClusterTableMeta {
+  /** The roles that own a listed cluster, sorted, for the owner filter. */
+  ownerNames: string[];
+}
+
 interface UtilizationColumn {
   id: string;
   header: string;
@@ -298,6 +313,11 @@ const columnFiltersFromSearch = (search: string): ColumnFiltersState => {
     filters.push({ id: REPLICA_COLUMN_ID, value: minimumReplicas });
   }
 
+  const owners = ownerFilterFromUrl(params.getAll(OWNER_URL_KEY));
+  if (owners) {
+    filters.push({ id: OWNER_COLUMN_ID, value: owners });
+  }
+
   return filters;
 };
 
@@ -347,6 +367,28 @@ const columns = [
     sortingFn: sortingFunctions.nullsLast,
     sortDescFirst: true,
     cell: (info) => info.getValue() ?? "-",
+  }),
+  columnHelper.accessor((row) => row.owner, {
+    id: OWNER_COLUMN_ID,
+    header: "Owner",
+    sortingFn: sortingFunctions.nullsLast,
+    filterFn: ownerFilterFn,
+    cell: (info) => info.getValue() ?? "-",
+    meta: {
+      cellProps: truncateMaxWidth,
+      renderFilter: (column, table) => {
+        const meta = table.options.meta as ClusterUsageTableMeta;
+        return (
+          <MultiSelectFilterPanel<string, ClusterReplicaRow>
+            column={column}
+            items={meta.ownerNames}
+            searchable
+            searchPlaceholder="Search roles..."
+            emptyMessage="No roles match"
+          />
+        );
+      },
+    },
   }),
   ...UTILIZATION_COLUMNS.map(percentColumn),
   columnHelper.accessor(
@@ -424,9 +466,8 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     useLatestOfflineReplica();
   const { data: replicaUtilization } = useReplicaUtilization();
   const { data: replicaHydration } = useReplicaHydration();
+  const { ownerName } = useOwners();
   const location = useLocation();
-
-  const meta: ClusterTableMeta = { offlineReplicaMap };
 
   // Read once, on mount: the URL seeds the table, and from then on the table
   // drives the URL. Reading it on every render would fight the writer below.
@@ -441,11 +482,13 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   // flattened rows have to outlive the render that built them.
   const rows = React.useMemo<ClusterReplicaRow[]>(
     () =>
-      clusters.flatMap((cluster): ClusterReplicaRow[] =>
-        cluster.replicas.length === 0
+      clusters.flatMap((cluster): ClusterReplicaRow[] => {
+        const owner = ownerName(cluster.ownerId) ?? null;
+        return cluster.replicas.length === 0
           ? [
               {
                 cluster,
+                owner,
                 replica: null,
                 utilization: NO_UTILIZATION,
                 hydration: null,
@@ -453,13 +496,24 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
             ]
           : cluster.replicas.map((replica) => ({
               cluster,
+              owner,
               replica,
               utilization:
                 replicaUtilization?.get(replica.id) ?? NO_UTILIZATION,
               hydration: replicaHydration?.get(replica.id) ?? null,
-            })),
-      ),
-    [clusters, replicaHydration, replicaUtilization],
+            }));
+      }),
+    [clusters, ownerName, replicaHydration, replicaUtilization],
+  );
+
+  const meta = React.useMemo<ClusterUsageTableMeta>(
+    () => ({
+      offlineReplicaMap,
+      ownerNames: [
+        ...new Set(rows.map(({ owner }) => owner).filter(notNullOrUndefined)),
+      ].sort((a, b) => a.localeCompare(b)),
+    }),
+    [offlineReplicaMap, rows],
   );
 
   const table = useUniversalTable({
@@ -514,6 +568,12 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     );
     if (minimumReplicas !== undefined) {
       params[REPLICA_COUNT_URL_KEY] = minimumReplicas;
+    }
+    const ownerFilter = tableState.columnFilters.find(
+      (filter) => filter.id === OWNER_COLUMN_ID,
+    );
+    if (ownerFilter) {
+      params[OWNER_URL_KEY] = ownerFilter.value;
     }
     if (tableState.globalFilter) {
       params.q = tableState.globalFilter;
