@@ -246,7 +246,8 @@ CREATE QUERY POLICY no_ad_hoc_dataflows (
 - To let another role attach a policy, grant it `USAGE` on the policy with
   [`GRANT PRIVILEGE`](/sql/grant-privilege/). Revoking `USAGE` does not detach
   the policy from clusters it is already attached to.
-- A policy that is attached to a cluster can only be dropped with
+- To drop a policy that is attached to a cluster, either detach it first with
+  `ALTER CLUSTER ... RESET (QUERY POLICY)`, or use
   [`DROP QUERY POLICY ... CASCADE`](/sql/drop-query-policy/), which detaches it
   from all clusters.
 
