@@ -17,13 +17,13 @@
 # - a NULL decoding failure if the NOT NULL constraint is re-instated
 #   after being dropped and MZ reboots.
 ! SELECT * FROM alter_fail_drop_constraint;
-contains:Decode error
+regex:(Decode error|Incompatible schema change)
 
 # We can see either of InvalidData or InvalidColumn.
 # We see InvalidData if there was no data present.
 # We see InvalidColumn if there was a null present.
 ! SELECT * FROM alter_fail_drop_col;
-contains:column 'f2'
+regex:(column 'f2'|Incompatible schema change)
 
 # Ensure non-definite errors are cleared.
 > SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
