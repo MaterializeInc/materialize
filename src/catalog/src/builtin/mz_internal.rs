@@ -81,7 +81,8 @@ WHERE data->>'kind' <> 'AuditLog'",
         access: vec![],
         ontology: None,
     });
-/// Every user-defined catalog item.
+/// Every catalog item that has an `Item` record: user items, including temporary ones, and
+/// runtime-alterable builtins such as `mz_internal.mz_analytics`.
 /// This is an intermediate layer, intended to be used by
 /// downstream builtin item relations (e.g. mz_sources). Without it,
 /// they would need to parse DDL statements of all items in the durable catalog
