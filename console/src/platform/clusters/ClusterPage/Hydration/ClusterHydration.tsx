@@ -65,6 +65,7 @@ import {
   findSelectedRow,
   findUnrecordedHydrations,
   HYDRATION_HELP,
+  HydrationRow,
   HydrationVerdict,
   hydrationVerdict,
   ReplicaNow,
@@ -170,7 +171,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
   const data = useClusterHydrationData({ cluster, timePeriodMinutes });
   const isEmulator = useIsEmulator();
   const colorById = useReplicaColors(cluster.id, data.replicas);
-  const [selectedRowId, setSelectedRowId] = React.useState<string>();
+  const [pickedRow, setPickedRow] = React.useState<HydrationRow>();
 
   // A retired replica can be selected while its history is in the window.
   // Narrowing keeps every replica of the selected name, such as the ones a
@@ -268,7 +269,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
   // Rows are ordered by when each began, and a long hydration can end after a
   // later one.
   const lastRow = greatest(rows, (row) => rowEndTime(row).getTime());
-  const selectedRow = findSelectedRow(rows, selectedRowId) ?? lastRow;
+  const selectedRow = findSelectedRow(rows, pickedRow) ?? lastRow;
   const isLastShown = selectedRow === lastRow;
   const nameOf = (replicaId: string) => nameById.get(replicaId) ?? replicaId;
   // A replica's boot comes from its status, so its start waits for it too.
@@ -377,7 +378,7 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
                 nameById={nameById}
                 allocationById={data.allocationById}
                 selectedId={selectedRow?.id}
-                onSelect={setSelectedRowId}
+                onSelect={setPickedRow}
               />
             </SectionCard>
           </>

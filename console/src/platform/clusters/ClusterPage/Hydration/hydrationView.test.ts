@@ -26,7 +26,6 @@ import {
   isUnrecordedEpisode,
   summarizeReplicasNow,
   toHydrationRows,
-  unrecordedRowId,
 } from "./hydrationView";
 
 const at = (time: string) => new Date(`2026-10-20T${time}Z`);
@@ -134,7 +133,7 @@ describe("toHydrationRows", () => {
 
     expect(rows.map(({ type, id }) => [type, id])).toEqual([
       ["hydration", "u1|11:00:00"],
-      ["unrecorded", unrecordedRowId(hydration("u2", "10:30:00", 60_000))],
+      ["unrecorded", "u2|10:30:00|unrecorded"],
       ["unfinished", "u1|10:00:00"],
       ["hydration", "u1|09:00:00"],
     ]);
@@ -142,19 +141,58 @@ describe("toHydrationRows", () => {
 });
 
 describe("findSelectedRow", () => {
-  it("follows a row read from its replica to the hydration Materialize recorded", () => {
-    const read = hydration("u2", "10:30:00", 60_000);
-    // Recorded with an earlier start, from the introspection indexes, and the
-    // same finish.
-    const recorded = hydration("u2", "10:29:30", 90_000);
-    const before = toHydrationRows([], [{ hydration: read, spans: [] }], []);
-    const after = toHydrationRows([recorded], [], []);
+  it("follows a row read from its replica as it's read again and recorded", () => {
+    // Another replica's newer hydration overlaps the read.
+    const other = hydration("u1", "10:29:45", 105_000);
+    const [picked] = toHydrationRows(
+      [other],
+      [{ hydration: hydration("u2", "10:30:00", 60_000), spans: [] }],
+      [],
+    );
+    // Its first object was dropped before Materialize recorded it.
+    const reread = toHydrationRows(
+      [other],
+      [{ hydration: hydration("u2", "10:30:20", 40_000), spans: [] }],
+      [],
+    );
+    // Recorded with an introspection index that installed earlier and
+    // finished later.
+    const recorded = toHydrationRows(
+      [other, hydration("u2", "10:29:30", 95_000)],
+      [],
+      [],
+    );
 
-    const selectedId = before[0].id;
+    expect(picked.type).toBe("unrecorded");
+    expect(findSelectedRow(reread, picked)?.id).toBe("u2|10:30:20|unrecorded");
+    expect(findSelectedRow(recorded, picked)?.id).toBe("u2|10:29:30");
+  });
 
-    expect(findSelectedRow(before, selectedId)?.type).toBe("unrecorded");
-    expect(findSelectedRow(after, selectedId)?.id).toBe("u2|10:29:30");
-    expect(findSelectedRow(after, "u1|09:00:00")).toBeUndefined();
+  it("lets go of a row nothing on its replica overlaps, and of others once gone", () => {
+    const [read] = toHydrationRows(
+      [],
+      [{ hydration: hydration("u2", "10:30:00", 60_000), spans: [] }],
+      [],
+    );
+    const [recorded] = toHydrationRows(
+      [hydration("u2", "10:30:00", 60_000)],
+      [],
+      [],
+    );
+
+    // The next hydration, after this one fell out of the window.
+    expect(
+      findSelectedRow(
+        toHydrationRows([hydration("u2", "10:40:00", 60_000)], [], []),
+        read,
+      ),
+    ).toBeUndefined();
+    expect(
+      findSelectedRow(
+        toHydrationRows([hydration("u2", "10:29:30", 95_000)], [], []),
+        recorded,
+      ),
+    ).toBeUndefined();
   });
 });
 

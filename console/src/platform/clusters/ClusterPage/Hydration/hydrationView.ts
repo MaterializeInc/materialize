@@ -72,20 +72,6 @@ export const rowEndTime = (row: HydrationRow) =>
   row.type === "unfinished" ? row.endedAt : row.finishedAt;
 
 /**
- * The id of a row read from its replica. Materialize can record that
- * hydration with an earlier start, since it counts the introspection indexes
- * the read leaves out (`src/adapter/src/coord/hydration_history.rs`), but with
- * the same finish, so the id comes from the finish.
- */
-export const unrecordedRowId = ({
-  replicaId,
-  finishedAt,
-}: {
-  replicaId: string;
-  finishedAt: Date;
-}) => `${replicaId}|${finishedAt.getTime()}|unrecorded`;
-
-/**
  * Hydrations, the ones read from replicas before Materialize recorded them,
  * and unfinished ones, newest first.
  */
@@ -98,7 +84,7 @@ export const toHydrationRows = (
     ...hydrations.map((row) => ({ ...row, type: "hydration" as const })),
     ...unrecorded.map(({ hydration, spans }) => ({
       ...hydration,
-      id: unrecordedRowId(hydration),
+      id: `${hydration.id}|unrecorded`,
       spans,
       type: "unrecorded" as const,
     })),
@@ -106,17 +92,29 @@ export const toHydrationRows = (
   ].sort((a, b) => rowTime(b).getTime() - rowTime(a).getTime());
 
 /**
- * The row `selectedId` picks. A row read from its replica stays picked once
- * Materialize records its hydration.
+ * The row in `rows` that shows `selected`. A row read from its replica stays
+ * picked once Materialize records its hydration.
  */
 export const findSelectedRow = (
   rows: HydrationRow[],
-  selectedId: string | undefined,
+  selected: HydrationRow | undefined,
 ) =>
-  rows.find(({ id }) => id === selectedId) ??
-  rows.find(
-    (row) => row.type === "hydration" && unrecordedRowId(row) === selectedId,
-  );
+  selected &&
+  (rows.find(({ id }) => id === selected.id) ??
+    (selected.type === "unrecorded"
+      ? // The record's start and finish also count the introspection indexes
+        // the read leaves out (`src/adapter/src/coord/hydration_history.rs`),
+        // and a re-read can move them, so match on overlap. A replica's
+        // episodes never overlap, as the collector groups overlapping spans
+        // into one.
+        rows.find(
+          (row) =>
+            row.type !== "unfinished" &&
+            row.replicaId === selected.replicaId &&
+            row.startedAt.getTime() <= selected.finishedAt.getTime() &&
+            row.finishedAt.getTime() >= selected.startedAt.getTime(),
+        )
+      : undefined));
 
 /**
  * `restarting` is hydrating again after restarting since it last finished.

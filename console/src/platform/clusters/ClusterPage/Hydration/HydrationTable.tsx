@@ -44,7 +44,7 @@ interface HydrationTableMeta {
   /** Each replica's per-process CPU, memory and disk. */
   allocationById: Map<string, SizeAllocation>;
   selectedId: string | undefined;
-  onSelect: (rowId: string) => void;
+  onSelect: (row: HydrationRow) => void;
 }
 
 const columnHelper = createColumnHelper<HydrationRow>();
@@ -61,7 +61,7 @@ const SelectCell = ({
     type="button"
     fontWeight={row.id === meta.selectedId ? "600" : undefined}
     aria-pressed={row.id === meta.selectedId}
-    onClick={() => meta.onSelect(row.id)}
+    onClick={() => meta.onSelect(row)}
   >
     {formatDate(rowTime(row), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
   </TextLink>
