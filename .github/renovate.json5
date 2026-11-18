@@ -109,7 +109,7 @@
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
     },
     {
@@ -163,6 +163,13 @@
       "matchManagers": ["cargo"],
       "matchPackageNames": ["tungstenite"],
       "allowedVersions": "<0.30"
+    },
+    {
+      // bincode is unmaintained (RUSTSEC-2025-0141 in deny.toml). 3.0.0 is a
+      // tombstone release
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["bincode"],
+      "enabled": false
     },
     {
       "matchManagers": ["cargo"],
