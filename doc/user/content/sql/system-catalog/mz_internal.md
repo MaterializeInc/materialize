@@ -1086,7 +1086,7 @@ in the system.
 
 {{< private-preview />}}
 
-The `mz_query_policies` table contains a row for each [query
+The `mz_query_policies` materialized view contains a row for each [query
 policy](/clusters/query-policies/) in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_query_policies -->
@@ -1103,8 +1103,8 @@ policy](/clusters/query-policies/) in the system.
 
 {{< private-preview />}}
 
-The `mz_query_policy_rules` table contains a row for each query policy rule in
-the system.
+The `mz_query_policy_rules` materialized view contains a row for each query
+policy rule in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_query_policy_rules -->
 | Field       | Type     | Meaning                                                                                                   |
@@ -1119,8 +1119,8 @@ the system.
 
 {{< private-preview />}}
 
-The `mz_query_policy_attachments` table contains a row for each cluster that
-has a query policy attached.
+The `mz_query_policy_attachments` materialized view contains a row for each
+cluster that has a query policy attached.
 
 <!-- RELATION_SPEC mz_internal.mz_query_policy_attachments -->
 | Field         | Type     | Meaning                                                                                                 |
