@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { greatest, min } from "d3";
+import { greatest, max, min } from "d3";
 import { millisecondsInMinute } from "date-fns/constants";
 
 import { OOM_REASON } from "~/api/materialize/cluster/replicaStatusTimeline";
@@ -24,13 +24,21 @@ import {
   HydrationReplica,
   latestBoot,
   latestFullHydration,
+  NamedSpan,
+  ReplicaEpisode,
+  ReplicaTransition,
   UnfinishedHydration,
 } from "./hydrationModel";
 import { ReplicaHydrationProgress } from "./useLiveHydration";
 
-/** A finished hydration or one a replica restarted before finishing. */
+/**
+ * A finished hydration, one read from its replica before Materialize recorded
+ * it, or one a replica restarted before finishing.
+ */
 export type HydrationRow =
   | ({ type: "hydration" } & Hydration)
+  // Read from its replica before Materialize recorded it, so with no peaks.
+  | ({ type: "unrecorded"; spans: NamedSpan[] } & Hydration)
   | ({ type: "unfinished" } & UnfinishedHydration);
 
 export type HydrationRowKind = "full" | "additive" | "unfinished";
@@ -38,20 +46,15 @@ export type HydrationRowKind = "full" | "additive" | "unfinished";
 export const rowKind = (row: HydrationRow): HydrationRowKind =>
   row.type === "unfinished" ? "unfinished" : row.kind;
 
-/** How the tab names each kind of row: in text, in a heading, and in a column. */
+/** How the tab names each kind of row: in text, and in a column. */
 export const ROW_KIND_NAMES: Record<
   HydrationRowKind,
-  { label: string; title: string; short: string }
+  { label: string; short: string }
 > = {
-  full: { label: "Full hydration", title: "Full Hydration", short: "Full" },
-  additive: {
-    label: "Additive hydration",
-    title: "Additive Hydration",
-    short: "Additive",
-  },
+  full: { label: "Full hydration", short: "Full" },
+  additive: { label: "Additive hydration", short: "Additive" },
   unfinished: {
     label: "Restarted before finishing",
-    title: "Restart",
     short: "Restarted before finishing",
   },
 };
@@ -60,19 +63,58 @@ export const ROW_KIND_NAMES: Record<
 export const formatPeakBytes = (bytes: number | null) =>
   bytes === null ? undefined : formatBytesShort(BigInt(Math.round(bytes)));
 
-/** When a row happened: a hydration's start, or an unfinished one's end. */
+/** When a row happened: a hydration's start, or an unfinished one's restart. */
 export const rowTime = (row: HydrationRow) =>
-  row.type === "hydration" ? row.startedAt : row.endedAt;
+  row.type === "unfinished" ? row.endedAt : row.startedAt;
 
-/** Hydrations and unfinished ones, newest first. */
+/** When a row ended: a hydration's finish, or an unfinished one's restart. */
+export const rowEndTime = (row: HydrationRow) =>
+  row.type === "unfinished" ? row.endedAt : row.finishedAt;
+
+/**
+ * Hydrations, the ones read from replicas before Materialize recorded them,
+ * and unfinished ones, newest first.
+ */
 export const toHydrationRows = (
   hydrations: Hydration[],
+  unrecorded: Array<{ hydration: Hydration; spans: NamedSpan[] }>,
   unfinished: UnfinishedHydration[],
 ): HydrationRow[] =>
   [
     ...hydrations.map((row) => ({ ...row, type: "hydration" as const })),
+    ...unrecorded.map(({ hydration, spans }) => ({
+      ...hydration,
+      id: `${hydration.id}|unrecorded`,
+      spans,
+      type: "unrecorded" as const,
+    })),
     ...unfinished.map((row) => ({ ...row, type: "unfinished" as const })),
   ].sort((a, b) => rowTime(b).getTime() - rowTime(a).getTime());
+
+/**
+ * The row in `rows` that shows `selected`. A row read from its replica stays
+ * picked once Materialize records its hydration.
+ */
+export const findSelectedRow = (
+  rows: HydrationRow[],
+  selected: HydrationRow | undefined,
+) =>
+  selected &&
+  (rows.find(({ id }) => id === selected.id) ??
+    (selected.type === "unrecorded"
+      ? // The record's start and finish also count the introspection indexes
+        // the read leaves out (`src/adapter/src/coord/hydration_history.rs`),
+        // and a re-read can move them, so match on overlap. A replica's
+        // episodes never overlap, as the collector groups overlapping spans
+        // into one.
+        rows.find(
+          (row) =>
+            row.type !== "unfinished" &&
+            row.replicaId === selected.replicaId &&
+            row.startedAt.getTime() <= selected.finishedAt.getTime() &&
+            row.finishedAt.getTime() >= selected.startedAt.getTime(),
+        )
+      : undefined));
 
 /**
  * `restarting` is hydrating again after restarting since it last finished.
@@ -84,12 +126,15 @@ export type ReplicaHydrationState =
 export interface ReplicaNow {
   replica: HydrationReplica;
   state: ReplicaHydrationState;
+  /** A starting replica that hasn't reported has 0 of the cluster's objects. */
   progress: ReplicaHydrationProgress;
   /**
-   * Hydrating now: online and short of its objects. A replica restarting in a
-   * loop can be offline between attempts.
+   * Hydrating now: online and short of its objects, or starting. A replica
+   * restarting in a loop can be offline between attempts.
    */
   isWorking: boolean;
+  /** Whether it has reported its objects. */
+  hasReported: boolean;
   /** When its current hydration began, if it's working and that's known. */
   startedAt: Date | undefined;
   lastFull: Hydration | undefined;
@@ -167,7 +212,7 @@ export function summarizeReplicasNow({
   return replicas
     .filter(({ isCurrent }) => isCurrent)
     .map((replica) => {
-      const progress = progressByReplicaId.get(replica.id) ?? {
+      const reported = progressByReplicaId.get(replica.id) ?? {
         objectCount: 0,
         hydratedCount: 0,
         unhydratedObjectIds: [],
@@ -181,17 +226,25 @@ export function summarizeReplicasNow({
         ({ replicaId, endedAt }) =>
           replicaId === replica.id && endedAt.getTime() > lastFinishedMs,
       );
-      const isHydrating = progress.hydratedCount < progress.objectCount;
+      const isHydrating = reported.hydratedCount < reported.objectCount;
       const isOffline = statusById.get(replica.id)?.kind === "offline";
-      const isWorking = isHydrating && !isOffline;
       // A replica reports nothing until its first process is up, which reads as
       // nothing to hydrate on a cluster that has objects.
       const bootedAt = latestBoot(bootTimes, replica.id);
       const hasNotReported =
-        progress.objectCount === 0 &&
-        (clusterObjectCount ?? 0) > 0 &&
+        reported.objectCount === 0 &&
+        clusterObjectCount !== undefined &&
+        clusterObjectCount > 0 &&
         bootedAt !== undefined &&
         nowMs - bootedAt.getTime() < STARTING_GRACE_MS;
+      const isWorking = (isHydrating || hasNotReported) && !isOffline;
+      const progress = hasNotReported
+        ? {
+            objectCount: clusterObjectCount,
+            hydratedCount: 0,
+            unhydratedObjectIds: [],
+          }
+        : reported;
       const state: ReplicaHydrationState =
         restarts.length > 0 && (isOffline || isHydrating || hasNotReported)
           ? "restarting"
@@ -207,10 +260,11 @@ export function summarizeReplicasNow({
         state,
         progress,
         isWorking,
+        hasReported: reported.objectCount > 0,
         startedAt: isWorking
           ? currentHydrationStart(
               bootedAt,
-              progress.unhydratedObjectIds,
+              reported.unhydratedObjectIds,
               createdAtMsById,
             )
           : undefined,
@@ -241,8 +295,8 @@ const restartsSentence = (restarts: UnfinishedHydration[], subject: string) => {
 
 /**
  * One sentence on what needs attention in the cluster's hydration, with the
- * numbers behind it. Undefined when every replica is hydrated or hydrating,
- * which the progress card already shows.
+ * numbers behind it. Undefined unless a replica keeps restarting before it
+ * finishes or there are no replicas, since the progress card shows the rest.
  */
 export function hydrationVerdict(
   replicasNow: ReplicaNow[],
@@ -279,31 +333,119 @@ export function hydrationVerdict(
     };
   }
 
-  const offline = replicasNow.filter(({ state }) => state === "offline");
-  if (offline.length > 0) {
-    return {
-      variant: "warning",
-      label: `${LIST_FORMAT.format(offline.map(({ replica }) => replica.name))} ${offline.length === 1 ? "is" : "are"} offline.`,
-      message:
-        offline.length === 1
-          ? "It hydrates once it's back online."
-          : "They hydrate once they're back online.",
-      isFailing: false,
-    };
-  }
-  const starting = replicasNow.filter(({ state }) => state === "starting");
-  if (starting.length > 0) {
-    return {
-      variant: "warning",
-      label: `${LIST_FORMAT.format(starting.map(({ replica }) => replica.name))} ${starting.length === 1 ? "is" : "are"} starting.`,
-      message: "Hydration progress shows once the replica reports it.",
-      isFailing: false,
-    };
-  }
   return undefined;
 }
 
-/** What the tab's terms mean, shared by the chart, detail and table. */
+/** A current replica that may have finished a hydration not recorded yet. */
+export interface UnrecordedHydration {
+  replica: HydrationReplica;
+  /** When it last needed a hydration. */
+  since: Date;
+  /** Whether it reports every object hydrated. */
+  isHydrated: boolean;
+}
+
+/**
+ * Current replicas with everything hydrated that they last needed, and no
+ * hydration recorded since: since they were created or restarted, or got the
+ * newest object they have hydrated. One still hydrating newer objects counts,
+ * but not one rebuilding after a restart. Materialize records hydrations by
+ * visiting replicas in turn, so a finished one can take several minutes to
+ * show up. Status alone can't tell a restart from a blip, so
+ * `isUnrecordedEpisode` confirms each against the replica.
+ */
+export function findUnrecordedHydrations({
+  replicasNow,
+  hydrations,
+  restarts,
+  createdObjects,
+  startMs,
+}: {
+  replicasNow: ReplicaNow[];
+  hydrations: Hydration[];
+  /** Every restart of the replicas, as `findRestarts` returns them. */
+  restarts: ReplicaTransition[];
+  /**
+   * When the cluster's objects were created, undefined until known. An object
+   * missing from it is taken to be older than the replica's boot.
+   */
+  createdObjects: Array<{ id: string | null; occurredAt: Date }> | undefined;
+  /** Hydrations before this aren't loaded, so earlier events can't be judged. */
+  startMs: number;
+}): UnrecordedHydration[] {
+  const createdAtMsById = new Map(
+    (createdObjects ?? []).flatMap(({ id, occurredAt }) =>
+      id ? [[id, occurredAt.getTime()]] : [],
+    ),
+  );
+  return replicasNow.flatMap(({ replica, state, progress }) => {
+    if (state !== "hydrated" && state !== "hydrating") return [];
+    if (progress.objectCount === 0) return [];
+    const bootedMs =
+      max(
+        [
+          replica.createdAt?.getTime(),
+          ...restarts
+            .filter(({ replicaId }) => replicaId === replica.id)
+            .map(({ occurredAt }) => occurredAt.getTime()),
+        ],
+        (ms) => ms,
+      ) ?? -Infinity;
+    const unhydrated = new Set(progress.unhydratedObjectIds);
+    const isRebuilding = [...unhydrated].some(
+      (id) => (createdAtMsById.get(id) ?? -Infinity) <= bootedMs,
+    );
+    if (isRebuilding) return [];
+    const lastHydratedCreationMs =
+      max(
+        [...createdAtMsById].filter(([id]) => !unhydrated.has(id)),
+        ([, ms]) => ms,
+      ) ?? -Infinity;
+    const sinceMs = Math.max(bootedMs, lastHydratedCreationMs);
+    if (sinceMs < startMs) return [];
+    const isRecorded = hydrations.some(
+      ({ replicaId, finishedAt }) =>
+        replicaId === replica.id && finishedAt.getTime() > sinceMs,
+    );
+    return isRecorded
+      ? []
+      : [
+          {
+            replica,
+            since: new Date(sinceMs),
+            isHydrated: unhydrated.size === 0,
+          },
+        ];
+  });
+}
+
+// Episode times come from the replica's clock and `since` from the
+// environment's, which drift apart over a long-running process.
+const CLOCK_SKEW_MS = millisecondsInMinute;
+
+/**
+ * Whether the latest episode a replica reports is a hydration it finished
+ * since `since` that isn't recorded. A recorded episode carries the same
+ * finish as the replica reports, since both come from its clock.
+ */
+export function isUnrecordedEpisode({
+  episode,
+  since,
+  hydrations,
+}: {
+  episode: ReplicaEpisode;
+  since: Date;
+  /** The replica's recorded hydrations. */
+  hydrations: Hydration[];
+}) {
+  const finishedMs = episode.finishedAt.getTime();
+  return (
+    finishedMs >= since.getTime() - CLOCK_SKEW_MS &&
+    !hydrations.some(({ finishedAt }) => finishedAt.getTime() >= finishedMs)
+  );
+}
+
+/** What the tab's terms mean, shared by the detail and table. */
 export const HYDRATION_HELP = {
   full: "Hydrating every object on a replica, as after it starts or restarts. Inferred: Materialize doesn't record why a hydration began.",
   additive:
@@ -311,7 +453,6 @@ export const HYDRATION_HELP = {
   kind: "Full or additive. Inferred: Materialize doesn't record why a hydration began.",
   unfinished:
     "Inferred from replica status: it went offline or ran out of memory with no finished hydration recorded. Materialize records hydrations by visiting replicas in turn, so one that finished shortly before the restart can show here.",
-  inProgress: "Still hydrating, placed at how long it has taken so far.",
   hydrationSlot: "A replica hydrates a few objects at a time, 4 by default.",
   duration: "From the first dataflow installed to the last object hydrated.",
   objects: "Indexes and materialized views in the hydration.",
@@ -319,11 +460,18 @@ export const HYDRATION_HELP = {
     "The most memory one process used, as a share of its memory. Materialize records the peak since the process started, so it can predate this hydration.",
   peakDisk:
     "The most disk one process used, as a share of its disk. Recorded since the process started.",
-  peakHeap:
-    "Memory plus disk, as a share of the process's heap limit. A process that reaches the limit runs out of memory. Recorded since the process started.",
   cpu: "The highest CPU sample during the hydration. Materialize samples CPU once a minute.",
+  ended:
+    "Whether the replica ran out of memory or went offline, from its status.",
+  ranFor: "From when the replica began hydrating to when it restarted.",
+  sampledMemory:
+    "The most memory one process used while it hydrated, as a share of its memory. Materialize samples memory once a minute, so the true peak can be higher.",
+  sampledHeap:
+    "The most heap one process reported while it hydrated, memory plus swap, as a share of its heap limit. A process that reaches the limit runs out of memory. Materialize samples heap once a minute, so the true peak can be higher.",
   restarting:
     "Inferred from replica status: it restarted with no finished hydration recorded.",
+  recording:
+    "Read from the replica. Materialize records hydrations by visiting replicas in turn, which can take several minutes, and adds the peak memory and disk then.",
   offline: "The replica is offline, so it isn't hydrating.",
   starting: "The replica hasn't reported its objects yet.",
 };

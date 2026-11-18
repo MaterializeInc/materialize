@@ -9,8 +9,10 @@
 
 import {
   keepPreviousData,
+  Query,
   QueryFunctionContext,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
@@ -57,7 +59,9 @@ import {
   fetchClusterHydrationEpisodes,
   fetchClusterReplicaHistory,
   fetchEpisodeObjectHydrations,
-  fetchReplicaCpuPeak,
+  fetchReplicaObjectHydrations,
+  fetchReplicaPeakUsage,
+  LiveObjectHydration,
 } from "~/api/materialize/cluster/hydrationHistory";
 import {
   fetchIndexesList,
@@ -309,14 +313,24 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("episodeObjectHydrations", params),
     ] as const,
-  replicaCpuPeak: (params: {
+  replicaObjectHydrations: (params: {
+    clusterName: string;
+    replicaId: string;
+    replicaName: string;
+    since: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaObjectHydrations", params),
+    ] as const,
+  replicaPeakUsage: (params: {
     replicaId: string;
     startDate: string;
     endDate: string;
   }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("replicaCpuPeak", params),
+      buildQueryKeyPart("replicaPeakUsage", params),
     ] as const,
   unhydratedComputeObjects: (params: { replicaIds: string[] }) =>
     [
@@ -1495,15 +1509,79 @@ export function useEpisodeObjectHydrations(
   });
 }
 
+// Module-level, so the combined result keeps its identity while the reads
+// don't change.
+const combineReplicaObjectHydrations = (
+  results: Array<{ data: LiveObjectHydration[] | undefined }>,
+) => results.map(({ data }) => data);
+
 /**
- * The highest CPU sampled on a replica over a past window, which never
- * changes, so this is fetched once. Idle without a window.
+ * Each user object's hydration on each given replica, read from the replica
+ * itself. Keyed on `since`, the last time the replica needed a hydration, so
+ * it reads again after the next one. A read that has an object still
+ * hydrating is taken again every minute while the replica reports every
+ * object hydrated, unless it failed. Idle before the environment records
+ * per-worker hydration times.
  */
-export function useReplicaCpuPeak(
+export function useReplicaObjectHydrations(
+  replicas: Array<{
+    clusterName: string;
+    replicaId: string;
+    replicaName: string;
+    since: Date;
+    isHydrated: boolean;
+  }>,
+) {
+  const hasHydrationTimes =
+    useEnvironmentGate(OBJECT_HYDRATION_TIMES_MIN_VERSION) === true;
+  return useQueries({
+    queries: replicas.map(
+      ({ clusterName, replicaId, replicaName, since, isHydrated }) => {
+        const queryKey = clusterQueryKeys.replicaObjectHydrations({
+          clusterName,
+          replicaId,
+          replicaName,
+          since: since.toISOString(),
+        });
+        // Right after a restart, progress can still report the previous
+        // process's objects hydrated, and a read then catches the new process
+        // mid-hydration. `since` stays the same when that hydration finishes.
+        const isBehind = ({ state }: Query<LiveObjectHydration[]>) =>
+          isHydrated &&
+          state.status !== "error" &&
+          state.data?.some(({ hydratedAt }) => hydratedAt === null) === true;
+        return {
+          queryKey,
+          enabled: hasHydrationTimes,
+          staleTime: (query: Query<LiveObjectHydration[]>) =>
+            isBehind(query) ? 0 : Infinity,
+          refetchInterval: (query: Query<LiveObjectHydration[]>) =>
+            isBehind(query) ? millisecondsInMinute : false,
+          // A replica that failed to answer is often busy hydrating, and the
+          // recorded hydrations show meanwhile, so it isn't asked again.
+          retry: false,
+          queryFn: ({ signal }: { signal: AbortSignal }) =>
+            fetchReplicaObjectHydrations({
+              params: { clusterName, replicaName },
+              queryKey,
+              requestOptions: { signal },
+            }),
+        };
+      },
+    ),
+    combine: combineReplicaObjectHydrations,
+  });
+}
+
+/**
+ * The highest CPU and memory sampled on a replica over a past window, which
+ * never change, so this is fetched once. Idle without a window.
+ */
+export function useReplicaPeakUsage(
   window: { replicaId: string; startDate: Date; endDate: Date } | undefined,
 ) {
   return useQuery({
-    queryKey: clusterQueryKeys.replicaCpuPeak({
+    queryKey: clusterQueryKeys.replicaPeakUsage({
       replicaId: window?.replicaId ?? "",
       startDate: window?.startDate.toISOString() ?? "",
       endDate: window?.endDate.toISOString() ?? "",
@@ -1512,7 +1590,7 @@ export function useReplicaCpuPeak(
     staleTime: Infinity,
     queryFn: ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
-      return fetchReplicaCpuPeak({
+      return fetchReplicaPeakUsage({
         params: queryKeyParams,
         queryKey,
         requestOptions: { signal },
