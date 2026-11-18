@@ -521,11 +521,7 @@ async fn completed_restart_preserves_seed_drift() {
         .expect("completed join");
     let opened = fixture.open(storage).await;
     let mut restarted = opened
-        .complete_deployment_restart(
-            fixture.persist.clone(),
-            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
-            fixture.oracle.as_ref(),
-        )
+        .admit_deployment_restart()
         .await
         .expect("ordinary controller restart");
     fixture.assert_provenance(&restarted, Some(1)).await;
@@ -1013,7 +1009,7 @@ async fn table_schema_preparation_precedes_registration_timestamp() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn activation_retries_configuration_exhaustion_on_later_round() {
+async fn restart_admission_defers_configuration_to_bounded_activation() {
     let fixture = Fixture::new().await;
     let mut catalog = fixture
         .initialize(fixture.open(fixture.durable(true).await).await)
@@ -1029,6 +1025,21 @@ async fn activation_retries_configuration_exhaustion_on_later_round() {
         .await;
     let drifted = fixture.rows(&mut catalog, builtin).await;
     assert_ne!(drifted, expected);
+    catalog.expire().await;
+    let restarted = fixture
+        .builder()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("controller restart join");
+    let mut catalog = fixture
+        .open(restarted)
+        .await
+        .admit_deployment_restart()
+        .await
+        .expect("restart admission does not publish configuration");
+    assert_eq!(fixture.rows(&mut catalog, builtin).await, drifted);
     let storage = fixture
         .builder()
         .unwrap_build()

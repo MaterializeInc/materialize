@@ -22,6 +22,8 @@ use mz_repr::Timestamp;
 /// must pair same-build children and preserve deployment configuration. Explicitly
 /// pending controller initialization resumes before child launch. Unmarked existing
 /// environments remain join-only. Admission never promotes or retires a peer.
+/// The final return value records whether initialization already published launch
+/// configuration. Restart publication belongs to the controller runtime tick.
 /// Configuration is borrowed exclusively because its listener hooks are Send,
 /// not Sync, and initialization can move between executor threads across awaits.
 pub async fn open_catalog(
@@ -31,6 +33,7 @@ pub async fn open_catalog(
     Catalog,
     Arc<dyn mz_timestamp_oracle::TimestampOracle<Timestamp> + Send + Sync>,
     Arc<mz_txn_wal::metrics::Metrics>,
+    bool,
 )> {
     ensure!(
         config.joined_adapter_id.is_none(),
@@ -207,7 +210,6 @@ pub async fn open_catalog(
             license_key: config.license_key.clone(),
         },
     };
-    let persist = catalog_config.state.persist_client.clone();
     let txns_metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&config.metrics_registry));
     let catalog = if initialize {
         super::initialize_fresh(catalog_config, Arc::clone(&txns_metrics), oracle.as_ref()).await?
@@ -218,9 +220,7 @@ pub async fn open_catalog(
         let catalog = if opened.catalog.state().active_deployment_generation()
             == Some(config.controller.deploy_generation)
         {
-            opened
-                .complete_deployment_restart(persist, Arc::clone(&txns_metrics), oracle.as_ref())
-                .await?
+            opened.admit_deployment_restart().await?
         } else {
             opened.catalog
         };
@@ -244,5 +244,5 @@ pub async fn open_catalog(
         catalog.state().catalog_read_protection_enabled(),
         "controllerd requires catalog-following execution"
     );
-    Ok((catalog, oracle, txns_metrics))
+    Ok((catalog, oracle, txns_metrics, initialize))
 }

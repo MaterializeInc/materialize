@@ -48,10 +48,11 @@ pub async fn run(
         anyhow::anyhow!("controllerd requires a shared catalog timestamp oracle URL")
     })?;
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
-    let (mut catalog, oracle, txns_metrics) =
+    // Catalog authority alone does not mean this process published its launch
+    // configuration. Active restarts owe activation on a tick; fresh initialization
+    // has already completed it before any children can launch.
+    let (mut catalog, oracle, txns_metrics, mut was_active) =
         super::open_catalog(&mut config, &adapter_sizes).await?;
-    let mut was_active =
-        catalog.state().active_deployment_generation() == Some(config.controller.deploy_generation);
     let persist = config
         .catalog_config
         .persist_clients

@@ -17,17 +17,13 @@ use mz_timestamp_oracle::TimestampOracle;
 use crate::catalog::{Catalog, CatalogError};
 
 impl crate::catalog::OpenCatalogResult {
-    /// Reconciles active-controller launch configuration after join-only restart.
+    /// Validates active-controller admission after join-only restart.
     ///
     /// The caller is the deployment's controller, not a serving adapter. Joining
     /// preserves admission and format limits. This never seeds the positive
     /// builtin snapshot or recovers interrupted initialization or migrations.
-    pub async fn complete_deployment_restart(
-        mut self,
-        persist: mz_persist_client::PersistClient,
-        metrics: Arc<mz_txn_wal::metrics::Metrics>,
-        oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
-    ) -> Result<Catalog, CatalogError> {
+    /// The controller publishes launch configuration through its runtime tick.
+    pub async fn admit_deployment_restart(self) -> Result<Catalog, CatalogError> {
         {
             let mut storage = self.catalog.storage().await;
             if self.catalog.diagnostic_config.read_only
@@ -48,19 +44,6 @@ impl crate::catalog::OpenCatalogResult {
                 "controller restart requires an initialized catalog without replacement migrations"
             )
             .into());
-        }
-        let mut prepared = None;
-        while !self
-            .catalog
-            .complete_deployment_activation(
-                persist.clone(),
-                Arc::clone(&metrics),
-                oracle,
-                &mut prepared,
-            )
-            .await?
-        {
-            tokio::task::yield_now().await;
         }
         Ok(self.catalog)
     }

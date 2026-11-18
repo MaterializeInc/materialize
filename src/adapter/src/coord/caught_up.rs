@@ -531,12 +531,36 @@ impl Coordinator {
         task::spawn(|| "caught_up_check", async move {
             let mut reference = None;
             let mut delay = None;
+            let mut attempt = 0u64;
             loop {
+                attempt += 1;
+                let sleep_started = std::time::Instant::now();
                 // A slow check must not cause back-to-back retries.
                 if let Some(delay) = delay {
                     tokio::time::sleep(delay).await;
                 }
+                let slept = sleep_started.elapsed();
+                let attempt_started = std::time::Instant::now();
                 delay = Some(period);
+                // The coordinator may have applied structural changes during the
+                // scheduled sleep. Refresh that known-stale projection before the
+                // reference read, but still validate its revision after sampling.
+                if !catalog.transient_revision_is_current() {
+                    let Ok(current) = gate
+                        .client
+                        .call_coordinator(|tx| crate::coord::Command::CatalogSnapshot {
+                            tx,
+                            include_durable_upper: false,
+                            through: None,
+                        })
+                        .await
+                    else {
+                        return;
+                    };
+                    catalog = current.catalog;
+                }
+                let catalog_elapsed = attempt_started.elapsed();
+                let reference_started = std::time::Instant::now();
                 let leader_revision = catalog.transient_revision();
                 let leader = match LeaderSnapshot::read(
                     &catalog,
@@ -549,13 +573,17 @@ impl Coordinator {
                 {
                     Ok(leader) => leader,
                     Err(error) => {
-                        tracing::warn!(%error, "cannot read leader caught-up state");
+                        tracing::warn!(attempt, ?slept, elapsed = ?attempt_started.elapsed(), %error, "cannot read leader caught-up state");
                         continue;
                     }
                 };
                 // Read reference progress first. Neither the policy timestamp nor
                 // local execution evidence should age behind a slow Persist read.
+                let reference_elapsed = reference_started.elapsed();
+                let oracle_started = std::time::Instant::now();
                 let policy_read_ts = policy_oracle.read_ts().await;
+                let oracle_elapsed = oracle_started.elapsed();
+                let coordinator_started = std::time::Instant::now();
                 let (tx, rx) = oneshot::channel();
                 let request = CaughtUpCheckRequest { policy_read_ts, tx };
                 // Dropping the trigger on coordinator shutdown preserves the
@@ -569,12 +597,25 @@ impl Coordinator {
                 let Ok(check) = rx.await else {
                     return;
                 };
+                let coordinator_elapsed = coordinator_started.elapsed();
                 catalog = Arc::clone(&check.catalog);
-                if catalog.transient_revision() != leader_revision {
+                let revision_changed = catalog.transient_revision() != leader_revision;
+                tracing::info!(attempt, ?slept, ?catalog_elapsed, ?reference_elapsed, ?oracle_elapsed,
+                    ?coordinator_elapsed, ?leader_revision,
+                    candidate_revision = ?catalog.transient_revision(), revision_changed,
+                    "caught-up check inputs acquired");
+                if revision_changed {
+                    tracing::info!(attempt, elapsed = ?attempt_started.elapsed(),
+                        "caught-up check discarded after catalog revision change");
                     continue;
                 }
                 let snapshot = check.run(leader);
-                if gate.ready(snapshot).await && catalog.transient_revision_is_current() {
+                let gate_started = std::time::Instant::now();
+                let ready = gate.ready(snapshot).await;
+                tracing::info!(attempt, ready, stability_elapsed = ?gate_started.elapsed(),
+                    elapsed = ?attempt_started.elapsed(), "caught-up stability check complete");
+                if ready && catalog.transient_revision_is_current() {
+                    let certification_started = std::time::Instant::now();
                     // Planning revisions omit execution registrations. Fetch an
                     // uncached projection so retired execution evidence cannot
                     // authorize readiness after the asynchronous stability check.
@@ -600,6 +641,9 @@ impl Coordinator {
                             generation,
                         );
                     catalog = current.catalog;
+                    tracing::info!(attempt, valid,
+                        certification_elapsed = ?certification_started.elapsed(),
+                        elapsed = ?attempt_started.elapsed(), "caught-up final certification complete");
                     if valid {
                         trigger.fire();
                         return;
@@ -792,6 +836,7 @@ impl LeaderSnapshot {
         let metadata = storage_collections
             .collection_metadata(replica_frontier_gid)
             .expect("reference collection metadata");
+        let reference_started = std::time::Instant::now();
         if reference.is_none() {
             *reference = Some(ReplicaFrontierReference::open(persist, &metadata).await);
         }
@@ -801,6 +846,8 @@ impl LeaderSnapshot {
             "reference must not migrate during prewarm"
         );
         let live_frontiers = reference.refresh(persist).await;
+        let frontier_elapsed = reference_started.elapsed();
+        let status_started = std::time::Instant::now();
 
         let problematic_replicas =
             if ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK.get(catalog.system_config().dyncfgs()) {
@@ -814,6 +861,8 @@ impl LeaderSnapshot {
             } else {
                 BTreeSet::new()
             };
+        tracing::info!(?frontier_elapsed, status_elapsed = ?status_started.elapsed(),
+            "caught-up reference reads complete");
         Ok(Self {
             rows: live_frontiers,
             problematic_replicas,
