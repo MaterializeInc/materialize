@@ -15,7 +15,8 @@ The accepted version pair predates this isolated cache repair. Its implementatio
 and plan encoding are shared, not release-skew or migration coverage. Optimized
 comparison and 60s four-index acceptance are complete.
 
-Next, resume the group-commit repair and live retirement verification. The user rejected the
+Next, verify live retirement and full-tick continuation, then resume the remaining
+conditional-write retry survey. The user rejected the
 configuration commit-contract change. The committed repair preserves fresh
 snapshots and B/B+1 validation, returns exhaustion to a later controller tick, and
 does not skip unrelated tick work. Retirement drops invalid preparation without
@@ -26,9 +27,19 @@ Initialization, retirement and controller unit coverage, controller compilation,
 and targeted Clippy pass. Configuration and retirement regressions fail for the
 expected reasons without their repairs. Registration adoption racing DROP and
 Forget passes. Live process retirement and full-tick continuation still need
-integration coverage. The separate group-commit repair remains uncommitted.
+integration coverage.
 Controller-only cache publication is covered for enabled and disabled defaults
 and overrides. Removing publication reproduces cold misses on reopening.
+
+Group commits now prepare rows before timestamp allocation and reuse original
+batches across definitive upper conflicts (`613902c2`). FIFO ordering, missing-
+target transaction rejection and fixed-timestamp OCC semantics remain intact.
+Clippy, the full txn-WAL unit suite and append tests pass, including a gated
+backend-CAS loss with snapshot and listen assertions. Independent source review
+found no remaining concrete issue. Evidence: scratch
+`controller-followups/append-wal-final.log` and `append-tests.log`. End-to-end
+latency has not been remeasured, and inline coordinator registration waits remain
+in the retry survey.
 
 Afterward, finish the prompt's conditional-write convergence and startup work.
 Recheck `~/.local/share/aj/m3-evidence/multi-writer-retry-survey.md` against current
@@ -132,7 +143,7 @@ data was removed, leaving 155 GiB free on scratch.
 ## Worker and evidence
 
 Worker: `i-02f17d8a7d9534f5e`, 16 CPUs, 61 GiB RAM. Shutdown is
-2026-11-18 10:00 UTC, tag expiry 10:05. Docker runtime caps are eight CPUs/40 GiB
+2026-11-18 13:00 UTC, tag expiry 13:05. Docker runtime caps are eight CPUs/40 GiB
 aggregate and four CPUs/6 GiB per deployment container. The host lifecycle uses
 its separate reviewed system/user slice envelope. Builds use one job, four
 CPUs/32 GiB. Never overlap builds and runtimes. Keep heavy work off the local VM.
