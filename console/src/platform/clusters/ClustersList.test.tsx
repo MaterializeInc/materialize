@@ -2792,7 +2792,14 @@ describe("ClustersList owner column", () => {
   });
 
   it("finds a known owner in the search when the first cluster's owner isn't known", async () => {
-    await renderAt(ownedClusters().reverse(), "/?q=ben");
+    // The list sorts clusters by name, so this one's row comes first.
+    const unknownFirst = buildCluster({
+      id: "u4",
+      name: "aardvark",
+      ownerId: "u404",
+      replicas: [buildReplica({ id: "u40", name: "z-1" })],
+    });
+    await renderAt([...knownOwnerClusters(), unknownFirst], "/?q=ben");
 
     expect(rowOrder()).toEqual(["a-1"]);
   });
