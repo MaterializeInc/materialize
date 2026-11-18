@@ -4177,43 +4177,119 @@ def workflow_spec_change_during_promotion(
     definition = setup(c, args)
     init(definition)
     run(definition, False)
-    initial_generation = get_materialize_at_stored_version()["status"][
-        "activeGeneration"
-    ]
+    mz = get_materialize_at_stored_version()
+    mz_name = mz["metadata"]["name"]
+    initial_generation = mz["status"]["activeGeneration"]
 
-    def request_rollout(env_name: str) -> str:
+    # Patched at the stored version, which needs no conversion webhook, so
+    # that it works while the operator is down.
+    def patch_materialize(patch: dict[str, Any], subresource: str | None = None):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "materializes.v1alpha1.materialize.cloud",
+                mz_name,
+                "-n",
+                "materialize-environment",
+                "--type=merge",
+                *([f"--subresource={subresource}"] if subresource else []),
+                "-p",
+                json.dumps(patch),
+            ]
+        )
+
+    def request_rollout(env_name: str, strategy: str) -> str:
         request = str(uuid.uuid4())
-        definition["materialize"]["spec"]["requestRollout"] = request
-        definition["materialize"]["spec"]["environmentdExtraEnv"] = [
-            {"name": env_name, "value": "true"},
-        ]
-        apply_materialize(definition)
+        patch_materialize(
+            {
+                "spec": {
+                    "requestRollout": request,
+                    "rolloutStrategy": strategy,
+                    "environmentdExtraEnv": [{"name": env_name, "value": "true"}],
+                }
+            }
+        )
         return request
 
-    first_request = request_rollout("SPEC_CHANGE_DURING_PROMOTION_1")
+    def scale_operator(replicas: int) -> None:
+        spawn.runv(
+            [
+                "kubectl",
+                "scale",
+                f"deployment/{OPERATOR_DEPLOYMENT}",
+                "-n",
+                "materialize",
+                f"--replicas={replicas}",
+            ]
+        )
 
-    # Promotion is past the point of no return, and lasts at least one 5 to 10
-    # second retry while environmentd becomes the leader.
-    promoting = ("Promoting", "TearingDownPreviousGeneration")
-    for _ in range(9000):
-        status = get_materialize_status_at_stored_version() or {}
-        if status.get("phase") in promoting:
-            break
-        assert (
-            status.get("lastCompletedRolloutRequest") != first_request
-        ), "The first rollout completed before it was seen promoting"
-        time.sleep(0.1)
-    else:
-        print(yaml.dump(get_materialize_at_stored_version()))
-        raise RuntimeError("The first rollout never started promoting")
+    request_rollout("SPEC_CHANGE_DURING_PROMOTION_1", "ManuallyPromote")
+    wait_for_ready_to_promote()
 
-    second_request = request_rollout("SPEC_CHANGE_DURING_PROMOTION_2")
+    # The operator writes the `Promoting` status and promotes right after, so
+    # a spec change cannot be timed to land in between. Stop the operator and
+    # write that status by hand instead, as if it had crashed after the write.
+    operator_replicas = int(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                f"deployment/{OPERATOR_DEPLOYMENT}",
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.replicas}",
+            ]
+        )
+    )
+    scale_operator(0)
+    spawn.runv(
+        [
+            "kubectl",
+            "wait",
+            "--for=delete",
+            "pod",
+            "-l",
+            "app.kubernetes.io/instance=operator",
+            "-n",
+            "materialize",
+            "--timeout=300s",
+        ]
+    )
+
+    status = get_materialize_status_at_stored_version()
+    assert status is not None and status["phase"] == "ReadyToPromote", status
+    candidate_generation = status["rollout"]["generation"]
+    assert candidate_generation == initial_generation + 1, status
+    patch_materialize(
+        {
+            "status": {
+                "phase": "Promoting",
+                "conditions": [
+                    {
+                        **status["conditions"][0],
+                        "reason": "Promoting",
+                        "message": f"Attempting to promote generation {candidate_generation}",
+                    }
+                ],
+            }
+        },
+        subresource="status",
+    )
+
+    second_request = request_rollout("SPEC_CHANGE_DURING_PROMOTION_2", "WaitUntilReady")
+
+    scale_operator(operator_replicas)
 
     # The operator resyncs an idle resource after 30 minutes, which would roll
     # the second change out eventually. It has to happen sooner than that.
     for _ in range(900):
         time.sleep(1)
-        status = get_materialize_status_at_stored_version() or {}
+        try:
+            status = get_materialize_status_at_stored_version() or {}
+        except subprocess.CalledProcessError:
+            continue
         if status.get("lastCompletedRolloutRequest") == second_request:
             break
     else:
@@ -4543,6 +4619,8 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
 
     initial_mz = get_materialize_at_stored_version()
     initial_request = initial_mz["spec"]["requestRollout"]
+    initial_definition = copy.deepcopy(definition["materialize"])
+    initial_definition["spec"]["requestRollout"] = initial_request
     assert initial_mz["status"]["lastCompletedRolloutRequest"] == initial_request
     assert (
         initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
@@ -4647,6 +4725,52 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
         f"the last completed rollout image: "
         f"{initial_console_image_ref!r} -> {final_console_image_ref!r}"
     )
+
+    # Park a second upgrade at ReadyToPromote, then revert the whole spec. The
+    # candidate must be torn down and the resource must report `Applied`,
+    # since the spec again matches the active generation.
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump(definition["materialize"]).encode(),
+    )
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("second upgrade never became ready for manual promotion")
+
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump(initial_definition).encode(),
+    )
+
+    def check_full_revert_applied() -> None:
+        status = get_materialize_at_stored_version()["status"]
+        condition = status["conditions"][0]
+        assert (
+            condition["status"] == "True" and condition["reason"] == "Applied"
+        ), status
+        assert status.get("rollout") is None, status
+        assert status["activeGeneration"] == initial_mz["status"]["activeGeneration"]
+        assert status["lastCompletedRolloutRequest"] == initial_request
+        statefulsets = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "statefulsets",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "name",
+            ]
+        ).split()
+        environmentds = [name for name in statefulsets if "environmentd-" in name]
+        assert len(environmentds) == 1, environmentds
+
+    retry(check_full_revert_applied, 120)
 
 
 def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> None:

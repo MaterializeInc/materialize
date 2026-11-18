@@ -195,8 +195,10 @@ enum Step {
         up_to_date: bool,
     },
     /// The spec asks for an upgrade outside the upgrade window. Report it and
-    /// wait for the spec to change.
-    RefuseUpgrade,
+    /// wait for the spec to change, or for a rollout in flight to time out.
+    RefuseUpgrade {
+        timeout_in: Option<Duration>,
+    },
     /// Record the rollout in the status. This is its own step, ahead of
     /// applying anything, so that a candidate generation never exists without
     /// a status that says to tear it down if the spec is reverted.
@@ -245,6 +247,13 @@ fn plan_step(mz: &Materialize, status: &MaterializeStatus, observed: &Observed) 
     let phase = status.phase.unwrap_or_default();
     let rollout = status.rollout.as_ref();
 
+    // No step leaves a rollout behind when it goes idle. Cancel one that a
+    // status claims anyway, so that it cannot idle with a candidate generation
+    // running.
+    if phase == MaterializePhase::Idle && rollout.is_some() {
+        return Step::CancelRollout(Cancel::Reverted);
+    }
+
     // The global resources come first in every phase, because the generation
     // resources, the balancer and the console all depend on them.
     let stale = observed.inputs_changed || (phase == MaterializePhase::Idle && observed.resync_due);
@@ -283,7 +292,7 @@ fn plan_step(mz: &Materialize, status: &MaterializeStatus, observed: &Observed) 
                 return Step::CancelRollout(Cancel::TimedOut);
             }
             if !mz.within_upgrade_window() {
-                return Step::RefuseUpgrade;
+                return Step::RefuseUpgrade { timeout_in };
             }
             if rollout.request != mz.requested_reconciliation_id()
                 || rollout.resources_hash != observed.candidate_hash
@@ -309,7 +318,7 @@ fn plan_step(mz: &Materialize, status: &MaterializeStatus, observed: &Observed) 
         _ if !rollout_wanted => Step::Settle {
             up_to_date: !has_changes,
         },
-        _ if !mz.within_upgrade_window() => Step::RefuseUpgrade,
+        _ if !mz.within_upgrade_window() => Step::RefuseUpgrade { timeout_in: None },
         _ => Step::BeginRollout,
     }
 }
@@ -733,6 +742,14 @@ impl Context {
                     .apply(client, &namespace)
                     .await?;
                 step.finish(Outcome::Completed);
+                let next = MaterializeStatus {
+                    phase: Some(next_phase),
+                    ..status
+                };
+                self.update_status(metadata, &mz_api, mz, next).await?;
+                // Recorded after the status write. A pass recorded for a
+                // write that failed would hide the changed inputs from the
+                // retry until the next resync.
                 if observed.inputs_changed || observed.resync_due {
                     self.passes.lock().unwrap().insert(
                         pass_key(mz),
@@ -742,11 +759,6 @@ impl Context {
                         },
                     );
                 }
-                let next = MaterializeStatus {
-                    phase: Some(next_phase),
-                    ..status
-                };
-                self.update_status(metadata, &mz_api, mz, next).await?;
                 if next_phase == MaterializePhase::Idle {
                     debug!("no changes");
                     return Ok(None);
@@ -770,6 +782,7 @@ impl Context {
                         );
                     }
                     next.last_completed_rollout_request = mz.requested_reconciliation_id();
+                    next.last_completed_rollout_hash = None;
                 } else if mz.conditions_need_update() {
                     next.conditions = up_to_date_condition(
                         mz,
@@ -783,7 +796,7 @@ impl Context {
                 self.update_status(metadata, &mz_api, mz, next).await?;
                 advanced
             }
-            Step::RefuseUpgrade => {
+            Step::RefuseUpgrade { timeout_in } => {
                 let next = MaterializeStatus {
                     conditions: up_to_date_condition(
                         mz,
@@ -806,7 +819,7 @@ impl Context {
                     ..status
                 };
                 self.update_status(metadata, &mz_api, mz, next).await?;
-                Ok(None)
+                Ok(timeout_in.map(Action::requeue))
             }
             Step::BeginRollout => {
                 let next = MaterializeStatus {
@@ -979,6 +992,7 @@ impl Context {
                     // retried. The user must request a new rollout to try
                     // again.
                     last_completed_rollout_request: mz.requested_reconciliation_id(),
+                    last_completed_rollout_hash: None,
                     conditions,
                     ..status
                 };
@@ -1016,6 +1030,7 @@ impl Context {
                     rollout: None,
                     active_generation: rollout.generation,
                     last_completed_rollout_request: rollout.request,
+                    last_completed_rollout_hash: None,
                     last_completed_rollout_environmentd_image_ref: Some(
                         rollout.environmentd_image_ref,
                     ),
@@ -1387,6 +1402,44 @@ mod tests {
         assert_eq!(
             plan(&mz_in(MaterializePhase::SyncingConsole), &resync),
             Step::SyncConsole,
+        );
+    }
+
+    #[mz_ore::test]
+    fn idle_with_a_rollout_cancels_it() {
+        let mz = mz_rolling_out(MaterializePhase::Idle);
+        assert_eq!(
+            plan(&mz, &observed()),
+            Step::CancelRollout(Cancel::Reverted),
+        );
+    }
+
+    #[mz_ore::test]
+    fn refused_upgrade_still_times_out() {
+        let mut mz = mz_rolling_out(MaterializePhase::AwaitingCandidate);
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v28.0.0".into();
+        mz.status
+            .as_mut()
+            .unwrap()
+            .last_completed_rollout_environmentd_image_ref =
+            Some("materialize/environmentd:v26.0.0".into());
+        assert!(matches!(
+            plan(&mz, &observed()),
+            Step::RefuseUpgrade {
+                timeout_in: Some(_)
+            },
+        ));
+
+        let mut mz = mz_in(MaterializePhase::PlanningRollout);
+        mz.spec.request_rollout = Uuid::from_u128(2);
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v28.0.0".into();
+        let status = mz.status.as_mut().unwrap();
+        status.resources_hash = "previous".into();
+        status.last_completed_rollout_environmentd_image_ref =
+            Some("materialize/environmentd:v26.0.0".into());
+        assert_eq!(
+            plan(&mz, &observed()),
+            Step::RefuseUpgrade { timeout_in: None },
         );
     }
 
