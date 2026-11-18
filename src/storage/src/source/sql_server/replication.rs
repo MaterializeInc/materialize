@@ -10,31 +10,25 @@
 //! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
-use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::desc::SqlServerRowDecoder;
-use mz_sql_server_util::inspect::{
-    ensure_database_cdc_enabled, ensure_sql_server_agent_running, get_latest_restore_history_id,
-};
-use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
-use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SqlServerSourceConnection;
-use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL};
+use mz_storage_types::sources::sql_server::MAX_LSN_WAIT;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
@@ -43,7 +37,8 @@ use timely::progress::Timestamp;
 use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
-    DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+    DataOutputs, DefiniteError, PrometheusSqlServerCdcMetrics, ReplicationError, SourceOutputInfo,
+    TransientError, decode, return_definite_error, validate_upstream,
 };
 use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 
@@ -54,17 +49,22 @@ use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCol
 /// replicate different tables, if we're using SQL Server's CDC features.
 static REPL_READER: &str = "reader";
 
-/// The data output ports of the operator, one per source export in output index order.
-type DataOutputs = SharedFuel<
-    Lsn,
-    CapacityContainerBuilder<Vec<(Result<SourceMessage, DataflowError>, Lsn, Diff)>>,
->;
+/// Asks the replication operator to retract the changes of an export that its snapshot already
+/// contains.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RewindRequest {
+    /// The output index that should be rewound.
+    pub(crate) output_index: usize,
+    /// The LSN that the snapshot was taken at.
+    pub(crate) snapshot_lsn: Lsn,
+}
 
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, Lsn>,
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     source: SqlServerSourceConnection,
+    rewind_stream: StreamVec<'scope, Lsn, RewindRequest>,
     metrics: SqlServerSourceMetrics,
 ) -> (
     Vec<StackedCollection<'scope, Lsn, Result<SourceMessage, DataflowError>>>,
@@ -89,12 +89,23 @@ pub(crate) fn render<'scope>(
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
 
+    // The operator collects every rewind request before it streams any change, so the rewind
+    // input needs no connection to the data ports.
+    let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
+    let mut rewind_input =
+        builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| repl_reader_id));
+
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (data_cap_sets, caps) = caps.split_at_mut(export_count);
             let [definite_error_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
             let mut data_outputs = SharedFuel::new(data_outputs);
+
+            // TODO(sql_server2): Run ingestions across multiple workers.
+            if !config.responsible_for(REPL_READER) {
+                return Ok::<_, TransientError>(());
+            }
 
             let connection_config = source
                 .connection
@@ -106,21 +117,16 @@ pub(crate) fn render<'scope>(
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(connection_config).await?;
 
-            let worker_id = config.worker_id;
-
             // The decoder is specific to the export, and each export pulls data from a specific capture instance.
             let mut decoder_map: BTreeMap<_, _> = BTreeMap::new();
-            // Maps the 'capture instance' to the output index for only those outputs that this worker will snapshot
-            let mut capture_instance_to_snapshot: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
-            // Export statistics for a given capture instance
-            let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
             // Maps the included columns for each output index so we can check
             // whether schema updates are valid on a per-output basis
             let mut included_columns: HashMap<usize, Vec<Arc<str>>> = HashMap::new();
+            let mut initial_lsns = BTreeMap::new();
 
-            for (export_id, output) in outputs.iter() {
+            for output in outputs.values() {
                 let key = output.output_index;
                 if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.output_index);
@@ -137,231 +143,28 @@ pub(crate) fn render<'scope>(
                     .entry(Arc::clone(&output.capture_instance))
                     .or_default()
                     .push(output.output_index);
-
-                if *output.resume_upper == [Lsn::minimum()] {
-                    capture_instance_to_snapshot
-                        .entry(Arc::clone(&output.capture_instance))
-                        .or_default()
-                        .push((output.output_index, output.initial_lsn));
-                }
-                export_statistics.entry(Arc::clone(&output.capture_instance))
-                    .or_default()
-                    .push(
-                        config
-                            .statistics
-                            .get(export_id)
-                            .expect("statistics have been intialized")
-                            .clone(),
-                    );
+                initial_lsns.insert(output.output_index, output.initial_lsn);
             }
 
-            // Eagerly emit an event if we have tables to snapshot.
-            // A worker *must* emit a count even if not responsible for snapshotting a table
-            // as statistic summarization will return null if any worker hasn't set a value.
-            // This will also reset snapshot stats for any exports not snapshotting.
-            metrics.snapshot_table_count.set(u64::cast_from(capture_instance_to_snapshot.len()));
-            if !capture_instance_to_snapshot.is_empty() {
-                for stats in config.statistics.values() {
-                    stats.set_snapshot_records_known(0);
-                    stats.set_snapshot_records_staged(0);
-                }
-            }
-            // We need to emit statistics before we exit
-            // TODO(sql_server2): Run ingestions across multiple workers.
-            if !config.responsible_for(REPL_READER) {
-                return Ok::<_, TransientError>(());
-            }
-
-            let snapshot_instances = capture_instance_to_snapshot
-                    .keys()
-                    .map(|i| i.as_ref());
-
-            // TODO (maz): we can avoid this query by using SourceOutputInfo
-            let snapshot_tables =
-                mz_sql_server_util::inspect::get_tables_for_capture_instance(
-                    &mut client,
-                    snapshot_instances,
+            if let Some(definite_error) = validate_upstream(&mut client, &source, &config).await? {
+                tracing::warn!(?definite_error, "Restore detected, exiting");
+                return_definite_error(
+                    definite_error,
+                    capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                    &mut data_outputs,
+                    data_cap_sets,
+                    &definite_error_handle,
+                    definite_error_cap_set,
                 )
-                .await?;
-
-            // validate that the restore_history_id hasn't changed
-            let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
-            if current_restore_history_id != source.extras.restore_history_id {
-                if SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY.get(config.config.config_set()) {
-                    let definite_error = DefiniteError::RestoreHistoryChanged(
-                        source.extras.restore_history_id.clone(),
-                        current_restore_history_id.clone()
-                    );
-                    tracing::warn!(?definite_error, "Restore detected, exiting");
-
-                    return_definite_error(
-                            definite_error,
-                            capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
-                            &mut data_outputs,
-                            data_cap_sets,
-                            &definite_error_handle,
-                            definite_error_cap_set,
-                        ).await;
-                    return Ok(());
-                } else {
-                    tracing::warn!(
-                        "Restore history mismatch ignored: expected={expected:?} actual={actual:?}",
-                        expected=source.extras.restore_history_id,
-                        actual=current_restore_history_id
-                    );
-                }
+                .await;
+                return Ok(());
             }
 
-            // For AOAG, it's possible that the dataflow restarted and is now connected to a
-            // different SQL Server, which may not have CDC enabled correctly.
-            ensure_database_cdc_enabled(&mut client).await?;
-            ensure_sql_server_agent_running(&mut client).await?;
-
-            // We first calculate all the total rows we need to fetch across all tables. Since this
-            // happens outside the snapshot transaction the totals might be off, so we won't assert
-            // that we get exactly this many rows later.
-            for table in &snapshot_tables {
-                let qualified_table_name = format!("{schema_name}.{table_name}",
-                    schema_name = table.schema_name,
-                    table_name = table.name);
-                let size_calc_start = Instant::now();
-                let table_total =
-                    mz_sql_server_util::inspect::snapshot_size(
-                        &mut client,
-                        &table.schema_name,
-                        &table.name,
-                    )
-                    .await?;
-                metrics.set_snapshot_table_size_latency(
-                    &qualified_table_name,
-                    size_calc_start.elapsed().as_secs_f64()
-                );
-                for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
-                    export_stat.set_snapshot_records_known(u64::cast_from(table_total));
-                    export_stat.set_snapshot_records_staged(0);
-                }
-            }
             let cdc_metrics = PrometheusSqlServerCdcMetrics{inner: &metrics};
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned(), cdc_metrics)
                 .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
-
-            // Snapshot any instance that requires it.
-            // Each table snapshot will have its own LSN captured at the moment of snapshotting.
-            let snapshot_lsns: BTreeMap<Arc<str>, Lsn> = {
-                // Before starting a transaction where the LSN will not advance, ensure
-                // the upstream DB is ready for CDC.
-                cdc_handle.wait_for_ready().await?;
-
-                // Intentionally logging this at info for debugging. This section won't get entered
-                // often, but if there are problems here, it will be much easier to troubleshoot
-                // knowing where stall/hang might be happening.
-                tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
-
-                let report_interval =
-                    SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
-                let mut last_report = Instant::now();
-                let mut snapshot_lsns = BTreeMap::new();
-
-                for table in snapshot_tables {
-                    // TODO(sql_server3): filter columns to only select columns required for Source.
-                    let (snapshot_lsn, snapshot) = cdc_handle
-                        .snapshot(&table, config.worker_id, config.id)
-                        .await?;
-
-                    tracing::info!(
-                        %config.id,
-                        %table.name,
-                        %table.schema_name,
-                        %snapshot_lsn,
-                        "timely-{worker_id} snapshot start",
-                    );
-
-                    let mut snapshot = std::pin::pin!(snapshot);
-
-                    snapshot_lsns.insert(
-                        Arc::clone(&table.capture_instance.name),
-                        snapshot_lsn,
-                    );
-
-                    let ci_name = &table.capture_instance.name;
-                    let output_indexes = capture_instance_to_snapshot
-                        .get(ci_name)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "no snapshot outputs in known capture \
-                                 instances [{}] for capture instance: \
-                                 '{}'",
-                                capture_instance_to_snapshot
-                                    .keys()
-                                    .join(","),
-                                ci_name,
-                            );
-                        });
-
-                    let mut snapshot_staged = 0;
-                    while let Some(result) = snapshot.next().await {
-                        let sql_server_row =
-                            result.map_err(TransientError::from)?;
-
-                        if last_report.elapsed() > report_interval.get() {
-                            last_report = Instant::now();
-                            let stats =
-                                export_statistics.get(ci_name).unwrap();
-                            for export_stat in stats {
-                                export_stat.set_snapshot_records_staged(
-                                    snapshot_staged,
-                                );
-                            }
-                        }
-
-                        for (output_index, _) in output_indexes {
-                            // Decode the SQL Server row into an MZ one.
-                            let mut mz_row = Row::default();
-                            let arena = RowArena::default();
-
-                            let decoder = decoder_map
-                                .get(output_index)
-                                .expect("decoder for output");
-                            // Try to decode a row, returning a SourceError
-                            // if it fails.
-                            let message = decode(
-                                decoder,
-                                &sql_server_row,
-                                &mut mz_row,
-                                &arena,
-                                None,
-                            );
-                            data_outputs
-                                .give(
-                                    *output_index,
-                                    &data_cap_sets[*output_index][0],
-                                    (message, Lsn::minimum(), Diff::ONE),
-                                )
-                                .await;
-                        }
-                        snapshot_staged += 1;
-                    }
-
-                    tracing::info!(
-                        %config.id,
-                        %table.name,
-                        %table.schema_name,
-                        %snapshot_lsn,
-                        "timely-{worker_id} snapshot complete",
-                    );
-                    metrics.snapshot_table_count.dec();
-                    // final update for snapshot_staged, using the staged
-                    // values as the total is an estimate
-                    let stats = export_statistics.get(ci_name).unwrap();
-                    for export_stat in stats {
-                        export_stat.set_snapshot_records_staged(snapshot_staged);
-                        export_stat.set_snapshot_records_known(snapshot_staged);
-                    }
-                }
-
-                snapshot_lsns
-            };
+            cdc_handle.wait_for_ready().await?;
 
             // Rewinds need to keep track of 2 timestamps to ensure that
             // all replicas emit the same set of updates for any given timestamp.
@@ -377,30 +180,16 @@ pub(crate) fn render<'scope>(
             //
             // If initial_lsn == snapshot_lsn, all CDC events at LSNs up to and including the
             // snapshot_lsn are ignored, and no rewinds are issued.
-            let mut rewinds: BTreeMap<_, _> = capture_instance_to_snapshot
-                .iter()
-                .flat_map(|(capture_instance, export_ids)|{
-                    let snapshot_lsn = snapshot_lsns.get(capture_instance).expect("snapshot lsn must be collected for capture instance");
-                    export_ids
-                        .iter()
-                        .map(|(idx, initial_lsn)| (*idx, (*initial_lsn, *snapshot_lsn)))
-                }).collect();
-
-            // For now, we assert that initial_lsn captured during purification is less
-            // than or equal to snapshot_lsn. If that was not true, it would mean that
-            // we observed a SQL server DB that appeared to go back in time.
-            // TODO (maz): not ideal to do this after snapshot, move this into
-            // CdcStream::snapshot after https://github.com/MaterializeInc/materialize/pull/32979 is merged.
-            for (initial_lsn, snapshot_lsn) in rewinds.values() {
-                assert!(
-                    initial_lsn <= snapshot_lsn,
-                    "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
-                );
+            let mut rewinds = BTreeMap::new();
+            while let Some(event) = rewind_input.next().await {
+                if let AsyncEvent::Data(_, data) = event {
+                    for RewindRequest { output_index, snapshot_lsn } in data {
+                        let initial_lsn = initial_lsns[&output_index];
+                        rewinds.insert(output_index, (initial_lsn, snapshot_lsn));
+                    }
+                }
             }
-
             tracing::debug!("rewinds to process: {rewinds:?}");
-
-            capture_instance_to_snapshot.clear();
 
             // Resumption point is the minimum LSN that has been observed per capture instance.
             let mut resume_lsns = BTreeMap::new();
@@ -732,78 +521,4 @@ async fn handle_data_event(
         }
     }
     Ok(())
-}
-
-/// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)
-/// to a [`Row`]. This centralizes the decode and mapping to result.
-fn decode(
-    decoder: &SqlServerRowDecoder,
-    row: &tiberius::Row,
-    mz_row: &mut Row,
-    arena: &RowArena,
-    new_row: Option<&tiberius::Row>,
-) -> Result<SourceMessage, DataflowError> {
-    match decoder.decode(row, mz_row, arena, new_row) {
-        Ok(()) => Ok(SourceMessage {
-            key: Row::default(),
-            value: mz_row.clone(),
-            metadata: Row::default(),
-        }),
-        Err(e) => {
-            let kind = DecodeErrorKind::Text(e.to_string().into());
-            // TODO(sql_server2): Get the raw bytes from `tiberius`.
-            let raw = format!("{row:?}");
-            Err(DataflowError::DecodeError(Box::new(DecodeError {
-                kind,
-                raw: raw.as_bytes().to_vec(),
-            })))
-        }
-    }
-}
-
-/// Helper method to return a "definite" error upstream.
-async fn return_definite_error(
-    err: DefiniteError,
-    outputs: impl Iterator<Item = usize>,
-    data_outputs: &mut DataOutputs,
-    data_cap_sets: &[CapabilitySet<Lsn>],
-    errs_handle: &AsyncOutputHandle<Lsn, CapacityContainerBuilder<Vec<ReplicationError>>>,
-    errs_capset: &CapabilitySet<Lsn>,
-) {
-    for output_index in outputs {
-        let update = (
-            Err(err.clone().into()),
-            // Select an LSN that should not conflict with a previously observed LSN.  Ideally
-            // we could identify the LSN that resulted in the definite error so that all replicas
-            // would emit the same updates for the same times.
-            Lsn {
-                vlf_id: u32::MAX,
-                block_id: u32::MAX,
-                record_id: u16::MAX,
-            },
-            Diff::ONE,
-        );
-        data_outputs
-            .give(output_index, &data_cap_sets[output_index][0], update)
-            .await;
-    }
-    errs_handle.give(
-        &errs_capset[0],
-        ReplicationError::DefiniteError(Rc::new(err)),
-    );
-}
-
-/// Provides an implemntation of [`SqlServerCdcMetrics`] that will update [`SqlServerSourceMetrics`]`
-struct PrometheusSqlServerCdcMetrics<'a> {
-    inner: &'a SqlServerSourceMetrics,
-}
-
-impl<'a> SqlServerCdcMetrics for PrometheusSqlServerCdcMetrics<'a> {
-    fn snapshot_table_lock_start(&self, table_name: &str) {
-        self.inner.update_snapshot_table_lock_count(table_name, 1);
-    }
-
-    fn snapshot_table_lock_end(&self, table_name: &str) {
-        self.inner.update_snapshot_table_lock_count(table_name, -1);
-    }
 }
