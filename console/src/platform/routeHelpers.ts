@@ -48,6 +48,16 @@ export const absoluteMaintainedObjectPath = (
   objectId: string,
 ) => `${regionPath(regionSlug)}/maintained-objects/${objectId}`;
 
+/** The search param that opens an object's detail drawer on a given tab. */
+export const MAINTAINED_OBJECT_TAB_PARAM = "tab";
+
+/** An object's detail drawer, opened on the tab that holds its critical path. */
+export const absoluteMaintainedObjectFreshnessPath = (
+  regionSlug: string,
+  objectId: string,
+) =>
+  `${absoluteMaintainedObjectPath(regionSlug, objectId)}?${MAINTAINED_OBJECT_TAB_PARAM}=freshness`;
+
 export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;
 
