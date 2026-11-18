@@ -1596,7 +1596,7 @@ def _final_read(db: sqlite3.Connection, host: str, epoch: int, deadline: float) 
     return False
 
 
-def client_history_final() -> int:
+def client_history_final(scope: str = "finally") -> int:
     """Read every key of the live epochs once more, then check the whole history."""
     start_watchdog(FINAL_READ_DEADLINE_S + CHECK_WATCHDOG_S)
     db = open_state()
@@ -1625,7 +1625,7 @@ def client_history_final() -> int:
     covered: list[int] = []
     cluster_id = _coverage_cluster_id(host) if host is not None else None
     for epoch in epochs:
-        covered.extend(_check_epoch(db, epoch, "finally", cluster_id=cluster_id))
+        covered.extend(_check_epoch(db, epoch, scope, cluster_id=cluster_id))
     _assert_timestamp_order(db, None)
     _mark_checked(db, covered)
     return 0
