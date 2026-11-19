@@ -23,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import MutableMapping, Sequence
 from pathlib import Path
 from textwrap import dedent
 from typing import IO
@@ -203,6 +203,13 @@ def testdrive(no_reset: bool, use_https: bool = True) -> Testdrive:
         # schema_registry_url=...
         # aws_endpoint=...
     )
+
+
+def pass_license_key(env: MutableMapping[str, str]) -> None:
+    """Hands the CI license key to the Terraform invocations run with `env`."""
+    license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+    if license_key:
+        env["TF_VAR_license_key"] = license_key
 
 
 def get_tag(tag: str | None) -> str:
@@ -810,12 +817,7 @@ class AWS(State):
                 f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
             ]
 
-        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
-        if license_key:
-            self.base_vars += [
-                "-var",
-                f"license_key={license_key}",
-            ]
+        pass_license_key(os.environ)
 
         if prefix == PREFIX_AWS_PERSISTENT:
             delete_after = "2099-12-31T00:00:00Z"
@@ -1453,12 +1455,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
-        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
-        if license_key:
-            vars += [
-                "-var",
-                f"license_key={license_key}",
-            ]
+        pass_license_key(os.environ)
 
         vars += [
             "-var",
@@ -1679,12 +1676,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
-        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
-        if license_key:
-            vars += [
-                "-var",
-                f"license_key={license_key}",
-            ]
+        pass_license_key(venv_env)
 
         vars += [
             "-var",
