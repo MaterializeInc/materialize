@@ -150,6 +150,7 @@ impl Coordinator {
                     .await;
             }
             Message::ExecuteReplan(ctx) => self.replan_execute(ctx),
+            Message::StartupReady(pending) => self.resume_startup(pending).await,
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
                     .boxed_local()

@@ -12,9 +12,13 @@
 
 #![recursion_limit = "256"]
 
-use std::sync::{Mutex, mpsc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use mz_adapter::session::SessionConfig;
+use mz_auth::{Authenticated, AuthenticatorKind};
+use mz_catalog::durable::persist_backed_catalog_join_active;
 use mz_environmentd::test_util;
 use mz_ore::retry::Retry;
 use mz_postgres_util::{batch_execute, query_one, sql};
@@ -141,8 +145,160 @@ async fn test_catalog_completion() {
         .await
         .unwrap();
         assert_eq!(row.get::<_, String>(0), "a");
+
+        check_startup_contention(&server).await;
     };
     tokio::time::timeout(Duration::from_secs(120), test_case)
         .await
         .expect("catalog completion test timed out");
+}
+
+// The failpoint makes real empty-upper conflicts after candidate construction.
+// It does not synthesize an error or bypass the durable transaction boundary.
+const CATALOG_FAILPOINT: &str = "catalog_before_commit";
+
+struct RemoveCatalogHook;
+
+impl Drop for RemoveCatalogHook {
+    fn drop(&mut self) {
+        fail::remove(CATALOG_FAILPOINT);
+    }
+}
+
+struct ReleaseCandidate(mpsc::Sender<()>);
+
+impl Drop for ReleaseCandidate {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+async fn check_startup_contention(server: &test_util::TestServer) {
+    let admin = server.connect().internal().await.unwrap();
+    for statement in [
+        sql!("ALTER SYSTEM SET oidc_group_role_sync_enabled = true"),
+        sql!("CREATE ROLE login_group"),
+        sql!("CREATE ROLE manual_group"),
+    ] {
+        batch_execute(&admin, statement).await.unwrap();
+    }
+    let persist = server
+        .persist_clients
+        .open(server.persist_location.clone())
+        .await
+        .unwrap();
+    let mut peer = persist_backed_catalog_join_active(
+        persist,
+        server.environment_id.organization_id(),
+        mz_environmentd::BUILD_INFO.semver_version(),
+        Arc::new(mz_catalog::durable::Metrics::new(
+            &mz_ore::metrics::MetricsRegistry::new(),
+        )),
+        Some(server.catalog_timestamp_oracle().await),
+    )
+    .await
+    .unwrap();
+    let adapter = server.inner.adapter_client();
+
+    // First force auto-provisioning to yield, then force membership synchronization
+    // for the same role. Neither retry may register a session before completion.
+    for groups in [
+        None,
+        Some(vec!["login_group".to_owned(), "manual_group".to_owned()]),
+    ] {
+        if groups.is_some() {
+            // Establish this before synchronization, never repair it afterward.
+            batch_execute(&admin, sql!("GRANT manual_group TO contention_login"))
+                .await
+                .unwrap();
+        }
+        let session = adapter.new_session(
+            SessionConfig {
+                conn_id: adapter.new_conn_id().unwrap(),
+                uuid: uuid::Uuid::new_v4(),
+                user: "contention_login".to_owned(),
+                client_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups,
+            },
+            Authenticated,
+        );
+        let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+        let hook = RemoveCatalogHook;
+        fail::cfg_callback(CATALOG_FAILPOINT, move || {
+            let (resume_tx, resume_rx) = mpsc::channel();
+            if candidate_tx.send(resume_tx).is_ok() {
+                tokio::task::block_in_place(|| {
+                    // Panic/timeout drops the receiver and the per-attempt release
+                    // guard. The fuse is only a last resort for test teardown.
+                    let _ = resume_rx.recv_timeout(Duration::from_secs(180));
+                });
+            }
+        })
+        .unwrap();
+        let conflicts = AtomicUsize::new(0);
+        let interference = async {
+            while let Some(resume) = candidates.recv().await {
+                let release = ReleaseCandidate(resume);
+                peer.sync_to_current_updates().await.unwrap();
+                let upper = peer.current_upper().await;
+                peer.advance_upper(upper.step_forward()).await.unwrap();
+                conflicts.fetch_add(1, Ordering::SeqCst);
+                drop(release);
+            }
+        };
+        let frontend = async {
+            let mut startup = Box::pin(adapter.startup(session));
+            assert!(futures::poll!(&mut startup).is_pending());
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while conflicts.load(Ordering::SeqCst) < 4 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("startup did not encounter peer contention");
+            assert!(futures::poll!(&mut startup).is_pending());
+
+            // This round trip must complete while the peer is still defeating
+            // every catalog write, not only after the login finally commits.
+            let responsive =
+                tokio::time::timeout(Duration::from_secs(5), adapter.get_system_vars()).await;
+            drop(hook);
+            let client = tokio::time::timeout(Duration::from_secs(30), &mut startup)
+                .await
+                .expect("startup did not recover after contention")
+                .unwrap();
+            assert!(
+                responsive.is_ok(),
+                "login contention monopolized the coordinator"
+            );
+            drop(client);
+        };
+        tokio::join!(interference, frontend);
+    }
+    let rows = mz_postgres_util::query(
+        &admin,
+        sql!(
+            "SELECT r.name, g.name FROM mz_role_members m
+              JOIN mz_roles r ON m.role_id = r.id
+              JOIN mz_roles u ON m.member = u.id
+              JOIN mz_roles g ON m.grantor = g.id
+              WHERE u.name = 'contention_login' ORDER BY r.name"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let memberships: Vec<(String, String)> =
+        rows.iter().map(|row| (row.get(0), row.get(1))).collect();
+    assert_eq!(
+        memberships,
+        vec![
+            ("login_group".into(), "mz_jwt_sync".into()),
+            ("manual_group".into(), "mz_system".into()),
+        ]
+    );
+    peer.expire().await;
 }

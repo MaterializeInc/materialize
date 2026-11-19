@@ -35,8 +35,8 @@ use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowAre
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan, SideEffectingFunc,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateSourcePlanBundle, FetchPlan,
+    HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan, SideEffectingFunc,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -863,23 +863,6 @@ impl Coordinator {
             }
             .instrument(Span::current()),
         );
-    }
-
-    /// Creates a role during connection startup.
-    ///
-    /// This should not be called from anywhere except connection startup.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn sequence_create_role_for_startup(
-        &mut self,
-        plan: CreateRolePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // This does not set conn_id because it's not yet in active_conns. That is because we can't
-        // make a ConnMeta until we have a role id which we don't have until after the catalog txn
-        // is committed. Passing None here means the audit log won't have a user set in the event's
-        // user field. This seems fine because it is indeed the system that is creating this role,
-        // not a user request, and the user name is still recorded in the plan, so we aren't losing
-        // information.
-        self.sequence_create_role(None, plan).await
     }
 
     pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {

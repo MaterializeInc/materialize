@@ -7,72 +7,25 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Conditional startup history pruning passed the debug two-adapter regression,
-including both history tables and restart. The unchanged test fails with the
-former blind append, producing a negative row multiplicity. The fixed source is
-restored. See `pruning-red-green.md` for exact evidence and coverage limits.
+The login repair now retains provisioning and membership work across
+bounded coordinator turns. Structural changes recompute the operations. Existing
+strict/fail-open policy, manual grants and once-only session registration remain
+intact. Real peer-contention coverage passed, failed with inline retries restored,
+then passed again with the repair. Existing authentication and abandoned-startup
+cleanup checks passed. Independent review and targeted lint passed.
 
-Dependency, refresh and shard rows now derive from catalog state rather than
-adapter publishers. Selected plans carry physical imports, refresh schedule and
-original storage as-of, without Item fields or adapter reductions. Catalog
-contracts and affected SQL checks pass. The real-producer test passes across two
-adapters, restart, index-drop replan and scheduled-MV replacement. Restoring the
-former publishers makes it lose rows during peer join. The restored implementation
-passes again. See `plan-introspection-red-green.md` for evidence and limits.
+**Next action:** migrate the remaining fixed-response SQL completion owners
+through the existing staged commit boundary, starting with CREATE/ALTER NETWORK
+POLICY. Keep separate completion effects with their owners. Testing failpoints
+are approved. See `startup-retry-verification.md` for the completed login
+repair's receipts and limitations.
 
-Storage-usage collection now claims its finish-time interval in the existing
-batch-ID transaction, without catalog-server compute. Cached claims skip scans.
-Only the winner publishes. Bounded retries release the catalog lock during backoff
-and reschedule after exhaustion. A crash after claiming can leave an interval empty.
-The two-adapter row/restart test passes, fails with blind publication, and passes
-again after restoration. Contention, retirement and targeted Clippy checks pass.
-See `storage-usage-claim-review.md` for evidence and coverage limits.
+Run final-head native acceptance and the compatible version-pair walkthrough after
+the retry work, not after each small change.
 
-Declaration reconciliation now retains guarded candidates across subscription
-turns. Metric planning/publication runs outside the coordinator while retaining IDs
-and immutable revisions. Common bounded catalog retries include empty-upper
-contention. Deterministic boundary tests passed, failed with the guards removed,
-and passed after restoration. A live peer-declaration fixture verified metric-plan
-selection and query execution on the realized replica using normal debug stacks.
-Retention/protection checks and targeted lint passed. See
-`declaration-retry-verification.md` for evidence and limits.
-
-Next address login synchronization and the remaining SQL completion owners in the
-conditional-write survey, then run final-head native acceptance and the compatible
-version-pair walkthrough. Do not rerun the
-full lifecycle suites per small change. The replica catalog-open attribution is
-complete. Bring the proposed metadata-only replica boundary back for approval
-before implementation. See `catalog-function-costs.md`.
-
-The clean ee425edf debug timing workflow passed. Whole restart fell from 18.003s
-to 8.155s, with shutdown falling from 10.425s to 0.508s. Promotion-to-SQL fell from
-12.736s to 7.986s, and logs confirm immediate relaunch. Initialization itself is
-not faster. Fresh startup remains 54.326s, with 23.431s catalog opening, against
-pinned upstream's 30.271s and 17.004s. These are single observations with explicit
-topology/readiness differences, not statistical or full acceptance claims. See
-`startup-readiness-comparison.md` for phases, provenance and qualifications.
-
-Cold function profiling attributes 70.88 replica CPU-seconds to ordinary
-builtin-view optimization, 86.4% of measured item reconstruction CPU across four
-replicas. Packing and state cloning are small. Replicas execute selected physical
-plans, but the current catalog representation still reconstructs ordinary-view MIR.
-A narrower metadata-only boundary needs a design decision preserving descriptions,
-logical dependencies and validation. Cache namespace compatibility must not be
-weakened. See `catalog-function-costs.md` for measurements, options and limits.
-
-The shutdown timeout is reproduced and repaired at the launcher boundary:
-unreaped non-children took 10.03s before and 0.13s after. The strengthened regression
-fails on the original implementation and the full launcher suite passes on the
-repair. TERM/KILL deadlines and identity checks are unchanged. The current timing
-run confirms the full-environment improvement. See `shutdown-zombie-wait.md`.
-
-The approved promotion-only exit status is implemented as 168, preserving 5s
-backoff for other exits. The policy regression fails with unconditional backoff
-and passes with the exception. The wider suite reports passes but logs background
-panics in an existing current-thread image-replacement fixture, so it is not clean
-image-replacement coverage. The debug timing run confirms the removed delay. See
-`promotion-restart-status.md`.
-No publication cadence, readiness interval or resource-limit changes are approved.
+The replica catalog-open attribution is complete. Bring the proposed metadata-only
+replica boundary back for approval before implementation. Do not change Persist,
+publication cadence, readiness intervals or resource limits.
 
 ## Live gaps and constraints
 
@@ -81,9 +34,9 @@ No publication cadence, readiness interval or resource-limit changes are approve
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
-- Login sync and SQL owners with separate completion effects remain in the
-  conditional-write retry survey. Do not add a finite overall login retry limit
-  or alter strict/fail-open authentication behavior without agreement.
+- SQL owners with separate completion effects remain in the conditional-write
+  retry survey. No finite overall login retry limit or strict/fail-open
+  authentication policy change is approved.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
   failure after a fixed 5s wait. Its exact rerun passed without changes, but the
   cause remains unresolved. Include the refresh-scheduled MV case in final
@@ -105,6 +58,22 @@ No publication cadence, readiness interval or resource-limit changes are approve
 
 ## Verified outcomes and limits
 
+Shared dependency, refresh and shard rows derive from durable state. Startup
+history pruning is conditional, and compute-free storage-usage collection claims
+its interval before publication. Declaration reconciliation retains IDs, plans
+and guarded candidates across turns. Targeted peer/restart checks and negative
+controls verified these repairs. See the evidence pointers below.
+
+Debug timing showed whole restart at 8.155s versus 18.003s before, and promotion
+at 7.986s versus 12.736s. Shutdown and promotion-only relaunch repairs remove fixed
+waits. Fresh startup remains 54.326s versus pinned upstream's 30.271s. These are
+single observations with topology/readiness qualifications, not final acceptance.
+Cold profiling attributes 70.88 replica CPU-seconds to ordinary builtin-view
+optimization. No metadata-only replica implementation is approved. See
+`startup-readiness-comparison.md` and `catalog-function-costs.md`.
+The broader launcher suite still has background panics in its image-replacement
+fixture, so it is not clean coverage of that behavior.
+
 Targeted review, Clippy and boundary/SQL checks passed for cache reclamation,
 startup registration contention, native MV admission and recency cleanup, staged
 namespace DDL and retained managed-policy retries. Policy task tests simulate the
@@ -123,8 +92,8 @@ limits and the architecture-generated load assessment.
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-19 18:00 UTC.
-Recheck retention tags before extending it. Shutdown stops the instance and preserves
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Last scheduled shutdown: 2026-11-19 18:00 UTC.
+Recheck instance state and retention tags before restarting or extending it. Shutdown stops the instance and preserves
 its disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
 reserve. Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
@@ -134,10 +103,13 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `ee425edf` plus verified
-verified storage-usage and declaration-retry source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
+storage-usage, declaration and startup-retry overlays. Trust source receipts,
+not the displayed Git revision. Clean baseline:
 `/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 
 Essential pointers:
+- `startup-retry-verification.md`, `startup-final-source.json` and
+  `startup-cleanup-verified.log` cover the login repair.
 - `declaration-retry-verification.md`, `declaration-final-source.json` and
   `declaration-live-v1.log` cover retained declaration and metric-plan preparation.
 - `storage-usage-claim-review.md`, `storage-usage-final-checks.log` and

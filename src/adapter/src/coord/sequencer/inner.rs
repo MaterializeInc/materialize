@@ -991,7 +991,7 @@ impl Coordinator {
         Ok(())
     }
 
-    fn prepare_create_role(
+    pub(in crate::coord) fn prepare_create_role(
         &self,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<catalog::Op, AdapterError> {
@@ -1000,18 +1000,6 @@ impl Coordinator {
             name,
             attributes: attributes.into(),
         })
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_create_role(
-        &mut self,
-        conn_id: Option<&ConnectionId>,
-        plan: plan::CreateRolePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = self.prepare_create_role(plan)?;
-        self.catalog_transact_with_context(conn_id, None, vec![op])
-            .await
-            .map(|_| ExecuteResponse::CreatedRole)
     }
 
     pub(crate) async fn sequence_create_role_sql(

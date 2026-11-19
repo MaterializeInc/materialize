@@ -94,75 +94,85 @@ pub fn compute_group_sync_diff(
     GroupSyncDiff { grants, revokes }
 }
 
+/// Notices and error policy belong to one completed synchronization, not its attempts.
+#[derive(Debug)]
+pub(super) struct GroupSyncCompletion {
+    notices: Vec<AdapterNotice>,
+    strict: bool,
+}
+
+impl GroupSyncCompletion {
+    pub(super) fn finish(
+        mut self,
+        result: Result<(), AdapterError>,
+        notice_tx: &mpsc::UnboundedSender<AdapterNotice>,
+    ) -> Result<(), AdapterError> {
+        if let Err(e) = result {
+            if self.strict {
+                return Err(AdapterError::OidcGroupSyncFailed(e.to_string()));
+            }
+            warn!(
+                error = %e,
+                "OIDC group sync failed, proceeding with login (fail-open mode)"
+            );
+            self.notices.push(AdapterNotice::OidcGroupSyncError {
+                message: e.to_string(),
+            });
+        }
+        for notice in self.notices {
+            let _ = notice_tx.send(notice);
+        }
+        Ok(())
+    }
+}
+
 impl Coordinator {
     /// Top-level entry point for JWT group-to-role sync during connection startup.
     ///
     /// Checks whether sync is enabled and whether the user has group claims,
-    /// then delegates to [`Self::sync_jwt_groups`]. Handles strict vs fail-open
-    /// error semantics and delivers notices to the client via `notice_tx`.
+    /// then prepares a membership diff. The startup owner retains it across
+    /// metadata conflicts and recomputes it after structural changes. Completion
+    /// applies strict vs fail-open policy only to a definitive outcome.
     ///
     /// - `groups == None` (claim absent) → skip sync entirely, preserving current state.
     /// - `groups == Some([])` (empty claim) → revoke all sync-granted roles.
     /// - Strict mode (`oidc_group_role_sync_strict`) → reject login on sync failure.
     /// - Fail-open (default) → log warning, send notice, continue login.
-    pub(crate) async fn maybe_sync_jwt_groups(
-        &mut self,
+    pub(super) fn prepare_group_sync(
+        &self,
         member_id: RoleId,
         groups: Option<&[String]>,
-        notice_tx: &mpsc::UnboundedSender<AdapterNotice>,
-    ) -> Result<(), AdapterError> {
-        let groups = match groups {
-            Some(g) => g,
-            None => return Ok(()),
-        };
+    ) -> Option<(Vec<Op>, GroupSyncCompletion)> {
+        let groups = groups?;
 
         let dyncfgs = self.catalog().system_config().dyncfgs();
         let sync_enabled = OIDC_GROUP_ROLE_SYNC_ENABLED.get(dyncfgs);
         let strict = OIDC_GROUP_ROLE_SYNC_STRICT.get(dyncfgs);
 
         if !sync_enabled {
-            return Ok(());
+            return None;
         }
 
         let mut notices = Vec::new();
-        match self.sync_jwt_groups(member_id, groups, &mut notices).await {
-            Ok(()) => {}
-            Err(e) => {
-                if strict {
-                    return Err(AdapterError::OidcGroupSyncFailed(e.to_string()));
-                } else {
-                    warn!(
-                        error = %e,
-                        "OIDC group sync failed, proceeding with login (fail-open mode)"
-                    );
-                    notices.push(AdapterNotice::OidcGroupSyncError {
-                        message: e.to_string(),
-                    });
-                }
-            }
-        }
-        for notice in notices {
-            let _ = notice_tx.send(notice);
-        }
-        Ok(())
+        let ops = self.group_sync_ops(member_id, groups, &mut notices);
+        Some((ops, GroupSyncCompletion { notices, strict }))
     }
 
-    /// Syncs the user's role memberships based on JWT group claims.
+    /// Prepares the user's role memberships based on JWT group claims.
     ///
     /// Resolves group names to catalog role IDs via exact (case-sensitive)
-    /// lookup, computes the diff against current memberships, and executes
-    /// grant/revoke operations via `catalog_transact`.
+    /// lookup and computes the diff against current memberships.
     ///
     /// Groups that map to reserved role names (`mz_`/`pg_` prefixes) are
     /// filtered out with a warning notice. Groups with no matching catalog
     /// role are skipped silently: IdPs commonly include groups that have no
     /// corresponding Materialize role, so this is expected.
-    pub(crate) async fn sync_jwt_groups(
-        &mut self,
+    fn group_sync_ops(
+        &self,
         member_id: RoleId,
         groups: &[String],
         notices: &mut Vec<AdapterNotice>,
-    ) -> Result<(), AdapterError> {
+    ) -> Vec<Op> {
         // Resolve group names to role IDs (exact, case-sensitive match).
         let mut target_role_ids = BTreeSet::new();
         for group in groups {
@@ -203,26 +213,16 @@ impl Coordinator {
             }
         }
 
-        // Get the user's current memberships. Clone is needed to release the
-        // immutable catalog borrow before the mutable catalog_transact call below.
-        // This is cheap — role membership maps are typically small.
-        let current_membership = self.catalog().get_role(&member_id).membership.map.clone();
+        let current_membership = &self.catalog().get_role(&member_id).membership.map;
 
         // Compute diff.
-        let diff = compute_group_sync_diff(member_id, &current_membership, &target_role_ids);
-
-        // Skip catalog_transact if no changes (common for reconnect with same groups).
-        if diff.grants.is_empty() && diff.revokes.is_empty() {
-            return Ok(());
-        }
+        let diff = compute_group_sync_diff(member_id, current_membership, &target_role_ids);
 
         // Execute ops: revoke first, then grant.
         let mut ops = diff.revokes;
         ops.extend(diff.grants);
 
-        self.catalog_transact(None, ops).await?;
-
-        Ok(())
+        ops
     }
 }
 

@@ -267,7 +267,7 @@ impl Client {
         // NOTE: Terminate must only be sent for a successful startup. On a failed startup the
         // Coordinator never registered the connection, so a Terminate for it would trip the
         // Coordinator's "unknown connection" assertion. There is also nothing that needs
-        // cleaning up, see the invariant on `Coordinator::handle_startup_inner`.
+        // cleaning up, see the invariant on `Coordinator::validate_startup`.
         let rx = rx.with_guard(|resp: Result<StartupResponse, _>| {
             if resp.is_ok() {
                 self.send(Command::Terminate {
@@ -288,7 +288,7 @@ impl Client {
             notice_tx,
         });
 
-        // When startup fails, no need to call terminate (handle_startup does this). Delay creating
+        // When startup fails, no connection state needs termination. Delay creating
         // the client until after startup to sidestep the panic in its `Drop` implementation.
         let response = rx.await.expect("sender dropped")?;
 

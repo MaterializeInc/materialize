@@ -1149,6 +1149,8 @@ impl Catalog {
             );
             let new_state = new_state?;
 
+            fail::fail_point!("catalog_before_commit");
+
             #[cfg(test)]
             if let Some(before_commit) = &self.before_commit {
                 let (resume, ready) = tokio::sync::oneshot::channel();

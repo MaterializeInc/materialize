@@ -21,6 +21,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
@@ -89,6 +90,34 @@ use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
 use super::{ExecuteContextExtra, ExecuteContextGuard};
 
+/// Startup owns retryable role changes before any connection state is registered.
+#[derive(Debug)]
+pub struct PendingStartup {
+    tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
+    user: User,
+    conn_id: ConnectionId,
+    secret_key: u32,
+    uuid: Uuid,
+    client_ip: Option<IpAddr>,
+    application_name: String,
+    notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+    write: Option<StartupWrite>,
+}
+
+#[derive(Debug)]
+struct StartupWrite {
+    revision: u64,
+    ops: Vec<catalog::Op>,
+    transaction: Option<super::ddl::CatalogTransactionState>,
+    completion: StartupWriteCompletion,
+}
+
+#[derive(Debug)]
+enum StartupWriteCompletion {
+    ProvisionRole,
+    SyncGroups(super::group_sync::GroupSyncCompletion),
+}
+
 /// The login status of a role, used by authentication handlers to check role
 /// existence and login permission before proceeding to credential verification.
 enum RoleLoginStatus {
@@ -133,9 +162,9 @@ impl Coordinator {
                     // Note: A ClientTransmitter is not applicable here. Its purpose is to
                     // rescue the Session from an undeliverable Response, and startup
                     // responses carry no Session, the Session stays with the client. An
-                    // undeliverable startup response is instead handled by handle_startup's
+                    // undeliverable startup response is instead handled by finish_startup's
                     // failed-send path together with the cleanup guard in Client::startup.
-                    self.handle_startup(
+                    self.resume_startup(Box::new(PendingStartup {
                         tx,
                         user,
                         conn_id,
@@ -144,7 +173,8 @@ impl Coordinator {
                         client_ip,
                         application_name,
                         notice_tx,
-                    )
+                        write: None,
+                    }))
                     .await;
                 }
 
@@ -886,22 +916,137 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn handle_startup(
+    pub(super) fn resume_startup(
         &mut self,
-        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
-        user: User,
-        conn_id: ConnectionId,
-        secret_key: u32,
-        uuid: uuid::Uuid,
-        client_ip: Option<IpAddr>,
-        application_name: String,
-        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
-    ) {
-        // Early return if successful, otherwise cleanup any possible state.
-        match self
-            .handle_startup_inner(&user, &conn_id, &client_ip, &notice_tx)
-            .await
+        mut pending: Box<PendingStartup>,
+    ) -> LocalBoxFuture<'_, ()> {
+        async move {
+            if pending.tx.is_closed() {
+                return;
+            }
+            match self.advance_startup(&mut pending).await {
+                Ok(Some(delay)) => {
+                    let sender = self.internal_cmd_tx.clone();
+                    task::spawn(|| "startup-catalog-backoff", async move {
+                        // No write is in flight here. Cancellation never calls Terminate:
+                        // this connection has not been registered yet.
+                        tokio::select! {
+                            _ = pending.tx.closed() => return,
+                            _ = sender.closed() => return,
+                            _ = tokio::time::sleep(delay) => {}
+                        }
+                        let _ = sender.send(Message::StartupReady(pending));
+                    });
+                }
+                Ok(None) => self.finish_startup(pending).await,
+                Err(error) => {
+                    let _ = pending.tx.send(Err(error));
+                }
+            }
+        }
+        .boxed_local()
+    }
+
+    /// Complete at most one bounded role transaction. A successful provisioning
+    /// resumes in a new turn. Definitive contention backs off outside the loop.
+    async fn advance_startup(
+        &mut self,
+        pending: &mut PendingStartup,
+    ) -> Result<Option<Duration>, AdapterError> {
+        if pending
+            .write
+            .as_ref()
+            .is_some_and(|write| write.revision != self.catalog().transient_revision())
         {
+            pending.write = None;
+        }
+        if pending.write.is_none() {
+            pending.write = self.prepare_startup_write(&pending.user)?;
+        }
+        let Some(write) = pending.write.as_mut() else {
+            return Ok(None);
+        };
+        let result = if write.ops.is_empty() {
+            Ok(true)
+        } else {
+            self.try_catalog_transact_background(&write.ops, &mut write.transaction)
+                .await
+        };
+        let result = match result {
+            Ok(false) => return Ok(Some(self.read_protection_conflict_delay())),
+            Err(AdapterError::CatalogSnapshotChanged | AdapterError::DDLTransactionRace) => {
+                pending.write = None;
+                return Ok(Some(self.read_protection_conflict_delay()));
+            }
+            result => result.map(|_| ()),
+        };
+        match pending.write.take().expect("prepared above").completion {
+            StartupWriteCompletion::ProvisionRole => {
+                result?;
+                Ok(Some(Duration::ZERO))
+            }
+            StartupWriteCompletion::SyncGroups(completion) => {
+                completion.finish(result, &pending.notice_tx)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn prepare_startup_write(&self, user: &User) -> Result<Option<StartupWrite>, AdapterError> {
+        let (ops, completion) = match self.catalog().try_get_role_by_name(&user.name) {
+            None => {
+                // Authentication already succeeded, including internal-port restrictions.
+                // Auto-provisioning remains a role-scoped change if startup later fails.
+                let mut attributes = RoleAttributesRaw::new();
+                attributes.auto_provision_source = match user.authenticator_kind {
+                    Some(AuthenticatorKind::Oidc) => Some(AutoProvisionSource::Oidc),
+                    Some(AuthenticatorKind::Frontegg) => Some(AutoProvisionSource::Frontegg),
+                    Some(AuthenticatorKind::None) => Some(AutoProvisionSource::None),
+                    _ => {
+                        warn!(
+                            "auto-provisioning role with unexpected authenticator kind: {:?}",
+                            user.authenticator_kind
+                        );
+                        None
+                    }
+                };
+                attributes.login = Some(true);
+                let op = self.prepare_create_role(CreateRolePlan {
+                    name: user.name.to_string(),
+                    attributes,
+                })?;
+                (vec![op], StartupWriteCompletion::ProvisionRole)
+            }
+            Some(role) => {
+                let Some((ops, completion)) =
+                    self.prepare_group_sync(role.id, user.groups.as_deref())
+                else {
+                    return Ok(None);
+                };
+                (ops, StartupWriteCompletion::SyncGroups(completion))
+            }
+        };
+        Ok(Some(StartupWrite {
+            revision: self.catalog().transient_revision(),
+            ops,
+            transaction: None,
+            completion,
+        }))
+    }
+
+    async fn finish_startup(&mut self, pending: Box<PendingStartup>) {
+        let PendingStartup {
+            tx,
+            user,
+            conn_id,
+            secret_key,
+            uuid,
+            client_ip,
+            application_name,
+            notice_tx,
+            write: _,
+        } = *pending;
+        match self.validate_startup(&user, &client_ip) {
             Ok((role_id, superuser_attribute, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -998,7 +1143,7 @@ impl Coordinator {
             }
             Err(e) => {
                 // Nothing to clean up and `handle_terminate` must not be called. Per the
-                // `handle_startup_inner` invariant, no per-connection state exists and the
+                // `validate_startup` invariant, no per-connection state exists and the
                 // connection was never registered in `active_conns`. An auto-provisioned role
                 // stays, it is role-scoped rather than tied to this connection. Temporary
                 // schemas are created lazily, so none exists yet. For the same reason, a
@@ -1012,7 +1157,7 @@ impl Coordinator {
     ///
     /// Invariant: when this returns an error, no per-connection coordinator
     /// state exists. Per-connection state is registered only in
-    /// `handle_startup`'s Ok arm, after this function has succeeded. The
+    /// `finish_startup`'s Ok arm, after this function has succeeded. The
     /// cleanup guard in `Client::startup` relies on this invariant by not
     /// sending `Terminate` when startup fails, and `handle_terminate` panics
     /// on connections it does not know about.
@@ -1020,54 +1165,17 @@ impl Coordinator {
     /// Durable catalog changes made before an error (an auto-provisioned
     /// role, synced role memberships) are role-scoped rather than
     /// connection-scoped and are intentionally kept.
-    async fn handle_startup_inner(
-        &mut self,
+    fn validate_startup(
+        &self,
         user: &User,
-        _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
-        notice_tx: &mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<(RoleId, SuperuserAttribute, BTreeMap<String, OwnedVarInput>), AdapterError> {
-        if self.catalog().try_get_role_by_name(&user.name).is_none() {
-            // If the user has made it to this point, that means they have been fully authenticated.
-            // This includes preventing any user, except a pre-defined set of system users, from
-            // connecting to an internal port. Therefore it's ok to always create a new role for the
-            // user.
-            let mut attributes = RoleAttributesRaw::new();
-            // When auto-provisioning, we store the authenticator that was used to provision the role.
-            attributes.auto_provision_source = match user.authenticator_kind {
-                Some(AuthenticatorKind::Oidc) => Some(AutoProvisionSource::Oidc),
-                Some(AuthenticatorKind::Frontegg) => Some(AutoProvisionSource::Frontegg),
-                Some(AuthenticatorKind::None) => Some(AutoProvisionSource::None),
-                _ => {
-                    warn!(
-                        "auto-provisioning role with unexpected authenticator kind: {:?}",
-                        user.authenticator_kind
-                    );
-                    None
-                }
-            };
-
-            // Auto-provision roles with the LOGIN attribute to distinguish
-            // them as users.
-            attributes.login = Some(true);
-
-            let plan = CreateRolePlan {
-                name: user.name.to_string(),
-                attributes,
-            };
-            self.sequence_create_role_for_startup(plan).await?;
-        }
         let role = self
             .catalog()
             .try_get_role_by_name(&user.name)
-            .expect("created above");
+            .expect("provisioned before completion");
         let role_id = role.id;
         let superuser_attribute = role.attributes.superuser;
-
-        // JWT group-to-role sync: reconcile role memberships with JWT group claims.
-        // Missing groups claim (None) → skip sync; empty (Some([])) → revoke all.
-        self.maybe_sync_jwt_groups(role_id, user.groups.as_deref(), notice_tx)
-            .await?;
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);
@@ -2255,7 +2363,7 @@ impl Coordinator {
     ///
     /// Must only be called for connections that completed a successful
     /// startup, i.e. that are present in `active_conns`. A failed startup
-    /// leaves no state behind (see `handle_startup_inner`), so no Terminate
+    /// leaves no state behind (see `validate_startup`), so no Terminate
     /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {

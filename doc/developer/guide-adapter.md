@@ -220,6 +220,14 @@ transaction rather than replanning already acknowledged statements. Finalize
 session variables on every terminal outcome, including cancellation, and run
 completion effects only after a definitive commit.
 
+Connection startup owns role provisioning and JWT membership retries before
+registering any per-connection state. Retain preparation across metadata contention,
+but recompute membership diffs after structural changes so manual grants remain
+protected. Backoff runs outside the coordinator. Strict/fail-open policy and notices
+apply once to the definitive synchronization outcome, not to ordinary contention.
+Cancellation before registration needs no Terminate. A successfully committed role
+or membership change remains durable if later startup validation fails.
+
 #### Legacy paths being migrated away from
 
 The migration into the implications framework is incremental and unfinished.
