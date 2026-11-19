@@ -1848,18 +1848,20 @@ def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int
 def await_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
     """
     Like `fetch_reconciliation_metrics`, but waits for up to 120 s until the
-    replica reports that it reconciled dataflows.
+    replica reports that it reconciled dataflows, and until two reads in a row
+    agree.
 
     A leader reports `IsLeader` before it reconnects to its replicas, which is
     when they reconcile, and that can take a while after a long catalog
-    migration.
+    migration. A read can also land in the middle of a reconciliation.
     """
+    metrics = (0, 0)
     for _ in range(120):
-        reused, replaced = fetch_reconciliation_metrics(c, process)
-        if reused + replaced > 0:
+        previous, metrics = metrics, fetch_reconciliation_metrics(c, process)
+        if sum(metrics) > 0 and metrics == previous:
             break
         time.sleep(1)
-    return reused, replaced
+    return metrics
 
 
 def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
@@ -2076,11 +2078,8 @@ def check_new_builtins_survive_promotion(
             written
         ), f"{from_version} has all current builtin materialized views and sources, pick an older pin"
 
-        # Only the read-only generation can have advanced these before promotion. A read would
-        # block on a collection that nobody writes, so check the write frontiers instead. A new
-        # table without rows stays at the minimum until something reads it (the read then writes
-        # an empty batch), so tables are only covered by the reconciliation check below.
-        for name in sorted(written):
+        # The collections that a read of `name` uses. Each one's `name` contains its global id.
+        def explain_sources(name: str) -> list[dict]:
             explain = c.sql_query(
                 f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {name}",
                 service="mz_new",
@@ -2088,12 +2087,20 @@ def check_new_builtins_survive_promotion(
                 port=6877,
                 reuse_connection=False,
             )[0][0]
-            frontiers = [
-                source["write_frontier"] for source in json.loads(explain)["sources"]
-            ]
+            return json.loads(explain)["sources"]
+
+        # Only the read-only generation can have advanced these before promotion. A read would
+        # block on a collection that nobody writes, so check the write frontiers instead. A new
+        # table without rows stays at the minimum until something reads it (the read then writes
+        # an empty batch), so tables are only covered by the reconciliation check below.
+        read_only_ids = {}
+        for name in sorted(written):
+            sources = explain_sources(name)
+            frontiers = [source["write_frontier"] for source in sources]
             assert all(
                 frontier and frontier[0] > 0 for frontier in frontiers
             ), f"{name} was not written on the read-only generation: {frontiers}"
+            read_only_ids[name] = [source["name"] for source in sources]
 
         c.promote_mz("mz_new", retire_mz_service=None if leader_down else "mz_old")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
@@ -2108,6 +2115,15 @@ def check_new_builtins_survive_promotion(
             assert (
                 replaced == 0
             ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+        # A replica only counts a dataflow as reused or replaced if it had one with the same
+        # global ids before. A collection that came back under another id would be rebuilt
+        # without being counted, so also check that the ids did not change.
+        for name, ids in read_only_ids.items():
+            leader_ids = [source["name"] for source in explain_sources(name)]
+            assert (
+                leader_ids == ids
+            ), f"global ids changed across promotion for {name}: {ids} -> {leader_ids}"
 
 
 def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
