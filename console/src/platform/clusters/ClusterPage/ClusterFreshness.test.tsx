@@ -15,7 +15,6 @@ import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import server from "~/api/mocks/server";
-import { CLUSTER_TIME_PERIOD_STORAGE_KEY } from "~/platform/clusters/constants";
 import { allObjects } from "~/store/allObjects";
 import { buildDatabaseObject, renderComponent } from "~/test/utils";
 
@@ -37,7 +36,9 @@ const OBJECTS = {
   snapshotComplete: true,
 };
 
-const renderTab = (search = "") =>
+const STORAGE_KEY = "mz-cluster-freshness-time-period";
+
+const renderTab = () =>
   renderComponent(
     <Routes>
       <Route
@@ -47,33 +48,34 @@ const renderTab = (search = "") =>
     </Routes>,
     {
       initializeState: (store) => store.set(allObjects, OBJECTS),
-      initialRouterEntries: [`/u1/quickstart/freshness${search}`],
+      initialRouterEntries: ["/u1/quickstart/freshness"],
     },
   );
 
 describe("ClusterFreshness", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    neverAnswerSql();
   });
 
-  it("opens on the Metrics tab's time range", async () => {
-    window.localStorage.setItem(CLUSTER_TIME_PERIOD_STORAGE_KEY, "180");
+  it("opens on the time range it last showed", async () => {
+    neverAnswerSql();
+    window.localStorage.setItem(STORAGE_KEY, "180");
     await renderTab();
 
     expect(await screen.findByLabelText("Time range")).toHaveValue("180");
   });
 
-  it("caps a Metrics time range longer than its lag history", async () => {
-    window.localStorage.setItem(CLUSTER_TIME_PERIOD_STORAGE_KEY, "10080");
+  it("keeps its time range apart from the Metrics tab's", async () => {
+    neverAnswerSql();
+    window.localStorage.setItem("mz-cluster-graph-time-period", "180");
     await renderTab();
 
-    expect(await screen.findByLabelText("Time range")).toHaveValue("1440");
+    expect(await screen.findByLabelText("Time range")).toHaveValue("60");
   });
 
   it("restores its controls from a bookmarked URL", async () => {
-    // The URL wins over the shared time range.
-    window.localStorage.setItem(CLUSTER_TIME_PERIOD_STORAGE_KEY, "60");
+    neverAnswerSql();
+    window.localStorage.setItem(STORAGE_KEY, "60");
     await renderComponent(
       <Routes>
         <Route
@@ -95,9 +97,12 @@ describe("ClusterFreshness", () => {
     expect(screen.getByLabelText("Freshness threshold in seconds")).toHaveValue(
       5,
     );
+    // Saved, as the Metrics tab saves a range from its URL.
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe("360");
   });
 
   it("keeps its controls when the user leaves the tab and comes back", async () => {
+    neverAnswerSql();
     // Nested as `ClusterRoutes` and `ClusterPage` nest them, because the tab
     // links are relative.
     await renderComponent(
@@ -129,14 +134,12 @@ describe("ClusterFreshness", () => {
     await user.click(screen.getByRole("link", { name: "Metrics" }));
     expect(await screen.findByText("Metrics tab")).toBeVisible();
 
-    // The Metrics tab reads the time range from here.
-    expect(window.localStorage.getItem(CLUSTER_TIME_PERIOD_STORAGE_KEY)).toBe(
-      "360",
-    );
-    // Without the drawer's section, which would reopen the drawer, or the time
-    // range, which the shared one owns.
+    // Without the drawer's section, which would reopen the drawer.
     const freshnessTab = screen.getByRole("link", { name: "Freshness" });
-    expect(freshnessTab).toHaveAttribute("href", "/u1/quickstart/freshness");
+    expect(freshnessTab).toHaveAttribute(
+      "href",
+      "/u1/quickstart/freshness?timePeriod=360",
+    );
     await user.click(freshnessTab);
     expect(await screen.findByLabelText("Time range")).toHaveValue("360");
   });

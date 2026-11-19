@@ -14,9 +14,6 @@ export const AUTO_SCALING_DOCS = `${docUrls["/docs/sql/alter-cluster/"]}#speed-u
 // because the data is sampled on 60s intervals, we don't want to show more granular data than this.
 export const MIN_BUCKET_SIZE_MS = 60 * 1000;
 
-/** The time range the cluster page's Metrics and Freshness tabs share. */
-export const CLUSTER_TIME_PERIOD_STORAGE_KEY = "mz-cluster-graph-time-period";
-
 export const CLUSTERS_FETCH_ERROR_MESSAGE =
   "An error occurred loading cluster data";
 

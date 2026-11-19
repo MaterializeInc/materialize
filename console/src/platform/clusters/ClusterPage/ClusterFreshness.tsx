@@ -14,11 +14,8 @@ import { useParams, useSearchParams } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { useThresholdControl } from "~/components/ThresholdLineGraph/useThresholdControl";
-import { TIME_PERIOD_SEARCH_PARAM_KEY } from "~/hooks/useTimePeriodSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
-import { CLUSTER_TIME_PERIOD_STORAGE_KEY } from "~/platform/clusters/constants";
-import { TIME_PERIOD_OPTIONS } from "~/platform/freshness/constants";
 import {
   FreshnessContent,
   FreshnessFilterControls,
@@ -37,34 +34,13 @@ import storageAvailable from "~/utils/storageAvailable";
 
 import { freshnessTabSearchAtom } from "./tabLinks";
 
-// Lag history goes back 24 hours, so the Metrics tab's longer ranges have no
-// Freshness counterpart.
-const LONGEST_TIME_PERIOD_MINUTES = Math.max(
-  ...Object.keys(TIME_PERIOD_OPTIONS).map((key) => parseInt(key, 10)),
-);
+const TIME_PERIOD_STORAGE_KEY = "mz-cluster-freshness-time-period";
 
-/** The Metrics tab's time range, capped to the longest Freshness offers. */
-const readSharedTimePeriod = () => {
-  if (!storageAvailable("localStorage")) return undefined;
-  const stored = parseInt(
-    window.localStorage.getItem(CLUSTER_TIME_PERIOD_STORAGE_KEY) ?? "",
-    10,
-  );
-  if (Number.isNaN(stored)) return undefined;
-  return (
-    parseTimePeriod(String(Math.min(stored, LONGEST_TIME_PERIOD_MINUTES))) ??
-    undefined
-  );
-};
-
-const writeSharedTimePeriod = (minutes: number) => {
-  if (storageAvailable("localStorage")) {
-    window.localStorage.setItem(
-      CLUSTER_TIME_PERIOD_STORAGE_KEY,
-      minutes.toString(),
-    );
-  }
-};
+const readSavedTimePeriod = () =>
+  storageAvailable("localStorage")
+    ? (parseTimePeriod(window.localStorage.getItem(TIME_PERIOD_STORAGE_KEY)) ??
+      undefined)
+    : undefined;
 
 /**
  * The Freshness page fixed to this cluster. Its schema links open the Freshness
@@ -75,7 +51,7 @@ export const ClusterFreshness = () => {
   const { clusterId } = useParams<ClusterParams>();
   assert(clusterId);
   const regionSlug = useRegionSlug();
-  const [sharedTimePeriod] = React.useState(readSharedTimePeriod);
+  const [savedTimePeriod] = React.useState(readSavedTimePeriod);
   const {
     threshold,
     timePeriodMinutes,
@@ -85,21 +61,24 @@ export const ClusterFreshness = () => {
     setTimePeriodMinutes,
     setPredicate,
     setObjectTypes,
-  } = useFreshnessParams({ defaultTimePeriodMinutes: sharedTimePeriod });
-  const setSharedTimePeriodMinutes = (minutes: number) => {
-    writeSharedTimePeriod(minutes);
-    setTimePeriodMinutes(minutes);
-  };
+  } = useFreshnessParams({ defaultTimePeriodMinutes: savedTimePeriod });
+  // Saves whatever range is shown, one from the URL included, as the Metrics
+  // tab does with its own.
+  React.useEffect(() => {
+    if (storageAvailable("localStorage")) {
+      window.localStorage.setItem(
+        TIME_PERIOD_STORAGE_KEY,
+        timePeriodMinutes.toString(),
+      );
+    }
+  }, [timePeriodMinutes]);
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   // Only the Freshness settings, because the URL can also carry the
   // configuration drawer's section, and saving that would reopen the drawer on
-  // the next visit. The time range is left out because the shared one owns it:
-  // carried in the tab link, it would override a change made on Metrics.
+  // the next visit.
   const [searchParams] = useSearchParams();
-  const savedParams = new URLSearchParams(searchParams);
-  savedParams.delete(TIME_PERIOD_SEARCH_PARAM_KEY);
-  const search = freshnessControlsSearch(savedParams);
+  const search = freshnessControlsSearch(searchParams);
   const setSavedSearch = useSetAtom(freshnessTabSearchAtom);
   React.useEffect(() => setSavedSearch(search), [search, setSavedSearch]);
 
@@ -118,7 +97,7 @@ export const ClusterFreshness = () => {
           <FreshnessFilterControls
             scope="cluster"
             timePeriodMinutes={timePeriodMinutes}
-            setTimePeriodMinutes={setSharedTimePeriodMinutes}
+            setTimePeriodMinutes={setTimePeriodMinutes}
             objectTypes={objectTypes}
             setObjectTypes={setObjectTypes}
           />
