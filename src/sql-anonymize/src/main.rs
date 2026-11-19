@@ -885,6 +885,10 @@ impl<'ast> Visit<'ast, Raw> for GlobalNameCollector<'_> {
         visit::visit_cluster_option(self, node);
     }
 
+    fn visit_nested_statement(&mut self, node: &'ast Statement<Raw>) {
+        self.visit_statement(node);
+    }
+
     // `DROP`/`ALTER`/`COMMENT`/`GRANT` targets are `UnresolvedObjectName`, whose
     // default descent sends cluster/role/network-policy names to `visit_ident`
     // (which we deliberately do not override). Handle every variant here so
@@ -1635,6 +1639,21 @@ mod tests {
             "window_view",
             "serve_cluster",
         ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing {expected}: {names:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn collect_descends_into_nested_statements() {
+        let names = collect(&[
+            "DECLARE c CURSOR FOR ALTER CLUSTER quickstart SET (QUERY POLICY = 'cursor_policy')",
+            "PREPARE p AS SELECT * FROM prepared_view",
+        ]);
+        for expected in ["cursor_policy", "prepared_view"] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "missing {expected}: {names:?}"
