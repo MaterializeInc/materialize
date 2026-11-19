@@ -74,7 +74,7 @@ static COMPUTE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 /// The gate of [`StorageSpill`] chunks. See [`set_storage_spill_enabled`].
 static STORAGE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// The gate for bodies spilled through [`try_spill_ref`]. See
+/// The gate for bodies spilled through [`try_spill_typed`]. See
 /// [`set_sink_spill_enabled`].
 static SINK_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -138,7 +138,7 @@ pub fn set_storage_spill_enabled(enabled: bool) {
     STORAGE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Enable or disable spilling of bodies offered through [`try_spill_ref`],
+/// Enable or disable spilling of bodies offered through [`try_spill_typed`],
 /// which is how compute's MV sink correction buffer spills. Like the
 /// [`SpillGate`]s, it takes effect only once `apply_pool_config` has
 /// installed the pool.
@@ -821,53 +821,116 @@ fn pooled<D: Columnar + 'static, T: Columnar + 'static, R: Columnar + 'static>(
         .expect("chunk bodies are pooled as `PooledBody`")
 }
 
-/// Serialize a body into a pool slot, writing its serialized form through a cursor over the
-/// slot memory. A serialized body's encoding is one copy. Sizing is exact, so a short or
-/// overlong write is a contract violation and panics.
-fn spill_serialized<C: Columnar>(
-    body: &ColumnBody<C>,
-    pool: &Pool,
-    len_bytes: usize,
-    hints: ChunkHints,
-    codec: &'static dyn ExtentCodec,
-) -> ChunkHandle {
-    mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
-    pool.insert_with(len_bytes / 8, hints, codec, |dst| {
+/// A [`ColumnBody`] as the pool holds it for [`try_spill_typed`].
+struct TypedColumnBody<C: Columnar>(ColumnBody<C>);
+
+impl<C: Columnar> std::fmt::Debug for TypedColumnBody<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypedColumnBody")
+            .field("len_bytes", &self.0.length_in_bytes())
+            .finish()
+    }
+}
+
+impl<C: PoolColumnar + 'static> TypedBody for TypedColumnBody<C> {
+    fn words(&self) -> usize {
+        self.0.length_in_bytes() / 8
+    }
+
+    fn serialize_into(&self, dst: &mut [u64]) {
+        let len_bytes = self.0.length_in_bytes();
         let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
         let mut cursor = std::io::Cursor::new(bytes);
-        body.write_into(&mut cursor)
-            .expect("the slot is sized to the serialized body");
+        self.0
+            .write_into(&mut cursor)
+            .expect("the destination is sized to the serialized body");
         assert_eq!(
             usize::try_from(cursor.position()).expect("usize position"),
             len_bytes,
-            "serialized body must fill the chunk exactly",
+            "serialized body must fill the destination exactly",
         );
-    })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
 }
 
-/// Spill a serialized copy of `body` into the process pool, leaving `body` untouched, or
-/// `None` when the body stays resident.
+/// Offer `body` to the process pool in its typed form, or hand it back when it stays resident.
 ///
 /// A body stays resident when the gate [`set_sink_spill_enabled`] sets is off, when no pool is
 /// installed, or when it is smaller than `SPILL_MIN_BYTES`. `depth` is the body's generational
-/// depth: it selects the stored codec and the pool's eviction band.
+/// depth: it selects the codec the body is stored under once evicted, and the pool's eviction
+/// band.
 ///
 /// For consumers that keep their own chunk representation and so cannot use [`ColumnChunk`];
-/// the two share the spill decision through `spill_target`. The encode writes straight into
-/// the pool slot, so a spilled body costs no intermediate allocation and the caller can
-/// [`ColumnBody::clear`] and keep its allocation. A caller that gets `None` back still owns
-/// the body and must keep it resident itself.
-pub fn try_spill_ref<C: Columnar>(body: &ColumnBody<C>, depth: u8) -> Option<ChunkHandle> {
+/// the two share the spill decision through `spill_target`. The pool charges the body at its
+/// serialized length while it holds the typed form, so a caller should hand over a body whose
+/// allocations fit its contents: growth slack would be heap the budget cannot see. Read the
+/// body with [`with_spilled_body`] and take it back with [`take_spilled_body`].
+pub fn try_spill_typed<C: PoolColumnar + 'static>(
+    body: ColumnBody<C>,
+    depth: u8,
+) -> Result<ChunkHandle, ColumnBody<C>> {
     let len_bytes = body.length_in_bytes();
-    let pool = spill_target(SINK_SPILL_ENABLED.load(Ordering::Relaxed), len_bytes)?;
+    let Some(pool) = spill_target(SINK_SPILL_ENABLED.load(Ordering::Relaxed), len_bytes) else {
+        return Err(body);
+    };
     let (codec, _) = codec_for_depth(depth);
-    Some(spill_serialized(
-        body,
-        &pool,
-        len_bytes,
-        ChunkHints { depth },
-        codec,
-    ))
+    Ok(pool.insert_typed(Box::new(TypedColumnBody(body)), ChunkHints { depth }, codec))
+}
+
+/// Call `f` with the body of a chunk [`try_spill_typed`] spilled, leaving it in the pool.
+///
+/// A body the pool still holds typed is borrowed under the chunk's state lock, and one it has
+/// serialized is copied out for the call.
+///
+/// NOTE: `f` must not read `handle` again, because the state lock is not reentrant. Nor may it
+/// insert into the pool: an insert can enforce the pool's compressed cap, which must not run
+/// while the caller holds a chunk's state lock (see the lock order in `mz_ore::pool`).
+pub fn with_spilled_body<C: PoolColumnar + 'static, X>(
+    handle: &ChunkHandle,
+    f: impl FnOnce(&ColumnBody<C>) -> X,
+) -> X {
+    let mut f = Some(f);
+    let borrowed = handle.with_typed(|typed| {
+        typed.map(|typed| f.take().expect("unused")(&typed_column_body::<C>(typed).0))
+    });
+    match borrowed {
+        Some(out) => out,
+        None => f.take().expect("unused")(&read_words(handle)),
+    }
+}
+
+/// Free a chunk [`try_spill_typed`] spilled and return its body, without a copy when the pool
+/// still holds it typed.
+pub fn take_spilled_body<C: PoolColumnar + 'static>(handle: ChunkHandle) -> ColumnBody<C> {
+    match handle.take_typed() {
+        Ok(typed) => {
+            typed
+                .into_any()
+                .downcast::<TypedColumnBody<C>>()
+                .expect("bodies spilled by `try_spill_typed` are `TypedColumnBody`")
+                .0
+        }
+        Err(handle) => {
+            let mut words = Vec::new();
+            handle.take(&mut words);
+            ColumnBody::Words(words)
+        }
+    }
+}
+
+/// The [`TypedColumnBody`] a typed body spilled by [`try_spill_typed`] is.
+fn typed_column_body<C: Columnar + 'static>(typed: &dyn TypedBody) -> &TypedColumnBody<C> {
+    typed
+        .as_any()
+        .downcast_ref::<TypedColumnBody<C>>()
+        .expect("bodies spilled by `try_spill_typed` are `TypedColumnBody`")
 }
 
 impl<D, T, R, G> Chunk for ColumnChunk<D, T, R, G>
@@ -3094,7 +3157,7 @@ mod tests {
         let storage = |col: &ColumnBody<Tuple>| {
             ColumnChunk::<(u64, u64), u64, i64, StorageSpill>::commit(col.clone(), 0).is_spilled()
         };
-        let sink = |col: &ColumnBody<Tuple>| try_spill_ref(col, 0).is_some();
+        let sink = |col: &ColumnBody<Tuple>| try_spill_typed(col.clone(), 0).is_ok();
 
         assert!(!compute(&col), "all gates off");
         assert!(!storage(&col), "all gates off");
