@@ -2421,16 +2421,30 @@ mod tests {
 
         let num_ts = 50;
         let keys = 4;
+        // Offset of the far-future retractions, well beyond every read upper of the drain.
+        let far = 1 << 40;
 
-        // Upsert-style input: every timestamp updates each key, retracting the previous value.
+        // Upsert-style input behind a temporal filter: every timestamp updates each key,
+        // retracting the previous value, and schedules the new value's retraction in the far
+        // future while cancelling the previous value's. The cancellation lands at a different
+        // time than the retraction it cancels, so far-future updates accumulate above the read
+        // upper, in the buckets the drain must not emit.
         let batch = |t: u64| -> Vec<(String, Timestamp, Diff)> {
             (0..keys)
                 .flat_map(|k| {
-                    let addition = (format!("{k}-{t}"), Timestamp::from(t), Diff::ONE);
-                    let retraction = t
-                        .checked_sub(1)
-                        .map(|p| (format!("{k}-{p}"), Timestamp::from(t), -Diff::ONE));
-                    std::iter::once(addition).chain(retraction)
+                    let value = format!("{k}-{t}");
+                    let current = [
+                        (value.clone(), Timestamp::from(t), Diff::ONE),
+                        (value, Timestamp::from(t + far), -Diff::ONE),
+                    ];
+                    let previous = t.checked_sub(1).map(|p| {
+                        let value = format!("{k}-{p}");
+                        [
+                            (value.clone(), Timestamp::from(t), -Diff::ONE),
+                            (value, Timestamp::from(t + far), Diff::ONE),
+                        ]
+                    });
+                    current.into_iter().chain(previous.into_iter().flatten())
                 })
                 .collect()
         };
@@ -2453,20 +2467,28 @@ mod tests {
             // Guard against the comparison passing because both sides emit nothing.
             assert!(!actual.is_empty(), "no updates emitted at t={t}");
 
-            reference.insert_negated(&mut expected.clone());
+            reference.insert_negated(&mut expected);
             correction.insert_negated(&mut actual);
             reference.advance_since(upper.clone());
             correction.advance_since(upper);
         }
 
-        // Compare the final state at the since.
-        let upper = Antichain::from_elem(Timestamp::from(num_ts + 1));
+        // Insert one more batch, so the comparisons below have content: the drain loop cancels
+        // everything it emits. It also covers an insert at a since past every stored time.
+        reference.insert(&mut batch(num_ts));
+        correction.insert(&mut batch(num_ts));
+
+        // Compare the final state at the since, then including the far-future updates.
         correction.consolidate_at_since();
-        let mut expected = reference.updates_before(&upper);
-        let mut actual: Vec<_> = correction.updates_before(&upper).collect();
-        expected.sort();
-        actual.sort();
-        assert_eq!(expected, actual);
+        for upper in [num_ts + 1, num_ts + far + 1] {
+            let upper = Antichain::from_elem(Timestamp::from(upper));
+            let mut expected = reference.updates_before(&upper);
+            let mut actual: Vec<_> = correction.updates_before(&upper).collect();
+            expected.sort();
+            actual.sort();
+            assert_eq!(expected, actual, "diverged at upper={upper:?}");
+            assert!(!actual.is_empty(), "no updates emitted at upper={upper:?}");
+        }
     }
 
     #[mz_ore::test]
