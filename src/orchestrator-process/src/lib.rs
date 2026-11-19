@@ -1043,20 +1043,30 @@ impl OrchestratorWorker {
                     }
                     Err(error) => Err(error),
                 };
+                let restart_delay = process_restart_delay(&spawned);
                 match spawned {
                     Ok(status) => {
                         assert!(
                             !(propagate_crashes && did_process_crash(status)),
                             "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
                         );
-                        error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
+                        if restart_delay.is_none() {
+                            info!(
+                                "{full_id}-{i} exited: {:?}; relaunching immediately",
+                                status
+                            );
+                        } else {
+                            error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
+                        }
                     }
                     Err(e) => {
                         error!("{full_id}-{i} failed to spawn: {}; relaunching in 5s", e);
                     }
                 };
                 state_updater.update_state(ProcessStatus::NotReady);
-                time::sleep(Duration::from_secs(5)).await;
+                if let Some(delay) = restart_delay {
+                    time::sleep(delay).await;
+                }
             }
         }
     }
@@ -1341,6 +1351,14 @@ async fn spawn_process(
     state_updater.update_image_identity(image_identity.cloned());
     state_updater.update_state(ProcessStatus::Ready { pid });
     Ok(child.child.wait().await?)
+}
+
+/// Only the promotion restart status bypasses backoff. Spawn failures always wait.
+fn process_restart_delay(result: &Result<ExitStatus, anyhow::Error>) -> Option<Duration> {
+    match result {
+        Ok(status) if status.code() == Some(mz_ore::process::PROMOTION_RESTART_EXIT_CODE) => None,
+        _ => Some(Duration::from_secs(5)),
+    }
 }
 
 fn did_process_crash(status: ExitStatus) -> bool {
@@ -1747,6 +1765,36 @@ impl Service for ProcessService {
 mod tests {
     use super::*;
     use itertools::Itertools;
+
+    #[mz_ore::test]
+    fn process_restart_policy() {
+        for (code, delay) in [
+            (mz_ore::process::PROMOTION_RESTART_EXIT_CODE, None),
+            (0, Some(Duration::from_secs(5))),
+            (166, Some(Duration::from_secs(5))),
+            (167, Some(Duration::from_secs(5))),
+            (1, Some(Duration::from_secs(5))),
+        ] {
+            let status = ExitStatus::from_raw(code << 8);
+            assert_eq!(process_restart_delay(&Ok(status)), delay, "exit {code}");
+            assert!(!did_process_crash(status), "exit {code}");
+        }
+        for (signal, crashed) in [(Signal::SIGTERM, false), (Signal::SIGSEGV, true)] {
+            let status = ExitStatus::from_raw(signal as i32);
+            assert_eq!(
+                process_restart_delay(&Ok(status)),
+                Some(Duration::from_secs(5)),
+                "signal {signal}"
+            );
+            assert_eq!(did_process_crash(status), crashed, "signal {signal}");
+        }
+        assert_eq!(
+            process_restart_delay(&Err(
+                std::io::Error::from(std::io::ErrorKind::NotFound).into()
+            )),
+            Some(Duration::from_secs(5))
+        );
+    }
 
     #[mz_ore::test]
     fn native_tcp_discovery_uses_destination_addresses() {

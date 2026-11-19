@@ -46,7 +46,9 @@ repair. TERM/KILL deadlines and identity checks are unchanged. Full-environment
 before/after timings remain outstanding. See `shutdown-zombie-wait.md`.
 
 The approved promotion-only exit status is implemented as 168, preserving 5s
-backoff for other exits. Compilation passed. Tests and runtime timing remain outstanding.
+backoff for other exits. The policy regression fails with unconditional backoff,
+and the restored process-orchestrator suite passes. Runtime phase timing remains
+outstanding. See `promotion-restart-status.md`.
 No publication cadence, readiness interval or resource-limit changes are approved.
 
 ## Live gaps and constraints

@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_adapter::ResultExt;
 use mz_catalog::durable::{BootstrapArgs, Metrics};
 use mz_ore::channel::trigger;
-use mz_ore::halt;
+use mz_ore::process::{PROMOTION_RESTART_EXIT_CODE, exit_thread_safe};
 use mz_persist_client::PersistClient;
 use mz_repr::Timestamp;
 use mz_sql::catalog::EnvironmentId;
@@ -124,7 +124,8 @@ pub fn spawn_catchup(
             .unwrap_or_terminate("unexpected error while promoting deployment");
 
         // Rejoin the promoted generation without reinitializing its catalog.
-        halt!("deployment promoted; restarting adapter")
+        info!("deployment promoted; restarting adapter");
+        exit_thread_safe(PROMOTION_RESTART_EXIT_CODE)
     });
 }
 

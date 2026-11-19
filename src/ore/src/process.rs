@@ -15,6 +15,9 @@
 
 //! Process utilities.
 
+/// A successful deployment promotion that requires an immediate process restart.
+pub const PROMOTION_RESTART_EXIT_CODE: i32 = 168;
+
 /// Halts the process.
 ///
 /// `halt` forwards the provided arguments to the [`tracing::warn`] macro, then
