@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Runs with enable_mcp_protocol_2026_07_28 on. Lines before the JSON body are
-# request headers.
+# Lines before the JSON body are request headers.
 
 mcp-agent
 MCP-Protocol-Version: 2026-07-28

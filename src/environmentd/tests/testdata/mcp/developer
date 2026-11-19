@@ -217,38 +217,14 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
-# server/discover is only answered on 2026-07-28 with the flag on. Dual-era
-# clients probe with it and fall back to initialize on this error.
+# Without the 2026-07-28 MCP-Protocol-Version header, server/discover is not
+# answered. Dual-era clients probe with it and fall back to initialize on this
+# error.
 mcp-developer
 {"jsonrpc":"2.0","id":42,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
-
-mcp-developer
-MCP-Protocol-Version: 2026-07-28
-Mcp-Method: server/discover
-{"jsonrpc":"2.0","id":44,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
-----
-200 OK
-{"jsonrpc":"2.0","id":44,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
-
-# With enable_mcp_protocol_2026_07_28 off, a 2026-07-28 request is served as
-# 2025-11-25, so its missing Mcp-Method is not checked.
-mcp-developer
-MCP-Protocol-Version: 2026-07-28
-{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
-----
-200 OK
-{"jsonrpc":"2.0","id":43,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
-
-# With the flag off, a 2026-07-28 body that does not parse keeps the old 422.
-mcp-developer
-MCP-Protocol-Version: 2026-07-28
-{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
-----
-422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
 
 # An unknown notification with params is still a notification.
 mcp-developer
