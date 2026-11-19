@@ -583,9 +583,6 @@ impl Coordinator {
                     );
                     let _ = tx.send(explanation);
                 }
-                Command::FrontendStatementLogging(event) => {
-                    self.handle_frontend_statement_logging_event(event);
-                }
                 Command::RegisterConnectionCancelWatch { conn_id, tx } => {
                     // Always replace any existing entry. Another code path
                     // (e.g. `sequence_staged`) may have left a stale watch

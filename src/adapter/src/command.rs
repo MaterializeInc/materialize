@@ -56,8 +56,7 @@ use crate::error::AdapterError;
 use crate::optimize::LirDataflowDescription;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
-    StatementLoggingFrontend,
+    StatementEndedExecutionReason, StatementExecutionStrategy, StatementLoggingFrontend,
 };
 use crate::statement_logging::{StatementLoggingId, WatchSetCreation};
 use crate::util::Transmittable;
@@ -372,10 +371,6 @@ pub enum Command {
         tx: oneshot::Sender<Result<TimestampExplanation, AdapterError>>,
     },
 
-    /// Statement logging event from frontend peek sequencing.
-    /// No response channel needed - this is fire-and-forget.
-    FrontendStatementLogging(FrontendStatementLoggingEvent),
-
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
     ///
@@ -483,7 +478,6 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
@@ -527,7 +521,6 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
