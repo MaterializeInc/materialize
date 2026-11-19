@@ -14,6 +14,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use mz_ore::task::AbortOnDropHandle;
+
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::durable::objects::ReplicaPlanOwner;
 use mz_catalog::expr_cache::GlobalExpressions;
@@ -34,6 +38,69 @@ use crate::coord::Coordinator;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 
+pub(in crate::coord) struct PlannedReplicaMetrics {
+    plans: BTreeMap<GlobalId, GlobalExpressions>,
+    owners: BTreeMap<GlobalId, ReplicaPlanOwner>,
+    retractions: Vec<Op>,
+}
+
+/// Owns only planning state or an unselected immutable publication, never a
+/// catalog/storage handle. Dropping it cannot cancel an admitted catalog write.
+pub(in crate::coord) enum ReplicaMetricPreparation {
+    Planning(AbortOnDropHandle<Result<PlannedReplicaMetrics, AdapterError>>),
+    Publishing(BoxFuture<'static, Result<Vec<Op>, AdapterError>>),
+}
+
+impl ReplicaMetricPreparation {
+    async fn resume(
+        &mut self,
+        catalog: &Catalog,
+        inline: bool,
+    ) -> Result<Option<Vec<Op>>, AdapterError> {
+        if let Self::Planning(task) = self {
+            let planned = if inline {
+                Some(task.await)
+            } else {
+                task.now_or_never()
+            };
+            let Some(planned) = planned else {
+                return Ok(None);
+            };
+            let PlannedReplicaMetrics {
+                plans,
+                owners,
+                mut retractions,
+            } = planned?;
+            let publication = catalog.write_plans(plans);
+            *self = Self::Publishing(Box::pin(async move {
+                let mut selections = publication.await?;
+                for op in &mut selections {
+                    if let Op::SetWrittenPlan {
+                        id, replica_owner, ..
+                    } = op
+                    {
+                        *replica_owner = Some(owners[id].clone());
+                    }
+                }
+                retractions.extend(selections);
+                Ok(retractions)
+            }));
+        }
+        let Self::Publishing(publication) = self else {
+            unreachable!("planning consumed above")
+        };
+        if inline {
+            publication.await.map(Some)
+        } else {
+            publication.as_mut().now_or_never().transpose()
+        }
+    }
+
+    fn ready(ops: Vec<Op>) -> Self {
+        Self::Publishing(Box::pin(async move { Ok(ops) }))
+    }
+}
+
 impl Coordinator {
     /// Admit new replicas and reconcile denylist changes in the same transaction.
     /// An `enable_metric_sink` change alone neither backfills existing replicas
@@ -43,58 +110,76 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: &mut Vec<Op>,
         write_ts: Timestamp,
-    ) -> Result<(), AdapterError> {
-        let replicas: BTreeSet<_> = ops
-            .iter()
-            .filter_map(|op| match op {
-                Op::CreateClusterReplica { replica_id, .. }
-                | Op::CreateClusterReplicaRealization { replica_id, .. } => Some(*replica_id),
-                _ => None,
-            })
-            .collect();
-        let may_change_denylist = ops.iter().any(|op| match op {
-            Op::UpdateSystemConfiguration { name, .. } | Op::ResetSystemConfiguration { name } => {
-                name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name())
+        retry_inline: bool,
+        retained: &mut Option<ReplicaMetricPreparation>,
+    ) -> Result<bool, AdapterError> {
+        if retained.is_none() {
+            let replicas: BTreeSet<_> = ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::CreateClusterReplica { replica_id, .. }
+                    | Op::CreateClusterReplicaRealization { replica_id, .. } => Some(*replica_id),
+                    _ => None,
+                })
+                .collect();
+            let may_change_denylist = ops.iter().any(|op| match op {
+                Op::UpdateSystemConfiguration { name, .. }
+                | Op::ResetSystemConfiguration { name } => {
+                    name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name())
+                }
+                Op::ResetAllSystemConfiguration => true,
+                _ => false,
+            });
+            if replicas.is_empty() && !may_change_denylist {
+                return Ok(true);
             }
-            Op::ResetAllSystemConfiguration => true,
-            _ => false,
-        });
-        if replicas.is_empty() && !may_change_denylist {
-            return Ok(());
-        }
-        let revision = self.catalog().transient_revision();
-        let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection exists"));
-        let session = conn.map(|conn| {
-            crate::catalog::transaction_context(
-                conn,
-                self.query_client
-                    .as_ref()
-                    .map(|client| client.protection.incarnation()),
-            )
-        });
-        let (candidate, _) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                self.catalog().state(),
-                ops.clone(),
-                session,
-                None,
+            let revision = self.catalog().transient_revision();
+            let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection exists"));
+            let session = conn.map(|conn| {
+                crate::catalog::transaction_context(
+                    conn,
+                    self.query_client
+                        .as_ref()
+                        .map(|client| client.protection.incarnation()),
+                )
+            });
+            let (candidate, _) = self
+                .catalog()
+                .transact_incremental_dry_run(
+                    self.catalog().state(),
+                    ops.clone(),
+                    session,
+                    None,
+                    write_ts,
+                )
+                .await?;
+            let preparation = prepare_selections(
+                self.catalog(),
+                Arc::new(candidate),
+                Some(&replicas),
                 write_ts,
+                self.optimizer_metrics(),
+                retry_inline,
             )
             .await?;
-        let selections = prepare_selections(
-            self.catalog(),
-            Arc::new(candidate),
-            Some(&replicas),
-            write_ts,
-            self.optimizer_metrics(),
-        )
-        .await?;
-        if self.catalog().transient_revision() != revision {
-            return Err(AdapterError::DDLTransactionRace);
+            if self.catalog().transient_revision() != revision {
+                return Err(AdapterError::DDLTransactionRace);
+            }
+            *retained = Some(preparation);
         }
-        ops.extend(selections);
-        Ok(())
+        let result = retained
+            .as_mut()
+            .expect("prepared above")
+            .resume(self.catalog(), retry_inline)
+            .await?;
+        match result {
+            Some(selections) => {
+                ops.extend(selections);
+                *retained = None;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Bootstrap reconciles all replicas under the current flag, before replica
@@ -104,14 +189,22 @@ impl Coordinator {
     ) -> Result<Vec<Op>, AdapterError> {
         let revision = self.catalog().transient_revision();
         let write_ts = self.get_catalog_write_ts().await.lower_bound();
-        let selections = prepare_selections(
+        let mut preparation = prepare_selections(
             self.catalog(),
             Arc::new(self.catalog().state().clone()),
             None,
             write_ts,
             self.optimizer_metrics(),
+            true,
         )
         .await?;
+        if self.catalog().transient_revision() != revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+        let selections = preparation
+            .resume(self.catalog(), true)
+            .await?
+            .expect("inline preparation completed");
         if self.catalog().transient_revision() != revision {
             return Err(AdapterError::DDLTransactionRace);
         }
@@ -128,11 +221,12 @@ async fn prepare_selections(
     replicas: Option<&BTreeSet<ReplicaId>>,
     write_ts: Timestamp,
     metrics: OptimizerMetrics,
-) -> Result<Vec<Op>, AdapterError> {
+    retry_inline: bool,
+) -> Result<ReplicaMetricPreparation, AdapterError> {
     {
         let storage = catalog.storage().await;
         if storage.is_savepoint() || storage.is_read_only() {
-            return Ok(Vec::new());
+            return Ok(ReplicaMetricPreparation::ready(Vec::new()));
         }
     }
     let build = candidate.written_plan_namespace();
@@ -179,7 +273,7 @@ async fn prepare_selections(
         }
     }
     if !enabled {
-        return Ok(retractions);
+        return Ok(ReplicaMetricPreparation::ready(retractions));
     }
     let existing: BTreeSet<_> = owned
         .values()
@@ -206,19 +300,21 @@ async fn prepare_selections(
         }
     }
     if missing.is_empty() {
-        return Ok(retractions);
+        return Ok(ReplicaMetricPreparation::ready(retractions));
     }
     // The durable user allocator is the high-water mark, even after every
     // selection has been dropped. These IDs are never SQL catalog items.
     // Allocate directly, without entering coordinator DDL to refill a pool.
-    let mut ids = catalog
-        .allocate_user_ids(u64::cast_from(missing.len()) * 2, write_ts)
-        .await?
-        .into_iter()
-        .map(|(_, id)| match id {
-            GlobalId::User(n) => GlobalId::Transient(n),
-            _ => unreachable!("user allocator returns user IDs"),
-        });
+    let amount = u64::cast_from(missing.len()) * 2;
+    let allocated = if retry_inline {
+        catalog.allocate_user_ids(amount, write_ts).await?
+    } else {
+        catalog.try_allocate_user_ids(amount, write_ts).await?
+    };
+    let mut ids = allocated.into_iter().map(|(_, id)| match id {
+        GlobalId::User(n) => GlobalId::Transient(n),
+        _ => unreachable!("user allocator returns user IDs"),
+    });
     let work: Vec<_> = missing
         .into_iter()
         .map(|(cluster, replica, definition)| {
@@ -231,7 +327,7 @@ async fn prepare_selections(
             )
         })
         .collect();
-    let (plans, owners) = mz_ore::task::spawn_blocking(
+    let task = mz_ore::task::spawn_blocking(
         || "plan replica metric sinks",
         move || {
             let mut plans = BTreeMap::new();
@@ -258,22 +354,15 @@ async fn prepare_selections(
                     },
                 );
             }
-            Ok::<_, AdapterError>((plans, owners))
+            Ok::<_, AdapterError>(PlannedReplicaMetrics {
+                plans,
+                owners,
+                retractions,
+            })
         },
     )
-    .await?;
-    // Immutable bytes must be durable before their selections can be committed.
-    let mut selections = catalog.write_plans(plans).await?;
-    for op in &mut selections {
-        if let Op::SetWrittenPlan {
-            id, replica_owner, ..
-        } = op
-        {
-            *replica_owner = Some(owners[id].clone());
-        }
-    }
-    retractions.extend(selections);
-    Ok(retractions)
+    .abort_on_drop();
+    Ok(ReplicaMetricPreparation::Planning(task))
 }
 
 fn plan_definition(

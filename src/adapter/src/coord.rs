@@ -4436,6 +4436,7 @@ impl Coordinator {
                 CATALOG_SUBSCRIPTION_INTERVAL,
             ));
             tokio::pin!(subscription_timer);
+            let mut declared_replica_preparation = None;
             // Match storage frontier introspection's maintenance cadence. This
             // is independent of permission publication and installation waits.
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
@@ -4508,14 +4509,23 @@ impl Coordinator {
                         ).await {
                             warn!(%error, "unable to follow committed native catalog state");
                         }
-                        if let Err(error) = trace_maintenance(
-                            "subscription_reconcile", self.reconcile_declared_replicas()
+                        let made_progress = match trace_maintenance(
+                            "subscription_reconcile", self.reconcile_declared_replicas(&mut declared_replica_preparation)
                         ).await {
-                            warn!(%error, "unable to realize declared replicas");
-                        }
-                        subscription_timer.set(tokio::time::sleep(mz_catalog::retry::periodic_delay(
-                            CATALOG_SUBSCRIPTION_INTERVAL,
-                        )));
+                            Ok(progress) => progress,
+                            Err(error) => {
+                                warn!(%error, "unable to realize declared replicas");
+                                false
+                            }
+                        };
+                        // A successful candidate yields to the coordinator's client
+                        // batch, then continues without a per-cluster one-second delay.
+                        let delay = if made_progress {
+                            Duration::ZERO
+                        } else {
+                            mz_catalog::retry::periodic_delay(CATALOG_SUBSCRIPTION_INTERVAL)
+                        };
+                        subscription_timer.set(tokio::time::sleep(delay));
                     }
 
                     // Polling a pinned Sleep is cancellation-safe. Bootstrap restores execution holds
@@ -4731,6 +4741,9 @@ impl Coordinator {
             if let Some(sweep) = self.retired_rows_sweep.take() {
                 sweep.abort_and_wait().await;
             }
+            // Retained preparation may own catalog read protection. Release it
+            // before expiring the catalog and its timestamp-oracle resources.
+            drop(declared_replica_preparation);
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {

@@ -67,7 +67,7 @@ type CommittedCatalogTransaction = (
     crate::ReadHolds,
 );
 
-/// Retained DDL preparation and input holds, but no unfinished publication.
+/// Retained DDL preparation and input holds, but no unfinished catalog publication.
 /// Reuse requires the same planning revision and protection incarnation. Each
 /// commit attempt rebuilds creator protection against the current catalog.
 pub(super) struct CatalogTransactionState {
@@ -85,11 +85,11 @@ pub(super) struct CatalogTransactionState {
     )>,
 }
 
-// Preparation owns candidate plans and granted tokens, never an unfinished
-// catalog publication. Only Complete may enter the commit path.
+// Preparation owns candidate plans, unselected immutable publication and granted
+// tokens, never an unfinished catalog publication. Only Complete may enter the commit path.
 enum CatalogPreparation {
     Rewrites(Option<Box<WrittenPlanRewrites>>),
-    ReplicaMetrics,
+    ReplicaMetrics(Option<super::metric_sink::ReplicaMetricPreparation>),
     Complete,
 }
 
@@ -459,6 +459,7 @@ impl Coordinator {
                 Box::pin(self.resume_catalog_preparation(
                     conn_id,
                     prepared.as_mut().expect("initialized above"),
+                    false,
                 ))
                 .await
             }
@@ -1468,6 +1469,7 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         prepared: &mut CatalogTransactionState,
+        retry_inline: bool,
     ) -> Result<bool, AdapterError> {
         if matches!(prepared.preparation, CatalogPreparation::Complete) {
             return Ok(true);
@@ -1490,7 +1492,7 @@ impl Coordinator {
             self.validate_catalog_preparation(prepared)?;
             let CatalogPreparation::Rewrites(rewrites) = std::mem::replace(
                 &mut prepared.preparation,
-                CatalogPreparation::ReplicaMetrics,
+                CatalogPreparation::ReplicaMetrics(None),
             ) else {
                 unreachable!("rewrites phase checked above")
             };
@@ -1504,7 +1506,10 @@ impl Coordinator {
                 prepared.rewritten_objects = names;
             }
         }
-        Box::pin(
+        let CatalogPreparation::ReplicaMetrics(retained) = &mut prepared.preparation else {
+            unreachable!("rewrites completed above")
+        };
+        let complete = Box::pin(
             self.prepare_replica_metric_sinks(
                 conn_id,
                 &mut prepared.ops,
@@ -1512,13 +1517,23 @@ impl Coordinator {
                     .initial_write_ts
                     .expect("preparation precedes commit")
                     .lower_bound(),
+                retry_inline,
+                retained,
             ),
         )
         .wall_time()
         .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
         .await?;
         self.validate_catalog_preparation(prepared)?;
+        if !complete {
+            return Ok(false);
+        }
         prepared.preparation = CatalogPreparation::Complete;
+        if !retry_inline && conn_id.is_none() {
+            // Background realization preparation may allocate IDs and persist
+            // metric plans. Its timestamp is not the final commit allocation.
+            prepared.initial_write_ts = None;
+        }
         Ok(true)
     }
 
@@ -1542,7 +1557,7 @@ impl Coordinator {
             });
         let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
         // Non-staged owners retain their inline scheduling contract.
-        while !Box::pin(self.resume_catalog_preparation(conn_id, &mut prepared)).await? {
+        while !Box::pin(self.resume_catalog_preparation(conn_id, &mut prepared, true)).await? {
             tokio::time::sleep(self.read_protection_conflict_delay()).await;
         }
         if refresh_client_protection {

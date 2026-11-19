@@ -663,6 +663,15 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Vec<u64>, CatalogError>;
 
+    /// Allocates IDs with one definitive CAS attempt. Any upper conflict returns
+    /// to the owner without consuming IDs or pending catalog projection updates.
+    async fn try_allocate_ids(
+        &mut self,
+        id_type: &str,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError>;
+
     /// Claims the interval containing `collection_timestamp` and allocates its batch ID
     /// in one transaction. Returns `None` if this or a later interval is already claimed.
     /// `interval_start` must not exceed `collection_timestamp`.

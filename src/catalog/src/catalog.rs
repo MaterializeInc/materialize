@@ -1036,6 +1036,32 @@ impl Catalog {
             .maybe_terminate("allocating user ids")?)
     }
 
+    /// Allocates user IDs once for a retained preparation owner. Contention is
+    /// returned without process termination so that owner can yield and retry.
+    pub async fn try_allocate_user_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
+        let result = self
+            .storage()
+            .await
+            .try_allocate_ids(crate::durable::USER_ITEM_ALLOC_KEY, amount, commit_ts)
+            .await;
+        let ids = match result {
+            Err(
+                error @ DurableError::Durable(
+                    crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                ),
+            ) => return Err(error.into()),
+            result => result.maybe_terminate("allocating prepared user ids")?,
+        };
+        Ok(ids
+            .into_iter()
+            .map(|id| (CatalogItemId::User(id), GlobalId::User(id)))
+            .collect())
+    }
+
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         let commit_ts = self.storage().await.current_upper().await;
         self.allocate_user_id(commit_ts).await
@@ -1969,56 +1995,64 @@ impl Catalog {
 
     /// Writes immutable candidates as one batch before selecting them in a catalog transaction.
     /// The transaction must validate their imports and predecessors against its final state.
-    pub async fn write_plans(
+    pub fn write_plans(
         &self,
         plans: BTreeMap<GlobalId, GlobalExpressions>,
-    ) -> Result<Vec<Op>, CatalogError> {
-        let store = self.expr_cache_handle.as_ref().ok_or_else(|| {
-            CatalogError::internal("write maintained plan", "expression store is not open")
-        })?;
-        let build_version = self.state.written_plan_namespace();
-        let mut entries = Vec::with_capacity(plans.len());
-        let mut selections = Vec::with_capacity(plans.len());
-        for (id, mut plan) in plans {
-            // Installation and recovery select timestamps from current protected history.
-            plan.global_mir.as_of = None;
-            plan.global_mir.until = Default::default();
-            plan.physical_plan.as_of = None;
-            plan.physical_plan.until = Default::default();
-            let expected_revision = self.state.written_plan(id, &build_version);
-            let revision = Uuid::new_v4();
-            let imports = plan.collection_imports().copied().collect();
-            let introspection = crate::durable::objects::WrittenPlanIntrospection {
-                physical_imports: plan
-                    .physical_plan
-                    .source_imports
-                    .keys()
-                    .chain(plan.physical_plan.index_imports.keys())
-                    .copied()
-                    .collect(),
-                refresh_schedule: plan.physical_plan.refresh_schedule.clone(),
-                initial_storage_as_of: plan
-                    .physical_plan
-                    .initial_storage_as_of
-                    .as_ref()
-                    .and_then(|frontier| frontier.as_option().copied()),
-            };
-            entries.push((id, revision, plan));
-            selections.push(Op::SetWrittenPlan {
-                id,
-                build_version: build_version.clone(),
-                expected_revision,
-                revision: Some(revision),
-                imports,
-                introspection,
-                replica_owner: None,
-            });
+    ) -> impl std::future::Future<Output = Result<Vec<Op>, CatalogError>> + Send + 'static + use<>
+    {
+        // Capture selection predecessors once. The returned future retains neither
+        // the catalog nor its durable storage/oracle handles while publishing.
+        let prepared = (|| -> Result<_, CatalogError> {
+            let store = self.expr_cache_handle.clone().ok_or_else(|| {
+                CatalogError::internal("write maintained plan", "expression store is not open")
+            })?;
+            let build_version = self.state.written_plan_namespace();
+            let mut entries = Vec::with_capacity(plans.len());
+            let mut selections = Vec::with_capacity(plans.len());
+            for (id, mut plan) in plans {
+                // Installation and recovery select timestamps from current protected history.
+                plan.global_mir.as_of = None;
+                plan.global_mir.until = Default::default();
+                plan.physical_plan.as_of = None;
+                plan.physical_plan.until = Default::default();
+                let expected_revision = self.state.written_plan(id, &build_version);
+                let revision = Uuid::new_v4();
+                let imports = plan.collection_imports().copied().collect();
+                let introspection = crate::durable::objects::WrittenPlanIntrospection {
+                    physical_imports: plan
+                        .physical_plan
+                        .source_imports
+                        .keys()
+                        .chain(plan.physical_plan.index_imports.keys())
+                        .copied()
+                        .collect(),
+                    refresh_schedule: plan.physical_plan.refresh_schedule.clone(),
+                    initial_storage_as_of: plan
+                        .physical_plan
+                        .initial_storage_as_of
+                        .as_ref()
+                        .and_then(|frontier| frontier.as_option().copied()),
+                };
+                entries.push((id, revision, plan));
+                selections.push(Op::SetWrittenPlan {
+                    id,
+                    build_version: build_version.clone(),
+                    expected_revision,
+                    revision: Some(revision),
+                    imports,
+                    introspection,
+                    replica_owner: None,
+                });
+            }
+            Ok((store, entries, selections))
+        })();
+        async move {
+            let (store, entries, selections) = prepared?;
+            store.write_plans(entries).await.map_err(|error| {
+                CatalogError::internal("write maintained plan", error.to_string())
+            })?;
+            Ok(selections)
         }
-        store
-            .write_plans(entries)
-            .await
-            .map_err(|error| CatalogError::internal("write maintained plan", error.to_string()))?;
-        Ok(selections)
     }
 
     /// Reads specified immutable revisions in the committed-plan namespace. Missing entries are omitted.

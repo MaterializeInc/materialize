@@ -43,6 +43,7 @@ use tracing::warn;
 use crate::catalog::CatalogState;
 
 mod written;
+pub(in crate::coord) use written::ReplicaMetricPreparation;
 
 /// A curated metric sink: SQL producing the canonical metric-sink columns, plus the name it is
 /// known by in logs.

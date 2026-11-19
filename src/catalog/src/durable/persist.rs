@@ -3376,6 +3376,21 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(ids)
     }
 
+    async fn try_allocate_ids(
+        &mut self,
+        id_type: &str,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError> {
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+        let mut txn = self.transaction_unchecked().await?;
+        let ids = txn.get_and_increment_id_by(id_type.to_owned(), amount)?;
+        txn.commit_internal_once(commit_ts).await?;
+        Ok(ids)
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn claim_storage_usage_interval(
         &mut self,

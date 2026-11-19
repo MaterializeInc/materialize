@@ -28,8 +28,18 @@ The two-adapter row/restart test passes, fails with blind publication, and passe
 again after restoration. Contention, retirement and targeted Clippy checks pass.
 See `storage-usage-claim-review.md` for evidence and coverage limits.
 
-Next finish the remaining conditional-write retry survey, then run final-head
-native acceptance and the compatible version-pair walkthrough. Do not rerun the
+Declaration reconciliation now retains guarded candidates across subscription
+turns. Metric planning/publication runs outside the coordinator while retaining IDs
+and immutable revisions. Common bounded catalog retries include empty-upper
+contention. Deterministic boundary tests passed, failed with the guards removed,
+and passed after restoration. A live peer-declaration fixture verified metric-plan
+selection and query execution on the realized replica using normal debug stacks.
+Retention/protection checks and targeted lint passed. See
+`declaration-retry-verification.md` for evidence and limits.
+
+Next address login synchronization and the remaining SQL completion owners in the
+conditional-write survey, then run final-head native acceptance and the compatible
+version-pair walkthrough. Do not rerun the
 full lifecycle suites per small change. The replica catalog-open attribution is
 complete. Bring the proposed metadata-only replica boundary back for approval
 before implementation. See `catalog-function-costs.md`.
@@ -71,8 +81,9 @@ No publication cadence, readiness interval or resource-limit changes are approve
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
-- Declaration reconciliation, login sync and SQL owners with separate completion
-  effects remain in the conditional-write retry survey.
+- Login sync and SQL owners with separate completion effects remain in the
+  conditional-write retry survey. Do not add a finite overall login retry limit
+  or alter strict/fail-open authentication behavior without agreement.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
   failure after a fixed 5s wait. Its exact rerun passed without changes, but the
   cause remains unresolved. Include the refresh-scheduled MV case in final
@@ -123,10 +134,12 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `ee425edf` plus verified
-storage-usage source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
+verified storage-usage and declaration-retry source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
 `/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 
 Essential pointers:
+- `declaration-retry-verification.md`, `declaration-final-source.json` and
+  `declaration-live-v1.log` cover retained declaration and metric-plan preparation.
 - `storage-usage-claim-review.md`, `storage-usage-final-checks.log` and
   `storage-usage-restored-green.log` cover compute-free interval claims.
 - `catalog-function-costs.md` links the cold attribution, source receipts and

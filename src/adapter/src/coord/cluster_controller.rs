@@ -65,7 +65,7 @@ fn matches_declaration_config(
         && physical.config == declaration.config
 }
 
-/// Preparation belongs to the controller task between coordinator turns.
+/// Preparation belongs to its background cluster owner between coordinator turns.
 #[derive(Debug)]
 pub struct PreparedClusterApply {
     revision: u64,
@@ -450,7 +450,23 @@ impl Coordinator {
 
     /// Realize shared explicit declarations without borrowing a peer's inventory.
     /// The existing catalog transaction owns admission and derived provisioning.
-    pub(super) async fn reconcile_declared_replicas(&mut self) -> Result<(), AdapterError> {
+    /// Returns true after a successful candidate so remaining work can continue
+    /// promptly in a new coordinator turn. Contention waits for the normal timer.
+    pub(super) async fn reconcile_declared_replicas(
+        &mut self,
+        pending: &mut Option<Box<PreparedClusterApply>>,
+    ) -> Result<bool, AdapterError> {
+        if pending
+            .as_ref()
+            .is_some_and(|p| p.revision != self.catalog().transient_revision())
+        {
+            // Shared declarations and local realization bindings may both change.
+            // Rebuild instead of replaying operations from a stale structural cut.
+            *pending = None;
+        }
+        if pending.is_some() {
+            return self.resume_declared_replicas(pending).await;
+        }
         let mut declarations: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for declaration in self.catalog().state().replica_declarations() {
             declarations
@@ -523,13 +539,44 @@ impl Coordinator {
                         expected,
                     },
                 );
-                match self.catalog_transact(None, ops).await {
-                    Ok(()) | Err(AdapterError::DDLTransactionRace) => (),
-                    Err(error) => return Err(error),
-                }
+                *pending = Some(Box::new(PreparedClusterApply {
+                    revision: self.catalog().transient_revision(),
+                    ops,
+                    transaction: None,
+                }));
+                // Bound each maintenance turn to one candidate, including when
+                // it succeeds. The existing timer owns the next attempt.
+                return self.resume_declared_replicas(pending).await;
             }
         }
-        Ok(())
+        Ok(false)
+    }
+
+    async fn resume_declared_replicas(
+        &mut self,
+        pending: &mut Option<Box<PreparedClusterApply>>,
+    ) -> Result<bool, AdapterError> {
+        let candidate = pending.as_mut().expect("candidate prepared");
+        match self
+            .try_catalog_transact_background(&candidate.ops, &mut candidate.transaction)
+            .await
+        {
+            Ok(false) => Ok(false),
+            Ok(true) => {
+                *pending = None;
+                Ok(true)
+            }
+            Err(AdapterError::DDLTransactionRace)
+            | Err(AdapterError::CatalogSnapshotChanged)
+            | Err(AdapterError::ClusterStateChanged { .. }) => {
+                *pending = None;
+                Ok(false)
+            }
+            Err(error) => {
+                *pending = None;
+                Err(error)
+            }
+        }
     }
 
     /// Whether the current replica-set policy has its required local realizations.

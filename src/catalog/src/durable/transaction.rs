@@ -4532,9 +4532,26 @@ impl<'a> Transaction<'a> {
     /// [`crate::durable::CatalogCommitTimestamp`] to avoid allocating again.
     /// Read-only empty transactions return their synchronized prefix's upper.
     /// Savepoint commits return a local upper, not a durable certificate.
-    pub async fn commit_with_upper(
+    pub fn commit_with_upper(
+        self,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+    ) -> impl std::future::Future<Output = Result<mz_repr::Timestamp, CatalogError>> {
+        self.commit_with_upper_inner(commit_ts, true)
+    }
+
+    /// Commits once, returning all definitive upper conflicts to the caller.
+    /// Validation, completion and consumption of own updates match `commit_with_upper`.
+    pub fn commit_with_upper_once(
+        self,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+    ) -> impl std::future::Future<Output = Result<mz_repr::Timestamp, CatalogError>> {
+        self.commit_with_upper_inner(commit_ts, false)
+    }
+
+    async fn commit_with_upper_inner(
         mut self,
         commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+        retry_empty_progress: bool,
     ) -> Result<mz_repr::Timestamp, CatalogError> {
         let commit_ts = commit_ts.into();
         self.ensure_committable()?;
@@ -4545,7 +4562,9 @@ impl<'a> Transaction<'a> {
             "unconsumed transaction updates: {op_updates:?}"
         );
 
-        let (durable_storage, upper) = self.commit_internal(commit_ts).await?;
+        let (durable_storage, upper) = self
+            .commit_internal_with_empty_progress_retry(commit_ts, retry_empty_progress)
+            .await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
         let updates = durable_storage.sync_updates(upper).await?;
         // Writable and savepoint catalogs should have consumed all updates before committing a

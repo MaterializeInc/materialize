@@ -20,6 +20,8 @@
 //! it and converges a tick after the `ALTER` commits, so an assertion right
 //! after an `ALTER` has to poll.
 
+#![recursion_limit = "256"]
+
 use std::time::Duration;
 
 use mz_environmentd::test_util::{self, TestHarness, TestServerWithRuntime};
@@ -351,4 +353,124 @@ fn test_unmanaged_builtin_cluster_is_left_alone() {
         replica_names(&server, "mz_support"),
         vec!["extra".to_string(), "r1".to_string()]
     );
+}
+
+// Shared desired state can arrive from another catalog writer without an adapter
+// having created the local realization. Exercise the maintenance owner, including
+// its asynchronously prepared curated plans, rather than SQL's inline create path.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_peer_replica_declaration_converges_with_metric_plans() {
+    use mz_catalog::durable::objects::{ClusterReplica, DurableType};
+    use mz_catalog::durable::{
+        CatalogError, ClusterReplicaDeclaration, DurableCatalogError,
+        persist_backed_catalog_join_active,
+    };
+    use mz_postgres_util::{batch_execute, query_one, sql};
+    use std::sync::Arc;
+
+    tokio::time::timeout(Duration::from_secs(180), async {
+        let server = TestHarness::default()
+            .with_system_parameter_default("enable_metric_sink".into(), "true".into())
+            .start()
+            .await;
+        let client = server.connect().internal().await.unwrap();
+        for statement in [
+            sql!("CREATE CLUSTER declared_cluster REPLICAS (), MANAGED = false"),
+            sql!("CREATE TABLE declaration_input (a int)"),
+            sql!("INSERT INTO declaration_input VALUES (2), (4)"),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
+        let cluster: String = query_one(
+            &client,
+            sql!("SELECT id FROM mz_clusters WHERE name = 'declared_cluster'"),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+        let persist = server
+            .persist_clients
+            .open(server.persist_location.clone())
+            .await
+            .unwrap();
+        let mut peer = persist_backed_catalog_join_active(
+            persist,
+            server.environment_id.organization_id(),
+            mz_environmentd::BUILD_INFO.semver_version(),
+            Arc::new(mz_catalog::durable::Metrics::new(
+                &mz_ore::metrics::MetricsRegistry::new(),
+            )),
+            Some(server.catalog_timestamp_oracle().await),
+        )
+        .await
+        .unwrap();
+        let ts = peer.current_upper().await;
+        let replica_id = peer.allocate_user_replica_ids(1, ts).await.unwrap()[0];
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("open peer transaction: {error}"),
+            };
+            let template = txn
+                .get_cluster_replicas()
+                .find(|r| r.replica_id.is_user())
+                .unwrap();
+            txn.set_cluster_replica_declaration(ClusterReplicaDeclaration {
+                cluster_id: cluster.parse().unwrap(),
+                replica_id,
+                name: "peer_replica".into(),
+                config: template.config,
+                owner_id: template.owner_id,
+            })
+            .unwrap();
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("publish declaration: {error}"),
+            }
+        }
+        loop {
+            let snapshot = peer.snapshot().await.unwrap();
+            let realized = snapshot.cluster_replicas.iter().any(|(key, value)| {
+                ClusterReplica::from_key_value(key.clone(), value.clone()).replica_id == replica_id
+            });
+            let selected = snapshot.written_plans.values().any(|value| {
+                value
+                    .replica_owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.replica_id == replica_id)
+            });
+            if realized && selected {
+                break;
+            }
+            // The coordinator must still serve other work while the preparation
+            // is pending. Actual execution on the new replica is checked below.
+            query_one(&client, sql!("SELECT 1"), &[]).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        batch_execute(&client, sql!("SET cluster = declared_cluster"))
+            .await
+            .unwrap();
+        let total: i64 = query_one(
+            &client,
+            sql!("SELECT sum(a)::bigint FROM declaration_input"),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+        assert_eq!(total, 6);
+        peer.expire().await;
+    })
+    .await
+    .expect("peer declaration convergence exceeded 180s");
 }

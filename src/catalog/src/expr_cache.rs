@@ -425,7 +425,11 @@ impl ExpressionCache {
     async fn write_plans(
         &mut self,
         plans: Vec<(GlobalId, Uuid, GlobalExpressions)>,
+        completion: &mut oneshot::Sender<Result<(), PlanStoreError>>,
     ) -> Result<(), PlanStoreError> {
+        if completion.is_closed() {
+            return Ok(());
+        }
         let mut entries = BTreeMap::new();
         for (id, revision, plan) in plans {
             let key = CacheKey {
@@ -441,6 +445,11 @@ impl ExpressionCache {
             }
         }
         loop {
+            // Receiver closure abandons unselected candidates, not a submitted CAS.
+            // Finish each attempt before noticing cancellation or backing off.
+            if completion.is_closed() {
+                return Ok(());
+            }
             let mut writes = Vec::new();
             for (key, bytes) in &entries {
                 match self.durable_cache.get_local(key) {
@@ -464,6 +473,12 @@ impl ExpressionCache {
             // state rather than letting set_many overwrite another writer's revision.
             if self.durable_cache.try_set_many(&writes).await.is_ok() {
                 return Ok(());
+            }
+            tokio::select! {
+                _ = completion.closed() => return Ok(()),
+                _ = tokio::time::sleep(crate::retry::periodic_delay(
+                    std::time::Duration::from_millis(10),
+                )) => {},
             }
         }
     }
@@ -711,8 +726,9 @@ impl ExpressionCacheHandle {
                             }
                         }
                     }
-                    CacheOperation::WritePlans { plans, tx } => {
-                        let _ = tx.send(cache.write_plans(plans).await);
+                    CacheOperation::WritePlans { plans, mut tx } => {
+                        let result = cache.write_plans(plans, &mut tx).await;
+                        let _ = tx.send(result);
                     }
                     CacheOperation::ReadPlans { revisions, tx } => {
                         let _ = tx.send(cache.read_plans(revisions).await);
@@ -1096,6 +1112,45 @@ mod tests {
         })
         .await
         .expect("reclamation and actor commands must complete");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn abandoned_written_plan_request_does_not_publish() {
+        let persist = mz_persist_client::PersistClient::new_for_tests().await;
+        let store = ExpressionCacheHandle::open_plan_store(
+            Version::new(26, 1, 0),
+            &persist,
+            ShardId::new(),
+        )
+        .await;
+        let id = GlobalId::User(1);
+        let revision = Uuid::new_v4();
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        store
+            .tx
+            .send(CacheOperation::WritePlans {
+                plans: vec![(id, revision, gen_global_expressions())],
+                tx,
+            })
+            .unwrap_or_else(|_| panic!("store closed"));
+        // The read is a FIFO barrier, not a sleep. An abandoned request must not
+        // start publishing, and must leave the worker able to serve later work.
+        assert!(
+            store
+                .read_plans(vec![(id, revision)])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .write_plans(vec![(id, revision, gen_global_expressions())])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read_plans(vec![(id, revision)]).await.unwrap().len(),
+            1
+        );
     }
 
     #[mz_ore::test(tokio::test)]

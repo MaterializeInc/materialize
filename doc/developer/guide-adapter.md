@@ -264,6 +264,22 @@ not prove that no write committed, so the kernel must reobserve state before act
 These sessionless writes retain catalog admission and execution fencing. SQL retries
 still check their connection's liveness.
 
+Explicit replica declarations converge through the catalog subscription owner.
+Retain guarded operations across metadata contention, but discard them on structural
+invalidation. Each turn handles one candidate. Successful work continues in a new
+turn without waiting a full subscription interval. Contention uses the existing
+timer, not an inline retry loop.
+
+Retained replica metric preparation owns its allocated IDs, blocking planner and
+unselected immutable-plan publication. Planning tasks own catalog state, not durable
+catalog or oracle handles. Publication captures revisions and predecessors once.
+Only durable completion permits selection in the final validated catalog transaction.
+Dropping an invalidated preparation abandons unselected plans. The expression worker
+finishes any submitted CAS before observing receiver closure or backing off. This
+does not permit canceling admitted catalog or WAL writes. Background final commit
+allocates its timestamp after preparation, and the catalog's bounded retry budget
+includes empty-upper conflicts as well as content conflicts.
+
 Catalog accounting and downstream side-effect ordering must agree. If one
 transaction nets replacement drops against creates, its implications must queue
 those drops before the creates. An orchestrator can retry a failed create

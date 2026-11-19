@@ -1164,9 +1164,15 @@ impl Catalog {
                 phase = "durable_commit",
                 "catalog phase start",
             );
-            let result = tx
-                .commit_with_upper(commit_timestamp.advance_to(commit_ts))
-                .await;
+            // This boundary owns the bounded retry budget. Do not hide an
+            // unbounded empty-upper retry loop underneath it.
+            let result = if may_retry {
+                tx.commit_with_upper_once(commit_timestamp.advance_to(commit_ts))
+                    .await
+            } else {
+                tx.commit_with_upper(commit_timestamp.advance_to(commit_ts))
+                    .await
+            };
             debug!(
                 target: "mz_adapter::frontend_read_then_write",
                 phase = "durable_commit",

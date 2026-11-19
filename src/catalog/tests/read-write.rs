@@ -90,10 +90,17 @@ async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
 async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_allocate_id(state_builder).await;
+    test_allocate_id(state_builder, false).await;
 }
 
-async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_try_allocate_ids() {
+    let state_builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await);
+    test_allocate_id(state_builder, true).await;
+}
+
+async fn test_allocate_id(state_builder: TestCatalogStateBuilder, single_attempt: bool) {
     let state_builder = state_builder.with_default_deploy_generation();
 
     let id_type = USER_ITEM_ALLOC_KEY;
@@ -107,7 +114,18 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
     // Allocation does not require the initial update queue to be drained.
-    let ids = state.allocate_id(id_type, 3, commit_ts).await.unwrap();
+    let ids = if single_attempt {
+        assert!(
+            state
+                .try_allocate_ids(id_type, 0, commit_ts)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        state.try_allocate_ids(id_type, 3, commit_ts).await.unwrap()
+    } else {
+        state.allocate_id(id_type, 3, commit_ts).await.unwrap()
+    };
     assert_eq!(ids, (start_id..(start_id + 3)).collect::<Vec<_>>());
 
     let snapshot_id_allocs: Vec<_> = state
@@ -422,6 +440,37 @@ async fn test_persist_conflicts_with_empty_progress_rebase() {
     assert_ok!(txn.commit(commit_ts).await);
     let next_id = state.get_next_id(id_type).await.unwrap();
     assert_eq!(next_id, start_id + 1);
+
+    let mut txn = state.transaction().await.unwrap();
+    let ts = txn.upper();
+    assert_eq!(
+        txn.get_and_increment_id_by(id_type.to_owned(), 1).unwrap(),
+        vec![next_id]
+    );
+    let _ = txn.get_and_commit_op_updates();
+    raw_write
+        .compare_and_append(
+            Vec::<((SourceData, ()), mz_repr::Timestamp, i64)>::new(),
+            Antichain::from_elem(ts),
+            Antichain::from_elem(ts.step_forward()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        txn.commit_with_upper_once(ts).await,
+        Err(CatalogError::Durable(
+            DurableCatalogError::CatalogOutOfSync {
+                update_count: 0,
+                ..
+            }
+        ))
+    ));
+    assert_eq!(state.get_next_id(id_type).await.unwrap(), next_id);
+    assert_eq!(
+        state.try_allocate_ids(id_type, 1, ts).await.unwrap(),
+        vec![next_id]
+    );
 
     Box::new(state).expire().await;
 }

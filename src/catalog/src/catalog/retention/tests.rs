@@ -826,6 +826,63 @@ async fn frontier_retry_exhaustion_returns_committed_effects() {
     );
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn empty_progress_respects_catalog_retry_budget() {
+    let mut f = Fixture::new().await;
+    let mut catch_up = f.catch_up().await;
+    let (view_id, _, ops) = f
+        .create_ops(
+            "empty_progress_view",
+            format!("CREATE VIEW {}.empty_progress_view AS SELECT 1", f.prefix),
+            None,
+        )
+        .await;
+    let mut peer = f.peer().await;
+    tokio::time::pause();
+    let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+    f.catalog.before_commit = Some(hook);
+    let ts = f.catalog.current_upper().await;
+    let transaction = async {
+        let result = f
+            .catalog
+            .transact(Some(&mut catch_up), None, ts, None, ops.clone())
+            .await;
+        f.catalog.before_commit = None;
+        result
+    };
+    let interference = async {
+        let mut attempts = 0;
+        while let Some(resume) = candidates.recv().await {
+            attempts += 1;
+            assert!(attempts <= 3, "empty progress must obey the retry budget");
+            peer.sync_to_current_updates().await.unwrap();
+            let upper = peer.current_upper().await;
+            peer.advance_upper(upper.step_forward()).await.unwrap();
+            resume.send(()).unwrap();
+        }
+        attempts
+    };
+    let (result, attempts) = tokio::join!(transaction, interference);
+    assert_eq!(attempts, 3);
+    assert!(
+        matches!(result, Err(crate::catalog::CatalogError::Catalog(error))
+        if matches!(error.kind, crate::memory::error::ErrorKind::Durable(
+            crate::durable::DurableCatalogError::CatalogOutOfSync { update_count: 0, .. })))
+    );
+    assert!(f.catalog.state().try_get_entry(&view_id).is_none());
+    assert!(catch_up.updates.is_empty());
+    // No partial admission escaped. The retained operation can succeed after
+    // the owner gets another turn and the peer stops winning the CAS.
+    f.catalog.sync_to_current_updates().await.unwrap();
+    f.catalog
+        .transact(Some(&mut catch_up), None, ts, None, ops)
+        .await
+        .unwrap();
+    assert!(f.catalog.state().try_get_entry(&view_id).is_some());
+    peer.expire().await;
+}
+
 /// A native durable catalog, with no controller or query client. Source data
 /// advances only through explicit Persist writes, never a running generator.
 struct Fixture {
