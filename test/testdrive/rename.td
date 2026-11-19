@@ -736,10 +736,10 @@ materialize.public.qualified_wildcard "CREATE VIEW materialize.public.qualified_
   SELECT b FROM t1 WHERE b IN ('v8')
 
 # Identifiers used only in the view being renamed
-![version<2652000] ALTER VIEW where_in_subquery RENAME TO scm5
+![version<2605200] ALTER VIEW where_in_subquery RENAME TO scm5
 contains:renaming conflict
->[version>=2652000] ALTER VIEW where_in_subquery RENAME TO scm5
->[version>=2652000] ALTER VIEW scm5 RENAME TO where_in_subquery
+>[version>=2605200] ALTER VIEW where_in_subquery RENAME TO scm5
+>[version>=2605200] ALTER VIEW scm5 RENAME TO where_in_subquery
 
 # ✅ New idents
 > ALTER VIEW where_in_literal RENAME TO v8
@@ -813,10 +813,10 @@ materialize.public.unnatural "CREATE VIEW\n    materialize.public.unnatural\n   
   ON no_func.a = x.a;
 
 # Identifiers used only in the view being renamed
-![version<2652000] ALTER VIEW func RENAME TO count
+![version<2605200] ALTER VIEW func RENAME TO count
 contains:renaming conflict
->[version>=2652000] ALTER VIEW func RENAME TO count
->[version>=2652000] ALTER VIEW count RENAME TO func
+>[version>=2605200] ALTER VIEW func RENAME TO count
+>[version>=2605200] ALTER VIEW count RENAME TO func
 
 # ✅ Non-colliding function name
 > ALTER VIEW no_func RENAME TO count
