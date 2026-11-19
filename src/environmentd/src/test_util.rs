@@ -206,6 +206,7 @@ pub struct TestHarness {
     force_builtin_schema_migration: Option<String>,
     capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
+    adapter_id: mz_repr::AdapterId,
 }
 
 impl Default for TestHarness {
@@ -328,6 +329,7 @@ impl Default for TestHarness {
             code_version: crate::BUILD_INFO.semver_version(),
             force_builtin_schema_migration: None,
             environment_id: EnvironmentId::for_tests(),
+            adapter_id: mz_catalog::durable::DEFAULT_ADAPTER_ID,
             capture: None,
         }
     }
@@ -393,7 +395,13 @@ impl TestHarness {
         self
     }
 
-    /// Start the default adapter in an existing test deployment, without
+    /// Select an adapter already declared in the deployment's catalog.
+    pub fn with_adapter_id(mut self, adapter_id: mz_repr::AdapterId) -> Self {
+        self.adapter_id = adapter_id;
+        self
+    }
+
+    /// Start the selected adapter in an existing test deployment, without
     /// reinitializing metadata or replacing the replica process owner.
     /// Use the same harness configuration that created the deployment.
     /// This restarts coordinator/listener state, not the process-wide Persist cache.
@@ -913,7 +921,7 @@ impl Listeners {
                 && config.code_version == resources.code_version,
             "adapter must join its test deployment's environment and generation"
         );
-        let adapter_id = mz_catalog::durable::DEFAULT_ADAPTER_ID;
+        let adapter_id = config.adapter_id;
         let service =
             crate::controllerd::provisioning::service_name(adapter_id, config.deploy_generation);
         let mut exit = deployment.exit.clone();
