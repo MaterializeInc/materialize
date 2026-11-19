@@ -26,15 +26,14 @@
 //! nesting (`[[[…]]]` / `{"a":{"a":…}}`) that walks the recursive collector up
 //! toward serde_json's nesting limit (where it must `Err`, not overflow the
 //! stack), and an object whose key is literally `$serde_json::private::Number`,
-//! serde_json's private arbitrary-precision-number token. Such an object is
-//! reinterpreted as a number on the way back in, so we don't run the re-parse
-//! oracle on it. We only assert `from_slice` doesn't panic and that `Display`
-//! renders fully without panicking.
+//! serde_json's private arbitrary-precision-number token, which must stay an
+//! object.
 
 #![no_main]
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
+use mz_repr::Datum;
 use mz_repr::adt::jsonb::Jsonb;
 
 /// Valid JSON numbers chosen to stress the arbitrary-precision numeric coercion:
@@ -159,37 +158,42 @@ fn gen_deep_spine(u: &mut Unstructured, depth: u32, out: &mut String) -> arbitra
     Ok(())
 }
 
-/// Render the object `{"$serde_json::private::Number": <value>}`. serde_json
-/// (built with `arbitrary_precision`) treats this exact key as its private
-/// number token, so the object is reinterpreted as a number rather than packed
-/// as an object. That asymmetry defeats the strict re-parse oracle but must
-/// still not panic in `from_slice`/`Display`.
-fn gen_private_number(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
-    out.push_str("{\"$serde_json::private::Number\":");
+/// serde_json (built with `arbitrary_precision`) hands a number to a visitor as
+/// a map with this one key.
+const NUMBER_TOKEN: &str = "$serde_json::private::Number";
+
+/// Render the object `{"$serde_json::private::Number": <value>}`, which must
+/// still pack as an object. Returns the value if it is a string. Such an object
+/// always parses, whereas the other values can hold an out-of-range number.
+fn gen_private_number(
+    u: &mut Unstructured,
+    out: &mut String,
+) -> arbitrary::Result<Option<&'static str>> {
+    out.push_str("{\"");
+    out.push_str(NUMBER_TOKEN);
+    out.push_str("\":");
     // The value serde_json expects here is a string holding the digits, but feed
     // a variety (string number, junk string, real number, nested) to probe how
     // the number sniffer copes.
-    match u.int_in_range(0u8..=3)? {
-        0 => {
-            out.push('"');
+    let payload = match u.int_in_range(0u8..=3)? {
+        0 => Some(*u.choose(NUMBERS)?),
+        1 => Some("not-a-number"),
+        2 => {
             out.push_str(u.choose(NUMBERS)?);
-            out.push('"');
+            None
         }
-        1 => out.push_str("\"not-a-number\""),
-        2 => out.push_str(u.choose(NUMBERS)?),
-        _ => gen_json(u, 1, out)?,
+        _ => {
+            gen_json(u, 1, out)?;
+            None
+        }
+    };
+    if let Some(payload) = payload {
+        out.push('"');
+        out.push_str(payload);
+        out.push('"');
     }
     out.push('}');
-    Ok(())
-}
-
-/// Parse, and only require that `Display` renders fully without panicking. Used
-/// for shapes whose round trip is inherently lossy (the private number token).
-fn check_no_panic(data: &[u8]) {
-    if let Ok(j) = Jsonb::from_slice(data) {
-        // Force the full Display rendering, which must not panic.
-        let _ = j.to_string();
-    }
+    Ok(payload)
 }
 
 fn check(data: &[u8]) {
@@ -197,22 +201,32 @@ fn check(data: &[u8]) {
         return;
     };
     let formatted = j.to_string();
-    // serde_json (which mz-repr builds with `arbitrary_precision`) represents
-    // every JSON number internally as a single-key map
-    // `{"$serde_json::private::Number": "<digits>"}`. A JSON *object* that uses
-    // that exact key is therefore indistinguishable from a number on the way
-    // back in: JSONB sorts an object's keys for display, this `$`-prefixed token
-    // sorts ahead of ordinary keys, and the value is then reinterpreted as a
-    // (possibly invalid) number. That asymmetry is an inherent serde_json
-    // limitation, not a JSONB round-trip bug, and `from_slice` itself never
-    // panics on it. So skip the re-parse check whenever the rendering leans on
-    // serde_json's private number token.
-    const SERDE_JSON_NUMBER_TOKEN: &str = "$serde_json::private::Number";
-    if formatted.contains(SERDE_JSON_NUMBER_TOKEN) {
-        return;
-    }
     let reparsed: Jsonb = formatted.parse().expect("jsonb Display must re-parse");
     assert_eq!(j, reparsed, "jsonb changed across parse/format round trip");
+}
+
+/// Check the output of `gen_private_number`. The round trip in `check` is not
+/// enough here. It also holds for an object misread as the number in its value,
+/// and it skips an object that fails to parse.
+fn check_private_number(data: &[u8], payload: Option<&str>) {
+    let j = match Jsonb::from_slice(data) {
+        Ok(j) => j,
+        Err(e) => {
+            assert!(payload.is_none(), "token-keyed object must parse: {e}");
+            return;
+        }
+    };
+    let Datum::Map(map) = j.as_ref().into_datum() else {
+        panic!("token-keyed object parsed as a non-object: {j}");
+    };
+    let mut entries = map.iter();
+    let (key, value) = entries.next().expect("token-keyed object lost its key");
+    assert_eq!(key, NUMBER_TOKEN);
+    assert!(entries.next().is_none(), "token-keyed object grew a key");
+    if let Some(payload) = payload {
+        assert_eq!(value, Datum::String(payload));
+    }
+    check(data);
 }
 
 fn run(mut u: Unstructured) -> arbitrary::Result<()> {
@@ -232,11 +246,11 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
             gen_deep_spine(&mut u, depth, &mut s)?;
             check(s.as_bytes());
         }
-        // The private-number-token object: assert no panic + total Display only.
+        // The private-number-token object.
         1 => {
             let mut s = String::new();
-            gen_private_number(&mut u, &mut s)?;
-            check_no_panic(s.as_bytes());
+            let payload = gen_private_number(&mut u, &mut s)?;
+            check_private_number(s.as_bytes(), payload);
         }
         // The common case: a wide, moderately deep random JSON value.
         _ => {

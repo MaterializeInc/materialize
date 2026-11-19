@@ -245,25 +245,8 @@ fn to_scalar_type(ty: &GType) -> SqlScalarType {
 
 /// Build a small, valid JSON string of bounded depth for the `Jsonb` path.
 ///
-/// TODO: Generate serde_json's arbitrary-precision magic key here once SS-157 is
-/// fixed. `JsonbPacker`'s `KeyClassifier` recognises the object key
-/// `$serde_json::private::Number` and runs the payload through
-/// `strconv::parse_numeric`, which accepts positive quiet NaN, bypassing the
-/// `cast_jsonbable_to_jsonb` guard that the SQL cast path relies on. That is the
-/// only route by which a non-finite numeric enters a `Jsonb`, and
-/// `JsonbRef::to_serde_json` then panics on it, so the literal
-/// `{"$serde_json::private::Number":"NaN"}` (and that value nested inside an
-/// array or object, to cover `JsonbDatum::serialize`'s list/map recursion) is
-/// what this generator has to produce to guard the fix. It is left out until the
-/// fix lands, because this target is in the `FRUITFUL` set and would otherwise
-/// report the same known crash on every release-qualification run.
-///
-/// Adding it also requires relaxing the `pack_str` call in `push_typed`: `"NaN"`
-/// is the only payload `parse_numeric` accepts, so `Infinity`, `sNaN`, `1e5000`
-/// and the like make `pack_str` return `Err`, which today's `.expect()` would
-/// turn into a *harness* panic. `pack_str` collects its commands before touching
-/// the packer, so a rejection leaves the packer untouched and a valid
-/// `Datum::JsonNull` can be substituted instead.
+/// TODO: Also generate objects keyed by `$serde_json::private::Number`, such as
+/// `{"$serde_json::private::Number":"NaN"}`, which must pack as objects.
 fn gen_json_text(u: &mut Unstructured) -> arbitrary::Result<String> {
     Ok(match u.int_in_range(0u8..=7)? {
         0 => "null".into(),

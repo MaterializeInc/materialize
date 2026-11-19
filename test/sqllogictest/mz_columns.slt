@@ -526,8 +526,7 @@ view  temp_view  2  b  text  false  NULL
 
 # --- A column named like serde_json's number token ----------------------------
 
-# The jsonb packer reads a map whose first key is `$serde_json::private::Number`
-# as a number, so `parse_catalog_create_sql` must never key JSON by a column
+# The output of `parse_catalog_create_sql` must pack as jsonb for any column
 # name. A packing failure would stall every mz_catalog_server dataflow.
 
 statement ok

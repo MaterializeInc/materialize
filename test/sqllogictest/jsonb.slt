@@ -2261,3 +2261,21 @@ SELECT jsonb_build_array(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE')]
 
 query error to_jsonb does not support casting from regclass to text
 SELECT to_jsonb(ARRAY['mz_databases'::regclass])
+
+# Regression test for CPU-349: an object keyed by serde_json's number token
+# stays an object in persist. The long value makes persist compute stats.
+statement ok
+CREATE TABLE number_token (j jsonb)
+
+statement ok
+INSERT INTO number_token VALUES
+  (jsonb_build_object('$serde_json::private::Number', '5')),
+  ('{"a":1,"$serde_json::private::Number":"x"}'),
+  (('{"a":"' || repeat('z', 5000) || '","$serde_json::private::Number":"y"}')::jsonb)
+
+query TT
+SELECT jsonb_typeof(j), j->>'$serde_json::private::Number' FROM number_token ORDER BY 2
+----
+object  5
+object  x
+object  y
