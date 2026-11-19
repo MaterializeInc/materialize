@@ -23,16 +23,19 @@ passes again. See `plan-introspection-red-green.md` for evidence and limits.
 Next implement conditional storage-usage collection after resolving its two
 pending choices: using catalog-server compute to gate sampling, and assigning
 coverage to the interval containing the measurement's finish timestamp. While
-that decision is pending, finish promotion-restart validation and timings.
+that decision is pending, obtain per-function replica catalog-open attribution
+before proposing a broader catalog change. Source-reading leads are in
+`replica-catalog-boundary-survey.md`.
 
-The clean pinned-upstream debug startup comparison passed. Fresh startup was
-30.271s upstream versus 53.080s in the prior native capture. Catalog opening was
-17.004s versus 22.544s. Whole restart was 7.272s versus 18.003s, mostly explained
-by shutdown, not catalog reconstruction. These are single observations with
-explicit topology/readiness differences, not current-head acceptance or a speedup
-claim. See `startup-readiness-comparison.md` for phase timings and qualifications.
+The clean ee425edf debug timing workflow passed. Whole restart fell from 18.003s
+to 8.155s, with shutdown falling from 10.425s to 0.508s. Promotion-to-SQL fell from
+12.736s to 7.986s, and logs confirm immediate relaunch. Initialization itself is
+not faster. Fresh startup remains 54.326s, with 23.431s catalog opening, against
+pinned upstream's 30.271s and 17.004s. These are single observations with explicit
+topology/readiness differences, not statistical or full acceptance claims. See
+`startup-readiness-comparison.md` for phases, provenance and qualifications.
 
-Cold profiling found about 17.6 CPU-seconds within the adapter's 22.7s catalog
+Earlier cold profiling found about 17.6 CPU-seconds within the adapter's 22.7s catalog
 open and about 78.3 CPU-seconds across four replicas in the captured startup
 window. Parallel builtin reconstruction coincided with runtime-slice throttling.
 Caller attribution remains unreliable, so no parser optimization is selected.
@@ -42,13 +45,15 @@ weakening cache compatibility. See `startup-readiness-comparison.md`.
 The shutdown timeout is reproduced and repaired at the launcher boundary:
 unreaped non-children took 10.03s before and 0.13s after. The strengthened regression
 fails on the original implementation and the full launcher suite passes on the
-repair. TERM/KILL deadlines and identity checks are unchanged. Full-environment
-before/after timings remain outstanding. See `shutdown-zombie-wait.md`.
+repair. TERM/KILL deadlines and identity checks are unchanged. The current timing
+run confirms the full-environment improvement. See `shutdown-zombie-wait.md`.
 
 The approved promotion-only exit status is implemented as 168, preserving 5s
-backoff for other exits. The policy regression fails with unconditional backoff,
-and the restored process-orchestrator suite passes. Runtime phase timing remains
-outstanding. See `promotion-restart-status.md`.
+backoff for other exits. The policy regression fails with unconditional backoff
+and passes with the exception. The wider suite reports passes but logs background
+panics in an existing current-thread image-replacement fixture, so it is not clean
+image-replacement coverage. The debug timing run confirms the removed delay. See
+`promotion-restart-status.md`.
 No publication cadence, readiness interval or resource-limit changes are approved.
 
 ## Live gaps and constraints
