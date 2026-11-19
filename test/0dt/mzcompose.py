@@ -3549,9 +3549,9 @@ def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
     )
 
     # The leader must record a frontier for each new collection on every
-    # replica before it stops. A collection without one is compared against
-    # 'now' instead, with no cutoff, and its frozen inputs fall behind that
-    # comparison for good after `with_0dt_caught_up_check_allowed_lag`.
+    # replica before it stops. A collection without one is compared against the
+    # leader's clock instead, with no cutoff, so it would not take the
+    # ignored-past-cutoff path this test covers.
     for _ in range(120):
         recorded = c.sql_query(
             """
