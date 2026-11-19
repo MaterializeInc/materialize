@@ -473,6 +473,11 @@ def verify_anonymized(
     # literal in THAT position only, not bare numbers anywhere, which would mask
     # a leaked numeric-string predicate (an SSN/account id in a view body).
     interval_value = re.compile(r"\bINTERVAL\s+('(?:[^']|'')*')", re.IGNORECASE)
+    # A cluster's `QUERY POLICY = '<name>'` option names an object as a string,
+    # so the name is checked like an identifier.
+    query_policy_option = re.compile(
+        r"\bQUERY POLICY\s*=?\s*'((?:[^']|'')*)'", re.IGNORECASE
+    )
 
     # The identifier check runs over identifier positions only: SQL text and
     # structural dict keys (e.g. a source child's fully-qualified key). It must
@@ -521,6 +526,8 @@ def verify_anonymized(
         # names are not user-identifier leaks.
         scannable = load_generator_ref.sub(" ", string_literal.sub("''", sql))
         check_identifiers(location, scannable)
+        for match in query_policy_option.finditer(sql):
+            check_identifiers(location, match.group(1))
         if args.literals and not literals_preserved(location):
             exempt_spans = [m.span() for m in config_map.finditer(sql)]
             exempt_spans += [m.span() for m in preserved_option.finditer(sql)]
