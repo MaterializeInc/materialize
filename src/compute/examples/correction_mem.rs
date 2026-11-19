@@ -7,67 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Peak-memory harness for the MV sink correction buffers.
+//! Peak-memory harness for the MV sink correction buffer.
 //!
 //! Criterion measures CPU time across many iterations, which makes peak RSS meaningless: setup,
 //! measured closure, and drop of the previous iteration overlap. This harness runs exactly one
 //! fill (and optionally one stepwise drain) in a fresh process and reports wall time next to
-//! `VmHWM`, so the number can be compared across implementations and read under a `memcap` cap.
+//! `VmHWM`, so the number can be compared across configurations and read under a `memcap` cap.
 //! The memory figures come from `/proc/self/status`, so they are Linux only. Elsewhere they print
 //! as `NaN` and only the timings are meaningful.
 //!
 //! ```text
 //! cargo run --release -p mz-compute --features bench --example correction_mem -- \
-//!     --version v2 --num-ts 262144 --phase drain
+//!     --num-ts 262144 --phase drain
 //! ```
 
 use std::time::Instant;
 
-use mz_compute::sink::correction::CorrectionV1;
-use mz_compute::sink::correction_v2::CorrectionV2;
+use mz_compute::sink::correction::Correction;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::{Metrics, SinkMetrics};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use timely::progress::Antichain;
-
-enum Corr {
-    V1(CorrectionV1<Row>),
-    V2(CorrectionV2<Row>),
-}
-
-impl Corr {
-    fn insert(&mut self, updates: &mut Vec<(Row, Timestamp, Diff)>) {
-        match self {
-            Self::V1(c) => c.insert(updates),
-            Self::V2(c) => c.insert(updates),
-        }
-    }
-
-    fn insert_negated(&mut self, updates: &mut Vec<(Row, Timestamp, Diff)>) {
-        match self {
-            Self::V1(c) => c.insert_negated(updates),
-            Self::V2(c) => c.insert_negated(updates),
-        }
-    }
-
-    fn updates_before(
-        &mut self,
-        upper: &Antichain<Timestamp>,
-    ) -> Box<dyn Iterator<Item = (Row, Timestamp, Diff)> + '_> {
-        match self {
-            Self::V1(c) => Box::new(c.updates_before(upper)),
-            Self::V2(c) => Box::new(c.updates_before(upper)),
-        }
-    }
-
-    fn advance_since(&mut self, since: Antichain<Timestamp>) {
-        match self {
-            Self::V1(c) => c.advance_since(since),
-            Self::V2(c) => c.advance_since(since),
-        }
-    }
-}
 
 fn row(key: u64, value: u64) -> Row {
     // Written by hand rather than with `format!`: integer formatting runs inside the timed loop
@@ -120,7 +81,6 @@ fn arg(args: &[String], name: &str, default: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let version = arg(&args, "--version", "v2");
     let num_ts: u64 = arg(&args, "--num-ts", "262144").parse().expect("--num-ts");
     let chunk_size: usize = arg(&args, "--chunk-size", "2097152")
         .parse()
@@ -163,17 +123,8 @@ fn main() {
         .sink
         .clone();
     let worker_metrics = metrics.for_worker(0);
-    let mut correction = match version.as_str() {
-        "v1" => Corr::V1(CorrectionV1::new(metrics.clone(), worker_metrics, 1)),
-        "v2" => Corr::V2(CorrectionV2::new(
-            metrics.clone(),
-            worker_metrics,
-            None,
-            3.0,
-            chunk_size,
-        )),
-        other => panic!("unknown --version {other}"),
-    };
+    let mut correction =
+        Correction::<Row>::with_params(metrics.clone(), worker_metrics, None, 3.0, chunk_size);
 
     // Batches are generated per timestamp rather than up front: holding the whole input resident
     // would dominate the peak we are trying to attribute to the buffer.
@@ -203,7 +154,7 @@ fn main() {
     let updates = num_ts * updates_per_ts;
     let pool_budget_mib = pool_budget / 1024 / 1024;
     println!(
-        "version={version} chunk_size={chunk_size} num_ts={num_ts} updates={updates} \
+        "chunk_size={chunk_size} num_ts={num_ts} updates={updates} \
          insert_ms={insert_ms:.1} insert_peak_mib={insert_peak:.1} drain_ms={drain_ms:.1} \
          pool_budget_mib={pool_budget_mib} peak_mib={:.1} live_mib={:.1}",
         peak_rss_mib(),

@@ -101,7 +101,7 @@ impl Columnation for DataflowErrorSer {
     type InnerRegion = DataflowErrorSerRegion;
 }
 
-impl crate::sink::correction_v2::DataBytes for DataflowErrorSer {
+impl crate::sink::correction::DataBytes for DataflowErrorSer {
     fn data_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + self.0.len()
     }

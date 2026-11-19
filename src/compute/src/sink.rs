@@ -11,11 +11,7 @@ mod copy_to_s3_oneshot;
 #[cfg(feature = "bench")]
 pub mod correction;
 #[cfg(not(feature = "bench"))]
-mod correction;
-#[cfg(feature = "bench")]
-pub mod correction_v2;
-#[cfg(not(feature = "bench"))]
-pub(crate) mod correction_v2;
+pub(crate) mod correction;
 mod materialized_view;
 mod materialized_view_v2;
 mod metric_sink;

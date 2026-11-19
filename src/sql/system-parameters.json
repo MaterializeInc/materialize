@@ -533,15 +533,6 @@
       "dyncfg": true
     },
     {
-      "name": "consolidating_vec_growth_dampener",
-      "typeName": "unsigned integer",
-      "default": "1",
-      "description": "Dampener in growth rate for consolidating vector size",
-      "scope": "replica",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "controller_past_generation_replica_cleanup_retry_interval",
       "typeName": "duration",
       "default": "5 min",
@@ -910,15 +901,6 @@
       "default": "on",
       "description": "Enable allocating regions from lgalloc.",
       "scope": "replica",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
-      "name": "enable_compute_correction_v2",
-      "typeName": "boolean",
-      "default": "on",
-      "description": "Whether compute should use the new MV sink correction buffer implementation.",
-      "scope": "environment",
       "userVisible": false,
       "dyncfg": true
     },
