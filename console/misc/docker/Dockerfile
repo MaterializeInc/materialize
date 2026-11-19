@@ -39,29 +39,45 @@ ENV NODE_OPTIONS='--max_old_space_size=4096'
 RUN yarn build
 
 # Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
-# digest for security fixes.
-FROM nginx/nginx-unprivileged:alpine@sha256:60214a103e6f38e953ff957f34b1f2e97a9db801ab2df3821da955d0fe6cadd6
+# digest for security fixes. The Debian release in the tag must match the
+# distroless base below, whose glibc the staged binaries run against.
+FROM nginx/nginx-unprivileged:mainline-trixie@sha256:0255fc1dcc1d7b358aac20166543e52029fea577413edadb0912f5b928c7e312 AS nginx
 
-# Add labels
+USER root
+# Stage nginx, njs, envsubst and the libraries they link that distroless lacks.
+# `load_module` only works in the main context, ahead of the `http` block that
+# includes the template, so it goes into nginx.conf here.
+RUN set -eu; \
+    lib="usr/lib/$(uname -m)-linux-gnu"; \
+    mkdir -p "/out/$lib" /out/usr/sbin /out/usr/bin /out/usr/lib/nginx /out/etc/nginx /out/var/log /out-rw/etc/nginx/conf.d; \
+    for l in libcrypt.so.1 libpcre2-8.so.0 libxml2.so.2 liblzma.so.5; do cp -L "/$lib/$l" "/out/$lib/"; done; \
+    cp /usr/sbin/nginx /out/usr/sbin/; \
+    cp /usr/bin/envsubst /out/usr/bin/; \
+    mkdir /out/usr/lib/nginx/modules; \
+    cp /usr/lib/nginx/modules/ngx_http_js_module.so /out/usr/lib/nginx/modules/; \
+    cp -P /etc/nginx/modules /etc/nginx/mime.types /out/etc/nginx/; \
+    sed '1i load_module modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf > /out/etc/nginx/nginx.conf; \
+    cp -a /var/log/nginx /out/var/log/
+
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
+# digest for security fixes.
+FROM gcr.io/distroless/base-debian13:debug-nonroot@sha256:7f30768c4ae983ba7bbdb2e7d60a904efd6ced1e26e73e928313d3cf352166e9
+
 LABEL maintainer="support@materialize.com" \
     version="1.0" \
     description="Materialize Console"
 
-# Copy built assets
+COPY --from=nginx /out/ /
+# The entrypoint renders the config into conf.d at startup.
+COPY --from=nginx --chown=65532:65532 /out-rw/ /
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Copy nginx configuration
 COPY misc/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY misc/docker/metrics.js /etc/nginx/njs/metrics.js
-# The metrics need the njs module, and `load_module` only works in the main
-# context, ahead of the `http` block that includes the template.
-RUN sed -i '1i load_module modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf
+COPY misc/docker/docker-entrypoint.sh /docker-entrypoint.sh
 
 ENV MZ_NGINX_LISTENER_CONFIG="listen 8080;"
 ENV MZ_NGINX_METRICS_LISTENER_CONFIG="listen 8081;"
-# This value has to just be set in order for the entrpoint to auto-detect the local resolvers
-# and put them in NGINX_LOCAL_RESOLVERS
-ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS='true'
 
-# Start Nginx
+# Distroless has no /bin/sh, only busybox.
+ENTRYPOINT ["/busybox/sh", "/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]
