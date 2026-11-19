@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.51.1
+*Released to Materialize Cloud: 2026-11-19* <br>
+*Released to Materialize Self-Managed: 2026-11-20* <br>
+
+### Bug Fixes {#v26.51.1-bug-fixes}
+- Updated the nginx base image of the Console container to 1.31.9, which carries the fixes for the nginx2root advisories (CVE-2026-113425, CVE-2026-121810, CVE-2026-123007, CVE-2026-123633, and CVE-2026-123634); the Console's shipped configuration does not enable the affected nginx features, so the update is precautionary rather than a fix for a reachable flaw (<red>*Materialize Self-Managed only*</red>).
+
 ## v26.50.1
 *Released to Materialize Self-Managed: 2026-11-15* <br>
 
