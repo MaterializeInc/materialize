@@ -1282,7 +1282,7 @@ fn append_batches<'scope>(
         .expect("statistics initialized")
         .clone();
 
-    // An output whose frontier tracks the last successful compare and append of this operator
+    // An output whose frontier tracks the shard's upper, as last observed by this operator.
     let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator accepts the batch descriptions and tokens that represent

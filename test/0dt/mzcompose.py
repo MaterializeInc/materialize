@@ -4060,13 +4060,25 @@ def workflow_offset_committed_read_only(c: Composition) -> None:
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     ingest(2000)
-    # Several statistics intervals, so mz_old has written 2000 down.
+    # mz_new's read-only sink polls the shard upper once a second, so give it several polls.
     time.sleep(5)
 
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
-    # Several statistics intervals for the promoted replica to report.
-    time.sleep(10)
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        # Reaching 3000 proves the promoted replica's reports arrive.
+        ingest(3000)
 
     logs = c.invoke("logs", "mz_new", capture=True).stdout
     assert "gauge offset_committed" not in logs, "offset_committed regressed"
