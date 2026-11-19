@@ -1806,7 +1806,6 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
 dependencies = [
- "bzip2-sys",
  "libbz2-rs-sys",
 ]
 
@@ -9013,7 +9012,6 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
- "bzip2",
  "columnar",
  "columnation",
  "csv-async",
@@ -9169,7 +9167,6 @@ dependencies = [
  "aws-types",
  "byteorder",
  "bytes",
- "bzip2",
  "chrono",
  "clap",
  "duckdb",
