@@ -20,6 +20,21 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.50.2, v26.49.2, v26.44.2, v26.41.3 {#v26502}
+*Released to Materialize Self-Managed: 2026-11-19* <br>
+
+### Security {#v26.50.2-security}
+- Updated the Console's nginx base image to nginx 1.31.9
+  (`nginx/nginx-unprivileged:alpine`), which fixes the vulnerabilities in F5's
+  advisory [K000163930](https://my.f5.com/manage/s/article/K000163930) and the
+  [nginx security advisories](https://nginx.org/en/security_advisories.html)
+  published with that release: CVE-2026-113425, CVE-2026-118899,
+  CVE-2026-120967, CVE-2026-120993, CVE-2026-121810, CVE-2026-123007,
+  CVE-2026-123633, CVE-2026-123634, CVE-2026-123640 and CVE-2026-125283.
+  Shipped as a patch of every supported line in use: v26.50.2, v26.49.2,
+  v26.44.2 and v26.41.3. Each contains only this change over its
+  predecessor; v26.41.3 also carries the contents of v26.41.1 and v26.41.2.
+
 ## v26.50.1
 *Released to Materialize Self-Managed: 2026-11-15* <br>
 
