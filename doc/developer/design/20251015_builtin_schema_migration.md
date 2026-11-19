@@ -93,6 +93,7 @@ The read-only process also allocates a new builtin's `GlobalId` only in that sav
 So their entries also record the builtin's schema name, object name and type, and are only reused for the same `GlobalId` and builtin.
 On a mismatch, a fresh shard is allocated.
 The read-only process writes new tables and sources as it writes `Replacement`-migrated ones, whether or not the two conditions above hold.
+When either does not hold, every new builtin and its dependents are excluded from the caught-up check, as are the migrated materialized views.
 
 A leader process performing shard replacement performs the same steps as in read-only mode.
 Additionally, it cleans up durable state written by earlier versions and/or deploy generations by:

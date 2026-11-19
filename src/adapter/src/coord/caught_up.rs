@@ -123,10 +123,8 @@ pub struct CaughtUpCheckContext {
     /// A trigger that signals that all clusters/collections have been caught
     /// up.
     pub trigger: Trigger,
-    /// Collections to exclude from the caught up check.
-    ///
-    /// When a caught up check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
+    /// Collections to exclude from the caught up check, such as collections that can't advance
+    /// their write frontier in read-only mode during a 0dt upgrade.
     pub exclude_collections: BTreeSet<GlobalId>,
 }
 
