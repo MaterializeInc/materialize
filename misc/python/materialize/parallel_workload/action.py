@@ -2066,7 +2066,9 @@ class ResolveReplacementMaterializedViewAction(Action):
     kills, and 0dt deploys are found too.
     """
 
-    def pick_replacement(self, exe: Executor) -> tuple[str, str] | None:
+    def pick_replacement(self, exe: Executor) -> tuple[str, str, str] | None:
+        """A random live replacement as (qualified replacement, qualified
+        target, bare replacement item name)."""
         exe.execute(
             "SELECT rd.name, rs.name, r_mv.name, td.name, ts.name, t_mv.name"
             " FROM mz_internal.mz_replacements r"
@@ -2084,7 +2086,7 @@ class ResolveReplacementMaterializedViewAction(Action):
         r_db, r_schema, r_name, t_db, t_schema, t_name = self.rng.choice(rows)
         replacement = f"{identifier(r_db)}.{identifier(r_schema)}.{identifier(r_name)}"
         target = f"{identifier(t_db)}.{identifier(t_schema)}.{identifier(t_name)}"
-        return replacement, target
+        return replacement, target, r_name
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -2114,7 +2116,7 @@ class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewA
         picked = self.pick_replacement(exe)
         if picked is None:
             return False
-        replacement, target = picked
+        replacement, target, _ = picked
         # APPLY REPLACEMENT waits for the target's write frontier to catch up
         # to the replacement's. The wait never finishes if the target is
         # concurrently cascade-dropped (database-issues#9820), so bound it
@@ -2153,8 +2155,38 @@ class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAc
         picked = self.pick_replacement(exe)
         if picked is None:
             return False
-        replacement, _ = picked
+        replacement, _, _ = picked
         # IF EXISTS, a concurrent apply or drop may have resolved it already.
+        exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
+        return True
+
+
+class CreateOrReplaceReplacementMaterializedViewAction(
+    ResolveReplacementMaterializedViewAction
+):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        errors = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # The view's rendered SELECT embeds qualified names captured at
+            # creation time, renames invalidate them
+            errors += ["does not exist"]
+        return errors
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, target, replacement_name = picked
+        with exe.db.lock:
+            views = [v for v in exe.db.views if str(v) == target]
+        if not views:
+            # The target was renamed or is no longer tracked
+            return False
+        exe.execute(
+            f"CREATE OR REPLACE MATERIALIZED VIEW {replacement} AS {views[0].get_select()}"
+        )
+        # The replaced item is a plain materialized view that nothing tracks.
+        # IF EXISTS, a concurrent CASCADE drop may have removed it already.
         exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
         return True
 
@@ -6621,6 +6653,7 @@ ddl_action_list = ActionList(
         (CreateReplacementMaterializedViewAction, 10),
         (ApplyReplacementMaterializedViewAction, 5),
         (DropReplacementMaterializedViewAction, 5),
+        (CreateOrReplaceReplacementMaterializedViewAction, 5),
         (SealedCollectionCheckAction, 2),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),
