@@ -1140,10 +1140,14 @@ async fn handle_mcp_request(
         // gates the whole route.
         McpEndpointType::Unified => true,
     };
-    // Only meaningful on the agent endpoint; the developer endpoint doesn't
-    // expose `read_data_product`. Read it unconditionally so the plumbing
-    // matches `query_tool_enabled` above.
-    let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
+    // `read_data_product` is an agent route tool. The unified route shares the
+    // agent instructions, which must not point it at a tool it rejects.
+    let read_data_product_tool_enabled = match endpoint_type {
+        McpEndpointType::Agent | McpEndpointType::Developer => {
+            ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs)
+        }
+        McpEndpointType::Unified => false,
+    };
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
     let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
