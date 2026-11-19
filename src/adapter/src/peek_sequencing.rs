@@ -70,7 +70,6 @@ use crate::optimize::peek;
 use crate::peek_client::{ExecutionLogging, PeekCancelSafety, TakeOver};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::statement_logging::WatchSetCreation;
 use crate::{
     AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, PeekClient, ReadHolds,
     TimelineContext, TimestampContext, TimestampProvider, optimize,
@@ -1602,12 +1601,12 @@ impl PeekClient {
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
 
-                let watch_set = logging.id().map(|logging_id| {
-                    WatchSetCreation::new(
+                let watch_set = logging.id().and_then(|logging_id| {
+                    self.dependency_watch_set(
                         logging_id,
                         catalog.state(),
                         &input_id_bundle,
-                        determination.timestamp_context.timestamp_or_default(),
+                        &determination,
                     )
                 });
 
@@ -1819,12 +1818,12 @@ impl PeekClient {
                 .await??;
 
                 // Preflight succeeded, now execute the actual COPY TO dataflow
-                let watch_set = logging.id().map(|logging_id| {
-                    WatchSetCreation::new(
+                let watch_set = logging.id().and_then(|logging_id| {
+                    self.dependency_watch_set(
                         logging_id,
                         catalog.state(),
                         &input_id_bundle,
-                        determination.timestamp_context.timestamp_or_default(),
+                        &determination,
                     )
                 });
 
