@@ -1732,7 +1732,7 @@ struct Chunk<D: Data> {
     /// The generational depth: 0 for chunks built from staged updates or written by a read,
     /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
     /// treats deeper chunks as colder, and compresses them past the floor set by
-    /// [`chunk::set_compress_min_depth`].
+    /// [`chunk::set_sink_compress_min_depth`].
     depth: u8,
 }
 

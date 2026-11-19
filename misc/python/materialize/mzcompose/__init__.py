@@ -795,6 +795,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",
+    "compute_correction_v2_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",

@@ -308,6 +308,15 @@
       "dyncfg": true
     },
     {
+      "name": "compute_correction_v2_compress_min_depth",
+      "typeName": "unsigned integer",
+      "default": "1",
+      "description": "The youngest MV sink correction chunk generation whose spilled bodies are lz4-compressed in the buffer pool; younger generations store uncompressed. 0 compresses every spilled body.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "compute_dataflow_max_inflight_bytes",
       "typeName": "optional unsigned integer",
       "default": "",

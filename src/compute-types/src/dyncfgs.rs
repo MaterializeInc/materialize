@@ -325,6 +325,25 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// The youngest correction V2 chunk generation whose spilled bodies are
+/// lz4-compressed in the buffer pool. MV sinks take it in place of
+/// [`COLUMN_CHUNK_COMPRESS_MIN_DEPTH`], so tuning one leaves the other's
+/// consumers alone. Applies to chunks minted after the next configuration tick.
+///
+/// Compression trades CPU for pool bytes, and that trade differs by replica.
+/// Hydrating an MV over `SELECT * FROM lineitem` (TPC-H SF30) on a 2-worker
+/// replica whose memory nearly fit the correction buffer took 714 s at depth 1
+/// and 533 s with compression off, the uncompressed run peaking 4.5 GiB higher
+/// in RSS. Larger replicas were not measured.
+pub const CORRECTION_V2_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
+    "compute_correction_v2_compress_min_depth",
+    1,
+    "The youngest MV sink correction chunk generation whose spilled bodies are \
+     lz4-compressed in the buffer pool; younger generations store uncompressed. \
+     0 compresses every spilled body.",
+    ParameterScope::Replica,
+);
+
 /// The summary to apply to the frontier in temporal bucketing in compute.
 pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
@@ -823,6 +842,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
+        .add(&CORRECTION_V2_COMPRESS_MIN_DEPTH)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
