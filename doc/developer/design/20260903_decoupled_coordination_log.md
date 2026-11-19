@@ -7,18 +7,19 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-The login repair now retains provisioning and membership work across
-bounded coordinator turns. Structural changes recompute the operations. Existing
-strict/fail-open policy, manual grants and once-only session registration remain
-intact. Real peer-contention coverage passed, failed with inline retries restored,
-then passed again with the repair. Existing authentication and abandoned-startup
-cleanup checks passed. Independent review and targeted lint passed.
+Login and network-policy writes now release the coordinator during metadata
+contention while retaining preparation. Targeted peer-contention regressions pass
+and fail with the former inline paths restored. Authentication, session cleanup
+and network-policy protection remain intact. A structural policy conflict retains
+its existing serialization error, not transparent SQL replanning. Review and
+targeted lint passed. See `startup-retry-verification.md` and
+`network-policy-verification.md` for evidence and limitations.
 
-**Next action:** migrate the remaining fixed-response SQL completion owners
-through the existing staged commit boundary, starting with CREATE/ALTER NETWORK
-POLICY. Keep separate completion effects with their owners. Testing failpoints
-are approved. See `startup-retry-verification.md` for the completed login
-repair's receipts and limitations.
+**Next action:** address CREATE TYPE preparation and final commit. Its shared
+user-ID pool refills inline, so changing only final commit would leave a retry
+site. Reuse the existing pool and single-attempt allocation API before introducing
+new machinery. Testing failpoints are approved. Keep separate completion effects
+with their owners.
 
 Run final-head native acceptance and the compatible version-pair walkthrough after
 the retry work, not after each small change.
@@ -92,7 +93,7 @@ limits and the architecture-generated load assessment.
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Last scheduled shutdown: 2026-11-19 18:00 UTC.
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Scheduled shutdown: 2026-11-19 22:04:52 UTC.
 Recheck instance state and retention tags before restarting or extending it. Shutdown stops the instance and preserves
 its disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
@@ -103,11 +104,13 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `ee425edf` plus verified
-storage-usage, declaration and startup-retry overlays. Trust source receipts,
+storage-usage, declaration, startup and network-policy retry overlays. Trust source receipts,
 not the displayed Git revision. Clean baseline:
 `/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 
 Essential pointers:
+- `network-policy-verification.md`, `network-policy-final-source.json` and
+  `network-policy-red-green.log` cover staged policy writes and stale-candidate rejection.
 - `startup-retry-verification.md`, `startup-final-source.json` and
   `startup-cleanup-verified.log` cover the login repair.
 - `declaration-retry-verification.md`, `declaration-final-source.json` and

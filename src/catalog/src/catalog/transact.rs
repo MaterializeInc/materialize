@@ -2232,6 +2232,7 @@ impl Catalog {
                 name,
                 owner_id: _owner_id,
             } => {
+                fail::fail_point!("alter_network_policy_before_apply");
                 let existing_policy = state.get_network_policy(&id).clone();
                 let mut policy: NetworkPolicy = existing_policy.into();
                 policy.rules = rules;

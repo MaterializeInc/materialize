@@ -1024,42 +1024,47 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_network_policy(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan::CreateNetworkPolicyPlan { name, rules }: plan::CreateNetworkPolicyPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let op = catalog::Op::CreateNetworkPolicy {
             rules,
             name,
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         };
-        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
-            .await
-            .map(|_| ExecuteResponse::CreatedNetworkPolicy)
+        self.sequence_catalog_commit(ctx, vec![op], ExecuteResponse::CreatedNetworkPolicy)
+            .await;
     }
 
     #[instrument]
     pub(super) async fn sequence_alter_network_policy(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         // TODO(network_policy): Consider role based network policies here.
         let current_network_policy_name =
             self.catalog().system_config().default_network_policy_name();
-        // Check if the way we're alerting the policy is still valid for the current connection.
-        if current_network_policy_name == name {
-            self.validate_alter_network_policy(session, &rules)?;
+        // A structural replan reruns this check before staging the new candidate.
+        if current_network_policy_name == name
+            && let Err(error) = self.validate_alter_network_policy(ctx.session(), &rules)
+        {
+            ctx.retire(Err(error));
+            return;
         }
 
         let op = catalog::Op::AlterNetworkPolicy {
             id,
             rules,
             name,
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         };
-        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
-            .await
-            .map(|_| ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy))
+        self.sequence_catalog_commit(
+            ctx,
+            vec![op],
+            ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy),
+        )
+        .await;
     }
 
     #[instrument]

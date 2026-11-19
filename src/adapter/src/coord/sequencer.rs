@@ -343,10 +343,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateNetworkPolicy(plan) => {
-                    let res = self
-                        .sequence_create_network_policy(ctx.session(), plan)
-                        .await;
-                    ctx.retire(res);
+                    self.sequence_create_network_policy(ctx, plan).await;
                 }
                 Plan::Comment(plan) => {
                     self.sequence_comment_on(ctx, plan).await;
@@ -585,10 +582,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::AlterNetworkPolicy(plan) => {
-                    let res = self
-                        .sequence_alter_network_policy(ctx.session(), plan)
-                        .await;
-                    ctx.retire(res);
+                    self.sequence_alter_network_policy(ctx, plan).await;
                 }
                 Plan::DiscardTemp => {
                     self.drop_temp_items(ctx.session().conn_id()).await;

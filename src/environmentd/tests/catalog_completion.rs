@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use mz_adapter::session::SessionConfig;
 use mz_auth::{Authenticated, AuthenticatorKind};
-use mz_catalog::durable::persist_backed_catalog_join_active;
+use mz_catalog::durable::{
+    CatalogError, DurableCatalogError, DurableCatalogState, persist_backed_catalog_join_active,
+};
 use mz_environmentd::test_util;
 use mz_ore::retry::Retry;
 use mz_postgres_util::{batch_execute, query_one, sql};
@@ -146,7 +148,7 @@ async fn test_catalog_completion() {
         .unwrap();
         assert_eq!(row.get::<_, String>(0), "a");
 
-        check_startup_contention(&server).await;
+        check_catalog_contention(&server).await;
     };
     tokio::time::timeout(Duration::from_secs(120), test_case)
         .await
@@ -157,11 +159,11 @@ async fn test_catalog_completion() {
 // It does not synthesize an error or bypass the durable transaction boundary.
 const CATALOG_FAILPOINT: &str = "catalog_before_commit";
 
-struct RemoveCatalogHook;
+struct RemoveCatalogHook(&'static str);
 
 impl Drop for RemoveCatalogHook {
     fn drop(&mut self) {
-        fail::remove(CATALOG_FAILPOINT);
+        fail::remove(self.0);
     }
 }
 
@@ -173,7 +175,7 @@ impl Drop for ReleaseCandidate {
     }
 }
 
-async fn check_startup_contention(server: &test_util::TestServer) {
+async fn check_catalog_contention(server: &test_util::TestServer) {
     let admin = server.connect().internal().await.unwrap();
     for statement in [
         sql!("ALTER SYSTEM SET oidc_group_role_sync_enabled = true"),
@@ -225,58 +227,15 @@ async fn check_startup_contention(server: &test_util::TestServer) {
             },
             Authenticated,
         );
-        let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
-        let hook = RemoveCatalogHook;
-        fail::cfg_callback(CATALOG_FAILPOINT, move || {
-            let (resume_tx, resume_rx) = mpsc::channel();
-            if candidate_tx.send(resume_tx).is_ok() {
-                tokio::task::block_in_place(|| {
-                    // Panic/timeout drops the receiver and the per-attempt release
-                    // guard. The fuse is only a last resort for test teardown.
-                    let _ = resume_rx.recv_timeout(Duration::from_secs(180));
-                });
-            }
-        })
+        let client = complete_under_catalog_contention(
+            server,
+            &mut *peer,
+            "login",
+            adapter.startup(session),
+        )
+        .await
         .unwrap();
-        let conflicts = AtomicUsize::new(0);
-        let interference = async {
-            while let Some(resume) = candidates.recv().await {
-                let release = ReleaseCandidate(resume);
-                peer.sync_to_current_updates().await.unwrap();
-                let upper = peer.current_upper().await;
-                peer.advance_upper(upper.step_forward()).await.unwrap();
-                conflicts.fetch_add(1, Ordering::SeqCst);
-                drop(release);
-            }
-        };
-        let frontend = async {
-            let mut startup = Box::pin(adapter.startup(session));
-            assert!(futures::poll!(&mut startup).is_pending());
-            tokio::time::timeout(Duration::from_secs(30), async {
-                while conflicts.load(Ordering::SeqCst) < 4 {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .expect("startup did not encounter peer contention");
-            assert!(futures::poll!(&mut startup).is_pending());
-
-            // This round trip must complete while the peer is still defeating
-            // every catalog write, not only after the login finally commits.
-            let responsive =
-                tokio::time::timeout(Duration::from_secs(5), adapter.get_system_vars()).await;
-            drop(hook);
-            let client = tokio::time::timeout(Duration::from_secs(30), &mut startup)
-                .await
-                .expect("startup did not recover after contention")
-                .unwrap();
-            assert!(
-                responsive.is_ok(),
-                "login contention monopolized the coordinator"
-            );
-            drop(client);
-        };
-        tokio::join!(interference, frontend);
+        drop(client);
     }
     let rows = mz_postgres_util::query(
         &admin,
@@ -300,5 +259,202 @@ async fn check_startup_contention(server: &test_util::TestServer) {
             ("manual_group".into(), "mz_system".into()),
         ]
     );
+    batch_execute(
+        &admin,
+        sql!("ALTER SYSTEM SET enable_network_policies = true"),
+    )
+    .await
+    .unwrap();
+    let policy_client = server.connect().await.unwrap();
+    for statement in [
+        sql!(
+            "CREATE NETWORK POLICY retry_policy (RULES (r0 (address='0.0.0.0/0', action='allow', direction='ingress')))"
+        ),
+        sql!(
+            "ALTER NETWORK POLICY retry_policy SET (RULES (r1 (address='127.0.0.1/32', action='allow', direction='ingress')))"
+        ),
+    ] {
+        complete_under_catalog_contention(
+            server,
+            &mut *peer,
+            "network policy",
+            batch_execute(&policy_client, statement),
+        )
+        .await
+        .unwrap();
+    }
+    let rule = query_one(
+        &admin,
+        sql!(
+            "SELECT r.name, r.address::text FROM mz_internal.mz_network_policy_rules r
+              JOIN mz_internal.mz_network_policies p ON p.id = r.policy_id
+              WHERE p.name = 'retry_policy'"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(rule.get::<_, String>(0), "r1");
+    assert_eq!(rule.get::<_, String>(1), "127.0.0.1/32");
+
+    let hook = RemoveCatalogHook("alter_network_policy_before_apply");
+    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let rendezvous = Mutex::new(Some((parked_tx, resume_rx)));
+    fail::cfg_callback(hook.0, move || {
+        let Some((parked, resume)) = rendezvous.lock().unwrap().take() else {
+            return;
+        };
+        tokio::task::block_in_place(|| {
+            let _ = parked.send(());
+            let _ = resume.recv_timeout(Duration::from_secs(180));
+        });
+    })
+    .unwrap();
+    let release = ReleaseCandidate(resume_tx);
+    let activate_policy = async {
+        parked_rx
+            .await
+            .expect("ALTER reached candidate application");
+        // The initial validation sees an inactive policy. A real peer then makes
+        // it active before the ALTER can commit. Its stale candidate must be
+        // rejected rather than replaying the earlier lockout decision.
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("open peer transaction: {error}"),
+            };
+            txn.upsert_system_config("network_policy", "retry_policy".into())
+                .unwrap();
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("activate policy: {error}"),
+            }
+        }
+        drop(release);
+    };
+    let alteration = batch_execute(
+        &policy_client,
+        sql!(
+            "ALTER NETWORK POLICY retry_policy SET (RULES (r1 (address='1.1.1.1/32', action='allow', direction='ingress')))"
+        ),
+    );
+    let ((), result) = tokio::join!(activate_policy, alteration);
+    drop(hook);
+    let error = result.expect_err("structural conflict must reject the stale candidate");
+    let mz_postgres_util::PostgresError::Postgres(error) = error else {
+        panic!("expected SQL rejection, got {error:?}");
+    };
+    let error = error.as_db_error().unwrap();
+    assert_eq!(
+        error.code(),
+        &tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE
+    );
+    assert_eq!(
+        error.message(),
+        "another session modified the catalog while this DDL transaction was open"
+    );
+    // Structural conflicts during a submitted attempt keep their existing SQL
+    // error contract. A fresh statement must validate against the active policy.
+    let error = batch_execute(
+        &policy_client,
+        sql!("ALTER NETWORK POLICY retry_policy SET (RULES (r1 (address='1.1.1.1/32', action='allow', direction='ingress')))"),
+    ).await.expect_err("active policy must not lock out its invoking connection");
+    let mz_postgres_util::PostgresError::Postgres(error) = error else {
+        panic!("expected SQL rejection, got {error:?}");
+    };
+    assert!(
+        error
+            .as_db_error()
+            .unwrap()
+            .message()
+            .contains("policy would block current session IP"),
+        "unexpected SQL rejection: {error:?}"
+    );
+    let preserved = query_one(
+        &admin,
+        sql!(
+            "SELECT r.name, r.address::text FROM mz_internal.mz_network_policy_rules r
+              JOIN mz_internal.mz_network_policies p ON p.id = r.policy_id
+              WHERE p.name = 'retry_policy'"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(preserved.get::<_, String>(0), rule.get::<_, String>(0));
+    assert_eq!(preserved.get::<_, String>(1), rule.get::<_, String>(1));
     peer.expire().await;
+}
+
+/// Defeat prepared catalog candidates with real peer progress while checking that
+/// the coordinator still serves unrelated commands. The caller checks the result.
+async fn complete_under_catalog_contention<T>(
+    server: &test_util::TestServer,
+    peer: &mut dyn DurableCatalogState,
+    name: &str,
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+    let hook = RemoveCatalogHook(CATALOG_FAILPOINT);
+    fail::cfg_callback(CATALOG_FAILPOINT, move || {
+        let (resume_tx, resume_rx) = mpsc::channel();
+        if candidate_tx.send(resume_tx).is_ok() {
+            tokio::task::block_in_place(|| {
+                // Dropping the driver releases queued and active candidates on
+                // timeout or panic. This fuse is only a last resort for teardown.
+                let _ = resume_rx.recv_timeout(Duration::from_secs(180));
+            });
+        }
+    })
+    .unwrap();
+    let conflicts = AtomicUsize::new(0);
+    let interference = async {
+        while let Some(resume) = candidates.recv().await {
+            let release = ReleaseCandidate(resume);
+            peer.sync_to_current_updates().await.unwrap();
+            let upper = peer.current_upper().await;
+            peer.advance_upper(upper.step_forward()).await.unwrap();
+            conflicts.fetch_add(1, Ordering::SeqCst);
+            drop(release);
+        }
+    };
+    let frontend = async {
+        let mut operation = Box::pin(operation);
+        assert!(futures::poll!(&mut operation).is_pending());
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while conflicts.load(Ordering::SeqCst) < 4 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("operation did not encounter peer contention");
+        assert!(futures::poll!(&mut operation).is_pending());
+
+        let responsive = tokio::time::timeout(
+            Duration::from_secs(5),
+            server.inner.adapter_client().get_system_vars(),
+        )
+        .await;
+        drop(hook);
+        let result = tokio::time::timeout(Duration::from_secs(30), operation)
+            .await
+            .expect("operation did not recover after contention");
+        assert!(
+            responsive.is_ok(),
+            "{name} contention monopolized the coordinator"
+        );
+        result
+    };
+    let ((), result) = tokio::join!(interference, frontend);
+    result
 }
