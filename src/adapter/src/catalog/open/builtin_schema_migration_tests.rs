@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mz_catalog::builtin::{BuiltinSource, BuiltinTable};
+use mz_catalog::builtin::{BuiltinMaterializedView, BuiltinSource, BuiltinTable};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{RelationDesc, SqlScalarType};
@@ -47,10 +47,10 @@ fn hydration_history_forced_migration_policy() {
 }
 
 /// A builtin that the source version never had has no shard registered. An `Evolution` step for
-/// it, registered at a version above the source, must be skipped rather than bail out: the leader
-/// allocates the shard at the target schema during bootstrap, and a read-only process that bailed
-/// here would crash-loop. Regression test for SQL-713 (upgrade from before
-/// `mz_replica_hydration_history` existed to a version that evolves it).
+/// it, registered at a version above the source, must be skipped rather than bail out, since there
+/// is nothing to evolve: a read-only process that bailed here would crash-loop. Regression test
+/// for SQL-713 (upgrade from before `mz_replica_hydration_history` existed to a version that
+/// evolves it).
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_evolution_skips_builtin_without_shard() {
@@ -156,6 +156,201 @@ fn test_evolution_skips_builtin_without_shard() {
             "{name}: the builtin without a shard must be skipped"
         );
     }
+}
+
+/// A target version replaces a builtin MV and adds a builtin table, MV and source. The boots, in
+/// order: a read-only boot, a read-only boot of another deploy generation that is then aborted, a
+/// leader that gives the replaced MV, the new table and the new MV each other's global ids, the
+/// promoted leader, and a leader of the next version.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_shardless_builtin_collections_get_migration_shards() {
+    configure_tracing_for_turmoil();
+
+    let mut sim = turmoil::Builder::new().build();
+    let persist_location = init_persist(&mut sim);
+    let migration_shard_id = ShardId::new();
+    let (v1, v2, v3) = (
+        Version::new(0, 1, 0),
+        Version::new(0, 2, 0),
+        Version::new(0, 3, 0),
+    );
+
+    let info = |global_id: u64,
+                shard_id: Option<ShardId>,
+                builtin: &'static Builtin<NameReference>| ObjectInfo {
+        global_id: GlobalId::System(global_id),
+        shard_id,
+        builtin,
+        fingerprint: builtin.fingerprint(),
+    };
+    let (replaced_object, replaced_builtin) = make_builtin_mv("replaced_mv".into());
+    let (old_table_object, old_table_builtin) = make_builtin_table("old_table".into());
+    let (table_object, table_builtin) = make_builtin_table("new_table".into());
+    let (mv_object, mv_builtin) = make_builtin_mv("new_mv".into());
+    let (source_object, source_builtin) = make_builtin_source("new_source".into());
+    let catalog_raw_object = MZ_CATALOG_RAW_DESCRIPTION.clone();
+    let catalog_raw_builtin: &'static Builtin<NameReference> =
+        leak(Builtin::Source(&*MZ_CATALOG_RAW));
+    let replaced_shard = ShardId::new();
+    let old_table_shard = ShardId::new();
+    let steps = [MigrationStep {
+        version: v2.clone(),
+        object: replaced_object.clone(),
+        mechanism: Mechanism::Replacement,
+    }];
+
+    // `ids` are the global ids of the replaced MV, the new table and the new MV. `shards`, if
+    // given, holds the shards that the replaced MV and the new collections already have, by
+    // global id.
+    let mut boot = |name: &'static str,
+                    (source, target): (&Version, &Version),
+                    deploy_generation: u64,
+                    read_only: bool,
+                    ids: [u64; 3],
+                    shards: Option<&BTreeMap<GlobalId, ShardId>>| {
+        let shard = |id| shards.map(|shards| shards[&GlobalId::System(id)]);
+        let [replaced_id, table_id, mv_id] = ids;
+        let system_objects = BTreeMap::from([
+            (
+                replaced_object.clone(),
+                info(
+                    replaced_id,
+                    shard(replaced_id).or(Some(replaced_shard)),
+                    replaced_builtin,
+                ),
+            ),
+            (
+                old_table_object.clone(),
+                info(6, Some(old_table_shard), old_table_builtin),
+            ),
+            (
+                table_object.clone(),
+                info(table_id, shard(table_id), table_builtin),
+            ),
+            (mv_object.clone(), info(mv_id, shard(mv_id), mv_builtin)),
+            (source_object.clone(), info(4, shard(4), source_builtin)),
+            (
+                catalog_raw_object.clone(),
+                info(5, None, catalog_raw_builtin),
+            ),
+        ]);
+        let (source, target) = (source.clone(), target.clone());
+        let steps = steps.to_vec();
+        let persist_location = persist_location.clone();
+        let result = Rc::new(RefCell::new(None));
+        let host_result = Rc::clone(&result);
+        sim.host(name, move || {
+            let system_objects = system_objects.clone();
+            let (source, target) = (source.clone(), target.clone());
+            let steps = steps.clone();
+            let persist_location = persist_location.clone();
+            let result = Rc::clone(&host_result);
+            async move {
+                let persist_cache = PersistClientCache::new_for_turmoil();
+                let persist_client = persist_cache.open(persist_location).await.unwrap();
+                let migration = Migration {
+                    source_version: source,
+                    target_version: target,
+                    deploy_generation,
+                    system_objects,
+                    migration_shard: migration_shard_id,
+                    config: BuiltinItemMigrationConfig {
+                        persist_client,
+                        read_only,
+                        force_migration: None,
+                    },
+                };
+                let res = migration.run(&steps).await.unwrap();
+                result
+                    .borrow_mut()
+                    .replace((res.new_shards, res.shards_to_finalize));
+                Ok(())
+            }
+        });
+        sim.bounce(name);
+        while result.borrow().is_none() {
+            sim.step().unwrap();
+        }
+        sim.crash(name);
+        result.borrow_mut().take().unwrap()
+    };
+
+    let (ro, _) = boot("read-only", (&v1, &v2), 1, true, [1, 2, 3], None);
+    assert_eq!(
+        ro.keys().copied().collect::<Vec<_>>(),
+        [1, 2, 3, 4].map(GlobalId::System),
+        "the replaced MV and the shardless storage collections other than the catalog shard get a \
+         shard"
+    );
+    let (aborted, _) = boot("aborted-generation", (&v1, &v2), 2, true, [1, 2, 3], None);
+    assert!(
+        aborted
+            .values()
+            .all(|shard| !ro.values().any(|s| s == shard)),
+        "another deploy generation gets its own shards"
+    );
+
+    let (swapped, _) = boot("swapped-ids-leader", (&v1, &v2), 1, false, [2, 3, 1], None);
+    for id in [1, 2, 3].map(GlobalId::System) {
+        assert_ne!(
+            swapped[&id], ro[&id],
+            "an entry is not reused for another builtin with the same global id"
+        );
+    }
+
+    let (leader, _) = boot("leader", (&v1, &v2), 1, false, [1, 2, 3], None);
+    assert_eq!(
+        leader, ro,
+        "the promoted leader reuses the read-only process's shards"
+    );
+
+    let (next, to_finalize) = boot("next-version", (&v2, &v3), 1, false, [1, 2, 3], Some(&ro));
+    assert!(next.is_empty(), "builtins with a shard get none allocated");
+    assert!(
+        ro.values().all(|shard| !to_finalize.contains(shard)),
+        "cleanup keeps the shards in use"
+    );
+    assert!(
+        aborted
+            .values()
+            .chain([1, 2, 3].map(|id| &swapped[&GlobalId::System(id)]))
+            .all(|shard| to_finalize.contains(shard)),
+        "cleanup finalizes the other shards"
+    );
+}
+
+/// Versions that don't know `Key::object` decode keys that have it, and a key without it encodes
+/// as those versions wrote it.
+#[mz_ore::test]
+fn migration_shard_key_object_is_compatible() {
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct KeyWithoutObject {
+        global_id: u64,
+        build_version: Version,
+        deploy_generation: Option<u64>,
+    }
+
+    let (object, _) = make_builtin_mv("mv".into());
+    let key = migration_shard::Key {
+        global_id: 3,
+        build_version: Version::new(0, 2, 0),
+        deploy_generation: Some(1),
+        object: Some((&object).into()),
+    };
+    let encoded = key.to_string();
+    assert_eq!(encoded.parse::<migration_shard::Key>().unwrap(), key);
+    let old: KeyWithoutObject = serde_json::from_str(&encoded).unwrap();
+
+    let without_object = migration_shard::Key {
+        object: None,
+        ..key
+    };
+    assert_eq!(
+        without_object.to_string(),
+        serde_json::to_string(&old).unwrap(),
+        "cleanup retracts an entry by re-encoding its key, which has to match the stored bytes"
+    );
 }
 
 #[test] // allow(test-attribute)
@@ -426,7 +621,7 @@ fn make_builtin_table(name: String) -> (SystemObjectDescription, &'static Builti
 fn make_builtin_source(name: String) -> (SystemObjectDescription, &'static Builtin<NameReference>) {
     let object = SystemObjectDescription {
         schema_name: "schema".into(),
-        object_type: CatalogItemType::Table,
+        object_type: CatalogItemType::Source,
         object_name: name.clone(),
     };
 
@@ -444,6 +639,31 @@ fn make_builtin_source(name: String) -> (SystemObjectDescription, &'static Built
         ontology: None,
     };
     let builtin = leak(Builtin::Source(leak(builtin)));
+
+    (object, builtin)
+}
+
+fn make_builtin_mv(name: String) -> (SystemObjectDescription, &'static Builtin<NameReference>) {
+    let object = SystemObjectDescription {
+        schema_name: "schema".into(),
+        object_type: CatalogItemType::MaterializedView,
+        object_name: name.clone(),
+    };
+
+    let builtin = BuiltinMaterializedView {
+        name: name.leak(),
+        schema: "schema",
+        oid: 1,
+        desc: RelationDesc::builder()
+            .with_column("a", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "IN CLUSTER c AS SELECT 'a' AS a",
+        is_retained_metrics_object: false,
+        access: Vec::new(),
+        ontology: None,
+    };
+    let builtin = leak(Builtin::MaterializedView(leak(builtin)));
 
     (object, builtin)
 }
