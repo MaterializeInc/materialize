@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Locations are tried by weight: exact path, then longest prefix, then
+# regex, then "/". So /api/x.js reaches the backend, not "static".
+
+[locations.app]
+path = "/"
+plugins = ["app_files", "app_cache_headers", "compress"]
+
+[locations.static]
+path = "~(?i)\\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2)$"
+plugins = ["static_files", "static_cache_headers", "compress"]
+
+[locations.api]
+path = "/api"
+upstream = "environmentd"
+plugins = ["request_id", "compress"]
+client_max_body_size = "100MiB"
+enable_reverse_proxy_headers = true
+connection_timeout = "600s"
+read_timeout = "600s"
+write_timeout = "600s"
+
+# RFC 9728 OAuth protected-resource metadata. MCP clients pointed at
+# /api/mcp follow the resource_metadata URL from the 401 challenge, which
+# environmentd publishes on this host, so it must reach environmentd too.
+[locations.oauth_metadata]
+path = "/.well-known/oauth-protected-resource"
+upstream = "environmentd"
+plugins = ["request_id"]
+enable_reverse_proxy_headers = true
+
+# pingap serves a server's Prometheus registry only on that server's own
+# port. The metrics server proxies here over loopback, and nothing else may.
+[locations.metrics_loopback]
+path = "=/_mz_console_metrics"
+plugins = ["loopback_only"]
+
+[locations.metrics]
+path = "=/metrics"
+upstream = "console_self"
+rewrite = "^/metrics$ /_mz_console_metrics"
+
+[locations.metrics_not_found]
+path = "/"
+plugins = ["not_found"]

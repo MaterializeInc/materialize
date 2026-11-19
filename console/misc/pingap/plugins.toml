@@ -1,0 +1,65 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+[plugins.app_files]
+category = "directory"
+path = "/usr/share/nginx/html"
+index = "index.html"
+fallback = "/index.html"
+
+# No fallback: a missing asset must be a 404, not index.html parsed as JS.
+[plugins.static_files]
+category = "directory"
+path = "/usr/share/nginx/html"
+
+# NOTE: the directory plugin's own `headers` lose Cache-Control on any file
+# larger than its chunk_size (4kb), which it streams. Set it afterwards.
+[plugins.app_cache_headers]
+category = "response_headers"
+always = true
+set_headers = [
+    "Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+    "Expires: 0",
+]
+
+[plugins.static_cache_headers]
+category = "response_headers"
+always = true
+set_headers = ["Cache-Control: public, max-age=31536000, immutable"]
+
+[plugins.compress]
+category = "compression"
+gzip_level = 6
+min_length = 256
+types = [
+    "text/html",
+    "text/plain",
+    "text/css",
+    "application/json",
+    "application/javascript",
+    "application/x-javascript",
+    "text/xml",
+    "application/xml",
+    "application/xml+rss",
+    "text/javascript",
+    "image/svg+xml",
+]
+
+[plugins.request_id]
+category = "request_id"
+header_name = "X-Request-ID"
+
+[plugins.loopback_only]
+category = "ip_restriction"
+type = "allow"
+ip_list = ["127.0.0.1", "::1"]
+
+[plugins.not_found]
+category = "mock"
+status = 404
