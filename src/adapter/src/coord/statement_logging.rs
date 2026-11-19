@@ -448,7 +448,7 @@ impl Coordinator {
 
         self.statement_logging
             .log
-            .begin_execution(record, mseh_update, maybe_ps_event);
+            .begin_execution(record, maybe_ps_event);
 
         Some(StatementLoggingId(execution_uuid))
     }
