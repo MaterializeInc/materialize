@@ -9291,10 +9291,15 @@ dependencies = [
  "mz-ore",
  "openssl",
  "postgres-openssl",
+ "rustls",
+ "rustls-native-certs",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
+ "tracing",
+ "x509-cert",
 ]
 
 [[package]]
