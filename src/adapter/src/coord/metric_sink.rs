@@ -80,6 +80,38 @@ pub(super) struct CuratedMetricSink {
     prefix: &'static str,
 }
 
+/// The `ex` CTE that per-dataflow definitions key their series on: each dataflow's representative
+/// export id, as a string literal for `concat!`.
+///
+/// Key on the export id from `mz_compute_exports`, not `mz_dataflow_global_ids`: a materialized view
+/// builds under a transient view id and appears only as an export, so a global-id label names a
+/// `t<N>` that maps to no catalog object and churns on every re-render.
+///
+/// `min(export_id)` collapses a multi-export dataflow to one series (lexicographic, so
+/// `min('u10', 'u2')` is `'u10'`: arbitrary but stable). The group-size hint stops that `min` from
+/// rendering the 8-level hierarchy, which would otherwise show up as tuning advice for the sink's
+/// own dataflow in `mz_expected_group_size_advice`.
+///
+/// NOTE: measuring a dataflow whose logged state this sink's own work changes is a feedback loop.
+/// Every change to it changes its log rows, the sink reads that on the next logging tick, and the
+/// dataflow re-runs every tick for the replica's lifetime (SQL-730). `NOT LIKE 't%'` keeps out the
+/// sink's own dataflow and the replica's introspection subscribes. `NOT LIKE 'si%'` keeps out the
+/// logging dataflow: `si<N>` names only the introspection source indexes it exports, and a plain
+/// system index prints `s<N>`. Only that filter excludes it under `INTROSPECTION DEBUGGING`, which
+/// registers the loggers before the logging dataflow is built, so its own operators get log rows.
+/// The cost is that transient dataflows go unreported, so these families sum below the replica's
+/// totals.
+macro_rules! dataflow_export_cte {
+    () => {
+        "ex AS (
+    SELECT dataflow_id, min(export_id) AS export_id
+    FROM mz_introspection.mz_compute_exports
+    WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%'
+    GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+)"
+    };
+}
+
 /// The curated metric sinks, installed on every replica.
 ///
 /// Sources read the raw `..._raw` logging relations, not a derived view that re-aggregates them
@@ -89,58 +121,52 @@ pub(super) struct CuratedMetricSink {
 /// and is read freely.
 ///
 /// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
-/// reports one number per grouping key rather than one per process. The size families emit one series
-/// per dataflow, the errors family one per export.
+/// reports one number per grouping key rather than one per process. The size and elapsed families
+/// emit one series per dataflow, the errors family one per export, and the park and peek families
+/// one per replica.
 const CURATED: &[CuratedMetricSink] = &[
     CuratedMetricSink {
         name: "mz_metric_arrangement_sizes",
         prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
-        // Key on the export id from `mz_compute_exports`, not `mz_dataflow_global_ids`: a
-        // materialized view builds under a transient view id and appears only as an export, so a
-        // global-id label names a `t<N>` that maps to no catalog object and churns on every
-        // re-render.
-        //
         // Logs are per operator, so map operator -> dataflow -> export id. Take the operator ->
         // dataflow step off `mz_dataflow_addresses_per_worker` (`address[1]` is the dataflow id),
         // which avoids the multi-way join behind `mz_dataflow_operator_dataflows`.
         //
-        // `min(export_id)` collapses a multi-export dataflow to one series (lexicographic, so
-        // `min('u10', 'u2')` is `'u10'`: arbitrary but stable). The group-size hint stops that `min`
-        // from rendering the 8-level hierarchy, which would otherwise show up as tuning advice for
-        // the sink's own dataflow in `mz_expected_group_size_advice`.
-        //
-        // NOTE: counting an arrangement this sink reads is a feedback loop. Every change to it
-        // changes its logged size, the sink reads that on the next logging tick, and the dataflow
-        // re-runs every tick for the replica's lifetime (SQL-730). `NOT LIKE 't%'` keeps out the
-        // sink's own dataflow and the replica's introspection subscribes. `NOT LIKE 'si%'` keeps
-        // out the logging dataflow: `si<N>` names only the introspection source indexes it
-        // exports, and a plain system index prints `s<N>`. Only that filter excludes it under
-        // `INTROSPECTION DEBUGGING`, which registers the loggers before the logging dataflow is
-        // built, so its own operators get log rows. The cost is that transient dataflows'
-        // arrangements go unreported, so these families sum below what the replica holds.
-        //
         // `f` joins each raw log separately to reuse its `(operator_id, worker_id)` index
-        // (`LogVariant::index_by`). One union would arrange all three logs' rows afresh.
-        source_sql: "
-WITH ex AS (
-    SELECT dataflow_id, min(export_id) AS export_id
-    FROM mz_introspection.mz_compute_exports
-    WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%'
-    GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
-),
+        // (`LogVariant::index_by`). One union would arrange all five logs' rows afresh.
+        //
+        // `arrangement_count` counts the distinct operators in `rec`, so an arrangement that
+        // holds no records is not counted.
+        source_sql: concat!(
+            "
+WITH ",
+            dataflow_export_cte!(),
+            ",
 oe AS (
     SELECT a.id, a.worker_id, ex.export_id
     FROM mz_introspection.mz_dataflow_addresses_per_worker a
     JOIN ex ON ex.dataflow_id = a.address[1]
+),
+rec AS (
+    SELECT oe.export_id, r.operator_id
+    FROM mz_introspection.mz_arrangement_records_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
 ),
 f AS (
     SELECT 'arrangement_size_bytes'::text AS metric_name, oe.export_id
     FROM mz_introspection.mz_arrangement_heap_size_raw r
     JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
     UNION ALL
-    SELECT 'arrangement_records'::text, oe.export_id
-    FROM mz_introspection.mz_arrangement_records_raw r
+    SELECT 'arrangement_capacity_bytes'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_heap_capacity_raw r
     JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_allocations'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_heap_allocations_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_records'::text, export_id
+    FROM rec
     UNION ALL
     SELECT 'arrangement_batches'::text, oe.export_id
     FROM mz_introspection.mz_arrangement_batches_raw r
@@ -151,11 +177,75 @@ SELECT metric_name, 'gauge'::text AS metric_type,
        count(*)::double precision AS value,
        CASE metric_name
            WHEN 'arrangement_size_bytes' THEN 'arrangement heap size in bytes'
+           WHEN 'arrangement_capacity_bytes' THEN 'arrangement heap capacity in bytes'
+           WHEN 'arrangement_allocations' THEN 'number of allocations in arrangement heaps'
            WHEN 'arrangement_records' THEN 'number of records in arrangement heaps'
            WHEN 'arrangement_batches' THEN 'number of batches in arrangements'
        END AS help
 FROM f
-GROUP BY metric_name, export_id",
+GROUP BY metric_name, export_id
+UNION ALL
+SELECT 'arrangement_count'::text, 'gauge'::text,
+       map_build(LIST[ROW('id', export_id)])::map[text=>text],
+       count(DISTINCT operator_id)::double precision, 'number of arrangements'::text
+FROM rec
+GROUP BY export_id"
+        ),
+    },
+    CuratedMetricSink {
+        name: "mz_metric_dataflow_elapsed",
+        prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
+        // A dataflow's root operator (address `[dataflow_id]`) is the subgraph its other operators
+        // run inside, so its elapsed time covers the whole dataflow. The raw log carries the elapsed
+        // nanoseconds as the row's multiplicity, so `count(*)` sums them.
+        //
+        // NOTE: every scheduled operator, this sink's own included, adds a row update on each
+        // logging tick, and the join must look up each one to discard all but the roots. So this
+        // dataflow does work proportional to the replica's scheduling activity on every tick for
+        // the replica's lifetime. Deny it by name in `disabled_metric_sinks` if that shows up.
+        source_sql: concat!(
+            "
+WITH ",
+            dataflow_export_cte!(),
+            ",
+roots AS (
+    SELECT a.id, a.worker_id, ex.export_id
+    FROM mz_introspection.mz_dataflow_addresses_per_worker a
+    JOIN ex ON ex.dataflow_id = a.address[1]
+    WHERE list_length(a.address) = 1
+)
+SELECT 'dataflow_elapsed_seconds_total'::text AS metric_name, 'counter'::text AS metric_type,
+       map_build(LIST[ROW('id', roots.export_id)])::map[text=>text] AS labels,
+       count(*)::double precision / 1e9 AS value,
+       'time spent running the dataflow, in seconds'::text AS help
+FROM mz_introspection.mz_scheduling_elapsed_raw e
+JOIN roots ON e.id = roots.id AND e.worker_id = roots.worker_id
+GROUP BY roots.export_id"
+        ),
+    },
+    CuratedMetricSink {
+        name: "mz_metric_worker_parks",
+        prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
+        // Each raw row is one park, bucketed by `slept_for_ns` rounded up to a power of two
+        // (`mz_compute::logging::timely`), so the sum is an upper bound on the time parked.
+        source_sql: "
+SELECT 'park_duration_seconds_total'::text AS metric_name, 'counter'::text AS metric_type,
+       NULL::map[text=>text] AS labels,
+       sum(slept_for_ns)::double precision / 1e9 AS value,
+       'time workers spent parked, in seconds, rounded up per park'::text AS help
+FROM mz_introspection.mz_scheduling_parks_histogram_raw",
+    },
+    CuratedMetricSink {
+        name: "mz_metric_pending_peeks",
+        prefix: METRIC_SINK_CURATED_PREFIX_MARKER,
+        // A peek has a row on every worker that holds it, so count distinct peek ids. A global
+        // aggregate emits a row on empty input too, so an idle replica reads 0 rather than a gap.
+        source_sql: "
+SELECT 'pending_peeks'::text AS metric_name, 'gauge'::text AS metric_type,
+       NULL::map[text=>text] AS labels,
+       count(DISTINCT id)::double precision AS value,
+       'number of peeks the replica has not yet answered'::text AS help
+FROM mz_introspection.mz_active_peeks_per_worker",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",
