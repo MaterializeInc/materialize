@@ -284,6 +284,12 @@ wrappers = [
     "pulldown-cmark",
 ]
 
+# bzip2 decodes untrusted user files, e.g. in `COPY FROM`. Use bzip2's default
+# libbz2-rs-sys backend, a Rust port, instead of the C libbz2 that `bzip2-sys`
+# builds.
+[[bans.deny]]
+name = "bzip2-sys"
+
 # We shouldn't manually vendor `protoc`, instead rely on it through `mz-build-tools`.
 [[bans.deny]]
 name = "protobuf-src"

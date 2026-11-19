@@ -327,10 +327,6 @@ bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stabl
 byteorder = "1.5"
 bytes = "1.12.1"
 bytesize = "2.7.0"
-# async-compression turns on bzip2's default libbz2-rs-sys backend. Crates that
-# decode bzip2 depend on this to also turn on `bzip2-sys`, which bzip2 then uses
-# in place of libbz2-rs-sys.
-bzip2 = { version = "0.6.1", features = ["bzip2-sys"] }
 cc = "1.5.1"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
