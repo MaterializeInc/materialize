@@ -739,6 +739,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let (err_output, err_stream) = builder.new_output();
         let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
         let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        // The operator reschedules itself through its activator while it has work.
+        builder.set_notify_for(0, FrontierInterest::Never);
         let operator_info = builder.operator_info();
 
         builder.build(move |_capabilities| {
@@ -854,6 +856,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
         let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        // The operator reschedules itself through its activator while it has work.
+        builder.set_notify_for(0, FrontierInterest::Never);
         let operator_info = builder.operator_info();
 
         builder.build(move |_capabilities| {

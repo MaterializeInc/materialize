@@ -109,6 +109,7 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -150,11 +151,14 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::{CapabilitySet, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
+use timely::progress::operate::FrontierInterest;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
@@ -1637,8 +1641,28 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             }
         }
 
+        // Introspection updates are published once per second by default, so polling more
+        // often would not make the hydration status visible sooner.
+        const HYDRATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
         let name = format!("LogOperatorHydration ({lir_id})");
-        stream.unary_frontier(Pipeline, &name, |_cap, _info| {
+        let scope = stream.scope();
+        let mut builder = OperatorBuilderRc::new(name, scope.clone());
+        let mut input = builder.new_input(stream, Pipeline);
+        let (output, passthrough) = builder.new_output();
+        let mut output = OutputBuilder::<_, CapacityContainerBuilder<D>>::from(output);
+        let activator = scope.activator_for(builder.operator_info().address);
+
+        // The operator polls its input frontier until it has reported hydration, and is then
+        // scheduled only for data. With frontier interest it would be scheduled for every
+        // frontier advance for as long as the dataflow lives.
+        // NOTE: Holding a capability on an unconnected output under
+        // `FrontierInterest::IfCapability` does not work. Observed: timely does not schedule a
+        // region whose only interested operator holds such a capability, so the operator never
+        // sees the frontier advance.
+        builder.set_notify_for(0, FrontierInterest::Never);
+
+        builder.build(move |_capabilities| {
             let mut hydrated = false;
 
             for &export_id in &export_ids {
@@ -1649,8 +1673,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }));
             }
 
-            move |(input, frontier), output| {
+            move |frontiers| {
                 // Pass through inputs.
+                let mut output = output.activate();
                 input.for_each(|cap, data| {
                     output.session(&cap).give_container(data);
                 });
@@ -1659,7 +1684,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     return;
                 }
 
-                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontiers[0].frontier())
+                {
                     hydrated = true;
 
                     for &export_id in &export_ids {
@@ -1669,9 +1695,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             hydrated,
                         }));
                     }
+                } else {
+                    activator.activate_after(HYDRATION_POLL_INTERVAL);
                 }
             }
-        })
+        });
+
+        passthrough
     }
 }
 
