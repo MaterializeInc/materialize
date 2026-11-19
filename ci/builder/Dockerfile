@@ -303,7 +303,7 @@ RUN mkdir rust \
            # (yanked futures-util/zip, plus a crate using the perma-unstable \
            # `rustc_layout_scalar_valid_range_*` attribute). Let cargo resolve \
            # compatible versions instead. \
-           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+           cargo install --root /usr/local --version "=0.13.2" cargo-fuzz; \
        fi \
     && rm -rf /cargo/registry /cargo/git
 
