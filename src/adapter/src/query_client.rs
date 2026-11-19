@@ -1850,6 +1850,7 @@ mod tests {
                     Some(Uuid::new_v4()),
                     None,
                     BTreeSet::from([id]),
+                    Default::default(),
                 )
                 .expect("can record index plan dependency");
                 tx.set_collection_compaction_bound(GlobalId::User(n), Some(Timestamp::from(20)))

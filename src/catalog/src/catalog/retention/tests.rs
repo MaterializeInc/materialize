@@ -1031,6 +1031,7 @@ impl Fixture {
     fn select_plan(&self, id: GlobalId, build: &str, imports: Option<BTreeSet<GlobalId>>) -> Op {
         // Catalog admission checks the selection metadata, not immutable bytes.
         Op::SetWrittenPlan {
+            introspection: Default::default(),
             id,
             build_version: build.into(),
             expected_revision: self.catalog.state().written_plan(id, build),

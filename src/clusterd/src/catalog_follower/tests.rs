@@ -272,6 +272,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         vec![
             op,
             Op::SetWrittenPlan {
+                introspection: Default::default(),
                 id: global_id,
                 build_version: BUILD.into(),
                 expected_revision: None,
@@ -318,6 +319,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
     transact(
         &mut writer,
         vec![Op::SetWrittenPlan {
+            introspection: Default::default(),
             id: global_id,
             build_version: BUILD.into(),
             expected_revision: Some(revision),
@@ -354,6 +356,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
     transact(
         &mut writer,
         vec![Op::SetWrittenPlan {
+            introspection: Default::default(),
             id: global_id,
             build_version: BUILD.into(),
             expected_revision: Some(replacement),

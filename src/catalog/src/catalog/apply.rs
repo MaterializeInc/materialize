@@ -628,6 +628,7 @@ impl CatalogState {
                         revision: plan.revision,
                         replica_owner: plan.replica_owner,
                         imports: plan.imports,
+                        introspection: plan.introspection,
                     },
                     diff,
                 );

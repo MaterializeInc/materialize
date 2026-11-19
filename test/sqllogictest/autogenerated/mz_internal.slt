@@ -249,8 +249,8 @@ comment  text  The␠comment␠itself.
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
 ----
-object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions.id`.
-dependency_id  text  The␠ID␠of␠a␠compute␠dependency.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
+object_id  text  The␠global␠ID␠of␠a␠maintained␠compute␠object␠or␠the␠execution-qualified␠ID␠of␠a␠subscription.␠Corresponds␠to␠`mz_internal.mz_object_global_ids.global_id`␠or␠`mz_internal.mz_subscriptions.id`.
+dependency_id  text  The␠global␠ID␠of␠a␠physical␠compute␠dependency.␠Corresponds␠to␠`mz_internal.mz_object_global_ids.global_id`.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_hydration_statuses' ORDER BY position
@@ -333,7 +333,7 @@ at  timestamp␠with␠time␠zone  The␠time␠of␠a␠`REFRESH␠AT`,␠or�
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
 ----
-materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
+materialized_view_id  text  The␠global␠ID␠of␠the␠materialized␠view's␠current␠writer.␠Corresponds␠to␠`mz_internal.mz_object_global_ids.global_id`.
 last_completed_refresh  mz_timestamp  The␠time␠of␠the␠last␠successfully␠completed␠refresh.␠`NULL`␠if␠the␠materialized␠view␠hasn't␠completed␠any␠refreshes␠yet.
 next_refresh  mz_timestamp  The␠time␠of␠the␠next␠scheduled␠refresh.␠`NULL`␠if␠the␠materialized␠view␠has␠no␠future␠scheduled␠refreshes.
 

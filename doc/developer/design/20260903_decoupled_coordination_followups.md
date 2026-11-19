@@ -510,41 +510,47 @@ Replica-produced statistics are candidates for direct execution publication.
 Webhook contributions remain adapter-owned and need aggregation, not relocation
 to replicas or a designated adapter.
 
+The webhook writer in `src/storage-controller/src/adapter_storage.rs` uses
+`RowScope::Deployment(None)` for the shared webhook partition. Multiple adapters
+therefore reconcile the same rows rather than independent contributions. Record
+this overwrite risk separately from replica-statistics publication. Neither
+repair is in the current M3 slice.
+
 Preserve cumulative counters across restart and retirement, inactive-stat
 retention and webhook accounting. The relay boundary is clear. The smallest
 complete conversion still needs investigation.
 
 ### Maintained physical dependencies and MV refresh state
 
-The default-debug two-adapter witness reproduced missing dependency and refresh
-rows during peer join and restart. This ownership repair is now M3 work, not a
-deferred follow-up. See `remaining-introspection-ownership.md` and
-`dependency-refresh-fixed-evidence/` under the handoff's evidence root.
+These shared facts now derive from selected written-plan metadata and storage
+frontiers, rather than adapter observations. The selected revision carries its
+physical imports, refresh schedule and original storage as-of. No Item fields or
+adapter reductions are needed. Unknown progress remains distinct from a completed
+schedule. Subscription physical imports retain their separate adapter owner.
 
-The reduction contract remains open. Deduplicating live adapters' edges can
-include different selected plans. Selecting the furthest live refresh observation
-must preserve its complete last/next pair, including completed-schedule NULLs,
-and can fall back when that execution retires. Do not silently substitute these
-semantics for one authoritative plan or retirement-stable progress.
+The old sources and publishers are removed. The default-debug real-producer test
+preserves dependency, refresh and shard rows across adapter join/restart and plan
+changes. Restoring the old publishers makes that test lose rows during peer join.
+See `plan-introspection-red-green.md` under the handoff's evidence root for scope
+and remaining verification limits.
 
-`src/adapter/src/coord/introspection/frontiers.rs` publishes selected physical
-imports and refresh observations through differential introspection collections.
-The maintained dependency branch of `mz_compute_dependencies` still reads
-`mz_maintained_compute_dependencies`. Materialization dependency and lag views
-consume it. Subscription physical imports are a separate, valid adapter-owned
-branch and must survive any change.
+### Wallclock lag histogram multiplicity
 
-A replacement must expose actual selected imports, not substitute logical object
-dependencies. Establish whether committed plan metadata supports a projection
-before choosing a mechanism. MV refresh observations combine committed schedules
-and initial as-ofs with storage write progress. Preserve unknown progress and
-completed schedules. Remove both old sources and their adapter-local publication
-state only with complete replacement inputs, not by stopping the frontier timer.
+Deferred beyond M3. Each adapter's frontier collector calls
+`NativeWallclockLag::update` for shared collections and replicas
+(`src/adapter/src/coord/introspection/frontiers.rs`). Duplicate sampling can make
+histogram counts scale with adapter count rather than elapsed observation time.
+Do not infer a latency-distribution change from increased counts alone. Establish
+the intended sampling owner before changing publication or public reductions.
 
 ### Catalog-derived projections and lifecycle history
 
 The design retains originator-only projection publication and its scoped M3
-inconsistency allowance. Suitable derived facts could become raw-catalog-backed
+inconsistency allowance. A crash after the catalog commit but before builtin
+publication can leave derived rows missing indefinitely. Followers apply the
+catalog changes but intentionally do not republish those rows. Recovery of this
+gap remains deferred, apart from the explicitly scoped derived-relation repairs
+above. Suitable derived facts could become raw-catalog-backed
 relations. Transactionally sourced lifecycle events are a separate possible
 follow-up. Neither is approval to add projection-recovery protocols, watermarks
 or another policy owner during this milestone.
@@ -645,16 +651,17 @@ The read-only investigation is in `txn-retirement/verified-summary.json`, with
 catalog/WAL history, per-shard states and reproducible decoder scripts alongside.
 Repair checks and remaining failures are recorded in `txn-retirement/repair.md`.
 
-### Startup history pruning
+### Shared storage maintenance
 
-`src/adapter/src/coord.rs::prune_storage_usage_events_on_startup` and adjacent
-startup history pruning derive negatives from snapshots and submit ordinary
-builtin updates. Their comments rely on startup exclusivity. Concurrent adapters
-make process-local startup exclusivity insufficient as a general argument.
+Startup history pruning now writes snapshot-derived negatives conditionally at
+snapshot timestamp plus one and discards conflicts. The two-adapter debug
+regression covers both histories and restart. Restoring blind appends produces
+negative multiplicities. See `pruning-red-green.md` under the evidence root.
 
-Audit the real multiwriter retirement/append ordering before treating these as
-harmless one-shot reads. This is a concrete concern, not a reproduced failure.
-Do not fold its repair into frontier ownership without scope agreement.
+`mz_storage_shards` now derives live mappings from the catalog instead of an
+adapter differential writer. Storage-usage collection still needs to skip covered
+intervals and publish conditionally. That repair remains M3 work. These shared
+facts must not gain per-adapter observation owners.
 
 ## Snapshots that are not evidence of a recurring rescan bug
 

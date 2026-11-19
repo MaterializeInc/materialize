@@ -242,6 +242,7 @@ fn selection_changes_include_unselects_and_filter_the_build() {
     .into_iter()
     .map(|(id, build, diff)| ParsedStateUpdate {
         kind: ParsedStateUpdateKind::WrittenPlan(WrittenPlan {
+            introspection: Default::default(),
             id,
             build_version: build.into(),
             revision: uuid::Uuid::new_v4(),

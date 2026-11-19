@@ -1970,6 +1970,21 @@ impl Catalog {
             let expected_revision = self.state.written_plan(id, &build_version);
             let revision = Uuid::new_v4();
             let imports = plan.collection_imports().copied().collect();
+            let introspection = crate::durable::objects::WrittenPlanIntrospection {
+                physical_imports: plan
+                    .physical_plan
+                    .source_imports
+                    .keys()
+                    .chain(plan.physical_plan.index_imports.keys())
+                    .copied()
+                    .collect(),
+                refresh_schedule: plan.physical_plan.refresh_schedule.clone(),
+                initial_storage_as_of: plan
+                    .physical_plan
+                    .initial_storage_as_of
+                    .as_ref()
+                    .and_then(|frontier| frontier.as_option().copied()),
+            };
             entries.push((id, revision, plan));
             selections.push(Op::SetWrittenPlan {
                 id,
@@ -1977,6 +1992,7 @@ impl Catalog {
                 expected_revision,
                 revision: Some(revision),
                 imports,
+                introspection,
                 replica_owner: None,
             });
         }

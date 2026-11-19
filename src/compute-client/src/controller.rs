@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Shared compute readiness, peek summaries and introspection derivation.
+//! Shared compute readiness and peek summaries.
 //!
 //! Maintained execution belongs to catalog-following replicas. These helpers
 //! describe observations without owning instances, replicas or read capabilities.
@@ -21,8 +21,6 @@ use timely::progress::Antichain;
 use crate::protocol::response::PeekResponse;
 
 pub mod error;
-mod introspection;
-pub use introspection::refresh_introspection;
 
 /// A collection's hydration and catch-up status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

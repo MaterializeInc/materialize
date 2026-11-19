@@ -94,6 +94,7 @@ pub enum IntrospectionType {
     /// automatically bump the write frontier from time to time.
     SinkStatusHistory,
     SourceStatusHistory,
+    /// Retained for serialized descriptions. No builtin registers this type.
     ShardMapping,
 
     ReplicaStatusHistory,
@@ -116,8 +117,10 @@ pub enum IntrospectionType {
     StatementLifecycleHistory,
 
     // Collections written by the compute controller.
+    /// Retained for serialized descriptions. Dependencies are catalog-derived.
     ComputeDependencies,
     ComputeOperatorHydrationStatus,
+    /// Retained for serialized descriptions. Refreshes are catalog-derived.
     ComputeMaterializedViewRefreshes,
     ComputeErrorCounts,
     ComputeHydrationTimes,

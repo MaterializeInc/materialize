@@ -482,7 +482,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_maintained_compute_dependencies
-SOURCE
+VIEW
 materialize
 mz_internal
 mz_materialization_dependencies
@@ -498,7 +498,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_materialized_view_refreshes
-SOURCE
+VIEW
 materialize
 mz_internal
 mz_mcp_data_product_details
@@ -878,7 +878,7 @@ SOURCE
 materialize
 mz_internal
 mz_storage_shards
-SOURCE
+VIEW
 materialize
 mz_internal
 mz_storage_statuses_raw

@@ -870,7 +870,6 @@ impl StorageController for Controller {
         if publish_status_history {
             self.queue_native_paused_statuses(new_collections.iter().copied());
         }
-        self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         Ok(())
     }
@@ -1062,8 +1061,6 @@ impl StorageController for Controller {
         }
         self.collections.insert(new_collection, collection_state);
 
-        self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
-
         Ok(())
     }
 
@@ -1227,14 +1224,6 @@ impl StorageController for Controller {
             }
         }
 
-        // Delete all collection->shard mappings
-        let shards_to_update: BTreeSet<_> = ingestions_to_drop
-            .iter()
-            .chain(collections_to_drop.iter())
-            .cloned()
-            .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), Diff::MINUS_ONE);
-
         let status_now = mz_ore::now::to_datetime((self.now)());
         let mut status_updates = vec![];
         for id in ingestions_to_drop.iter() {
@@ -1293,7 +1282,6 @@ impl StorageController for Controller {
     ) {
         // Ignore exports that have already been removed.
         sinks_to_drop.retain(|id| self.is_sink(*id));
-        self.append_shard_mappings(sinks_to_drop.iter().copied(), Diff::MINUS_ONE);
 
         // Record the drop status for all sink drops.
         //
@@ -1961,50 +1949,6 @@ where
             .lock()
             .expect("poisoned")
             .retain(|(k, _replica_id), _| self.is_sink(*k));
-    }
-
-    /// Appends a new global ID, shard ID pair to the appropriate collection.
-    /// Use a `diff` of 1 to append a new entry; -1 to retract an existing
-    /// entry.
-    ///
-    /// # Panics
-    /// - If `self.collections` does not have an entry for `global_id`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
-    ///   a managed collection.
-    /// - If diff is any value other than `1` or `-1`.
-    #[instrument(level = "debug")]
-    fn append_shard_mappings<I>(&self, global_ids: I, diff: Diff)
-    where
-        I: Iterator<Item = GlobalId>,
-    {
-        mz_ore::soft_assert_or_log!(
-            diff == Diff::MINUS_ONE || diff == Diff::ONE,
-            "use 1 for insert or -1 for delete"
-        );
-
-        let id = *self
-            .introspection_ids
-            .get(&IntrospectionType::ShardMapping)
-            .expect("should be registered before this call");
-
-        let mut updates = vec![];
-        // Pack updates into rows
-        let mut row_buf = Row::default();
-
-        for global_id in global_ids {
-            let shard_id = if let Some(collection) = self.collections.get(&global_id) {
-                collection.collection_metadata.data_shard.clone()
-            } else {
-                panic!("unknown global id: {}", global_id);
-            };
-
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(global_id.to_string().as_str()));
-            packer.push(Datum::from(shard_id.to_string().as_str()));
-            updates.push((row_buf.clone(), diff));
-        }
-
-        self.collection_manager.differential_append(id, updates);
     }
 
     /// Handles writing of status updates for sources/sinks to the appropriate
@@ -2850,14 +2794,6 @@ mod tests {
             ),
         ];
         for (id, typ, desc) in [
-            (
-                GlobalId::System(1),
-                IntrospectionType::ShardMapping,
-                RelationDesc::builder()
-                    .with_column("object_id", mz_repr::SqlScalarType::String.nullable(false))
-                    .with_column("shard_id", mz_repr::SqlScalarType::String.nullable(false))
-                    .finish(),
-            ),
             (
                 GlobalId::System(2),
                 IntrospectionType::SourceStatusHistory,

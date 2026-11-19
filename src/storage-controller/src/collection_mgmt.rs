@@ -534,15 +534,6 @@ impl CollectionManager {
         }
     }
 
-    /// Appends the given `updates` to the differential collection identified by `id`.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to a differential collection.
-    /// - If the collection closed.
-    pub(super) fn differential_append(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        self.differential_write(id, StorageWriteOp::Append { updates })
-    }
-
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
     /// collection correlated with `id`.
     pub(super) fn monotonic_appender(
@@ -740,7 +731,7 @@ where
 
         match introspection_config.introspection_type {
             IntrospectionType::ShardMapping => {
-                // Done by the `append_shard_mappings` call.
+                // No native publisher. The public mapping is catalog-derived.
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = snapshot_statistics(

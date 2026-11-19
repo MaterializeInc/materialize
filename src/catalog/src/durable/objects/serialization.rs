@@ -1377,6 +1377,7 @@ impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
             revision: self.revision,
             replica_owner: self.replica_owner.into_proto(),
             imports: self.imports.into_proto(),
+            introspection: self.introspection.into_proto(),
         }
     }
     fn from_proto(proto: proto::WrittenPlanValue) -> Result<Self, TryFromProtoError> {
@@ -1384,6 +1385,7 @@ impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
             revision: proto.revision,
             replica_owner: proto.replica_owner.into_rust()?,
             imports: proto.imports.into_rust()?,
+            introspection: proto.introspection.into_rust()?,
         })
     }
 }
@@ -1445,6 +1447,53 @@ impl RustType<proto::AdapterRuntimeValue> for AdapterRuntimeValue {
             readiness_error: proto.readiness_error,
             readiness_changed_at: proto.readiness_changed_at,
             provisioning_error: proto.provisioning_error,
+        })
+    }
+}
+
+impl RustType<proto::WrittenPlanIntrospection> for super::WrittenPlanIntrospection {
+    fn into_proto(&self) -> proto::WrittenPlanIntrospection {
+        proto::WrittenPlanIntrospection {
+            physical_imports: self.physical_imports.into_proto(),
+            initial_storage_as_of: self.initial_storage_as_of.map(u64::from),
+            refresh_schedule: self.refresh_schedule.as_ref().map(|schedule| {
+                proto::RefreshSchedule {
+                    ats: schedule.ats.iter().copied().map(u64::from).collect(),
+                    everies: schedule
+                        .everies
+                        .iter()
+                        .map(|every| proto::RefreshEvery {
+                            interval: every.interval.into_proto(),
+                            aligned_to: every.aligned_to.into(),
+                        })
+                        .collect(),
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::WrittenPlanIntrospection) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            physical_imports: proto.physical_imports.into_rust()?,
+            initial_storage_as_of: proto.initial_storage_as_of.map(Into::into),
+            refresh_schedule: proto
+                .refresh_schedule
+                .map(|schedule| {
+                    Ok::<_, TryFromProtoError>(mz_repr::refresh_schedule::RefreshSchedule {
+                        ats: schedule.ats.into_iter().map(Into::into).collect(),
+                        everies: schedule
+                            .everies
+                            .into_iter()
+                            .map(|every| {
+                                Ok(mz_repr::refresh_schedule::RefreshEvery {
+                                    interval: every.interval.into_rust()?,
+                                    aligned_to: every.aligned_to.into(),
+                                })
+                            })
+                            .collect::<Result<_, TryFromProtoError>>()?,
+                    })
+                })
+                .transpose()?,
         })
     }
 }

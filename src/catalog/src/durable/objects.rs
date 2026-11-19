@@ -2715,6 +2715,7 @@ pub struct WrittenPlan {
     pub revision: Uuid,
     pub replica_owner: Option<ReplicaPlanOwner>,
     pub imports: BTreeSet<GlobalId>,
+    pub introspection: WrittenPlanIntrospection,
 }
 
 /// Replica-local maintained work without a SQL catalog item. Presence of the
@@ -2738,6 +2739,17 @@ pub struct WrittenPlanValue {
     pub replica_owner: Option<ReplicaPlanOwner>,
     /// Selected plan dependencies, readable without decoding build-specific plan bytes.
     pub imports: BTreeSet<GlobalId>,
+    pub introspection: WrittenPlanIntrospection,
+}
+
+/// Selected-plan facts exposed without decoding build-specific plan bytes.
+#[derive(Debug, Clone, Default, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlanIntrospection {
+    /// Physical imports only. Validation also retains MIR dependencies separately.
+    pub physical_imports: BTreeSet<GlobalId>,
+    pub refresh_schedule: Option<mz_repr::refresh_schedule::RefreshSchedule>,
+    /// The original storage birth, never a recovery installation timestamp.
+    pub initial_storage_as_of: Option<mz_repr::Timestamp>,
 }
 
 impl DurableType for WrittenPlan {
@@ -2754,6 +2766,7 @@ impl DurableType for WrittenPlan {
                 revision: self.revision,
                 replica_owner: self.replica_owner,
                 imports: self.imports,
+                introspection: self.introspection,
             },
         )
     }
@@ -2765,6 +2778,7 @@ impl DurableType for WrittenPlan {
             revision: value.revision,
             replica_owner: value.replica_owner,
             imports: value.imports,
+            introspection: value.introspection,
         }
     }
 

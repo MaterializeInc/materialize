@@ -284,6 +284,7 @@ async fn test_peer_index_pending_installation() {
                     Some(revision),
                     None,
                     selection.imports.clone(),
+                    Default::default(),
                 )
                 .unwrap();
                 txn.set_collection_compaction_bound(global_id, Some(initial_bound))

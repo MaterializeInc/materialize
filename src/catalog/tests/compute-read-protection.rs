@@ -451,6 +451,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         Some(uuid::Uuid::new_v4()),
         None,
         BTreeSet::from([input]),
+        Default::default(),
     )
     .unwrap();
     let own_replica_id = active_replica.replica_id;
@@ -482,6 +483,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
             name: "replica_local_index".into(),
         }),
         BTreeSet::new(),
+        Default::default(),
     )
     .unwrap();
     commit(tx).await;
@@ -619,6 +621,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
                         name: "foreign_replica_index".into(),
                     }),
                     BTreeSet::new(),
+                    Default::default(),
                 )
                 .unwrap();
             }
@@ -657,6 +660,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         Some(uuid::Uuid::new_v4()),
         None,
         BTreeSet::from([input]),
+        Default::default(),
     )
     .unwrap();
     let ts = tx.upper();

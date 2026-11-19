@@ -567,6 +567,7 @@ impl Fixture {
             vec![
                 create_index,
                 Op::SetWrittenPlan {
+                    introspection: Default::default(),
                     id: index,
                     build_version: namespace,
                     expected_revision: None,

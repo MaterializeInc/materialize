@@ -401,19 +401,32 @@ mz_catalog.mz_recent_storage_usage_ind:
 mz_catalog.mz_recent_storage_usage:
   →With
     cte l0 =
-      →Read mz_internal.mz_storage_usage_by_shard
+      →Differential Join %1[#0] » %0[#1]
+        →Arrange (#1)
+          →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
+            after %0:
+              Project: #2, #3
+              Filter: (case when ("StorageCollectionMetadata" = (#1{data} ->> "kind")) then parse_catalog_id(((#1{data} -> "key") -> "id")) else null end) IS NOT NULL AND (#2) IS NOT NULL
+              Map: ((#1{data} -> "value") ->> "shard"), parse_catalog_id(((#1{data} -> "key") -> "id"))
+            →Arranged mz_internal.mz_catalog_shared
+            →Arrange (#0)
+              →Constant (1 row)
+        →Distinct GroupAggregate
+          →Read mz_internal.mz_object_global_ids
     cte l1 =
-      →Differential Join %1[#0] » %0:mz_storage_shards[#1{shard_id}]
-        →Arrange (#1{shard_id})
-          →Stream mz_internal.mz_storage_shards
+      →Read mz_internal.mz_storage_usage_by_shard
+    cte l2 =
+      →Differential Join %1[#0] » %0:l0[#0{shard_id}]
+        →Arrange (#0{shard_id})
+          →Stream l0
         →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
           Aggregations: max
           Key:
             Project: #0
           →Fused with Child Map/Filter/Project
             Project: #0, #2
-              →Read l0
-    cte l2 =
+              →Read l1
+    cte l3 =
       →Union
         →Map/Filter/Project
           Project: #0..=#2
@@ -421,20 +434,24 @@ mz_catalog.mz_recent_storage_usage:
             →Consolidating Union
               →Negate Diffs
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1
-                    →Read l1
-              →Stream mz_internal.mz_storage_shards
-        →Stream l1
-    cte l3 =
+                  Project: #1, #0
+                    →Read l2
+              →Fused with Child Map/Filter/Project
+                Project: #1, #0
+                  →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1, #0, #2
+            →Read l2
+    cte l4 =
       →Arrange (#1{shard_id}, #2{collection_timestamp})
         →Fused with Child Map/Filter/Project
           Filter: (#2{collection_timestamp}) IS NOT NULL
-            →Read l2
-    cte l4 =
-      →Differential Join %1:l0[#0{shard_id}, #2{collection_timestamp}] » %0:l3[#1{shard_id}, #2{collection_timestamp}]
-        →Arranged l3
+            →Read l3
+    cte l5 =
+      →Differential Join %1:l1[#0{shard_id}, #2{collection_timestamp}] » %0:l4[#1{shard_id}, #2{collection_timestamp}]
+        →Arranged l4
         →Arrange (#0{shard_id}, #2{collection_timestamp})
-          →Stream l0
+          →Stream l1
   →Return
     →Map/Filter/Project
       Project: #0, #2
@@ -449,24 +466,28 @@ mz_catalog.mz_recent_storage_usage:
               Map: null
                 →Consolidating Union
                   →Negate Diffs
-                    →Differential Join %1[#0, #1] » %0:l3[#1{shard_id}, #2{collection_timestamp}]
-                      →Arranged l3
+                    →Differential Join %1[#0, #1] » %0:l4[#1{shard_id}, #2{collection_timestamp}]
+                      →Arranged l4
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #1, #2
-                            →Read l4
+                            →Read l5
                   →Fused with Child Map/Filter/Project
                     Project: #0
-                      →Read l2
+                      →Read l3
             →Fused with Child Map/Filter/Project
               Project: #0, #3
-                →Read l4
+                →Read l5
 
 Source mz_internal.mz_storage_usage_by_shard
   project=(#1..=#3)
   filter=((#1{shard_id}) IS NOT NULL AND (mz_now() <= #4) AND (mz_now() < step_mz_timestamp(#4)))
   map=(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))
-Source mz_internal.mz_storage_shards
+Source mz_internal.mz_object_global_ids
+  project=(#1)
+
+Used Indexes:
+  - mz_internal.mz_catalog_shared_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -951,42 +972,180 @@ mz_internal.mz_compute_dependencies_ind:
     →Stream mz_internal.mz_compute_dependencies
 
 mz_internal.mz_compute_dependencies:
-  →Union
-    →Stream mz_internal.mz_maintained_compute_dependencies
-    →Differential Join %1[#0] » %0[#0]
-      →Arrange (#0)
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-          Filter: (#2{dependency_id}) IS NOT NULL
-            →Table Function unnest_list(#1{physical_dependency_ids})
-              →Fused with Child Map/Filter/Project
-                Project: #0, #2
-                  →Read mz_internal.mz_subscriptions_raw
-      →Distinct GroupAggregate
-        →Differential Join %1[#0] » %0:mz_subscriptions_raw[#1]
-          →Arrange (#1)
+  →With
+    cte l0 =
+      →Differential Join %0[#0{id}] » %1:mz_object_global_ids[#0{id}]
+        →Arrange (#0{id})
+          →Union
             →Fused with Child Map/Filter/Project
-              Project: #0, #1
-              Filter: (#1) IS NOT NULL
-                →Read mz_internal.mz_subscriptions_raw
-          →Distinct GroupAggregate
-            Key:
-              Project: #1
-              Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
-            →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
+              Project: #0, #8, #9
+              Map: true, true
+                →Arranged mz_catalog.mz_indexes
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #7, #8
+              Map: true, true
+                →Arranged mz_internal.mz_metric_sinks
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #10, #11
+              Map: false, true
+                →Arranged mz_catalog.mz_materialized_views
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #15, #16
+              Filter: (#10{cluster_id}) IS NOT NULL
+              Map: false, false
+                →Arranged mz_catalog.mz_sources
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #15, #16
+              Map: false, false
+                →Arranged mz_catalog.mz_sinks
+                  Key: (#0{id})
+            →Differential Join %1:mz_sources[#0{id}] » %0:mz_tables[#1{source_id}]
               after %0:
+                Project: #15
+                Filter: (#10{cluster_id}) IS NOT NULL
+              Final closure:
+                Project: #0..=#2
+                Map: false, false
+              →Arrange (#1{source_id})
+                →Fused with Child Map/Filter/Project
+                  Project: #1, #8
+                  Filter: (#8{source_id}) IS NOT NULL
+                    →Arranged mz_catalog.mz_tables
+                      Key: (#2{schema_id})
+              →Arranged mz_catalog.mz_sources
+        →Arrange (#0{id})
+          →Stream mz_internal.mz_object_global_ids
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0, #3
+            →Read l0
+    cte l2 =
+      →Arranged mz_internal.mz_catalog_shared
+    cte l3 =
+      →Differential Join %1[#0] » %0:l2[(#0{data} ->> "kind")]
+        →Arranged l2
+        →Arrange (#0)
+          →Constant (1 row)
+    cte l4 =
+      →Differential Join %1[#0{id}] » %0:l1[#0{id}]
+        after %0:
+          Project: #0, #2
+          Filter: (#2{global_id} != #1{global_id})
+        →Arrange (#0{id})
+          →Arranged l1
+        →Arrange (#0{id})
+          →Map/Filter/Project
+            Project: #0, #1
+              →Non-monotonic TopK
+                Group By #0
+                Order By #2 desc nulls_first
+                Limit 1
+                →Union
+                  →Fused with Child Map/Filter/Project
+                    Project: #2..=#4
+                    Filter: (#1) IS NOT NULL
+                    Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), parse_catalog_id(((#0{data} -> "value") -> "global_id")), 0
+                      →Read l3
+                  →Fused with Child Map/Filter/Project
+                    Project: #0, #3, #4
+                    Map: parse_catalog_id((#2{version} -> "global_id")), coalesce(uint8_to_numeric(text_to_uint8(((#2{version} -> "version") ->> "value"))), 0)
+                      →Table Function jsonb_array_elements(#1{extra_versions})
+                        →Fused with Child Map/Filter/Project
+                          Project: #2, #3
+                          Filter: (#1) IS NOT NULL
+                          Map: ((#0{data} -> "key") -> "gid"), parse_catalog_id(#1), ((#0{data} -> "value") -> "extra_versions")
+                            →Read l3
+  →Return
+    →Union
+      →Fused with Child Map/Filter/Project
+        Project: #1, #3
+        Map: parse_catalog_id(#2{id})
+          →Table Function jsonb_array_elements(coalesce((((#0{data} -> "value") -> "introspection") -> "physical_imports"), []))
+            →Delta Join [%0[case when ("WrittenPlan" = (#0{data} ->> "kind")) then parse_catalog_id(((#0{data} -> "key") -> "id")) else null end] » %1:l0[#2] » %2[#0, #1]] [%1:l0[#0, #2] » %2[#0, #1] » %0[case when ("WrittenPlan" = (#0{data} ->> "kind")) then parse_catalog_id(((#0{data} -> "key") -> "id")) else null end]] [%2[#0, #1] » %1:l0[#0, #2] » %0[case when ("WrittenPlan" = (#0{data} ->> "kind")) then parse_catalog_id(((#0{data} -> "key") -> "id")) else null end]]
+              path %0:
+                after %2:
+                  Project: #2, #4
+                  Filter: (#3{compute_global} OR NOT(#5))
+              path %1:
+                after %2:
+                  Project: #1
+                  Filter: (#2{compute_global} OR NOT(#3))
+              path %2:
+                after %1:
+                  Project: #1, #1
+                  Filter: (#3{compute_global} OR NOT(#2))
+              →Arrange (case when ("WrittenPlan" = (#0{data} ->> "kind")) then parse_catalog_id(((#0{data} -> "key") -> "id")) else null end)
+                →Differential Join %1[#0] » %0:l2[(#0{data} ->> "kind")]
+                  after %0:
+                    Project: #1
+                    Filter: ("prototype-shared-plans-v1" = ((#1{data} -> "key") ->> "build_version")) AND (case when ("WrittenPlan" = (#1{data} ->> "kind")) then parse_catalog_id(((#1{data} -> "key") -> "id")) else null end) IS NOT NULL
+                  →Arranged l2
+                  →Arrange (#0)
+                    →Constant (1 row)
+              →Arrange (#0, #2) (#2)
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #3
+                  Filter: #2{replica_owned}
+                    →Read l0
+              →Arrange (#0, #1)
+                →Union
+                  →Fused with Child Map/Filter/Project
+                    Project: #0..=#2
+                    Map: true
+                      →Read l4
+                  →Map/Filter/Project
+                    Project: #0..=#2
+                    Map: false
+                      →Consolidating Union
+                        →Negate Diffs
+                          →Stream l4
+                        →Unarranged Raw Stream
+                          →Arranged l1
+      →Differential Join %1[#0] » %0[#0]
+        →Arrange (#0)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2
+            Filter: (#2{dependency_id}) IS NOT NULL
+              →Table Function unnest_list(#1{physical_dependency_ids})
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #2
+                    →Read mz_internal.mz_subscriptions_raw
+        →Distinct GroupAggregate
+          →Differential Join %1[#0] » %0:mz_subscriptions_raw[#1]
+            →Arrange (#1)
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1) IS NOT NULL
+                  →Read mz_internal.mz_subscriptions_raw
+            →Distinct GroupAggregate
+              Key:
                 Project: #1
-                Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
-              →Arranged mz_internal.mz_catalog_shared
-              →Arrange (#0)
-                →Constant (1 row)
+                Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
+              →Differential Join %1[#0] » %0:l2[(#0{data} ->> "kind")]
+                after %0:
+                  Project: #1
+                  Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
+                →Arranged l2
+                →Arrange (#0)
+                  →Constant (1 row)
 
 Source mz_internal.mz_subscriptions_raw
   project=(#0, #5, #6)
-Source mz_internal.mz_maintained_compute_dependencies
+Source mz_internal.mz_object_global_ids
 
 Used Indexes:
   - mz_internal.mz_catalog_shared_ind (lookup)
+  - mz_catalog.mz_indexes_ind (*** full scan ***)
+  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
+  - mz_catalog.mz_sinks_ind (*** full scan ***)
+  - mz_internal.mz_metric_sinks_ind (*** full scan ***)
+  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
+  - mz_catalog.mz_tables_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -6074,7 +6233,7 @@ mz_catalog.mz_sources:
             Project: #4, #0, #5, #1, #2, #6..=#12, #3, #13, #14
             Map: null, null, null, null, null, null, "s1", null, null
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (58 rows)
+          →Constant (55 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
             after %0:
@@ -6231,7 +6390,7 @@ mz_catalog.mz_views:
             Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
             Map: "s1"
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (208 rows)
+          →Constant (211 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
             after %0:
@@ -6850,7 +7009,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1139 rows)
+            →Constant (1158 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -9383,16 +9542,29 @@ Explained Query:
         Simple aggregates: sum(#1{size_bytes})
         Key:
           Project: #0, #2
-        →Differential Join %0:mz_storage_shards[#1{shard_id}] » %1:mz_storage_usage_by_shard[#0{shard_id}]
-          →Arrange (#1{shard_id})
-            →Stream mz_internal.mz_storage_shards
+        →One-Shot Delta Join [%0 » %1[#0] » %2:mz_storage_usage_by_shard[#0{shard_id}]]
+          →Unarranged Raw Stream
+            →Differential Join %1[#0] » %0:mz_catalog_shared[(#0{data} ->> "kind")]
+              after %0:
+                Project: #2, #3
+                Filter: (case when ("StorageCollectionMetadata" = (#1{data} ->> "kind")) then parse_catalog_id(((#1{data} -> "key") -> "id")) else null end) IS NOT NULL AND (#2) IS NOT NULL
+                Map: ((#1{data} -> "value") ->> "shard"), parse_catalog_id(((#1{data} -> "key") -> "id"))
+              →Arranged mz_internal.mz_catalog_shared
+              →Arrange (#0)
+                →Constant (1 row)
+          →Distinct GroupAggregate
+            →Read mz_internal.mz_object_global_ids
           →Arrange (#0{shard_id})
             →Read mz_internal.mz_storage_usage_by_shard
 
 Source mz_internal.mz_storage_usage_by_shard
   project=(#1..=#3)
   filter=((#1{shard_id}) IS NOT NULL)
-Source mz_internal.mz_storage_shards
+Source mz_internal.mz_object_global_ids
+  project=(#1)
+
+Used Indexes:
+  - mz_internal.mz_catalog_shared_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -9487,7 +9659,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_sources";
 ----
 Explained Query (fast path):
-  →Constant (58 rows)
+  →Constant (55 rows)
 
 Target cluster: mz_catalog_server
 
@@ -9507,7 +9679,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (208 rows)
+  →Constant (211 rows)
 
 Target cluster: mz_catalog_server
 
@@ -11714,7 +11886,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1139 rows)
+            →Constant (1158 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

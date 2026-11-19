@@ -3826,6 +3826,7 @@ mod tests {
                 .into_iter()
                 .map(|(revision, diff)| StateUpdate {
                     kind: StateUpdateKind::WrittenPlan(WrittenPlan {
+                        introspection: Default::default(),
                         id,
                         build_version: "build-a".into(),
                         revision,
@@ -3879,6 +3880,7 @@ mod tests {
         let owner = GlobalId::User(20);
         let other_owner = GlobalId::User(21);
         let initial = WrittenPlan {
+            introspection: Default::default(),
             id: owner,
             build_version: "build-a".into(),
             revision: uuid::Uuid::new_v4(),

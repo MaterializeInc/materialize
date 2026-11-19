@@ -166,6 +166,7 @@ pub enum Op {
         expected_revision: Option<uuid::Uuid>,
         revision: Option<uuid::Uuid>,
         imports: BTreeSet<GlobalId>,
+        introspection: crate::durable::objects::WrittenPlanIntrospection,
         replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
     },
     AlterRetainHistory {
@@ -2045,6 +2046,7 @@ impl Catalog {
                 expected_revision,
                 revision,
                 imports,
+                introspection,
                 replica_owner,
             } => {
                 if tx.get_written_plan(id, &build_version) != expected_revision {
@@ -2056,6 +2058,7 @@ impl Catalog {
                     revision,
                     replica_owner,
                     imports,
+                    introspection,
                 )?;
             }
             Op::CreateClientIncarnation {
@@ -5506,6 +5509,7 @@ mod tests {
             let imports = BTreeSet::from([index.on]);
             let revision = Uuid::new_v4();
             let select = |expected_revision, revision, imports| Op::SetWrittenPlan {
+                introspection: Default::default(),
                 id,
                 build_version: "test-build".into(),
                 expected_revision,
@@ -6326,6 +6330,7 @@ mod tests {
             });
             if name != "creator_closed" {
                 ops.push(Op::SetWrittenPlan {
+                    introspection: Default::default(),
                     id: gid,
                     build_version: "test-build".into(),
                     expected_revision: None,
@@ -6749,6 +6754,7 @@ mod tests {
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     },
                     Op::SetWrittenPlan {
+                        introspection: Default::default(),
                         id: index_gid,
                         build_version: "test-build".into(),
                         expected_revision: None,
@@ -6774,6 +6780,7 @@ mod tests {
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 },
                 Op::SetWrittenPlan {
+                    introspection: Default::default(),
                     id: automatic_gid,
                     build_version: "test-build".into(),
                     expected_revision: None,

@@ -167,6 +167,7 @@ async fn prepare_selections(
                     && metric_sink_denied(candidate.system_config(), &owner.name))
             {
                 retractions.push(Op::SetWrittenPlan {
+                    introspection: Default::default(),
                     id: *id,
                     build_version: build.clone(),
                     expected_revision: Some(selection.revision),

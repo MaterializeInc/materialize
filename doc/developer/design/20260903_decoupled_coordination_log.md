@@ -12,14 +12,18 @@ including both history tables and restart. The unchanged test fails with the
 former blind append, producing a negative row multiplicity. The fixed source is
 restored. See `pruning-red-green.md` for exact evidence and coverage limits.
 
-Next finish catalog-derived dependency/refresh rows, the `mz_storage_shards`
-view, and conditional storage-usage collection. The selected-plan record now
-carries physical imports, refresh schedule and initial storage as-of. No Item
-fields or adapter reductions were added. The derived views and publisher removals
-are uncommitted. Catalog planning, public descriptions, dependency ordering,
-serialization and the raw-catalog retention guard pass. Real producer coverage,
-including two adapters and refresh creation/restart/rewrite/replacement, remains
-outstanding. Conditional storage-usage collection is not implemented.
+Dependency, refresh and shard rows now derive from catalog state rather than
+adapter publishers. Selected plans carry physical imports, refresh schedule and
+original storage as-of, without Item fields or adapter reductions. Catalog
+contracts and affected SQL checks pass. The real-producer test passes across two
+adapters, restart, index-drop replan and scheduled-MV replacement. Restoring the
+former publishers makes it lose rows during peer join. The restored implementation
+passes again. See `plan-introspection-red-green.md` for evidence and limits.
+
+Next implement conditional storage-usage collection after resolving its two
+pending choices: using catalog-server compute to gate sampling, and assigning
+coverage to the interval containing the measurement's finish timestamp. While
+that decision is pending, finish promotion-restart validation and timings.
 
 The clean pinned-upstream debug startup comparison passed. Fresh startup was
 30.271s upstream versus 53.080s in the prior native capture. Catalog opening was
@@ -49,6 +53,9 @@ No publication cadence, readiness interval or resource-limit changes are approve
 
 - Scratch access is restored. Keep builds off the editing VM and preserve the
   existing resource caps. Test-hook and plan-record metadata decisions are settled.
+- Repository-wide formatting fails on an unchanged tracing macro in
+  `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
+  checks pass. See `plan-introspection-red-green.md`.
 - Declaration reconciliation, login sync and SQL owners with separate completion
   effects remain in the conditional-write retry survey.
 - The unchanged MV admission suite had an intermittent compaction-scheduling

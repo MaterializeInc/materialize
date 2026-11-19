@@ -1020,6 +1020,7 @@ impl Coordinator {
                     && mv.global_id_writes() != id
                 {
                     ops.push(Op::SetWrittenPlan {
+                        introspection: Default::default(),
                         id,
                         build_version: build.clone(),
                         expected_revision: Some(revisions[&id]),

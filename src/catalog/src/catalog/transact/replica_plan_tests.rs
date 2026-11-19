@@ -1098,6 +1098,7 @@ fn select(
     imports: BTreeSet<GlobalId>,
 ) -> Op {
     Op::SetWrittenPlan {
+        introspection: Default::default(),
         id,
         build_version: build.into(),
         expected_revision,

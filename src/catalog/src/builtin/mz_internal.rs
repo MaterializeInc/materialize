@@ -519,7 +519,14 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_DEPENDENCIES_OID,
     desc: MZ_MAINTAINED_COMPUTE_DEPENDENCIES.desc.clone(),
-    column_comments: MZ_MAINTAINED_COMPUTE_DEPENDENCIES.column_comments.clone(),
+    column_comments: {
+        let mut comments = MZ_MAINTAINED_COMPUTE_DEPENDENCIES.column_comments.clone();
+        comments.insert(
+            "object_id",
+            "The global ID of a maintained compute object or the execution-qualified ID of a subscription. Corresponds to `mz_internal.mz_object_global_ids.global_id` or `mz_internal.mz_subscriptions.id`.",
+        );
+        comments
+    },
     sql: "SELECT object_id, dependency_id FROM mz_internal.mz_maintained_compute_dependencies
 UNION ALL
 SELECT runtime.id, dependency_id
@@ -564,12 +571,11 @@ WHERE dependency_id IS NOT NULL
     }),
 });
 
-pub static MZ_MAINTAINED_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
+pub static MZ_MAINTAINED_COMPUTE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
         name: "mz_maintained_compute_dependencies",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
-        data_source: IntrospectionType::ComputeDependencies.into(),
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
             .with_column("dependency_id", SqlScalarType::String.nullable(false))
@@ -577,14 +583,39 @@ pub static MZ_MAINTAINED_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLoc
         column_comments: BTreeMap::from_iter([
             (
                 "object_id",
-                "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions.id`.",
+                "The global ID of a maintained compute object. Corresponds to `mz_internal.mz_object_global_ids.global_id`.",
             ),
             (
                 "dependency_id",
-                "The ID of a compute dependency. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_tables.id`.",
+                "The global ID of a physical compute dependency. Corresponds to `mz_internal.mz_object_global_ids.global_id`.",
             ),
         ]),
-        is_retained_metrics_object: false,
+        sql: Box::leak(
+            format!(
+                "
+WITH dependencies AS (
+SELECT
+    placement.object_id,
+    mz_internal.parse_catalog_id(d.id) AS dependency_id
+FROM mz_internal.mz_catalog_shared p
+JOIN mz_internal.mz_frontier_object_placement placement
+  ON placement.object_id = CASE WHEN p.data->>'kind' = 'WrittenPlan'
+                               THEN mz_internal.parse_catalog_id(p.data->'key'->'id')
+                          END
+CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(p.data->'value'->'introspection'->'physical_imports', '[]'::jsonb)
+) d(id)
+WHERE p.data->>'kind' = 'WrittenPlan'
+  AND p.data->'key'->>'build_version' = '{}'
+  AND placement.replica_owned
+)
+SELECT object_id, dependency_id
+FROM dependencies
+WHERE object_id IS NOT NULL AND dependency_id IS NOT NULL",
+                crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE
+            )
+            .into_boxed_str(),
+        ),
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
@@ -3572,43 +3603,91 @@ GROUP BY period_start, period_end, object_id, lag_seconds, labels",
         ontology: None,
     });
 
-pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::new(|| {
-    BuiltinSource {
-        name: "mz_materialized_view_refreshes",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
-        data_source: DataSourceDesc::Introspection(
-            IntrospectionType::ComputeMaterializedViewRefreshes,
+pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_materialized_view_refreshes",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
+    desc: RelationDesc::builder()
+        .with_column(
+            "materialized_view_id",
+            SqlScalarType::String.nullable(false),
+        )
+        .with_column(
+            "last_completed_refresh",
+            SqlScalarType::MzTimestamp.nullable(true),
+        )
+        .with_column("next_refresh", SqlScalarType::MzTimestamp.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "materialized_view_id",
+            "The global ID of the materialized view's current writer. Corresponds to `mz_internal.mz_object_global_ids.global_id`.",
         ),
-        desc: RelationDesc::builder()
-            .with_column(
-                "materialized_view_id",
-                SqlScalarType::String.nullable(false),
-            )
-            .with_column(
-                "last_completed_refresh",
-                SqlScalarType::MzTimestamp.nullable(true),
-            )
-            .with_column("next_refresh", SqlScalarType::MzTimestamp.nullable(true))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "materialized_view_id",
-                "The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`",
-            ),
-            (
-                "last_completed_refresh",
-                "The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.",
-            ),
-            (
-                "next_refresh",
-                "The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: None,
-    }
+        (
+            "last_completed_refresh",
+            "The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.",
+        ),
+        (
+            "next_refresh",
+            "The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.",
+        ),
+    ]),
+    sql: Box::leak(
+        format!(
+            "
+WITH selections AS (
+    SELECT CASE WHEN data->>'kind' = 'WrittenPlan'
+                THEN mz_internal.parse_catalog_id(data->'key'->'id')
+           END AS object_id,
+           data->'value'->'introspection'->'refresh_schedule' AS schedule,
+           (data->'value'->'introspection'->>'initial_storage_as_of')::numeric AS initial_as_of
+    FROM mz_internal.mz_catalog_shared
+    WHERE data->>'kind' = 'WrittenPlan'
+      AND data->'key'->>'build_version' = '{}'
+), observed AS (
+    SELECT s.*, f.write_frontier,
+           f.write_frontier::text::numeric AS upper_ts
+    FROM selections s
+    JOIN mz_internal.mz_frontier_object_placement p ON p.object_id = s.object_id
+    JOIN mz_internal.mz_current_storage_frontiers f ON f.object_id = s.object_id
+    WHERE p.replica_owned AND NOT p.compute_global AND f.write_known
+      AND s.schedule IS NOT NULL AND s.schedule <> 'null'::jsonb
+      AND s.initial_as_of IS NOT NULL
+)
+SELECT o.object_id AS materialized_view_id,
+       CASE WHEN o.upper_ts <= o.initial_as_of THEN NULL
+            ELSE r.last_refresh::mz_timestamp END AS last_completed_refresh,
+       CASE WHEN o.write_frontier IS NULL THEN NULL
+            WHEN o.upper_ts <= o.initial_as_of THEN o.initial_as_of::mz_timestamp
+            ELSE o.write_frontier END AS next_refresh
+FROM observed o
+CROSS JOIN LATERAL (
+    SELECT max(candidate) AS last_refresh
+    FROM (
+        SELECT a.value::text::numeric AS candidate
+        FROM jsonb_array_elements(o.schedule->'ats') a(value)
+        WHERE o.upper_ts IS NULL OR a.value::text::numeric < o.upper_ts
+        UNION ALL
+        SELECT CASE WHEN o.upper_ts IS NULL THEN 18446744073709551615::numeric
+                    ELSE greatest(0::numeric,
+                         e.aligned_to + floor((greatest(o.upper_ts - 1, 0::numeric)
+                             - e.aligned_to) / e.interval_ms) * e.interval_ms)
+               END
+        FROM (
+            SELECT (e.value->>'aligned_to')::numeric AS aligned_to,
+                   (e.value->'interval'->>'secs')::numeric * 1000
+                     + floor((e.value->'interval'->>'nanos')::numeric / 1000000) AS interval_ms
+            FROM jsonb_array_elements(o.schedule->'everies') e(value)
+        ) e
+    ) candidates
+) r
+WHERE o.object_id IS NOT NULL",
+            crate::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE
+        )
+        .into_boxed_str(),
+    ),
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 /// Adapter-owned subscription progress. NULL replica identifies merged progress.
@@ -4505,17 +4584,34 @@ pub static MZ_SINK_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     ontology: None,
 });
 
-pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
-    data_source: IntrospectionType::ShardMapping.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("shard_id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
+    // Dropped collections can retain metadata while clients still need their
+    // shards. Public mappings follow live objects, including retained versions.
+    sql: "
+WITH mappings AS (
+SELECT
+    CASE WHEN c.data->>'kind' = 'StorageCollectionMetadata'
+         THEN mz_internal.parse_catalog_id(c.data->'key'->'id')
+    END AS object_id,
+    c.data->'value'->>'shard' AS shard_id
+FROM mz_internal.mz_catalog_shared c
+WHERE c.data->>'kind' = 'StorageCollectionMetadata'
+)
+SELECT object_id, shard_id
+FROM mappings m
+WHERE object_id IS NOT NULL AND shard_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM mz_internal.mz_object_global_ids g
+    WHERE g.global_id = m.object_id
+  )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "storage_shard",

@@ -2545,6 +2545,40 @@ pub struct WrittenPlanValue {
     pub replica_owner: Option<ReplicaPlanOwner>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<GlobalId>,
+    #[serde(default)]
+    pub introspection: WrittenPlanIntrospection,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct WrittenPlanIntrospection {
+    pub physical_imports: Vec<GlobalId>,
+    pub refresh_schedule: Option<RefreshSchedule>,
+    pub initial_storage_as_of: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct RefreshSchedule {
+    pub ats: Vec<u64>,
+    pub everies: Vec<RefreshEvery>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct RefreshEvery {
+    pub interval: Duration,
+    pub aligned_to: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

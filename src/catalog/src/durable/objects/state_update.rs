@@ -1089,11 +1089,24 @@ mod tests {
         use crate::durable::objects::{DurableType, WrittenPlan};
 
         let plan = WrittenPlan {
+            introspection: crate::durable::objects::WrittenPlanIntrospection {
+                physical_imports: [mz_repr::GlobalId::User(41)].into_iter().collect(),
+                refresh_schedule: Some(mz_repr::refresh_schedule::RefreshSchedule {
+                    ats: vec![100u64.into(), 200u64.into()],
+                    everies: vec![mz_repr::refresh_schedule::RefreshEvery {
+                        interval: std::time::Duration::from_micros(2500),
+                        aligned_to: 50u64.into(),
+                    }],
+                }),
+                initial_storage_as_of: Some(100u64.into()),
+            },
             id: mz_repr::GlobalId::User(42),
             build_version: "26.43.0-dev (build hash)".into(),
             revision: uuid::Uuid::new_v4(),
             replica_owner: None,
-            imports: [mz_repr::GlobalId::User(41)].into_iter().collect(),
+            imports: [mz_repr::GlobalId::User(40), mz_repr::GlobalId::User(41)]
+                .into_iter()
+                .collect(),
         };
         let (key, value) = plan.clone().into_key_value();
         let update = StateUpdateKind::WrittenPlan(key.into_proto(), value.into_proto());

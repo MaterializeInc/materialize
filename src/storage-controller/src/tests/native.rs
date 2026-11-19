@@ -98,14 +98,6 @@ async fn native_controller_with_history(
     }
     for (id, typ, desc) in [
         (
-            GlobalId::System(1),
-            IntrospectionType::ShardMapping,
-            RelationDesc::builder()
-                .with_column("object_id", mz_repr::SqlScalarType::String.nullable(false))
-                .with_column("shard_id", mz_repr::SqlScalarType::String.nullable(false))
-                .finish(),
-        ),
-        (
             GlobalId::System(2),
             IntrospectionType::SourceStatusHistory,
             MZ_SOURCE_STATUS_HISTORY_DESC.clone(),

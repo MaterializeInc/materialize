@@ -178,6 +178,7 @@ fn selection(
     log_index: GlobalId,
 ) -> Op {
     Op::SetWrittenPlan {
+        introspection: Default::default(),
         id,
         build_version: build.into(),
         expected_revision,

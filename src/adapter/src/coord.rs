@@ -3690,7 +3690,10 @@ impl Coordinator {
             optimizer.optimize((mv.locally_optimized_expr.as_ref().clone(), typ))?;
         let global_mir = global_mir_plan.df_desc().clone();
         let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-        let (physical_plan, metainfo) = global_lir_plan.unapply();
+        let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+        physical_plan
+            .initial_storage_as_of
+            .clone_from(&mv.initial_as_of);
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
             .map(|(_item_id, gid)| gid)
             .take(metainfo.optimizer_notices.len())

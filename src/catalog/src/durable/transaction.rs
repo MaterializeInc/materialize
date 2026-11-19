@@ -431,7 +431,14 @@ impl<'a> Transaction<'a> {
         build_version: &str,
         revision: Option<Uuid>,
     ) -> Result<(), CatalogError> {
-        self.set_written_plan_with_owner(id, build_version, revision, None, BTreeSet::new())
+        self.set_written_plan_with_owner(
+            id,
+            build_version,
+            revision,
+            None,
+            BTreeSet::new(),
+            Default::default(),
+        )
     }
 
     /// Selects replica-local work in the same expression shard and build namespace.
@@ -444,6 +451,7 @@ impl<'a> Transaction<'a> {
         revision: Option<Uuid>,
         replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
         imports: BTreeSet<GlobalId>,
+        introspection: crate::durable::objects::WrittenPlanIntrospection,
     ) -> Result<(), CatalogError> {
         let key = WrittenPlanKey {
             id,
@@ -473,6 +481,7 @@ impl<'a> Transaction<'a> {
                 revision,
                 replica_owner,
                 imports,
+                introspection,
             }),
             self.op_id,
         )?;

@@ -1041,7 +1041,12 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
+        let (mut df_desc, mut raw_df_meta) = global_lir_plan.unapply();
+        // Preserve the first refresh in the selected plan, independently of
+        // the installation as-of that recovery may choose later.
+        if let Some((_, storage_as_of, _)) = &birth {
+            df_desc.set_initial_as_of(storage_as_of.clone());
+        }
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
