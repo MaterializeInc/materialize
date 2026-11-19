@@ -2651,9 +2651,6 @@ impl PostgresConnection<InlinedConnection> {
             }
         };
 
-        // The credentials sign an Amazon RDS IAM authentication token for
-        // every new connection, so cache them rather than assuming the role
-        // again each time.
         let aws_config = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(
@@ -3037,9 +3034,6 @@ impl MySqlConnection<InlinedConnection> {
             }
         };
 
-        // The credentials sign an Amazon RDS IAM authentication token for
-        // every new connection, so cache them rather than assuming the role
-        // again each time.
         let aws_config = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(

@@ -58,9 +58,8 @@ pub enum RdsTokenError {
 /// signature over that endpoint. The token is valid for 15 minutes.
 ///
 /// Every call asks `aws_config`'s credentials provider for credentials, and
-/// nothing here caches them. If that provider assumes a role, pass a config
-/// whose provider caches its credentials. Otherwise every token costs a round
-/// of AWS STS requests, which AWS throttles per account.
+/// nothing here caches them. If that provider assumes a role, each token
+/// costs a round of AWS STS requests unless the provider caches.
 ///
 /// This mirrors `aws_sdk_rds::auth_token`, without depending on `aws-sdk-rds`.
 pub async fn rds_auth_token(

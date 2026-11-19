@@ -168,18 +168,11 @@ impl AwsAssumeRole {
         .await
     }
 
-    /// Returns a provider that assumes this role on demand and serves the
-    /// resulting credentials from memory until they are close to expiry.
-    ///
-    /// The provider is shared by every caller in this process that uses the
-    /// same connection with the same settings, through
-    /// [`ConnectionContext::aws_credentials_cache`]. Callers that authenticate
-    /// often, such as a source that reconnects to its upstream database, then
-    /// make one round of STS calls per credential lifetime instead of one per
-    /// connection attempt.
+    /// Returns the process-wide caching credentials provider for this role,
+    /// from [`ConnectionContext::aws_credentials_cache`].
     ///
     /// No STS call happens here, so success does not mean the role can be
-    /// assumed. A failed fetch is not cached: the next call tries again.
+    /// assumed.
     async fn cached_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
@@ -425,19 +418,13 @@ impl AwsConnection {
         .await
     }
 
-    /// Like [`AwsConnection::load_sdk_config`], but the returned config's
-    /// credentials provider caches the credentials of an `AssumeRole`
-    /// connection, and shares that cache across this process.
+    /// Like [`AwsConnection::load_sdk_config`], but an `AssumeRole`
+    /// connection's credentials are cached and shared across this process.
     ///
-    /// Use this when the caller asks the credentials provider for credentials
-    /// directly, for example to sign an Amazon RDS IAM authentication token.
-    /// Those calls bypass the identity cache that AWS SDK clients keep, so
-    /// without this each one assumes the role again. AWS throttles STS
-    /// requests per account, and a source that reconnects in a loop would
-    /// otherwise spend that quota on every attempt.
-    ///
-    /// Connections that use static credentials make no STS calls and behave
-    /// exactly as with `load_sdk_config`.
+    /// For callers that ask the credentials provider for credentials directly,
+    /// such as signing an Amazon RDS IAM authentication token. Those calls
+    /// bypass the identity cache of AWS SDK clients, so each one assumes the
+    /// role again, against an STS quota that AWS enforces per account.
     pub async fn load_sdk_config_with_cached_credentials(
         &self,
         connection_context: &ConnectionContext,
@@ -651,18 +638,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
     }
 }
 
-/// A process-wide cache of credentials providers for `AssumeRole` AWS
-/// connections.
+/// A process-wide cache of caching credentials providers for `AssumeRole` AWS
+/// connections. See [`AwsConnection::load_sdk_config_with_cached_credentials`].
 ///
-/// Each entry is a provider that assumes a role on demand and remembers the
-/// credentials until they are close to expiry. See
-/// [`AwsConnection::load_sdk_config_with_cached_credentials`].
-///
-/// Entries are keyed by everything that determines which credentials a
-/// connection gets, so altering a connection to use another role yields a new
-/// entry rather than another role's credentials. Entries are never removed.
-/// The cache holds at most one entry for each distinct setting of each AWS
-/// connection this process has used, and an entry is small.
+/// Entries are never removed. There is at most one for each distinct setting
+/// of each AWS connection this process has used.
 #[derive(Debug, Clone, Default)]
 pub struct AwsCredentialsCache {
     providers: Arc<Mutex<BTreeMap<AwsCredentialsCacheKey, SharedCredentialsProvider>>>,
@@ -677,9 +657,9 @@ impl AwsCredentialsCache {
             .cloned()
     }
 
-    /// Returns the provider cached under `key`, inserting `provider` first if
-    /// there is none. When two callers race, both get the provider that was
-    /// inserted first, so they share one set of cached credentials.
+    /// Returns the provider under `key`, inserting `provider` if there is
+    /// none. Racing callers all get the one inserted first, so they share its
+    /// cached credentials.
     fn get_or_insert(
         &self,
         key: AwsCredentialsCacheKey,
@@ -695,7 +675,7 @@ impl AwsCredentialsCache {
 }
 
 /// Everything that determines which credentials an `AssumeRole` AWS connection
-/// receives.
+/// receives. Altering any of it must not serve the old entry's credentials.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct AwsCredentialsCacheKey {
     connection_id: CatalogItemId,
@@ -707,24 +687,22 @@ struct AwsCredentialsCacheKey {
 
 /// Cached credentials are not served once they are this close to expiry.
 ///
-/// Callers use the credentials right away, to sign a request or a token, so
-/// the buffer only needs to cover clock skew and the time until that signature
-/// is checked. Credentials from `AssumeRole` last an hour by default, so the
-/// cache still serves each set for most of its lifetime.
+/// Callers sign with the credentials immediately, so this only has to cover
+/// clock skew and the time until the signature is checked. `AssumeRole`
+/// credentials last an hour by default.
 const CREDENTIAL_CACHE_EXPIRY_BUFFER: Duration = Duration::from_mins(5);
 
 /// A [`ProvideCredentials`] that fetches credentials from `inner` on demand
-/// and serves them from memory until they are close to expiry.
+/// and serves them from memory until [`CREDENTIAL_CACHE_EXPIRY_BUFFER`] before
+/// they expire.
 ///
-/// Unlike [`CredentialPrefetcher`], it does no work in the background: a
-/// caller that never asks for credentials causes no fetches. That suits
-/// callers that authenticate rarely but in bursts, such as a source opening
-/// its connections.
+/// It does no background work, so holding one costs no STS requests. A
+/// [`CredentialPrefetcher`] held for the life of a source would refresh for
+/// as long as the source runs.
 ///
-/// Concurrent callers wait for a single fetch rather than each starting one.
 /// A failed fetch is returned to the caller and is not cached. Credentials
-/// that are past the expiry buffer are never served, even if the fetch that
-/// would replace them fails.
+/// past the expiry buffer are never served, even if the fetch that would
+/// replace them fails.
 #[derive(Debug)]
 struct LazyCredentialCache {
     inner: SharedCredentialsProvider,
@@ -758,8 +736,8 @@ impl ProvideCredentials for LazyCredentialCache {
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async move {
-            // Hold the lock across the fetch, so that concurrent callers wait
-            // for one fetch rather than each making their own.
+            // Holding the lock across the fetch makes concurrent callers wait
+            // for it. Without that, each would start a fetch of its own.
             let mut cached = self.cached.lock().await;
             match cached.as_ref() {
                 Some(creds) if credentials_are_fresh(creds, SystemTime::now()) => {
