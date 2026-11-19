@@ -20,6 +20,9 @@ path = "/usr/share/nginx/html"
 
 # NOTE: the directory plugin's own `headers` lose Cache-Control on any file
 # larger than its chunk_size (4kb), which it streams. Set it afterwards.
+# `always` also puts the immutable header on a 404 for a missing asset.
+# TODO: move these into the directory plugins' `headers` once a pingap
+# release includes vicanso/pingap#287.
 [plugins.app_cache_headers]
 category = "response_headers"
 always = true
