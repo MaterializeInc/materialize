@@ -15,11 +15,16 @@ its existing serialization error, not transparent SQL replanning. Review and
 targeted lint passed. See `startup-retry-verification.md` and
 `network-policy-verification.md` for evidence and limitations.
 
-**Next action:** address CREATE TYPE preparation and final commit. Its shared
-user-ID pool refills inline, so changing only final commit would leave a retry
-site. Reuse the existing pool and single-attempt allocation API before introducing
-new machinery. Testing failpoints are approved. Keep separate completion effects
-with their owners.
+CREATE TYPE now retains preparation while yielding during both shared ID-pool
+refill and final-write contention. Peer-contention tests fail with each former
+inline path and pass with the repair. A committed reservation cannot certify a
+type plan invalidated by peer DDL. Review, targeted Clippy and formatting passed.
+See `type-verification.md` for evidence and remaining coverage limits.
+
+**Next action:** convert CREATE VIEW's inline refill and final write through its
+existing staged owner. Preserve replacement validation, IF NOT EXISTS notices
+and EXPLAIN's admission behavior. See `create-view-retry-owner-audit.md`.
+Other ID-pool callers remain explicit. Testing failpoints are approved.
 
 Run final-head native acceptance and the compatible version-pair walkthrough after
 the retry work, not after each small change.
@@ -30,8 +35,9 @@ publication cadence, readiness intervals or resource limits.
 
 ## Live gaps and constraints
 
-- Scratch access is restored. Keep builds off the editing VM and preserve the
-  existing resource caps. Test-hook and plan-record metadata decisions are settled.
+- Scratch access and clock synchronization are repaired. The replacement worker
+  has current debug binaries and the targeted fixture. Completed runtimes stopped
+  and caps were restored. Keep builds off the editing VM and preserve existing caps.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
@@ -93,7 +99,8 @@ limits and the architecture-generated load assessment.
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Scheduled shutdown: 2026-11-19 22:04:52 UTC.
+Worker `i-0f602658c617effda`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
+Scheduled shutdown: 2026-11-20 21:11:48 UTC. Deletion: 2026-11-20 22:08:52 UTC.
 Recheck instance state and retention tags before restarting or extending it. Shutdown stops the instance and preserves
 its disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
@@ -103,10 +110,11 @@ the user slice. Extend this owned worker within existing caps when needed.
 
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, base `ee425edf` plus verified
-storage-usage, declaration, startup and network-policy retry overlays. Trust source receipts,
-not the displayed Git revision. Clean baseline:
-`/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
+`/home/ubuntu/materialize-m3-controller-followups`, base `6a209637` plus the verified
+TYPE repair. `type-replacement-source.sha256` matches the local source.
+The previous worker's build cache and baseline worktree expired. The baseline
+remains pinned at `d9a2c5dc402fd9fa359607305669d05f27215cc4` and needs reconstruction
+before further paired runs.
 
 Essential pointers:
 - `network-policy-verification.md`, `network-policy-final-source.json` and

@@ -15,7 +15,9 @@ use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
-use crate::coord::{CatalogCommitStage, Coordinator, Message, PlanValidity, StageResult, Staged};
+use crate::coord::{
+    CatalogCommitOps, CatalogCommitStage, Coordinator, Message, PlanValidity, StageResult, Staged,
+};
 use crate::{AdapterError, AdapterNotice, ExecuteContext, catalog};
 
 impl Staged for CatalogCommitStage {
@@ -36,18 +38,26 @@ impl Staged for CatalogCommitStage {
             // No attempt has run in this reacquired turn. Replan within it.
             return Err(AdapterError::CatalogSnapshotChanged);
         }
+        let ready = coord
+            .prepare_catalog_commit_ops(&mut self.ops, ctx.session())
+            .await?;
+        if self.planning_revision != coord.catalog().transient_revision() {
+            // Preparation may have completed an allocation and applied peer DDL.
+            // Do not certify the old plan with the caught-up revision.
+            coord.release_ddl_lock(ctx.session().conn_id());
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        if !ready {
+            return Ok(self.defer(coord, ctx));
+        }
+        let CatalogCommitOps::Ready(ops) = &self.ops else {
+            unreachable!("preparation reported ready");
+        };
         let result = coord
-            .try_catalog_transact_with_context(ctx, &self.ops, &mut self.prepared)
+            .try_catalog_transact_with_context(ctx, ops, &mut self.prepared)
             .await;
         match result {
-            Ok(false) => {
-                coord.release_ddl_lock(ctx.session().conn_id());
-                let delay = coord.read_protection_conflict_delay();
-                return Ok(StageResult::Await(Box::pin(async move {
-                    tokio::time::sleep(delay).await;
-                    Ok(Box::new(self))
-                })));
-            }
+            Ok(false) => return Ok(self.defer(coord, ctx)),
             Err(AdapterError::CatalogSnapshotChanged) => {
                 coord.release_ddl_lock(ctx.session().conn_id());
                 return Err(AdapterError::CatalogSnapshotChanged);
@@ -94,6 +104,17 @@ impl Staged for CatalogCommitStage {
     }
 }
 
+impl CatalogCommitStage {
+    fn defer(self, coord: &mut Coordinator, ctx: &ExecuteContext) -> StageResult<Box<Self>> {
+        coord.release_ddl_lock(ctx.session().conn_id());
+        let delay = coord.read_protection_conflict_delay();
+        StageResult::Await(Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            Ok(Box::new(self))
+        }))
+    }
+}
+
 impl Coordinator {
     /// Sequences SQL whose remaining work is a catalog transaction and fixed
     /// response. Startup and statements with separate completion effects retain
@@ -114,6 +135,22 @@ impl Coordinator {
         &mut self,
         ctx: ExecuteContext,
         ops: Vec<catalog::Op>,
+        response: ExecuteResponse,
+        already_exists_notice: Option<AdapterNotice>,
+    ) {
+        self.sequence_catalog_commit_ops(
+            ctx,
+            CatalogCommitOps::Ready(ops),
+            response,
+            already_exists_notice,
+        )
+        .await;
+    }
+
+    pub(super) async fn sequence_catalog_commit_ops(
+        &mut self,
+        ctx: ExecuteContext,
+        ops: CatalogCommitOps,
         response: ExecuteResponse,
         already_exists_notice: Option<AdapterNotice>,
     ) {

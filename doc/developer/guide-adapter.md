@@ -82,6 +82,13 @@ turn.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Staged ID-pool refills attempt allocation once per turn. Adopt only definitively
+committed reservations, retaining them even if the requesting statement becomes
+invalid. Allocation can follow peer definitions without applying their SQL
+projection, so catch up after success as well as conflict. Validate the original
+planning revision before constructing a catalog candidate. Allocation does not
+recertify an old plan. Retain assigned IDs across final-write metadata retries.
+
 The staged catalog-commit, DROP, CREATE INDEX and automatic-birth CREATE
 MATERIALIZED VIEW commit paths release DDL admission during definitive retry
 backoff. Their continuations retain preparation and input holds, then join the

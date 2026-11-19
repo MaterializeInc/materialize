@@ -104,10 +104,10 @@ use crate::coord::appends::{PendingWriteTxn, UserWriteResponder};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
-    ExplainContext, Message, NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
-    validate_ip_with_policy_rules,
+    CatalogCommitOps, Coordinator, CreateConnectionValidationReady, DeferredPlanStatement,
+    ExecuteContext, ExplainContext, Message, NetworkPolicyError, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, StageResult, Staged, StagedContext, TargetCluster,
+    WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -1289,16 +1289,49 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_type(
         &mut self,
-        session: &Session,
+        ctx: ExecuteContext,
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let (item_id, global_id) = self.allocate_user_id().await?;
-        // Validate the type definition (e.g., composite columns) before storing.
-        plan.typ
+    ) {
+        // Reject invalid definitions before allocating durable IDs.
+        if let Err(error) = plan
+            .typ
             .inner
-            .desc(&self.catalog().for_session(session))
-            .map_err(AdapterError::from)?;
+            .desc(&self.catalog().for_session(ctx.session()))
+        {
+            ctx.retire(Err(error.into()));
+            return;
+        }
+        self.sequence_catalog_commit_ops(
+            ctx,
+            CatalogCommitOps::CreateType {
+                plan: Box::new(plan),
+                resolved_ids,
+            },
+            ExecuteResponse::CreatedType,
+            None,
+        )
+        .await;
+    }
+
+    /// Returns true only once IDs have been assigned and catalog ops are ready.
+    /// The stage owns revision validation and any retry backoff.
+    async fn prepare_catalog_commit_ops(
+        &mut self,
+        ops: &mut CatalogCommitOps,
+        session: &Session,
+    ) -> Result<bool, AdapterError> {
+        if matches!(ops, CatalogCommitOps::Ready(_)) {
+            return Ok(true);
+        }
+        let Some((item_id, global_id)) = self.try_allocate_user_id().await? else {
+            return Ok(false);
+        };
+        let CatalogCommitOps::CreateType { plan, resolved_ids } =
+            std::mem::replace(ops, CatalogCommitOps::Ready(Vec::new()))
+        else {
+            unreachable!("only type preparation needs an ID");
+        };
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
             global_id,
@@ -1315,10 +1348,8 @@ impl Coordinator {
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedType),
-            Err(err) => Err(err),
-        }
+        *ops = CatalogCommitOps::Ready(vec![op]);
+        Ok(true)
     }
 
     #[instrument]

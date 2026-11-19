@@ -3361,6 +3361,7 @@ impl DurableCatalogState for PersistCatalogState {
         let ids = loop {
             let mut txn = self.transaction_unchecked().await?;
             let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+            fail::fail_point!("catalog_allocate_id_before_commit");
             match txn.commit_internal(commit_ts).await {
                 Ok(_) => break ids,
                 Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
@@ -3387,6 +3388,7 @@ impl DurableCatalogState for PersistCatalogState {
         }
         let mut txn = self.transaction_unchecked().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_owned(), amount)?;
+        fail::fail_point!("catalog_allocate_id_before_commit");
         txn.commit_internal_once(commit_ts).await?;
         Ok(ids)
     }

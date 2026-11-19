@@ -787,15 +787,25 @@ impl std::fmt::Debug for DdlCommitStage {
     }
 }
 
-/// SQL work whose only remaining effect is a catalog commit and response.
+/// SQL work with no completion effects beyond its catalog commit and response.
 #[derive(Debug)]
 pub struct CatalogCommitStage {
     validity: PlanValidity,
     planning_revision: u64,
-    ops: Vec<crate::catalog::Op>,
+    ops: CatalogCommitOps,
     prepared: Option<ddl::CatalogTransactionState>,
     response: ExecuteResponse,
     already_exists_notice: Option<AdapterNotice>,
+}
+
+/// Preparation that must survive metadata contention before catalog ops exist.
+#[derive(Debug)]
+enum CatalogCommitOps {
+    Ready(Vec<crate::catalog::Op>),
+    CreateType {
+        plan: Box<mz_sql::plan::CreateTypePlan>,
+        resolved_ids: ResolvedIds,
+    },
 }
 
 #[derive(Debug)]
@@ -4793,6 +4803,15 @@ impl Coordinator {
         let to_allocate = min_count.max(u64::from(batch_size));
         let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let ids = self.catalog().allocate_user_ids(to_allocate, id_ts).await?;
+        self.adopt_user_id_range(&ids)
+    }
+
+    /// Adopts an already committed, contiguous reservation. Replacing an unused
+    /// tail is safe, but reservations separated by peer allocations cannot merge.
+    fn adopt_user_id_range(
+        &mut self,
+        ids: &[(CatalogItemId, GlobalId)],
+    ) -> Result<(), AdapterError> {
         if let (Some((first_id, _)), Some((last_id, _))) = (ids.first(), ids.last()) {
             let start = match first_id {
                 CatalogItemId::User(id) => *id,
@@ -4817,6 +4836,41 @@ impl Coordinator {
             ));
         }
         Ok(())
+    }
+
+    /// Attempts one pool refill for an owner that can retain preparation and yield.
+    /// The owner must revalidate its original planning revision after this call:
+    /// even successful allocation can have followed unapplied peer definitions.
+    async fn try_allocate_user_id(
+        &mut self,
+    ) -> Result<Option<(CatalogItemId, GlobalId)>, AdapterError> {
+        if let Some(id) = self.user_id_pool.allocate() {
+            return Ok(Some((CatalogItemId::User(id), GlobalId::User(id))));
+        }
+        let amount =
+            u64::from(USER_ID_POOL_BATCH_SIZE.get(self.catalog().system_config().dyncfgs())).max(1);
+        let ts = self.get_catalog_write_ts().await.lower_bound();
+        let result = self
+            .catalog()
+            .try_allocate_user_ids(amount, ts)
+            .await
+            .map_err(AdapterError::from);
+        match result {
+            Ok(ids) => {
+                // A completed reservation belongs to the pool, even if the
+                // requesting statement is invalidated during catch-up.
+                self.adopt_user_id_range(&ids)?;
+                fail::fail_point!("user_id_pool_after_refill");
+                self.refresh_catalog(None).await?;
+                let id = self.user_id_pool.allocate().expect("ID pool just refilled");
+                Ok(Some((CatalogItemId::User(id), GlobalId::User(id))))
+            }
+            Err(error) if error.is_catalog_out_of_sync() => {
+                self.refresh_catalog(None).await?;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Allocates a single user ID, refilling the pool from the catalog if needed.

@@ -337,10 +337,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateType(plan) => {
-                    let result = self
-                        .sequence_create_type(ctx.session(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_create_type(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateNetworkPolicy(plan) => {
                     self.sequence_create_network_policy(ctx, plan).await;

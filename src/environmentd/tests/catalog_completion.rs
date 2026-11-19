@@ -18,8 +18,10 @@ use std::time::Duration;
 
 use mz_adapter::session::SessionConfig;
 use mz_auth::{Authenticated, AuthenticatorKind};
+use mz_catalog::durable::objects::DurableType;
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, DurableCatalogState, persist_backed_catalog_join_active,
+    CatalogError, DurableCatalogError, DurableCatalogState, Item,
+    persist_backed_catalog_join_active,
 };
 use mz_environmentd::test_util;
 use mz_ore::retry::Retry;
@@ -40,7 +42,10 @@ impl Drop for ReleaseCommitter {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_catalog_completion() {
     let test_case = async {
-        let server = test_util::TestHarness::default().start().await;
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("user_id_pool_batch_size".into(), "1".into())
+            .start()
+            .await;
         let client = server.connect().await.unwrap();
         let table_client = server.connect().await.unwrap();
         batch_execute(&client, sql!("CREATE TABLE existing_table (a int)"))
@@ -230,6 +235,7 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
         let client = complete_under_catalog_contention(
             server,
             &mut *peer,
+            CatalogConflict::Progress,
             "login",
             adapter.startup(session),
         )
@@ -259,6 +265,120 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
             ("manual_group".into(), "mz_system".into()),
         ]
     );
+    complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::Progress,
+        "type commit",
+        batch_execute(
+            &admin,
+            sql!("CREATE TYPE retry_list AS LIST (ELEMENT TYPE = int)"),
+        ),
+    )
+    .await
+    .unwrap();
+    let value: i32 = query_one(&admin, sql!("SELECT (LIST[7, 8]::retry_list)[1]"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(value, 7);
+    complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::IdAllocation,
+        "ID pool refill",
+        batch_execute(
+            &admin,
+            sql!("CREATE TYPE refill_list AS LIST (ELEMENT TYPE = int)"),
+        ),
+    )
+    .await
+    .unwrap();
+    let value: i32 = query_one(&admin, sql!("SELECT (LIST[9, 10]::refill_list)[2]"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(value, 10);
+
+    // A committed ID reservation does not certify the previously selected type.
+    // Follow peer DDL before constructing the final catalog candidate.
+    let type_id = query_one(
+        &admin,
+        sql!("SELECT id FROM mz_types WHERE name = 'refill_list'"),
+        &[],
+    )
+    .await
+    .unwrap()
+    .get::<_, String>(0)
+    .parse()
+    .unwrap();
+    let hook = RemoveCatalogHook("user_id_pool_after_refill");
+    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let rendezvous = Mutex::new(Some((parked_tx, resume_rx)));
+    fail::cfg_callback(hook.0, move || {
+        let Some((parked, resume)) = rendezvous.lock().unwrap().take() else {
+            return;
+        };
+        tokio::task::block_in_place(|| {
+            let _ = parked.send(());
+            let _ = resume.recv_timeout(Duration::from_secs(180));
+        });
+    })
+    .unwrap();
+    let release = ReleaseCandidate(resume_tx);
+    let drop_type = async {
+        parked_rx.await.expect("TYPE committed its pool refill");
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+                Err(error) => panic!("open peer type drop: {error}"),
+            };
+            // This standalone type has no comments, plans or durable dependents.
+            txn.remove_item(type_id).unwrap();
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("peer type drop: {error}"),
+            }
+        }
+        drop(release);
+    };
+    let creation = batch_execute(
+        &admin,
+        sql!("CREATE TYPE stale_list AS LIST (ELEMENT TYPE = refill_list)"),
+    );
+    let ((), result) = tokio::join!(drop_type, creation);
+    drop(hook);
+    let error = result.expect_err("allocation must not recertify a stale type plan");
+    let mz_postgres_util::PostgresError::Postgres(error) = error else {
+        panic!("expected SQL rejection, got {error:?}");
+    };
+    assert_eq!(
+        error.as_db_error().unwrap().message(),
+        "type \"refill_list\" does not exist"
+    );
+    // A raw durable peer does not publish the derived mz_types retraction.
+    // Check the authoritative state, not that separately published projection.
+    peer.sync_to_current_updates().await.unwrap();
+    let mut items = peer
+        .snapshot()
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|(key, value)| Item::from_key_value(key, value));
+    assert!(!items.any(|item| matches!(item.name.as_str(), "refill_list" | "stale_list")));
+
     batch_execute(
         &admin,
         sql!("ALTER SYSTEM SET enable_network_policies = true"),
@@ -277,6 +397,7 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
         complete_under_catalog_contention(
             server,
             &mut *peer,
+            CatalogConflict::Progress,
             "network policy",
             batch_execute(&policy_client, statement),
         )
@@ -396,17 +517,68 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
     peer.expire().await;
 }
 
+enum CatalogConflict {
+    Progress,
+    IdAllocation,
+}
+
+impl CatalogConflict {
+    fn failpoint(&self) -> &'static str {
+        match self {
+            Self::Progress => CATALOG_FAILPOINT,
+            Self::IdAllocation => "catalog_allocate_id_before_commit",
+        }
+    }
+
+    async fn publish(&self, peer: &mut dyn DurableCatalogState) {
+        match self {
+            Self::Progress => {
+                peer.sync_to_current_updates().await.unwrap();
+                let upper = peer.current_upper().await;
+                peer.advance_upper(upper.step_forward()).await.unwrap();
+            }
+            Self::IdAllocation => loop {
+                peer.sync_to_current_updates().await.unwrap();
+                let mut txn = match peer.transaction().await {
+                    Ok(txn) => txn,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                    Err(error) => panic!("open peer allocation: {error}"),
+                };
+                txn.get_and_increment_id_by(mz_catalog::durable::USER_ITEM_ALLOC_KEY.into(), 1)
+                    .unwrap();
+                let ts = txn.upper();
+                let _ = txn.get_and_commit_op_updates();
+                match txn.commit(ts).await {
+                    Ok(()) => break,
+                    Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                        ..
+                    })) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => panic!("peer allocation: {error}"),
+                }
+            },
+        }
+    }
+}
+
 /// Defeat prepared catalog candidates with real peer progress while checking that
 /// the coordinator still serves unrelated commands. The caller checks the result.
 async fn complete_under_catalog_contention<T>(
     server: &test_util::TestServer,
     peer: &mut dyn DurableCatalogState,
+    conflict: CatalogConflict,
     name: &str,
     operation: impl std::future::Future<Output = T>,
 ) -> T {
     let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
-    let hook = RemoveCatalogHook(CATALOG_FAILPOINT);
-    fail::cfg_callback(CATALOG_FAILPOINT, move || {
+    let hook = RemoveCatalogHook(conflict.failpoint());
+    fail::cfg_callback(hook.0, move || {
         let (resume_tx, resume_rx) = mpsc::channel();
         if candidate_tx.send(resume_tx).is_ok() {
             tokio::task::block_in_place(|| {
@@ -421,9 +593,7 @@ async fn complete_under_catalog_contention<T>(
     let interference = async {
         while let Some(resume) = candidates.recv().await {
             let release = ReleaseCandidate(resume);
-            peer.sync_to_current_updates().await.unwrap();
-            let upper = peer.current_upper().await;
-            peer.advance_upper(upper.step_forward()).await.unwrap();
+            conflict.publish(peer).await;
             conflicts.fetch_add(1, Ordering::SeqCst);
             drop(release);
         }
