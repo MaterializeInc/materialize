@@ -2925,31 +2925,14 @@ impl Catalog {
                 // Rename item itself.
                 let mut new_entry = entry.clone();
                 new_entry.name.item.clone_from(&to_name);
-                new_entry.item = entry
-                    .item()
-                    .rename_item_refs(current_full_name.clone(), to_full_name.item.clone(), true)
-                    .map_err(|e| {
-                        Error::new(ErrorKind::from(AmbiguousRename {
-                            depender: state
-                                .resolve_full_name(entry.name(), entry.conn_id())
-                                .to_string(),
-                            dependee: state
-                                .resolve_full_name(entry.name(), entry.conn_id())
-                                .to_string(),
-                            message: e,
-                        }))
-                    })?;
+                new_entry.item = entry.item().rename(to_name);
 
                 for id in entry.referenced_by() {
                     let dependent_item = state.get_entry(id);
                     let mut to_entry = dependent_item.clone();
                     to_entry.item = dependent_item
                         .item()
-                        .rename_item_refs(
-                            current_full_name.clone(),
-                            to_full_name.item.clone(),
-                            false,
-                        )
+                        .rename_item_refs(current_full_name.clone(), to_full_name.item.clone())
                         .map_err(|e| {
                             Error::new(ErrorKind::from(AmbiguousRename {
                                 depender: state

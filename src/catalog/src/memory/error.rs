@@ -205,22 +205,13 @@ pub struct AmbiguousRename {
     pub message: String,
 }
 
-// Implement `Display` for `MinMax`.
 impl fmt::Display for AmbiguousRename {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.depender == self.dependee {
-            write!(
-                f,
-                "renaming conflict: in {}, {}",
-                self.dependee, self.message
-            )
-        } else {
-            write!(
-                f,
-                "renaming conflict: in {}, which uses {}, {}",
-                self.depender, self.dependee, self.message
-            )
-        }
+        write!(
+            f,
+            "renaming conflict: in {}, which uses {}, {}",
+            self.depender, self.dependee, self.message
+        )
     }
 }
 

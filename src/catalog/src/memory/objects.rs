@@ -2321,30 +2321,36 @@ impl CatalogItem {
         }
     }
 
-    /// Renames this item if `rename_self`, otherwise rewrites its references to
-    /// `from` or errors if those references are ambiguous.
+    /// Renames this item without changing references in its definition.
+    pub fn rename(&self, to_item_name: String) -> CatalogItem {
+        self.rewrite_for_rename(|stmt| {
+            mz_sql::ast::transform::create_stmt_rename(stmt, to_item_name);
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap_or_else(|err| match err {})
+    }
+
+    /// Rewrites references to `from` or errors if those references are ambiguous.
     pub fn rename_item_refs(
         &self,
         from: FullItemName,
         to_item_name: String,
-        rename_self: bool,
     ) -> Result<CatalogItem, String> {
-        let do_rewrite = |create_sql: String| -> Result<String, String> {
+        self.rewrite_for_rename(|stmt| {
+            mz_sql::ast::transform::create_stmt_rename_refs(stmt, from, to_item_name)
+        })
+    }
+
+    fn rewrite_for_rename<E>(
+        &self,
+        rewrite: impl FnOnce(&mut Statement<Raw>) -> Result<(), E>,
+    ) -> Result<CatalogItem, E> {
+        let do_rewrite = |create_sql: String| -> Result<String, E> {
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast;
-            if rename_self {
-                // References in the definition are to other items, even when
-                // one of them has the same unqualified name as this item.
-                mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name);
-            } else {
-                mz_sql::ast::transform::create_stmt_rename_refs(
-                    &mut create_stmt,
-                    from,
-                    to_item_name,
-                )?;
-            }
+            rewrite(&mut create_stmt)?;
             Ok(create_stmt.to_ast_string_stable())
         };
 
