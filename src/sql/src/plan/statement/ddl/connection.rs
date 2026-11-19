@@ -154,6 +154,7 @@ pub(super) fn validate_options_per_connection_type(
             SecurityProtocol,
         ],
         CreateConnectionType::Postgres => &[
+            AwsConnection,
             AwsPrivatelink,
             Database,
             Host,
@@ -438,6 +439,13 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::Postgres => {
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+                if aws_connection.is_some() && self.password.is_some() {
+                    sql_bail!(
+                        "invalid CONNECTION: AWS IAM authentication is not supported with password"
+                    );
+                }
+
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {
@@ -448,7 +456,16 @@ impl ConnectionOptionExtracted {
                     ),
                 };
                 let tls_mode = match self.ssl_mode.as_ref().map(|m| m.as_str()) {
-                    None | Some("disable") => tokio_postgres::config::SslMode::Disable,
+                    None | Some("disable") => {
+                        // The IAM authentication token is sent as the
+                        // password, so it must not travel in cleartext.
+                        if aws_connection.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: AWS IAM authentication requires SSL to be enabled"
+                            )
+                        }
+                        tokio_postgres::config::SslMode::Disable
+                    }
                     // "prefer" intentionally omitted because it has dubious security
                     // properties.
                     Some("require") | Some("required") => tokio_postgres::config::SslMode::Require,
@@ -492,6 +509,7 @@ impl ConnectionOptionExtracted {
                     user: self
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
+                    aws_connection,
                 })
             }
             CreateConnectionType::Ssh => {
