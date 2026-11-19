@@ -2321,9 +2321,8 @@ impl CatalogItem {
         }
     }
 
-    /// Returns a clone of `self` with all instances of `from` renamed to `to`
-    /// (with the option of including the item's own name) or errors if request
-    /// is ambiguous.
+    /// Renames this item if `rename_self`, otherwise rewrites its references to
+    /// `from` or errors if those references are ambiguous.
     pub fn rename_item_refs(
         &self,
         from: FullItemName,
@@ -2336,10 +2335,16 @@ impl CatalogItem {
                 .into_element()
                 .ast;
             if rename_self {
-                mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
+                // References in the definition are to other items, even when
+                // one of them has the same unqualified name as this item.
+                mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name);
+            } else {
+                mz_sql::ast::transform::create_stmt_rename_refs(
+                    &mut create_stmt,
+                    from,
+                    to_item_name,
+                )?;
             }
-            // Determination of what constitutes an ambiguous request is done here.
-            mz_sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to_item_name)?;
             Ok(create_stmt.to_ast_string_stable())
         };
 

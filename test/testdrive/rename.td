@@ -300,8 +300,7 @@ contains:renaming conflict
 ! ALTER VIEW t1 RENAME TO public;
 contains:renaming conflict
 
-# ❌ Identifiers used in own definition
-# `materialize.public.a` contains an unqualified reference to `materialize.public.t1.a`.
+# ❌ Identifiers used in the dependent view t2
 ! ALTER VIEW a RENAME TO anything
 contains:renaming conflict
 ! ALTER VIEW v0 RENAME TO b
@@ -736,9 +735,11 @@ materialize.public.qualified_wildcard "CREATE VIEW materialize.public.qualified_
 > CREATE VIEW where_in_literal AS
   SELECT b FROM t1 WHERE b IN ('v8')
 
-# ❌ Identifiers used in dependent items
-! ALTER VIEW where_in_subquery RENAME TO scm5
+# Identifiers used only in the view being renamed
+![version<2652000] ALTER VIEW where_in_subquery RENAME TO scm5
 contains:renaming conflict
+>[version>=2652000] ALTER VIEW where_in_subquery RENAME TO scm5
+>[version>=2652000] ALTER VIEW scm5 RENAME TO where_in_subquery
 
 # ✅ New idents
 > ALTER VIEW where_in_literal RENAME TO v8
@@ -764,7 +765,7 @@ materialize.public.v9 "CREATE VIEW materialize.public.v9 AS SELECT b FROM materi
   JOIN "already has space"
   ON "already has space".my_space = space."has space";
 
-# ❌ Identifiers used in own definition
+# ❌ Identifiers used in space_dependent
 ! ALTER VIEW space RENAME TO "has space"
 contains:renaming conflict
 ! ALTER VIEW "already has space" RENAME TO my_space
@@ -811,9 +812,11 @@ materialize.public.unnatural "CREATE VIEW\n    materialize.public.unnatural\n   
   ) AS x
   ON no_func.a = x.a;
 
-# ❌ Identifiers used in dependent items
-! ALTER VIEW func RENAME TO count
+# Identifiers used only in the view being renamed
+![version<2652000] ALTER VIEW func RENAME TO count
 contains:renaming conflict
+>[version>=2652000] ALTER VIEW func RENAME TO count
+>[version>=2652000] ALTER VIEW count RENAME TO func
 
 # ✅ Non-colliding function name
 > ALTER VIEW no_func RENAME TO count
