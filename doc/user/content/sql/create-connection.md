@@ -908,15 +908,28 @@ CREATE CONNECTION aws_rds_postgres TO AWS (
     REGION = 'us-west-1'
 );
 
+CREATE SECRET aws_rds_cas AS '<PEM_CONTENTS>';
+
 CREATE CONNECTION pg_connection TO POSTGRES (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
     USER 'materialize',
     AWS CONNECTION aws_rds_postgres,
     SSL MODE 'verify_full',
+    SSL CERTIFICATE AUTHORITY SECRET aws_rds_cas,
     DATABASE 'postgres'
 );
 ```
+
+AWS IAM authentication requires SSL. Amazon RDS and Aurora certificates are
+signed by Amazon's own certificate authorities, which are not in the system's
+default CA certificates. To verify the server's certificate with `SSL MODE`
+set to `verify_ca` or `verify_full`, [download the certificate bundle for your
+AWS Region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html),
+store its contents in a secret, and pass that secret as
+`SSL CERTIFICATE AUTHORITY`. With `SSL MODE 'require'`, the connection is
+encrypted but the server's certificate is not verified, and no certificate
+bundle is needed.
 
 Before you create the connection, configure the database for IAM
 authentication:
