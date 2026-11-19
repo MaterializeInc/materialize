@@ -144,6 +144,12 @@ The named type becomes a dependency of the materialized view, as with tables.
 With a declared schema, a replacement is validated against the target's declared schema with the same `RelationDesc::diff` check as today, which also compares the inferred keys.
 The difference is that both sides are now under the user's control, so a mismatch is something the user wrote, not something the optimizer decided.
 
+The check compares declared nullability, not what the replacement's query proves.
+A declared `NOT NULL` column whose query can produce NULLs passes it and becomes a runtime assertion, so after the replacement is applied a NULL there makes reads of the materialized view fail.
+Against an implicit target the same query is rejected as a nullability mismatch, which blue/green deployments rely on to catch problems before applying a replacement.
+To keep that signal, the sequencer emits a notice naming each declared `NOT NULL` column that the replacement's locally optimized query does not prove non-nullable.
+It is a notice rather than an error because declaring `NOT NULL` over a nullable query is a legitimate assertion.
+
 A replacement without a column list for a target *with* a declared schema inherits the target's schema.
 Purification copies the target's column definitions into the replacement's statement, so inheriting is shorthand for writing them out: the query is cast to them with implicit casts, `NOT NULL` becomes an assertion, and the feature flag applies.
 Because casts are implicit, a replacement whose query produces `int8` for an inherited `int2` column fails to plan instead of narrowing silently.
@@ -225,6 +231,7 @@ Inferred `NOT NULL` becomes a runtime assertion, which turns a nullability-infer
 Each column type is spelled with item ids and kept only if it plans back to the exact type.
 A type that cannot be spelled leaves the schema implicit: anonymous records, and arrays and ranges whose element type has modifiers.
 Replacements are not frozen, because a declared target passes its definitions on through purification and an implicit target should stay implicit.
+A frozen target counts as declared, so its replacements fall under the nullability notice in [Replacements](#replacements) instead of the creation-time mismatch error, and inherited names override the names in the replacement's query.
 Freezing changes what `SHOW CREATE MATERIALIZED VIEW` prints for users who never wrote a schema, which is why it starts behind a flag.
 
 ### Phase 2: migrating existing materialized views
