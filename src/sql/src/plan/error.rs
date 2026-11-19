@@ -210,7 +210,7 @@ pub enum PlanError {
     },
     NoTablesFoundForSchemas(Vec<String>),
     InvalidProtobufSchema {
-        cause: protobuf_native::OperationFailedError,
+        cause: protox::Error,
     },
     InvalidOptionValue {
         // Expected to be generated from the `to_ast_string` value on the option
@@ -354,7 +354,9 @@ impl PlanError {
             Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
-            Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
+            // protox's `Debug` output prefixes the message with the file name and,
+            // where known, the line and column, matching `protoc`'s format.
+            Self::InvalidProtobufSchema { cause } => Some(format!("{cause:?}")),
             Self::InvalidOptionValue { err, .. } => err.detail(),
             Self::UpsertSinkWithInvalidKey {
                 name,
