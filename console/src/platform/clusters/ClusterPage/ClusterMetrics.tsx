@@ -19,7 +19,10 @@ import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { ClusterInfoBox } from "~/platform/clusters/ClusterOverview";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
-import { CLUSTERS_FETCH_ERROR_MESSAGE } from "~/platform/clusters/constants";
+import {
+  CLUSTER_TIME_PERIOD_STORAGE_KEY,
+  CLUSTERS_FETCH_ERROR_MESSAGE,
+} from "~/platform/clusters/constants";
 import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
@@ -32,7 +35,7 @@ const ClusterMetricsContent = ({ cluster }: { cluster: Cluster }) => {
   const { selectedReplica, setSelectedReplicaName } =
     useSelectedReplica(cluster);
   const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
-    localStorageKey: "mz-cluster-graph-time-period",
+    localStorageKey: CLUSTER_TIME_PERIOD_STORAGE_KEY,
   });
 
   return (
