@@ -803,14 +803,28 @@ CREATE CONNECTION aws_rds_mysql TO AWS (
     REGION = 'us-west-1'
 );
 
+CREATE SECRET aws_rds_cas AS '<PEM_CONTENTS>';
+
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 3306,
     USER 'root',
     AWS CONNECTION aws_rds_mysql,
-    SSL MODE 'verify_identity'
+    SSL MODE 'verify_identity',
+    SSL CERTIFICATE AUTHORITY SECRET aws_rds_cas
 );
 ```
+
+AWS IAM authentication requires SSL. Amazon RDS certificates are signed by
+Amazon's own certificate authorities, which are not in the system's default
+CA certificates. To verify the server's certificate with `SSL MODE` set to
+`verify_ca` or `verify_identity`, [download the certificate bundle for your
+AWS Region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html),
+store its contents in a secret, and pass that secret as
+`SSL CERTIFICATE AUTHORITY`. With `SSL MODE 'required'`, the connection is
+encrypted but the server's certificate is not verified, and no certificate
+bundle is needed.
+
 {{< /tab >}}
 {{< /tabs >}}
 
