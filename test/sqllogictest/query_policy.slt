@@ -224,10 +224,16 @@ HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the que
 
 # Diagnostics remain available even when their introspection queries need dataflows.
 statement ok
+SET cluster_replica = r1;
+
+statement ok
 EXPLAIN ANALYZE CLUSTER MEMORY;
 
 statement ok
 EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW unindexed;
+
+statement ok
+RESET cluster_replica;
 
 # A persist fast-path read does not build a temporary dataflow.
 query II rowsort

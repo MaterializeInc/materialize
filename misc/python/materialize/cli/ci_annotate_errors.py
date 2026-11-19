@@ -133,6 +133,8 @@ ERROR_RE = re.compile(
     | Assertion\ `.*'\ failed\.
     | Invalid\ data\ in\ source\ errors,\ saw\ retractions
     | \+\+\+\ Expected\ builds\ to\ be\ available,\ the\ build\ probably\ failed
+    # cargo-deny advisories
+    | ^error\[(?:vulnerability|unmaintained|unsound|notice|yanked)\]:[^\n]*(?:\n(?!error\[|warning\[)[^\n]+)*
     )
     .* $
     """,
@@ -491,7 +493,24 @@ and finds associated open GitHub issues in Materialize repository.""",
 
     if args.buildkite_log_until:
         # Unlike output the caller captures, Buildkite's log has secrets redacted.
-        args.log_files.insert(0, write_buildkite_log(args.buildkite_log_until))
+        try:
+            args.log_files.insert(0, write_buildkite_log(args.buildkite_log_until))
+        except Exception as e:
+            if not args.test_result:
+                raise
+            print(f"Could not retrieve the Buildkite job log: {e}", file=sys.stderr)
+            add_annotation_raw(
+                style="error",
+                markdown=(
+                    f'<a href="#{html.escape(os.environ["BUILDKITE_JOB_ID"])}">'
+                    f"{html.escape(get_suite_name())}</a> failed "
+                    f"(exit status {args.test_result}).\n\n"
+                    "Could not retrieve the job log for error analysis:\n"
+                    f"<pre>{html.escape(str(e))}</pre>\n"
+                    "See the linked job for the command output."
+                ),
+            )
+            return args.test_result
 
     test_analytics_config = create_test_analytics_config_with_hostname(
         args.cloud_hostname
