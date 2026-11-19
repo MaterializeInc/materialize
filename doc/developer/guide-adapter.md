@@ -535,6 +535,15 @@ backoff between attempts. Do not cancel a submitted write or its completion.
 Fixed-timestamp OCC retains its single-attempt path and returns conflicts to the
 session owner rather than reusing its diffs at a new timestamp.
 
+Startup history pruning also uses fixed-timestamp writes. A completed snapshot
+at B authorizes its retractions only at B+1. Any intervening WAL write rejects
+that candidate, including another adapter pruning the same rows. Discard the
+candidate on conflict or lost acknowledgement. Never put snapshot-derived
+retractions into blind group commit, even before the local adapter starts serving.
+The oracle cut is not protection. If compaction has passed it before the reader
+opens, discard the pruning attempt without terminating the adapter. Never
+substitute a newer snapshot while retaining the original conditional-write cut.
+
 Runtime registration adopts schemas before allocating its timestamp, but installs
 local routes only after the WAL write completes. Retain preparation across
 definitive conflicts and certify catalog bindings after every fresh allocation.

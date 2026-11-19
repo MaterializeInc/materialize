@@ -369,11 +369,15 @@ pub enum Message {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
-    StorageUsagePrune(Vec<BuiltinTableUpdate>),
+    PruneBuiltinHistory {
+        item_id: CatalogItemId,
+        global_id: GlobalId,
+        read_ts: Timestamp,
+        diffs: Vec<(mz_repr::Row, Diff)>,
+    },
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
     ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
-    ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
     CaughtUpCheck(caught_up::CaughtUpCheckRequest),
@@ -535,11 +539,10 @@ impl Message {
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
-            Message::StorageUsagePrune(_) => "storage_usage_prune",
+            Message::PruneBuiltinHistory { .. } => "prune_builtin_history",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
             Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
-            Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
             Message::CaughtUpCheck(_) => "caught_up_check",
@@ -5066,13 +5069,8 @@ impl Coordinator {
     /// This method will read the entire contents of [`MZ_STORAGE_USAGE_BY_SHARD`] into memory
     /// which can be expensive.
     ///
-    /// DO NOT call this method outside of startup. The safety of reading at the current oracle read
-    /// timestamp and then writing at whatever the current write timestamp is (instead of
-    /// `read_ts + 1`) relies on the fact that there are no outstanding writes during startup.
-    ///
-    /// Group commit, which this method uses to write the retractions, has builtin fencing, and we
-    /// never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method, which is
-    /// only called once during startup. So we don't have to worry about double/invalid retractions.
+    /// Retractions are conditional on this snapshot. A concurrent WAL write
+    /// invalidates the candidate, which is discarded rather than retried.
     async fn prune_storage_usage_events_on_startup(&self, retention_period: Duration) {
         let item_id = self
             .catalog()
@@ -5085,9 +5083,21 @@ impl Coordinator {
             .snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "storage_usage_prune", async move {
-            let mut current_contents = current_contents_fut
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
+            let snapshot = current_contents_fut.await;
+            // The oracle cut is not a read hold. A peer can compact it before
+            // the reader opens. Like a WAL conflict, this cancels best-effort
+            // pruning without moving its retractions to a different timestamp.
+            if matches!(
+                &snapshot,
+                Err(mz_storage_types::controller::StorageError::ReadBeforeSince(
+                    _
+                ))
+            ) {
+                debug!(%global_id, %read_ts, "skipping compacted history pruning snapshot");
+                return;
+            }
+            let mut current_contents =
+                snapshot.unwrap_or_terminate("cannot fail to fetch snapshot");
             differential_dataflow::consolidation::consolidate(&mut current_contents);
 
             let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
@@ -5109,24 +5119,26 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE);
-                    expired.push(builtin_update);
+                    expired.push((row, Diff::MINUS_ONE));
                 }
             }
 
             // main thread has shut down.
-            let _ = internal_cmd_tx.send(Message::StorageUsagePrune(expired));
+            fail_point!("storage_usage_prune_before_submit");
+            let _ = internal_cmd_tx.send(Message::PruneBuiltinHistory {
+                item_id,
+                global_id,
+                read_ts,
+                diffs: expired,
+            });
         });
     }
 
     /// Retracts `mz_object_arrangement_size_history` rows older than the
     /// `arrangement_size_history_retention_period` dyncfg.
     ///
-    /// Must only run at startup: it reads at the oracle read timestamp and
-    /// writes retractions at the current write timestamp, which is only safe
-    /// when no other writes are in flight. See [the equivalent storage-usage
-    /// pruner](Self::prune_storage_usage_events_on_startup) for the same
-    /// reasoning.
+    /// Like storage-usage pruning, this discards its retractions if another
+    /// writer advances the WAL after the snapshot.
     async fn prune_arrangement_sizes_history_on_startup(&self) {
         let retention_period = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD
             .get(self.catalog().system_config().dyncfgs());
@@ -5141,19 +5153,35 @@ impl Coordinator {
             .snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "arrangement_sizes_history_prune", async move {
-            let mut current_contents = current_contents_fut
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
+            let snapshot = current_contents_fut.await;
+            // No retractions are justified if compaction passed the oracle
+            // cut before the reader opened. Leave pruning for a later startup.
+            if matches!(
+                &snapshot,
+                Err(mz_storage_types::controller::StorageError::ReadBeforeSince(
+                    _
+                ))
+            ) {
+                debug!(%global_id, %read_ts, "skipping compacted history pruning snapshot");
+                return;
+            }
+            let mut current_contents =
+                snapshot.unwrap_or_terminate("cannot fail to fetch snapshot");
             differential_dataflow::consolidation::consolidate(&mut current_contents);
 
             let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
-            let expired =
-                arrangement_sizes_expired_retractions(current_contents, cutoff_ts, item_id);
+            let expired = arrangement_sizes_expired_retractions(current_contents, cutoff_ts);
 
             // TODO(arrangement-sizes): when the writeable-catalog-server
             // plumbing in https://github.com/MaterializeInc/materialize/pull/35436
             // lands, retract directly on `mz_catalog_server`.
-            let _ = internal_cmd_tx.send(Message::ArrangementSizesPrune(expired));
+            fail_point!("arrangement_sizes_prune_before_submit");
+            let _ = internal_cmd_tx.send(Message::PruneBuiltinHistory {
+                item_id,
+                global_id,
+                read_ts,
+                diffs: expired,
+            });
         });
     }
 
@@ -5202,8 +5230,7 @@ impl Coordinator {
 fn arrangement_sizes_expired_retractions(
     rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
     cutoff_ts: u128,
-    item_id: CatalogItemId,
-) -> Vec<BuiltinTableUpdate> {
+) -> Vec<(mz_repr::Row, Diff)> {
     let mut expired = Vec::new();
     for (row, diff) in rows {
         assert_eq!(
@@ -5220,7 +5247,7 @@ fn arrangement_sizes_expired_retractions(
             .try_into()
             .expect("all collections happen after Jan 1 1970");
         if collection_timestamp < cutoff_ts {
-            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+            expired.push((row, Diff::MINUS_ONE));
         }
     }
     expired
@@ -6258,7 +6285,6 @@ mod id_pool_tests {
 #[cfg(test)]
 mod arrangement_sizes_pruner_tests {
     use itertools::Itertools;
-    use mz_repr::catalog_item_id::CatalogItemId;
     use mz_repr::{Datum, Row};
 
     use super::arrangement_sizes_expired_retractions;
@@ -6276,14 +6302,9 @@ mod arrangement_sizes_pruner_tests {
         ])
     }
 
-    fn item_id() -> CatalogItemId {
-        // Any CatalogItemId will do; tests don't dispatch on it.
-        CatalogItemId::User(42)
-    }
-
     #[mz_ore::test]
     fn empty_input_produces_no_retractions() {
-        let out = arrangement_sizes_expired_retractions(Vec::new(), 1_000, item_id());
+        let out = arrangement_sizes_expired_retractions(Vec::new(), 1_000);
         assert!(out.is_empty());
     }
 
@@ -6297,16 +6318,10 @@ mod arrangement_sizes_pruner_tests {
             (history_row(1_000), 1), // at cutoff: kept (strict <)
             (history_row(5_000), 1),
         ];
-        let out = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+        let out = arrangement_sizes_expired_retractions(rows, 1_000);
         assert_eq!(out.len(), 2);
         for (update, timestamp) in out.into_iter().zip_eq([100, 500]) {
-            let mz_storage_client::client::TableData::Rows(rows) = update.data else {
-                panic!("history cleanup must retract stored rows");
-            };
-            assert_eq!(
-                rows,
-                vec![(history_row(timestamp), mz_repr::Diff::MINUS_ONE)]
-            );
+            assert_eq!(update, (history_row(timestamp), mz_repr::Diff::MINUS_ONE));
         }
     }
 
@@ -6314,7 +6329,7 @@ mod arrangement_sizes_pruner_tests {
     #[should_panic(expected = "consolidated contents should not contain retractions")]
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
-        let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+        let _ = arrangement_sizes_expired_retractions(rows, 1_000);
     }
 }
 

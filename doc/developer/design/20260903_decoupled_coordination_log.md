@@ -7,18 +7,19 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Finish conditional startup history pruning first. Its implementation uses the
-existing fixed-timestamp write path, discarding conflicts. Compilation and the
-two-adapter regression remain outstanding. A deterministic snapshot-before-write
-failpoint needs approval. Also establish protection for its preselected snapshot
-cut before claiming the whole path safe.
+Conditional startup history pruning passed the debug two-adapter regression,
+including both history tables and restart. The unchanged test fails with the
+former blind append, producing a negative row multiplicity. The fixed source is
+restored. See `pruning-red-green.md` for exact evidence and coverage limits.
 
-Then finish catalog-derived dependency/refresh rows, the `mz_storage_shards`
-view, and conditional storage-usage collection. The shard view and publisher
-removal are uncommitted and unverified. Dependencies need physical imports in
-the existing selected-plan record, distinct from its broader validation imports.
-Refresh derivation needs approval for evaluated schedule metadata in the existing
-Item record, avoiding a change to displayed SQL. No adapter reduction is approved.
+Next finish catalog-derived dependency/refresh rows, the `mz_storage_shards`
+view, and conditional storage-usage collection. The selected-plan record now
+carries physical imports, refresh schedule and initial storage as-of. No Item
+fields or adapter reductions were added. The derived views and publisher removals
+are uncommitted. Catalog planning, public descriptions, dependency ordering,
+serialization and the raw-catalog retention guard pass. Real producer coverage,
+including two adapters and refresh creation/restart/rewrite/replacement, remains
+outstanding. Conditional storage-usage collection is not implemented.
 
 The clean pinned-upstream debug startup comparison passed. Fresh startup was
 30.271s upstream versus 53.080s in the prior native capture. Catalog opening was
@@ -41,14 +42,13 @@ repair. TERM/KILL deadlines and identity checks are unchanged. Full-environment
 before/after timings remain outstanding. See `shutdown-zombie-wait.md`.
 
 The approved promotion-only exit status is implemented as 168, preserving 5s
-backoff for other exits. Compilation, tests and runtime timing remain outstanding.
+backoff for other exits. Compilation passed. Tests and runtime timing remain outstanding.
 No publication cadence, readiness interval or resource-limit changes are approved.
 
 ## Live gaps and constraints
 
-- Scratch SSO expired. Renew with `bin/scratch login` before runtime verification.
-  Keep builds off the editing VM. Test-hook and refresh-metadata decisions are
-  pending as described above.
+- Scratch access is restored. Keep builds off the editing VM and preserve the
+  existing resource caps. Test-hook and plan-record metadata decisions are settled.
 - Declaration reconciliation, login sync and SQL owners with separate completion
   effects remain in the conditional-write retry survey.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
@@ -90,9 +90,9 @@ limits and the architecture-generated load assessment.
 
 ## Worker and evidence
 
-Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-18 19:00 UTC,
-tag expiry 2026-11-19 18:05 UTC. Shutdown stops the instance and preserves its
-disk. Completed runtimes stopped and restored caps. Never overlap
+Worker `i-02f17d8a7d9534f5e`: 16 CPUs, 61 GiB RAM. Shutdown 2026-11-19 18:00 UTC.
+Recheck retention tags before extending it. Shutdown stops the instance and preserves
+its disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
 reserve. Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
 Baseline environmentd uses each native adapter's 4 GiB/1-CPU allocation within
@@ -105,8 +105,15 @@ source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
 `/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 
 Essential pointers:
+- `pruning-red-green.md` links the passing test, blind-append failure and source
+  hashes. `history-plan-green-restore-build.log` tracks fixed-binary restoration.
+- `plan-view-v4-source.json` and `plan-view-catalog-tests-v4.log` identify the
+  passing catalog checks. Earlier test logs preserve the non-null schema failures.
+  `history-plan-build-v5.log` records the compiled integration fixtures. SQL
+  boundary tests and the real-producer witness still need runtime verification.
 - `dependency-refresh-fixed-evidence/`, its archive and runtime log preserve
-  the completed reproduction, raw observations, final MV contents and cleanup.
+  the reproduction of missing rows during peer join/restart, raw observations,
+  final MV contents and cleanup. This is evidence of the bug, not a passing repair.
   `remaining-introspection-ownership.md` explains scope and the first fixture error.
 - `startup-base-debug-evidence/`, its archive and phase summary preserve the clean
   baseline. Build and runtime logs record unchanged Cargo.lock and full completion.

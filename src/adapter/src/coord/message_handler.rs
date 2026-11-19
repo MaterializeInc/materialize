@@ -224,8 +224,33 @@ impl Coordinator {
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).boxed_local().await;
             }
-            Message::StorageUsagePrune(expired) => {
-                self.storage_usage_prune(expired).boxed_local().await;
+            Message::PruneBuiltinHistory {
+                item_id,
+                global_id,
+                read_ts,
+                diffs,
+            } => {
+                if !diffs.is_empty() {
+                    // A completed snapshot at B establishes WAL upper > B.
+                    // Appending exactly at B+1 rejects any intervening write,
+                    // including another adapter's retraction of the same rows.
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    self.handle_attempt_write(
+                        crate::command::WriteAttemptKind::Background {
+                            write_ts: read_ts.step_forward(),
+                        },
+                        item_id,
+                        global_id,
+                        diffs,
+                        tx,
+                    );
+                    task::spawn(|| "builtin_history_pruning_apply", async move {
+                        // Never retry these diffs, including after a lost reply.
+                        let result = rx.await;
+                        fail::fail_point!("builtin_history_prune_completed");
+                        tracing::debug!(?result, %global_id, "history pruning completed");
+                    });
+                }
             }
             Message::ArrangementSizesSchedule => {
                 self.schedule_arrangement_sizes_collection()
@@ -237,9 +262,6 @@ impl Coordinator {
             }
             Message::ArrangementSizesWrite(records) => {
                 self.arrangement_sizes_write(records).boxed_local().await;
-            }
-            Message::ArrangementSizesPrune(expired) => {
-                self.arrangement_sizes_prune(expired).boxed_local().await;
             }
             Message::HydrationHistorySchedule => {
                 self.schedule_hydration_history_collection();
@@ -443,14 +465,6 @@ impl Coordinator {
             if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
                 warn!("internal_cmd_rx dropped before we could send: {e:?}");
             }
-        });
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let fut = self.builtin_table_update().execute(expired);
-        task::spawn(|| "storage_usage_pruning_apply", async move {
-            fut.await;
         });
     }
 
@@ -757,14 +771,6 @@ impl Coordinator {
         tracing::debug!(
             "appended {row_count} rows to mz_object_arrangement_size_history at ts {collection_ts}"
         );
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let fut = self.builtin_table_update().execute(expired);
-        task::spawn(|| "arrangement_sizes_pruning_apply", async move {
-            fut.await;
-        });
     }
 
     #[mz_ore::instrument(level = "debug")]

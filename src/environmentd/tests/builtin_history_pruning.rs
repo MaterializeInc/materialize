@@ -179,7 +179,6 @@ async fn competing_pruners(table: &BuiltinTable, hook: &'static str, storage: bo
             peer_id,
         );
     };
-    drop(catalog);
     let peer_harness = harness.clone().with_adapter_id(peer_id);
     let (writer, mut reader) = persist
         .open::<SourceData, (), Timestamp, i64>(
@@ -211,17 +210,19 @@ async fn competing_pruners(table: &BuiltinTable, hook: &'static str, storage: bo
     }
     loop {
         let ts = oracle.write_ts().await.timestamp;
+        catalog.advance_upper(ts.step_forward()).await.unwrap();
         match txn.commit_at(&mut wal, ts).await {
             Ok(apply) => {
                 apply.apply(&mut wal).await;
                 oracle.apply_write(ts).await;
                 break;
             }
-            Err(CommitError::UpperMismatch(upper)) => oracle.apply_write(upper).await,
+            Err(CommitError::UpperMismatch(_)) => tokio::task::yield_now().await,
             Err(error) => panic!("seeding registered history table: {error}"),
         }
     }
     drop(wal);
+    drop(catalog);
     let txns = TxnsRead::start::<TxnsCodecRow>(persist, wal_id).await;
     assert_eq!(
         snapshot(&txns, shard, &mut reader, oracle.read_ts().await, &control)
@@ -347,6 +348,7 @@ async fn snapshot(
     ts: Timestamp,
     control: &Row,
 ) -> BTreeMap<Row, i64> {
+    txns.update_gt(ts).await;
     let rows = txns
         .data_snapshot(shard, ts)
         .await
