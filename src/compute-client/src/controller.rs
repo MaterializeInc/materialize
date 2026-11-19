@@ -1257,10 +1257,10 @@ impl ComputeController {
     /// Like [`Self::allow_writes`], but takes effect even in read-only mode.
     ///
     /// The caller must guarantee that no leader environment writes the collection's output shard.
-    /// In a 0dt deployment that means a shard this environment created for itself, the replacement
-    /// shard of a `Replacement`-migrated builtin collection, never one the leader is still serving
-    /// from. `Evolution` migrates in place and reuses the leader's shard, so it must not reach this
-    /// path. Violating the guarantee races two writers on one shard.
+    /// In a 0dt deployment that means a shard this environment created for itself, such as the
+    /// replacement shard of a `Replacement`-migrated builtin collection, never one the leader is
+    /// still serving from. `Evolution` migrates in place and reuses the leader's shard, so it must
+    /// not reach this path. Violating the guarantee races two writers on one shard.
     ///
     /// NOTE: ownership is exclusive per (build version, deploy generation), not per process: the
     /// migration shard entry naming the shard is keyed by that pair and a read-only catalog open is
@@ -1272,7 +1272,7 @@ impl ComputeController {
     /// of migrated storage collections. Migrated builtin tables are storage collections that
     /// storage force-writes read-only; migrated builtin MVs are compute collections that only this
     /// path can force-write. Both rest on the same guarantee (this environment exclusively owns the
-    /// replacement shard) but run on separate write paths, so each needs its own bypass.
+    /// shard) but run on separate write paths, so each needs its own bypass.
     ///
     /// NOTE: the replica-side handler enables persist compaction process-wide on the clusterd
     /// (`ComputeState::handle_allow_writes`), which this path is the first to trigger inside a
@@ -1283,9 +1283,10 @@ impl ComputeController {
         collection_id: GlobalId,
     ) -> Result<(), CollectionUpdateError> {
         // Every builtin eligible for this bypass has a system id, so a non-system id means the
-        // caller's `Replacement`-only invariant broke. No-op rather than risk writing a shard the
-        // leader still serves. The collection then sits in the caught-up gate on an unwritten
-        // shard and blocks promotion, which is the loud, safe direction to fail.
+        // caller's invariant (only shards from the builtin migration shard) broke. No-op rather
+        // than risk writing a shard the leader still serves. The collection then sits in the
+        // caught-up gate on an unwritten shard and blocks promotion, which is the loud, safe
+        // direction to fail.
         //
         // Storage asserts the same invariant hard, in
         // `StorageController::register_introspection_collection`. The asymmetry is deliberate: a

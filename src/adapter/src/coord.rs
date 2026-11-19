@@ -261,8 +261,8 @@ where
     future.boxed_local()
 }
 
-/// The oldest leader version against which a replacement-migrated builtin materialized view may
-/// write its new persist shard while this environment is still read-only.
+/// The oldest leader version against which a replacement-migrated or new builtin materialized
+/// view may write its persist shard while this environment is still read-only.
 ///
 /// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
 /// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
@@ -2606,15 +2606,9 @@ impl Coordinator {
                         if hydrate_migrated_mvs
                             && migrated_storage_collections_0dt.contains(&entry.id())
                         {
-                            // `migrated_storage_collections_0dt` is `Replacement`-migrated items
-                            // only, so this is a fresh shard we own: nothing else writes it, and
-                            // writing it while read-only hydrates the MV and its dependents before
-                            // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
-                            // and must never reach here.
-                            //
-                            // A *new* builtin MV gets no such treatment: its shard allocation
-                            // lives only in this read-only savepoint, so the promoted leader
-                            // allocates a different shard and discards whatever we wrote.
+                            // The shard came from the builtin migration shard, so the current
+                            // leader does not write it, and it survives promotion. Writing it
+                            // while read-only hydrates the MV and its dependents before cut-over.
                             self.controller
                                 .compute
                                 .allow_writes_in_read_only(mview.cluster_id, gid)
@@ -4893,16 +4887,16 @@ pub fn serve(
             catalog_open_start.elapsed()
         );
 
-        // Whether replacement-migrated builtin MVs may write their new shards before cut-over.
-        // Both `bootstrap` and the readiness gate below read this, and they have to agree.
-        // `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version settles it.
+        // Whether builtin MVs whose shard came from the builtin migration shard may write it before
+        // cut-over. Both `bootstrap` and the readiness gate below read this, and they have to
+        // agree. `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version
+        // settles it.
         //
         // While we are read-only, `last_seen_version` is that leader's version: our catalog
         // transaction is a savepoint, so our own bump of the setting never lands. `None` means a
         // freshly initialized catalog, with nothing migrated and no leader to be compatible with.
         //
-        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` is the break-glass revert: off falls back to
-        // excluding migrated MVs from the caught-up gate, no redeploy needed.
+        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` turns this off as a break-glass.
         let hydrate_migrated_mvs = ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS
             .get(catalog.system_config().dyncfgs())
             && last_seen_version
