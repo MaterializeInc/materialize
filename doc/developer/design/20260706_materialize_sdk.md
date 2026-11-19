@@ -15,27 +15,29 @@
 
 After review with the sources and sinks team, this design is narrowed to
 consuming `SUBSCRIBE` correctly, for live views and small syncs. The sink
-framework is parked, for two reasons:
-
-- Every `SUBSCRIBE` result reaches the client through environmentd, merged into
-  one stream per subscription (`absorb_subscribe_response` in
-  `src/compute-client/src/service.rs`). Sinks built on `SUBSCRIBE` put their
-  whole load on environmentd, which does not scale out with them.
-- Each `SUBSCRIBE` ships its own dataflow (`sequence_subscribe` in
-  `src/adapter/src/coord/sequencer/inner/subscribe.rs`), so every sink costs a
-  dataflow on its cluster.
+framework is parked. Every `SUBSCRIBE` result reaches the client through
+environmentd, merged into one stream per subscription
+(`absorb_subscribe_response` in `src/compute-client/src/service.rs`). Sinks
+built on `SUBSCRIBE` put their whole load on environmentd, which does not scale
+out with them.
 
 In scope are the protocol core, the Rust, Python, and Node packages for live
-subscriptions, resuming from a frontier in the core for consumers that keep
-their own, the conformance vectors and the nightly end-to-end suite, and an
-example that keeps a Valkey hash equal to a view. The intended use is a result
-of about 100 MiB or less, well under `max_result_size` (1 GiB by default), with
-a new snapshot after each reconnect and at-least-once delivery.
+subscriptions, the conformance vectors and the nightly end-to-end suite, and an
+example that keeps a Valkey hash equal to a view. The packages take a new
+snapshot on each reconnect and deliver at least once. The core also builds the
+statements and catalog checks for a resume, for consumers that store their own
+frontier. A resume covers one object. Multi-view subscriptions are parked.
 
-Parked are requirements R1 to R5 and R11, and the sections "Checkpoints and
-fencing", "Delivery guarantees", "Sink API", "Sink module", "turbopuffer sink",
-"Durable subscriptions", and "Appendix: turbopuffer sink". They stay as the
-record of that design.
+The intended use is a result of about 100 MiB or less. Each reconnect sends the
+whole snapshot through environmentd again, as one message held in memory there
+(see "Buffering limits"). The figure is guidance from the review, an order of
+magnitude under `max_result_size` (1 GB by default), not a measured limit.
+
+Parked are requirements R1 to R5 and R11, items 3 to 6 of "Testing", and the
+sections "Checkpoints and fencing", "Delivery guarantees", "Multi-view
+consistency", "Sink API", "Sink module", "turbopuffer sink", "Durable
+subscriptions", and "Appendix: turbopuffer sink". They stay as the record of
+that design.
 
 ## The Problem
 
@@ -790,6 +792,8 @@ and disconnect.
 
 ### Multi-view consistency
 
+*Parked. See "Scope update".*
+
 A multi-view subscription (R4) will release changes only up to the minimum
 frontier across its members, so every released moment is a consistent cut
 across all views. A Materialize timestamp is a global commit order, so one
@@ -1355,12 +1359,13 @@ clear error. The nightlies define which Materialize versions a release supports.
 
 ## Testing
 
-The conformance suite is the contract, whatever the generation strategy.
+The conformance suite is the contract, whatever the generation strategy. Items
+3 to 6 are parked with the sink framework (see "Scope update").
 
 1. Conformance vectors: language-agnostic JSON files, each with inputs and
-   expected outputs for one function (decode, batch release, multi-view release,
-   checkpoint encoding and fencing, statement SQL, and error classification
-   from SQLSTATE and message). The protocol core will run them natively, and
+   expected outputs for one function (decode, batch release, latest change per
+   key, statement SQL, error classification from SQLSTATE and message, object
+   identity, and catalog checks). The protocol core will run them natively, and
    each package will run them through its binding.
 2. End-to-end suite: the spec, vectors, and end-to-end suite will live in this
    repository and run in the nightly pipeline against `main` through mzcompose.
