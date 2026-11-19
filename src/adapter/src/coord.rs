@@ -4927,29 +4927,29 @@ pub fn serve(
 
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
-                let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.iter().copied().collect();
-
-                // A collection that can't advance its write frontier in read-only mode
-                // stalls its transitive dependents too, so exclude those from the caught-up
-                // check as well. That's every *new* builtin collection, whose fresh shard has no
-                // writer until this deployment promotes, plus migrated MVs whenever the leader is
-                // too old for them to write. An excluded dependent may still be hydrating right
-                // after promotion, a brief blip we accept because these collections are small and
-                // get a writer at cut-over.
+                // A collection that can't advance its write frontier in read-only mode stalls its
+                // transitive dependents too, so exclude those from the caught-up check as well. An
+                // excluded dependent may still be hydrating right after promotion, a brief blip we
+                // accept because these collections are small and get a writer at cut-over.
                 //
-                // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
-                // table or source has no read-only writer either (`register_table_collections`
-                // retains only *migrated* tables), so an MV reading one never advances past its
-                // empty frontier. A *migrated* table is the opposite case, even though a builtin
-                // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
-                // `read_only_mode_table_worker` keeps advancing migrated tables' uppers.
-                let new_builtin_items = new_builtin_collections.iter().map(|global_id| {
-                    catalog
+                // With `hydrate_migrated_mvs`, the only collection that can't advance is a new
+                // builtin storage collection that got no shard from the builtin migration shard,
+                // as when the migration is skipped because the version did not change. We write
+                // every other new storage collection while read-only (a table without rows
+                // advances once something reads it). New builtins without a shard, such as views,
+                // indexes and logs, are only frozen through their inputs.
+                //
+                // Without `hydrate_migrated_mvs`, every new builtin and every migrated MV is
+                // excluded, so that the break-glass flag also undoes the gating of new builtins.
+                let new_builtin_items = new_builtin_collections.iter().filter_map(|global_id| {
+                    let entry = catalog
                         .state()
                         .try_get_entry_by_global_id(global_id)
-                        .expect("new builtin collections have catalog entries")
-                        .id()
+                        .expect("new builtin collections have catalog entries");
+                    let seed = !hydrate_migrated_mvs
+                        || (entry.item().is_storage_collection()
+                            && !migrated_storage_collections_0dt.contains(&entry.id()));
+                    seed.then(|| entry.id())
                 });
                 let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
@@ -4957,6 +4957,7 @@ pub fn serve(
                     .filter(|_| !hydrate_migrated_mvs)
                     .filter(|id| catalog.state().get_entry(id).is_materialized_view());
                 let mut todo: Vec<_> = new_builtin_items.chain(frozen_migrated_mvs).collect();
+                let mut exclude_collections = BTreeSet::new();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());
