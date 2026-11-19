@@ -206,6 +206,12 @@ impl LocalMirPlan {
     pub fn expr(&self) -> OptimizedMirRelationExpr {
         OptimizedMirRelationExpr(self.expr.clone())
     }
+
+    /// The type of the locally optimized query, before any `NOT NULL`
+    /// assertions.
+    pub fn typ(&self) -> &SqlRelationType {
+        &self.typ
+    }
 }
 
 /// This is needed only because the pipeline in the bootstrap code starts from an

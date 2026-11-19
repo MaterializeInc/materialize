@@ -159,6 +159,12 @@ pub enum AdapterNotice {
     OidcGroupSyncError {
         message: String,
     },
+    /// A replacement materialized view declares columns `NOT NULL` that its
+    /// query does not prove non-nullable.
+    ReplacementNotNullUnproven {
+        name: String,
+        columns: Vec<String>,
+    },
 }
 
 impl AdapterNotice {
@@ -232,6 +238,7 @@ impl AdapterNotice {
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
+            AdapterNotice::ReplacementNotNullUnproven { .. } => Severity::Notice,
         }
     }
 
@@ -250,6 +257,11 @@ impl AdapterNotice {
                 "The index no longer appears in the catalog, but it is still maintained, using \
                  memory and CPU, until those objects are dropped or recreated, or replanned at \
                  the next restart. The drop was allowed because enable_drop_in_use_index is set."
+                    .into(),
+            ),
+            AdapterNotice::ReplacementNotNullUnproven { .. } => Some(
+                "The replacement checks these columns at runtime. After it is applied, a NULL \
+                 in one of them makes reads of the materialized view fail."
                     .into(),
             ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
@@ -372,6 +384,7 @@ impl AdapterNotice {
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
+            AdapterNotice::ReplacementNotNullUnproven { .. } => SqlState::SUCCESSFUL_COMPLETION,
         }
     }
 }
@@ -612,6 +625,15 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::OidcGroupSyncError { message } => {
                 write!(f, "OIDC group-to-role sync failed: {}", message)
+            }
+            AdapterNotice::ReplacementNotNullUnproven { name, columns } => {
+                write!(
+                    f,
+                    "replacement {} declares columns NOT NULL that its query does not prove \
+                     non-nullable: {}",
+                    name.quoted(),
+                    separated(", ", columns.iter().map(|c| c.quoted()))
+                )
             }
         }
     }

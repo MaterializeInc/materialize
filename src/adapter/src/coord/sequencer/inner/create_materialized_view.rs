@@ -9,6 +9,7 @@
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -609,6 +610,7 @@ impl Coordinator {
         } = stage;
 
         // Validate the replacement target, if one is given.
+        let mut replacement_notice = None;
         if let Some(target_id) = replacement_target {
             let target_entry = self.catalog().get_entry(&target_id);
             let Some(target) = target_entry.materialized_view() else {
@@ -637,6 +639,24 @@ impl Coordinator {
             let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
             if !schema_diff.is_empty() {
                 return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
+            }
+
+            // A declared `NOT NULL` is a runtime assertion, so the schema check
+            // above accepts a query that can produce NULLs there. An implicit
+            // target would have rejected it as a nullability mismatch.
+            if let Some(desc) = &declared_desc {
+                let columns: Vec<_> = desc
+                    .iter()
+                    .zip_eq(local_mir_plan.typ().column_types.iter())
+                    .filter(|((_, declared), inferred)| !declared.nullable && inferred.nullable)
+                    .map(|((name, _), _)| name.to_string())
+                    .collect();
+                if !columns.is_empty() {
+                    replacement_notice = Some(AdapterNotice::ReplacementNotNullUnproven {
+                        name: name.item.clone(),
+                        columns,
+                    });
+                }
             }
         }
 
@@ -856,6 +876,9 @@ impl Coordinator {
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                if let Some(notice) = replacement_notice {
+                    ctx.session().add_notice(notice);
+                }
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {

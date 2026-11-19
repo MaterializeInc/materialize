@@ -4932,3 +4932,60 @@ fn test_drop_index_read_by_in_flight_subscribe_notice() {
 
     subscribe_client.batch_execute("COMMIT").unwrap();
 }
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_not_null_unproven_notice() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_materialized_view_column_definitions".into(),
+            "true".into(),
+        )
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int4, b int4 NOT NULL)")
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv (x int4 NOT NULL, y int4 NOT NULL) AS SELECT b, b FROM t",
+        )
+        .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    client
+        .batch_execute(
+            "CREATE REPLACEMENT MATERIALIZED VIEW rp (x int4 NOT NULL, y int4 NOT NULL) \
+             FOR mv AS SELECT a, b FROM t",
+        )
+        .unwrap();
+    let notice = rx
+        .try_recv()
+        .expect("expected a notice about the unproven NOT NULL column");
+    assert_eq!(notice.severity(), "NOTICE");
+    assert_eq!(
+        notice.message(),
+        "replacement \"rp\" declares columns NOT NULL that its query does not prove \
+         non-nullable: \"x\""
+    );
+    assert_contains!(notice.detail().unwrap(), "checks these columns at runtime");
+    client.batch_execute("DROP MATERIALIZED VIEW rp").unwrap();
+
+    // The optimizer proves `a` non-nullable under the filter.
+    client
+        .batch_execute(
+            "CREATE REPLACEMENT MATERIALIZED VIEW rp (x int4 NOT NULL, y int4 NOT NULL) \
+             FOR mv AS SELECT a, b FROM t WHERE a IS NOT NULL",
+        )
+        .unwrap();
+    assert!(rx.try_recv().is_err(), "unexpected notice");
+}
