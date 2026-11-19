@@ -2398,6 +2398,28 @@ impl<'a> Transaction<'a> {
             .map(|entry| entry.value)
     }
 
+    /// Claims a storage-usage interval and allocates its batch ID atomically.
+    /// A crash after commit can leave the claimed interval without table rows.
+    /// Claiming is at-most-once publication permission, not a delivery acknowledgement.
+    pub fn claim_storage_usage_interval(
+        &mut self,
+        interval_start: u64,
+        collection_timestamp: u64,
+    ) -> Result<Option<u64>, CatalogError> {
+        assert!(interval_start <= collection_timestamp);
+        let key = crate::durable::STORAGE_USAGE_COLLECTION_TIMESTAMP_KEY.to_owned();
+        if self
+            .get_config(key.clone())
+            .is_some_and(|ts| ts >= interval_start)
+        {
+            return Ok(None);
+        }
+        let ids =
+            self.get_and_increment_id_by(crate::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_owned(), 1)?;
+        self.set_config(key, Some(collection_timestamp))?;
+        Ok(Some(ids.into_element()))
+    }
+
     /// Get the value of a persisted setting.
     pub fn get_setting(&self, name: String) -> Option<&str> {
         self.settings
@@ -4363,10 +4385,33 @@ impl<'a> Transaction<'a> {
     ///
     /// In read-only mode, this will return an error for non-empty transactions indicating that the
     /// catalog is not writeable.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn commit_internal(
+    pub(crate) fn commit_internal(
         self,
         commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+    ) -> impl std::future::Future<
+        Output = Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError>,
+    > {
+        // Return the shared future directly. Another async delegation frame makes
+        // catalog reconstruction overflow replica worker stacks in debug builds.
+        self.commit_internal_with_empty_progress_retry(commit_ts, true)
+    }
+
+    /// Makes one CAS attempt, returning even empty-upper contention to the owner.
+    /// Validation and definitive commit completion are identical to `commit_internal`.
+    pub(crate) fn commit_internal_once(
+        self,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+    ) -> impl std::future::Future<
+        Output = Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError>,
+    > {
+        self.commit_internal_with_empty_progress_retry(commit_ts, false)
+    }
+
+    #[mz_ore::instrument(level = "debug", name = "commit_internal")]
+    async fn commit_internal_with_empty_progress_retry(
+        self,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
+        retry_empty_progress: bool,
     ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
         self.ensure_committable()?;
         let (mut txn_batch, durable_catalog) = self.into_parts()?;
@@ -4444,7 +4489,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
         let upper = durable_catalog
-            .commit_transaction(txn_batch, commit_ts.into())
+            .commit_transaction(txn_batch, commit_ts.into(), retry_empty_progress)
             .await?;
         Ok((durable_catalog, upper))
     }
@@ -6806,6 +6851,63 @@ mod tests {
         );
         commit(&mut table, pending);
         assert_eq!(table, BTreeMap::new());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn storage_usage_claim_yields_on_empty_upper_progress() {
+        use crate::durable::STORAGE_USAGE_ID_ALLOC_KEY;
+        let builder =
+            TestCatalogStateBuilder::new(mz_persist_client::PersistClient::new_for_tests().await)
+                .with_default_deploy_generation();
+        let mut first = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        first.sync_to_current_updates().await.unwrap();
+        let mut txn = first.transaction().await.unwrap();
+        txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+            .unwrap();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
+        let mut peer = builder.unwrap_build().await.join().await.unwrap();
+        first.sync_to_current_updates().await.unwrap();
+        let next_id = first.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await.unwrap();
+
+        for _ in 0..3 {
+            let mut txn = first.transaction().await.unwrap();
+            assert_eq!(
+                txn.claim_storage_usage_interval(100, 110).unwrap(),
+                Some(next_id)
+            );
+            let ts = txn.upper();
+            peer.advance_upper(ts.step_forward()).await.unwrap();
+            assert!(matches!(
+                txn.commit_internal_once(ts).await,
+                Err(CatalogError::Durable(
+                    DurableCatalogError::CatalogOutOfSync {
+                        update_count: 0,
+                        ..
+                    }
+                ))
+            ));
+            assert_eq!(first.storage_usage_collection_timestamp(), None);
+            assert_eq!(
+                first.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await.unwrap(),
+                next_id
+            );
+        }
+        assert_eq!(
+            first
+                .claim_storage_usage_interval(100, 110, ts)
+                .await
+                .unwrap(),
+            Some(next_id)
+        );
+        first.expire().await;
+        peer.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]

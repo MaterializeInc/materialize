@@ -544,6 +544,16 @@ The oracle cut is not protection. If compaction has passed it before the reader
 opens, discard the pruning attempt without terminating the adapter. Never
 substitute a newer snapshot while retaining the original conditional-write cut.
 
+Storage-usage collection claims its finish-time interval and allocates its batch ID
+in one catalog transaction. Only the successful claimant publishes the measured
+rows. Cached catalog claims can suppress scans, but a stale cache miss never
+authorizes publication. Claim retries retain the measurement and finish timestamp,
+not a failed transaction. Both content and empty-upper contention return to the
+background owner, which releases the catalog lock before bounded backoff. Exhaustion
+reschedules collection rather than terminating the adapter. This path does not
+depend on catalog-server compute. A crash after claiming can leave an interval
+without rows. The claim grants publication permission, not a delivery guarantee.
+
 Runtime registration adopts schemas before allocating its timestamp, but installs
 local routes only after the WAL write completes. Retain preparation across
 definitive conflicts and certify catalog bindings after every fresh allocation.

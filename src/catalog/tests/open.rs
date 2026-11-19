@@ -1872,6 +1872,107 @@ async fn test_concurrent_protected_opens_and_allocators() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn test_storage_usage_interval_claims() {
+    use mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY;
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut first = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    let mut txn = first.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let mut second = builder.clone().unwrap_build().await.join().await.unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    second.sync_to_current_updates().await.unwrap();
+    let next_id = first.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await.unwrap();
+    assert_eq!(first.storage_usage_collection_timestamp(), None);
+
+    // Both peers prepare against the same unclaimed prefix. The losing CAS
+    // must not allocate an ID or authorize a second publication.
+    let mut left = first.transaction().await.unwrap();
+    let mut right = second.transaction().await.unwrap();
+    assert_eq!(
+        left.claim_storage_usage_interval(100, 110).unwrap(),
+        Some(next_id)
+    );
+    assert_eq!(
+        right.claim_storage_usage_interval(100, 120).unwrap(),
+        Some(next_id)
+    );
+    let ts = left.upper();
+    let _ = left.get_and_commit_op_updates();
+    let _ = right.get_and_commit_op_updates();
+    left.commit(ts).await.unwrap();
+    assert!(matches!(
+        right.commit(ts).await,
+        Err(CatalogError::Durable(
+            DurableCatalogError::CatalogOutOfSync { .. }
+        ))
+    ));
+    assert_eq!(
+        second
+            .claim_storage_usage_interval(100, 120, ts)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        second
+            .get_next_id(STORAGE_USAGE_ID_ALLOC_KEY)
+            .await
+            .unwrap(),
+        next_id + 1
+    );
+    assert_eq!(second.storage_usage_collection_timestamp(), Some(110));
+
+    // A later interval progresses. Delayed old measurements cannot regress it.
+    assert_eq!(
+        second
+            .claim_storage_usage_interval(200, 210, ts)
+            .await
+            .unwrap(),
+        Some(next_id + 1)
+    );
+    assert_eq!(
+        first
+            .claim_storage_usage_interval(100, 130, ts)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(first.storage_usage_collection_timestamp(), Some(210));
+    first.expire().await;
+    second.expire().await;
+
+    let mut restarted = builder.unwrap_build().await.join().await.unwrap();
+    assert_eq!(restarted.storage_usage_collection_timestamp(), Some(210));
+    assert_eq!(
+        restarted
+            .claim_storage_usage_interval(200, 220, ts)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        restarted
+            .get_next_id(STORAGE_USAGE_ID_ALLOC_KEY)
+            .await
+            .unwrap(),
+        next_id + 2
+    );
+    restarted.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn test_persist_opened_epoch_fencing() {
     let persist_client = PersistClient::new_for_tests().await;

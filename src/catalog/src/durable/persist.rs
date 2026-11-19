@@ -827,12 +827,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     /// Commits updates prepared from this handle's current prefix.
     ///
-    /// Empty upper progress preserves the candidate, including exact raw rows.
-    /// Content changes return `CatalogOutOfSync` so the caller rebuilds it.
+    /// Empty upper progress preserves the candidate, including exact raw rows, when
+    /// retrying is enabled. Otherwise return contention to the owning task after
+    /// one attempt. Content changes always require rebuilding the candidate.
     async fn commit_exact_prefix<S: IntoStateUpdateKindJson + Clone>(
         &mut self,
         updates: Vec<(S, Diff)>,
         mut commit_ts: crate::durable::CatalogCommitTimestamp,
+        retry_empty_progress: bool,
     ) -> Result<Timestamp, DurableCatalogError> {
         let mut attempt = 0u64;
         loop {
@@ -870,6 +872,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         "durable catalog mismatch classified",
                     );
                     result?;
+                    if !retry_empty_progress {
+                        return Err(DurableCatalogError::CatalogOutOfSync {
+                            update_count: 0,
+                            upper: self.upper,
+                        });
+                    }
                     commit_ts = commit_ts.advance_to(self.upper);
                 }
             }
@@ -1313,7 +1321,10 @@ impl PersistCatalogState {
         ));
         // This remains one full-prefix commit, including exclusion and cleanup.
         // Retain current raw inputs on conflict, never this candidate's diffs.
-        match self.commit_exact_prefix(updates, self.upper.into()).await {
+        match self
+            .commit_exact_prefix(updates, self.upper.into(), true)
+            .await
+        {
             Ok(_) => Ok(true),
             Err(DurableCatalogError::CatalogOutOfSync { .. }) => Ok(false),
             Err(error) => Err(error.into()),
@@ -3069,6 +3080,16 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         .await
     }
 
+    fn storage_usage_collection_timestamp(&self) -> Option<u64> {
+        self.update_applier
+            .snapshot
+            .configs
+            .get(&crate::durable::objects::ConfigKey {
+                key: crate::durable::STORAGE_USAGE_COLLECTION_TIMESTAMP_KEY.to_owned(),
+            })
+            .map(|value| value.value)
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
         self.sync_to_current_upper().await?;
@@ -3356,15 +3377,34 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
+    async fn claim_storage_usage_interval(
+        &mut self,
+        interval_start: u64,
+        collection_timestamp: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Option<u64>, CatalogError> {
+        let mut txn = self.transaction_unchecked().await?;
+        let Some(batch_id) =
+            txn.claim_storage_usage_interval(interval_start, collection_timestamp)?
+        else {
+            return Ok(None);
+        };
+        txn.commit_internal_once(commit_ts).await?;
+        Ok(Some(batch_id))
+    }
+
+    #[mz_ore::instrument(level = "debug")]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
         commit_ts: crate::durable::CatalogCommitTimestamp,
+        retry_empty_progress: bool,
     ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
             commit_ts: crate::durable::CatalogCommitTimestamp,
+            retry_empty_progress: bool,
         ) -> Result<Timestamp, CatalogError> {
             catalog.validate_runtime()?;
             // If the transaction is empty then we don't error, even in read-only mode.
@@ -3401,7 +3441,11 @@ impl DurableCatalogState for PersistCatalogState {
             let commit_ts = commit_ts.advance_to(catalog.upper);
 
             let next_upper = match catalog.mode {
-                Mode::Writable => catalog.commit_exact_prefix(updates, commit_ts).await?,
+                Mode::Writable => {
+                    catalog
+                        .commit_exact_prefix(updates, commit_ts, retry_empty_progress)
+                        .await?
+                }
                 Mode::Savepoint => {
                     let updates = updates.into_iter().map(|(kind, diff)| StateUpdate {
                         kind,
@@ -3420,7 +3464,7 @@ impl DurableCatalogState for PersistCatalogState {
         }
         self.metrics.transaction_commits.inc();
         let histogram = self.metrics.transaction_commit_latency_seconds.clone();
-        commit_transaction_inner(self, txn_batch, commit_ts)
+        commit_transaction_inner(self, txn_batch, commit_ts, retry_empty_progress)
             .wall_time()
             .observe(histogram)
             .await

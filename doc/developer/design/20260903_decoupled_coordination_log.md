@@ -20,12 +20,19 @@ adapters, restart, index-drop replan and scheduled-MV replacement. Restoring the
 former publishers makes it lose rows during peer join. The restored implementation
 passes again. See `plan-introspection-red-green.md` for evidence and limits.
 
-Next implement conditional storage-usage collection after resolving its two
-pending choices: using catalog-server compute to gate sampling, and assigning
-coverage to the interval containing the measurement's finish timestamp. While
-that decision is pending, obtain per-function replica catalog-open attribution
-before proposing a broader catalog change. Source-reading leads are in
-`replica-catalog-boundary-survey.md`.
+Storage-usage collection now claims its finish-time interval in the existing
+batch-ID transaction, without catalog-server compute. Cached claims skip scans.
+Only the winner publishes. Bounded retries release the catalog lock during backoff
+and reschedule after exhaustion. A crash after claiming can leave an interval empty.
+The two-adapter row/restart test passes, fails with blind publication, and passes
+again after restoration. Contention, retirement and targeted Clippy checks pass.
+See `storage-usage-claim-review.md` for evidence and coverage limits.
+
+Next finish the remaining conditional-write retry survey, then run final-head
+native acceptance and the compatible version-pair walkthrough. Do not rerun the
+full lifecycle suites per small change. The replica catalog-open attribution is
+complete. Bring the proposed metadata-only replica boundary back for approval
+before implementation. See `catalog-function-costs.md`.
 
 The clean ee425edf debug timing workflow passed. Whole restart fell from 18.003s
 to 8.155s, with shutdown falling from 10.425s to 0.508s. Promotion-to-SQL fell from
@@ -35,12 +42,13 @@ pinned upstream's 30.271s and 17.004s. These are single observations with explic
 topology/readiness differences, not statistical or full acceptance claims. See
 `startup-readiness-comparison.md` for phases, provenance and qualifications.
 
-Earlier cold profiling found about 17.6 CPU-seconds within the adapter's 22.7s catalog
-open and about 78.3 CPU-seconds across four replicas in the captured startup
-window. Parallel builtin reconstruction coincided with runtime-slice throttling.
-Caller attribution remains unreliable, so no parser optimization is selected.
-Investigate a narrower replica catalog boundary without skipping validation or
-weakening cache compatibility. See `startup-readiness-comparison.md`.
+Cold function profiling attributes 70.88 replica CPU-seconds to ordinary
+builtin-view optimization, 86.4% of measured item reconstruction CPU across four
+replicas. Packing and state cloning are small. Replicas execute selected physical
+plans, but the current catalog representation still reconstructs ordinary-view MIR.
+A narrower metadata-only boundary needs a design decision preserving descriptions,
+logical dependencies and validation. Cache namespace compatibility must not be
+weakened. See `catalog-function-costs.md` for measurements, options and limits.
 
 The shutdown timeout is reproduced and repaired at the launcher boundary:
 unreaped non-children took 10.03s before and 0.13s after. The strengthened regression
@@ -114,17 +122,21 @@ the user slice. Extend this owned worker within existing caps when needed.
 
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, base `17da75c2` plus verified
-source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
+`/home/ubuntu/materialize-m3-controller-followups`, base `ee425edf` plus verified
+storage-usage source overlays. Trust hashes, not the displayed Git revision. Clean baseline:
 `/home/ubuntu/materialize-m3-optimized-base`, pinned `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 
 Essential pointers:
+- `storage-usage-claim-review.md`, `storage-usage-final-checks.log` and
+  `storage-usage-restored-green.log` cover compute-free interval claims.
+- `catalog-function-costs.md` links the cold attribution, source receipts and
+  scratch-only diagnostic patch. Diagnostic runtime/database state was cleaned up.
 - `pruning-red-green.md` links the passing test, blind-append failure and source
   hashes. `history-plan-green-restore-build.log` tracks fixed-binary restoration.
 - `plan-view-v4-source.json` and `plan-view-catalog-tests-v4.log` identify the
   passing catalog checks. Earlier test logs preserve the non-null schema failures.
-  `history-plan-build-v5.log` records the compiled integration fixtures. SQL
-  boundary tests and the real-producer witness still need runtime verification.
+  `plan-introspection-red-green.md` records completed SQL boundary checks and
+  the real-producer witness, including the blind-publisher failure.
 - `dependency-refresh-fixed-evidence/`, its archive and runtime log preserve
   the reproduction of missing rows during peer join/restart, raw observations,
   final MV contents and cleanup. This is evidence of the bug, not a passing repair.

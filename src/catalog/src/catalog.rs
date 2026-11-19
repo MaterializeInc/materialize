@@ -24,8 +24,7 @@ use crate::config::{
 };
 use crate::durable::CatalogError as DurableError;
 use crate::durable::{
-    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
-    test_bootstrap_args,
+    BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
 };
 use crate::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use crate::memory::error::{Error, ErrorKind};
@@ -1042,26 +1041,45 @@ impl Catalog {
         self.allocate_user_id(commit_ts).await
     }
 
-    /// Allocates a single durable id for a storage usage collection batch.
-    ///
-    /// Bumps the durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator by one and
-    /// returns the previous value. The bump is committed at `commit_ts`.
-    /// One id is shared by every row produced by a collection cycle (see
-    /// `Coordinator::storage_usage_update`), so the durable cost is one
-    /// allocator round-trip per cycle, not per shard.
-    pub async fn allocate_storage_usage_id(
+    /// Claims a finish-time interval without occupying the coordinator during retries.
+    /// A definitive conflict retains the measurement, not the failed transaction.
+    pub fn claim_storage_usage_interval(
         &self,
+        interval_start: EpochMillis,
+        collection_timestamp: EpochMillis,
         commit_ts: mz_repr::Timestamp,
-    ) -> Result<u64, Error> {
-        use mz_ore::collections::CollectionExt;
-
-        self.storage()
-            .await
-            .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, 1, commit_ts)
-            .await
-            .maybe_terminate("allocating storage usage id")
-            .map(|ids| ids.into_element())
-            .err_into()
+    ) -> impl std::future::Future<Output = Result<Option<u64>, Error>> + Send + 'static + use<>
+    {
+        let storage = Arc::clone(&self.storage);
+        async move {
+            for attempt in 0..3 {
+                let result = storage
+                    .lock()
+                    .await
+                    .claim_storage_usage_interval(interval_start, collection_timestamp, commit_ts)
+                    .await;
+                match result {
+                    Err(
+                        error @ DurableError::Durable(
+                            crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                        ),
+                    ) => {
+                        if attempt == 2 {
+                            return Err(error.into());
+                        }
+                        // Release the catalog lock before backing off. Submitted writes
+                        // have reached a definitive outcome before this branch.
+                        tokio::time::sleep(std::time::Duration::from_millis(10 << attempt)).await;
+                    }
+                    result => {
+                        return result
+                            .maybe_terminate("claiming storage usage interval")
+                            .err_into();
+                    }
+                }
+            }
+            unreachable!("the final attempt returns")
+        }
     }
 
     /// Get the next user item ID without allocating it.

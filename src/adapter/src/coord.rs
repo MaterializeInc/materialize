@@ -369,6 +369,11 @@ pub enum Message {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
+    StorageUsageClaimed {
+        sizes: ShardsUsageReferenced,
+        collection_timestamp: EpochMillis,
+        batch_id: u64,
+    },
     PruneBuiltinHistory {
         item_id: CatalogItemId,
         global_id: GlobalId,
@@ -539,6 +544,7 @@ impl Message {
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::StorageUsageClaimed { .. } => "storage_usage_claimed",
             Message::PruneBuiltinHistory { .. } => "prune_builtin_history",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",

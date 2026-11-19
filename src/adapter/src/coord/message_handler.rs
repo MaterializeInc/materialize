@@ -224,6 +224,13 @@ impl Coordinator {
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).boxed_local().await;
             }
+            Message::StorageUsageClaimed {
+                sizes,
+                collection_timestamp,
+                batch_id,
+            } => {
+                self.storage_usage_publish(sizes, collection_timestamp, batch_id);
+            }
             Message::PruneBuiltinHistory {
                 item_id,
                 global_id,
@@ -389,6 +396,21 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     pub async fn storage_usage_fetch(&self) {
+        // This is only a cheap skip using the incrementally maintained catalog.
+        // A stale miss can cause an extra scan, never permission to publish.
+        let now: EpochMillis = self.peek_local_write_ts().await.into();
+        let interval_start = self.storage_usage_interval_start(now);
+        let covered = self
+            .catalog()
+            .storage()
+            .await
+            .storage_usage_collection_timestamp()
+            .is_some_and(|ts| ts >= interval_start);
+        if covered {
+            self.schedule_storage_usage_collection().await;
+            return;
+        }
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -427,19 +449,44 @@ impl Coordinator {
         let write_ts = self.get_catalog_write_ts().await.lower_bound();
         let collection_timestamp: EpochMillis = write_ts.into();
 
-        // All rows in this collection cycle share `batch_id` so consumers can
-        // identify rows that were collected together. We use one durable
-        // allocator bump per cycle (rather than per shard) so the id is
-        // monotonic across coordinator restarts while still keeping the
-        // coord-blocking cost proportional to one round-trip, not N.
-        let batch_id = match self.catalog().allocate_storage_usage_id(write_ts).await {
-            Ok(id) => id,
-            Err(err) => {
-                tracing::warn!("failed to allocate storage usage batch id: {:?}", err);
-                return;
-            }
-        };
+        let claim = self.catalog().claim_storage_usage_interval(
+            self.storage_usage_interval_start(collection_timestamp),
+            collection_timestamp,
+            write_ts,
+        );
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "storage_usage_claim", async move {
+            let next = match claim.await {
+                Ok(Some(batch_id)) => Message::StorageUsageClaimed {
+                    sizes: shards_usage,
+                    collection_timestamp,
+                    batch_id,
+                },
+                Ok(None) => Message::StorageUsageSchedule,
+                Err(err) => {
+                    tracing::warn!("failed to claim storage usage interval: {err:?}");
+                    Message::StorageUsageSchedule
+                }
+            };
+            let _ = internal_cmd_tx.send(next);
+        });
+    }
 
+    fn storage_usage_interval_start(&self, timestamp: EpochMillis) -> EpochMillis {
+        let interval: EpochMillis = self
+            .storage_usage_collection_interval
+            .as_millis()
+            .try_into()
+            .expect("storage usage collection interval must fit into u64");
+        timestamp - timestamp % interval
+    }
+
+    fn storage_usage_publish(
+        &mut self,
+        shards_usage: ShardsUsageReferenced,
+        collection_timestamp: EpochMillis,
+        batch_id: u64,
+    ) {
         let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()

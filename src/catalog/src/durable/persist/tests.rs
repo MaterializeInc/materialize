@@ -786,7 +786,7 @@ async fn test_exact_prefix_append_rebases_only_empty_progress() {
         assert!(peer.upper > prepared_at);
 
         let result = candidate
-            .commit_exact_prefix(updates, prepared_at.into())
+            .commit_exact_prefix(updates, prepared_at.into(), true)
             .await;
         if replacement.is_some() {
             assert!(matches!(
@@ -994,7 +994,7 @@ async fn test_retirement_reuses_raw_preparation_after_peer_and_own_writes() {
     .expect("peer changes exact raw keys after preparation");
     assert!(matches!(
         candidate
-            .commit_exact_prefix(vec![(target, Diff::MINUS_ONE)], prepared_at.into())
+            .commit_exact_prefix(vec![(target, Diff::MINUS_ONE)], prepared_at.into(), true)
             .await,
         Err(DurableCatalogError::CatalogOutOfSync { .. })
     ));
@@ -1002,7 +1002,7 @@ async fn test_retirement_reuses_raw_preparation_after_peer_and_own_writes() {
     // Retrying retirement must see this new target row without another snapshot.
     let upper = candidate.upper;
     candidate
-        .commit_exact_prefix(vec![(added_by_self, Diff::ONE)], upper.into())
+        .commit_exact_prefix(vec![(added_by_self, Diff::ONE)], upper.into(), true)
         .await
         .expect("own write before retirement retry");
     assert!(

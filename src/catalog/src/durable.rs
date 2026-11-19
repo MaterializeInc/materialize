@@ -77,6 +77,9 @@ pub const DEFAULT_ADAPTER_SIZE: &str = "1";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
+/// Last measurement finish timestamp claimed for storage-usage publication.
+/// A committed claim does not certify that its table rows were published.
+pub const STORAGE_USAGE_COLLECTION_TIMESTAMP_KEY: &str = "storage_usage_collection_timestamp";
 pub const USER_NETWORK_POLICY_ID_ALLOC_KEY: &str = "user_network_policy";
 pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
@@ -379,6 +382,10 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
 
+    /// Cached last storage-usage claim, without I/O. Absence or an older claim
+    /// permits sampling, not publication: a transaction must still claim the interval.
+    fn storage_usage_collection_timestamp(&self) -> Option<u64>;
+
     /// Get the next user ID without allocating it.
     async fn get_next_user_item_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(USER_ITEM_ALLOC_KEY).await
@@ -602,7 +609,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// completion covers the actual durable timestamp. The
     /// future-timestamp bound is enforced before each durable attempt.
     ///
-    /// Empty concurrent progress is retried. Concurrent content returns
+    /// Empty concurrent progress is retried only when `retry_empty_progress` is set.
+    /// Otherwise even empty progress returns `CatalogOutOfSync`, with zero updates.
+    /// Concurrent content returns
     /// `CatalogOutOfSync` without replaying the batch, so callers must refresh and
     /// revalidate their decisions. Generation fencing is propagated unchanged.
     /// Panics if the batch's snapshot upper differs from this handle's cached upper.
@@ -610,6 +619,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         txn_batch: TransactionBatch,
         commit_ts: CatalogCommitTimestamp,
+        retry_empty_progress: bool,
     ) -> Result<Timestamp, CatalogError>;
 
     /// Advances the catalog upper to at least `new_upper`.
@@ -652,6 +662,19 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         amount: u64,
         commit_ts: Timestamp,
     ) -> Result<Vec<u64>, CatalogError>;
+
+    /// Claims the interval containing `collection_timestamp` and allocates its batch ID
+    /// in one transaction. Returns `None` if this or a later interval is already claimed.
+    /// `interval_start` must not exceed `collection_timestamp`.
+    ///
+    /// Makes one commit attempt. On a definitive conflict, the owner may retry the
+    /// same measurement after backoff. Pending catalog projection updates are retained.
+    async fn claim_storage_usage_interval(
+        &mut self,
+        interval_start: u64,
+        collection_timestamp: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Option<u64>, CatalogError>;
 
     /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
     ///
