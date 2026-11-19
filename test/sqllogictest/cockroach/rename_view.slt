@@ -123,8 +123,14 @@ onlyif cockroach
 statement ok
 CREATE VIEW v as SELECT c1,c2 from t
 
-statement error pgcode 42P07 renaming conflict: in materialize\.public\.v, "v" potentially used ambiguously as item and column
+statement ok
 ALTER VIEW v RENAME TO new_v
+
+query II rowsort
+SELECT k, v FROM new_v
+----
+1 2
+3 4
 
 user testuser
 
