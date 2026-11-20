@@ -131,28 +131,25 @@ pub struct KubernetesOrchestratorConfig {
     pub additional_trust_bundle: Option<AdditionalTrustBundle>,
 }
 
-/// Where pods mount the certificates of an [`AdditionalTrustBundle`], for
-/// passing to `--additional-trust-bundle`.
-pub const ADDITIONAL_TRUST_BUNDLE_PATH: &str = "/etc/materialize/additional-trust-bundle/ca.crt";
+/// Where pods mount the certificates of an [`AdditionalTrustBundle`].
+pub const ADDITIONAL_TRUST_BUNDLE_DIR: &str = "/etc/materialize/additional-trust-bundle";
 
-/// The volume and mount that place the certificates of `bundle` at
-/// [`ADDITIONAL_TRUST_BUNDLE_PATH`].
+/// The certificates' file name in [`ADDITIONAL_TRUST_BUNDLE_DIR`]. Pass the
+/// joined path to `--additional-trust-bundle`.
+pub const ADDITIONAL_TRUST_BUNDLE_FILE: &str = "ca.crt";
+
+/// The volume and mount that place the certificates of `bundle` in
+/// [`ADDITIONAL_TRUST_BUNDLE_DIR`].
 pub fn additional_trust_bundle_volume(
     bundle: &AdditionalTrustBundle,
 ) -> Result<(Volume, VolumeMount), anyhow::Error> {
     const VOLUME_NAME: &str = "additional-trust-bundle";
-    let path = std::path::Path::new(ADDITIONAL_TRUST_BUNDLE_PATH);
-    let dir = path.parent().and_then(|dir| dir.to_str());
-    let file = path.file_name().and_then(|file| file.to_str());
-    let (Some(dir), Some(file)) = (dir, file) else {
-        unreachable!("{ADDITIONAL_TRUST_BUNDLE_PATH} names a file in a directory");
-    };
     // Project only the referenced key, so that pointing at a Secret that also
     // holds a private key, as cert-manager's do, does not mount that key.
     let items = |key: &str| {
         Some(vec![KeyToPath {
             key: key.to_owned(),
-            path: file.to_owned(),
+            path: ADDITIONAL_TRUST_BUNDLE_FILE.to_owned(),
             mode: None,
         }])
     };
@@ -180,7 +177,7 @@ pub fn additional_trust_bundle_volume(
     };
     let mount = VolumeMount {
         name: VOLUME_NAME.to_owned(),
-        mount_path: dir.to_owned(),
+        mount_path: ADDITIONAL_TRUST_BUNDLE_DIR.to_owned(),
         read_only: Some(true),
         ..Default::default()
     };
@@ -1193,7 +1190,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             volumes.push(volume);
             volume_mounts.push(volume_mount);
             args.push(format!(
-                "--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"
+                "--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_DIR}/{ADDITIONAL_TRUST_BUNDLE_FILE}"
             ));
         }
 
@@ -2011,10 +2008,7 @@ mod tests {
         let secret = volume.secret.expect("secret volume");
         assert_eq!(secret.secret_name.as_deref(), Some("private-ca"));
         assert_eq!(secret.items, items);
-        assert_eq!(
-            format!("{}/ca.crt", mount.mount_path),
-            ADDITIONAL_TRUST_BUNDLE_PATH
-        );
+        assert_eq!(mount.mount_path, ADDITIONAL_TRUST_BUNDLE_DIR);
         assert_eq!(mount.name, volume.name);
 
         let (volume, _) = additional_trust_bundle_volume(&AdditionalTrustBundle {

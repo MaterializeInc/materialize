@@ -47,7 +47,9 @@ use crate::tls::issuer_ref_defined;
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_cloud_resources::crd::{ManagedResource, recommended_k8s_labels};
-use mz_orchestrator_kubernetes::{ADDITIONAL_TRUST_BUNDLE_PATH, additional_trust_bundle_volume};
+use mz_orchestrator_kubernetes::{
+    ADDITIONAL_TRUST_BUNDLE_DIR, ADDITIONAL_TRUST_BUNDLE_FILE, additional_trust_bundle_volume,
+};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -103,9 +105,9 @@ static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
 /// `--additional-trust-bundle`, and `environmentd` learned
 /// `--orchestrator-kubernetes-additional-trust-bundle`. Older images reject the
 /// unknown arguments and fail to start.
-static V26_52_0: LazyLock<Version> = LazyLock::new(|| Version {
+static V26_53_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
-    minor: 52,
+    minor: 53,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1461,18 +1463,20 @@ fn additional_trust_bundle_args(
     let Some(bundle) = &mz.spec.additional_trust_bundle else {
         return Ok(None);
     };
-    if !mz.meets_minimum_version(&V26_52_0) {
+    if !mz.meets_minimum_version(&V26_53_0) {
         anyhow::bail!(
             "additionalTrustBundle requires environmentd v{}.{}.{} or later",
-            V26_52_0.major,
-            V26_52_0.minor,
-            V26_52_0.patch,
+            V26_53_0.major,
+            V26_53_0.minor,
+            V26_53_0.patch,
         );
     }
     let (volume, volume_mount) =
         additional_trust_bundle_volume(bundle).context("invalid additionalTrustBundle")?;
     let args = vec![
-        format!("--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"),
+        format!(
+            "--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_DIR}/{ADDITIONAL_TRUST_BUNDLE_FILE}"
+        ),
         format!(
             "--orchestrator-kubernetes-additional-trust-bundle={}",
             serde_json::to_string(bundle)?
@@ -1800,7 +1804,6 @@ mod tests {
     use kube::api::ObjectMeta;
     use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeSpec};
     use mz_cloud_resources::crd::materialize::{AdditionalTrustBundle, TrustBundleKeyRef};
-    use mz_orchestrator_kubernetes::ADDITIONAL_TRUST_BUNDLE_PATH;
 
     use super::{additional_trust_bundle_args, environmentd_probe, validate_probe_handlers};
 
@@ -1867,7 +1870,7 @@ mod tests {
     fn additional_trust_bundle_args_require_supported_version() {
         let mut mz = Materialize {
             spec: MaterializeSpec {
-                environmentd_image_ref: "materialize/environmentd:v26.51.0".to_owned(),
+                environmentd_image_ref: "materialize/environmentd:v26.52.0".to_owned(),
                 additional_trust_bundle: Some(AdditionalTrustBundle {
                     config_map_key_ref: Some(TrustBundleKeyRef {
                         name: "private-ca".to_owned(),
@@ -1882,11 +1885,11 @@ mod tests {
         };
         let err = additional_trust_bundle_args(&mz).unwrap_err();
         assert!(
-            err.to_string().contains("v26.52.0"),
+            err.to_string().contains("v26.53.0"),
             "unexpected error: {err}"
         );
 
-        mz.spec.environmentd_image_ref = "materialize/environmentd:v26.52.0-dev.0".to_owned();
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v26.53.0-dev.0".to_owned();
         let (volume, volume_mount, args) = additional_trust_bundle_args(&mz)
             .unwrap()
             .expect("bundle is set");
@@ -1898,7 +1901,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                format!("--additional-trust-bundle={ADDITIONAL_TRUST_BUNDLE_PATH}"),
+                "--additional-trust-bundle=/etc/materialize/additional-trust-bundle/ca.crt".to_owned(),
                 r#"--orchestrator-kubernetes-additional-trust-bundle={"configMapKeyRef":{"name":"private-ca","key":"ca.crt"}}"#.to_owned(),
             ]
         );
