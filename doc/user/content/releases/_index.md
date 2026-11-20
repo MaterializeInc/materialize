@@ -43,6 +43,12 @@ When you add a table to a MySQL source, with `CREATE TABLE ... FROM SOURCE`, Mat
 - **A clearer sink overcompaction error**: The error a sink raises when its `FROM` collection has compacted past the point the sink needs now explains the situation, which was previously reported as a possible bug.
 - **`dbt-materialize` 1.9.13**: Version 1.9.13 of the dbt adapter is released, fixing a `refresh_interval` that sets both `at` and `at_creation` rendering without a separating comma and failing to create the materialized view, `deploy_promote` stopping after the swap commits when `git` is not installed, the permission hints `deploy_init` prints not quoting names that need it, the non-empty-schema hint naming an operation that does not exist, and a profile pointing at PostgreSQL retrying instead of failing with a clear message.
 
+### Guides {#v26.51-guides}
+- [Serve results during source stalls](/serve-results/source-stalls/)
+- [Handle upstream constraint changes](/ingest-data/sql-server/source-versioning/#handle-upstream-constraint-changes) for SQL Server sources
+- [Bin packing](/self-managed-deployments/deployment-guidelines/bin-packing/) (<red>*Materialize Self-Managed only*</red>)
+- [Observability tools](/observability/self-managed/o11y-tools/) (<red>*Materialize Self-Managed only*</red>)
+
 ### Bug Fixes {#v26.51-bug-fixes}
 - Fixed a dataflow retaining memory proportional to the largest batch it consolidated until the dataflow was dropped, a regression introduced in v26.50.0 that affected consolidation during rendering, including the final consolidation of top-K results.
 - Fixed `environmentd` dropping its connections to every healthy cluster replica at once when it had been too busy to poll them, because a connection read reported a timeout before the keepalives already waiting in its socket buffer.
@@ -56,7 +62,7 @@ When you add a table to a MySQL source, with `CREATE TABLE ... FROM SOURCE`, Mat
 - Fixed a refresh schedule or hydration burst being stranded, and an otherwise allowed resize being blocked, when the set of sizes a cluster's owner may use shrank while the cluster controller was realizing a configuration that `ALTER CLUSTER` had already accepted.
 - Fixed the MCP server's catalog-query validation missing three ways to reference a user object — `TABLE t`, a schema-qualified name shadowed by a common table expression, and the `[u1 AS …]` ID form — and rejecting valid catalog queries that use `TABLE` or `WITH MUTUALLY RECURSIVE`.
 - Fixed the Console's role graph breaking every request in the browser tab, until reload, for anyone who opened it after a role named `__proto__` or `cache` was given a member.
-- Updated the nginx base image of the Console container to 1.31.9, which carries the fixes for the nginx2root advisories (CVE-2026-113425, CVE-2026-121810, CVE-2026-123007, CVE-2026-123633, and CVE-2026-123634); the Console's shipped configuration does not enable the affected nginx features, so the update is precautionary rather than a fix for a reachable flaw (<red>*Materialize Self-Managed only*</red>).
+- Updated the Console's nginx base image to nginx 1.31.9, the security update described in [v26.50.2](#v26502) (<red>*Materialize Self-Managed only*</red>).
 
 ## v26.50.2, v26.49.2, v26.44.2, v26.41.3 {#v26502}
 *Released to Materialize Self-Managed: 2026-11-19* <br>
