@@ -23,6 +23,7 @@ EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
 LATEST_IMAGE_TAG = "latest"
+_INTERNAL_REPO = f"{git.DEFAULT_GITHUB_REPO}-internal".lower()
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
 MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
 
@@ -48,7 +49,8 @@ def image_of_commit_exists(commit_hash: str) -> bool:
         return False
 
 
-def mz_image_tag_exists_cmdline(image_name: str) -> bool:
+def _manifest_exists(image_name: str) -> bool | None:
+    """Whether the registry has `image_name`, or None if it gave no answer."""
     command = [
         "docker",
         "manifest",
@@ -63,10 +65,14 @@ def mz_image_tag_exists_cmdline(image_name: str) -> bool:
         if "no such manifest:" in e.output:
             print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
             EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
-        else:
-            print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
-            # do not cache the result of unknown error messages
-        return False
+            return False
+        print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
+        # do not cache the result of unknown error messages
+        return None
+
+
+def mz_image_tag_exists_cmdline(image_name: str) -> bool:
+    return bool(_manifest_exists(image_name))
 
 
 # Cache for the GHCR anonymous token to avoid re-fetching it for every image check.
@@ -118,10 +124,32 @@ def mz_image_tag_exists_ghcr(image_name: str, image_tag: str) -> bool:
 
 
 def _internal_image_exists(image_name: str) -> bool:
+    """Whether the private image `image_name` exists.
+
+    Raises if the registry gives no answer. Reading that as missing selects the
+    public image of the same tag, which is a different build.
+    """
     cache = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK
     if image_name in cache:
         return cache[image_name]
-    return mz_image_tag_exists_cmdline(image_name)
+    for sleep_time in [2, 5, None]:
+        exists = _manifest_exists(image_name)
+        if exists is not None:
+            return exists
+        if sleep_time is not None:
+            time.sleep(sleep_time)
+    raise ui.UIError(
+        f"failed to look up the private image {image_name}",
+        hint="Log in to Docker Hub with an account that can read it.",
+    )
+
+
+def is_internal_image_tag(tag: str | MzVersion) -> bool:
+    """Whether `tag` is a build of the internal repository. Its images are
+    private and carry `image_suffix()` in their names."""
+    return bool(image_suffix()) and _internal_image_exists(
+        f"materialize/materialized{image_suffix()}:{tag}"
+    )
 
 
 def mz_image(name: str, tag: str | MzVersion) -> str:
@@ -136,9 +164,7 @@ def mz_image(name: str, tag: str | MzVersion) -> str:
 
 
 def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
-    if image_suffix() and _internal_image_exists(
-        f"materialize/materialized{image_suffix()}:{image_tag}"
-    ):
+    if is_internal_image_tag(image_tag):
         return True
 
     image_name = f"{image_registry()}/materialized:{image_tag}"
@@ -242,11 +268,21 @@ def _try_construct_image_tag(commit_hash: str) -> str | None:
         if version is None:
             return None
 
-        tag = f"v{version}--main.g{commit_hash}"
-        if mz_image_tag_exists(tag, quiet=True):
-            return tag
+        tags = [f"v{version}--main.g{commit_hash}"]
+        if image_suffix():
+            # The Docker Hub search cannot see private repositories, so probe
+            # the tags that ci/test/dev_tag.py publishes a PR commit under.
+            tags += [
+                f"v{version}--pr.g{commit_hash}{flavor}"
+                for flavor in ("", ".optimized")
+            ]
+        for tag in tags:
+            if mz_image_tag_exists(tag, quiet=True):
+                return tag
 
         return None
+    except ui.UIError:
+        raise
     except Exception:
         return None
 
@@ -329,8 +365,21 @@ def _select_image_name_from_candidates(
 def image_suffix() -> str:
     """`-internal` in the internal repository, whose images are private and
     only on Docker Hub, and empty otherwise."""
-    internal = f"{git.DEFAULT_GITHUB_REPO}-internal".lower()
-    return "-internal" if git.get_github_repo().lower() == internal else ""
+    return "-internal" if git.get_github_repo().lower() == _INTERNAL_REPO else ""
+
+
+def check_image_publishing() -> None:
+    """Fail if publishing could put internal code under the public image names.
+
+    A checkout with a remote of the internal repository can still resolve to
+    the public one, for example on a branch that tracks a fork.
+    """
+    repos = {repo.lower() for repo in git.get_github_repos()}
+    if not image_suffix() and _INTERNAL_REPO in repos:
+        raise ui.UIError(
+            "refusing to publish public images from a checkout with a remote of the internal repository",
+            hint="Publish internal images from a branch that tracks the internal repository, and public ones from a checkout without that remote.",
+        )
 
 
 def image_registry() -> str:

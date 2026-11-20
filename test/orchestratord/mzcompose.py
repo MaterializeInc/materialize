@@ -37,7 +37,7 @@ from psycopg import sql as psycopg_sql
 from semver.version import Version
 
 from materialize import MZ_ROOT, buildkite, ci_util, spawn
-from materialize.docker import image_suffix
+from materialize.docker import image_suffix, is_internal_image_tag, mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -127,8 +127,9 @@ def get_image(image: str, tag: str | None) -> str:
     return f"{name}:{get_tag(tag)}"
 
 
-def load_images_into_kind(c: Composition) -> None:
-    """Load this build's images into the kind cluster."""
+def load_images_into_kind(c: Composition, tag: str | None = None) -> None:
+    """Load the images of this build, or of the internal build at `tag`, into
+    the kind cluster under the plain names the chart uses."""
     services = [
         "orchestratord",
         "environmentd",
@@ -136,12 +137,16 @@ def load_images_into_kind(c: Composition) -> None:
         "console",
         "balancerd",
     ]
-    c.pull_images(*services)
-    images = [
-        get_image(c.compose["services"][service]["image"], None) for service in services
-    ]
-    for service, image in zip(services, images):
-        spawn.runv(["docker", "tag", c.compose["services"][service]["image"], image])
+    if tag:
+        sources = [mz_image(service, tag) for service in services]
+        for source in sources:
+            spawn.runv(["docker", "pull", source])
+    else:
+        c.pull_images(*services)
+        sources = [c.compose["services"][service]["image"] for service in services]
+    images = [get_image(source, tag) for source in sources]
+    for source, image in zip(sources, images):
+        spawn.runv(["docker", "tag", source, image])
     spawn.runv(["kind", "load", "docker-image", "--name", KIND_CLUSTER_NAME] + images)
 
 
@@ -5294,8 +5299,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
             ]
         )
 
-    if not args.tag:
-        load_images_into_kind(c)
+    # The cluster pulls released versions itself.
+    if not args.tag or is_internal_image_tag(args.tag):
+        load_images_into_kind(c, args.tag)
 
     definition: dict[str, Any] = {}
 

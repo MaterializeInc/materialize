@@ -33,6 +33,7 @@ import requests
 import yaml
 
 from materialize import MZ_ROOT, ci_util, gcp_oidc, spawn
+from materialize.docker import is_internal_image_tag
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -40,6 +41,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.ui import UIError
 from materialize.version_list import get_self_managed_versions
 
 SERVICES = [
@@ -206,7 +208,15 @@ def testdrive(no_reset: bool, use_https: bool = True) -> Testdrive:
 
 
 def get_tag(tag: str | None) -> str:
-    return tag or ci_util.dev_docker_tag()
+    tag = tag or ci_util.dev_docker_tag()
+    # The clusters pull images by their plain names and without credentials,
+    # so fail before provisioning anything.
+    if is_internal_image_tag(tag):
+        raise UIError(
+            f"cannot deploy the private images of {tag}",
+            hint="Pass --tag with a released version.",
+        )
+    return tag
 
 
 def get_operator_version() -> str:
