@@ -72,6 +72,14 @@ BASE_SYSTEM_PARAMETERS: dict[str, str] = {
     # rollout outlast a timeline, so both are scaled down here.
     "with_0dt_deployment_ddl_check_interval": "30s",
     "with_0dt_deployment_max_wait": "20min",
+    # A candidate is promoted only after its clusters stayed caught up for
+    # this long. The production 10 min outlasts most timelines, so no rollout
+    # would complete. 30 s still spans three caught-up checks, so a replica
+    # that crashes in the window resets it.
+    "with_0dt_caught_up_check_stability_period": "30s",
+    # The production 5 min would give a failed cleanup of the previous
+    # generation's replicas one retry per timeline.
+    "controller_past_generation_replica_cleanup_retry_interval": "30s",
 }
 
 

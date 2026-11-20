@@ -63,6 +63,9 @@ class Txn:
     """When the first read that saw it whole completed."""
     retired: bool = False
     """Its rows are being deleted, so a read may see some of them."""
+    pruned_at: float | None = None
+    """When the deletion was acknowledged. A read that began later sees none
+    of its rows."""
 
 
 class Atomic:
@@ -73,6 +76,9 @@ class Atomic:
         self.txns: dict[int, Txn] = {}
         self.rollback_share = 0.25
         self._pruning = False
+        self._reads: dict[int, float] = {}
+        """Reads in flight, each with a time no later than its start."""
+        self._next_read = 0
 
     def configure(self, d: Draw) -> None:
         self.rollback_share = d.choice((0.0, 0.25, 0.5))
@@ -133,13 +139,29 @@ class Atomic:
         def execute(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
             return conn.execute(query.encode()).fetchall()
 
+        with self._lock:
+            token = self._next_read
+            self._next_read += 1
+            self._reads[token] = time.monotonic()
+
         def complete(outcome: Outcome[list[tuple[Any, ...]]]) -> None:
+            with self._lock:
+                plans = self._plans(outcome.start)
+                # A read that began before a deletion was acknowledged may
+                # still see its rows, so pruned transactions stay in the model
+                # until every such read is done.
+                del self._reads[token]
+                oldest = min(self._reads.values(), default=float("inf"))
+                for m in [
+                    m
+                    for m, t in self.txns.items()
+                    if t.pruned_at is not None and t.pruned_at < oldest
+                ]:
+                    del self.txns[m]
             if not outcome.ok:
                 return
             assert outcome.value is not None
             rows = [(int(s), int(m), int(v)) for s, m, v in outcome.value]
-            with self._lock:
-                plans = {m: self._plan(t, outcome.start) for m, t in self.txns.items()}
             errors = model.violations(plans, rows)
             visible: dict[int, set[int]] = {}
             for s, m, _ in rows:
@@ -179,6 +201,13 @@ class Atomic:
             done.append(True)
 
         return Op("atomic read", execute, complete, SETTINGS)
+
+    def _plans(self, start: float) -> dict[int, model.Plan]:
+        return {
+            m: self._plan(t, start)
+            for m, t in self.txns.items()
+            if t.pruned_at is None or t.pruned_at >= start
+        }
 
     def _plan(self, t: Txn, start: float) -> model.Plan:
         """What a read that began at `start` may see of `t`."""
@@ -220,10 +249,8 @@ class Atomic:
             with self._lock:
                 self._pruning = False
                 if outcome.ok:
-                    # Every later read must miss them, and a row of one would
-                    # be reported as unattempted.
                     for m in settled:
-                        self.txns.pop(m, None)
+                        self.txns[m].pruned_at = outcome.end
             if outcome.ok:
                 reachable(
                     "atomic commits: settled transactions were pruned",

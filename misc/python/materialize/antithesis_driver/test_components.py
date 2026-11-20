@@ -243,6 +243,26 @@ def test_an_operation_on_a_busy_session_completes_as_not_applied() -> None:
     assert len(outcomes) == 1 and outcomes[0].rejected
 
 
+def test_a_session_resets_the_settings_of_earlier_operations() -> None:
+    class Conn:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def execute(self, query: bytes) -> None:
+            self.sent.append(query)
+
+    session = client.Session.__new__(client.Session)
+    session._settings = {}
+    conn: Any = Conn()
+    session._apply(conn, {"cluster": "quickstart", "real_time_recency": "true"})
+    session._apply(conn, {"cluster": "quickstart"})
+    assert conn.sent == [
+        b"SET cluster = quickstart",
+        b"SET real_time_recency = true",
+        b"RESET real_time_recency",
+    ]
+
+
 def test_atomic_requires_only_what_was_settled_before_the_read() -> None:
     from materialize.antithesis import atomic_commits_model
     from materialize.antithesis_driver import atomic
@@ -258,6 +278,25 @@ def test_atomic_requires_only_what_was_settled_before_the_read() -> None:
     assert atomic_commits_model.violations(
         plans, [(0, 1, 5), (1, 1, 5), (0, 2, 6)]
     ) == ["torn transaction 2"]
+
+
+def test_atomic_read_older_than_a_prune_may_see_its_rows() -> None:
+    from materialize.antithesis import atomic_commits_model
+    from materialize.antithesis_driver import atomic
+
+    component = atomic.Atomic.__new__(atomic.Atomic)
+    component.txns = {
+        1: atomic.Txn(
+            (0, 1), 5, False, outcome="ok", acked_at=1.0, retired=True, pruned_at=4.0
+        )
+    }
+    rows = [(0, 1, 5), (1, 1, 5)]
+    assert atomic_commits_model.violations(component._plans(3.0), rows) == []
+    assert atomic_commits_model.violations(component._plans(3.0), []) == []
+    assert atomic_commits_model.violations(component._plans(5.0), rows) == [
+        "unattempted marker 1",
+        "unattempted marker 1",
+    ]
 
 
 def test_subscriber_starts_its_stream_at_the_first_progress_row() -> None:

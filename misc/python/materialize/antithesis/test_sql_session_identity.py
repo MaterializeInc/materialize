@@ -74,6 +74,12 @@ def test_other_dependent_objects_errors_stay_violations():
         ),
         ("storage error: direct", sql.Outcome.REJECTED),
         (
+            "storage error: Token error: 'Login failed for user 'sa'.' on server"
+            " sql-server-upstream-0 executing  on line 1 (code: 18456, state: 1,"
+            " class: 14)",
+            sql.Outcome.REJECTED,
+        ),
+        (
             "storage error: failed to lookup address information:"
             " Name or service not known",
             sql.Outcome.REJECTED,

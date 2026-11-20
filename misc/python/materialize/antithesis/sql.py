@@ -250,14 +250,18 @@ def classify_as_of_read(error: BaseException) -> Classified:
 # ...". The other alternatives are the remaining transport errors of the same
 # clients: tokio-postgres's other kinds, tiberius's and `SqlServerError`'s I/O
 # errors after connecting, and for a Kafka source rdkafka's metadata or
-# watermark fetch error. A partitioned upstream instead times the read out
-# (57014), which `classify` already leaves indeterminate.
+# watermark fetch error. "Token error: ..." is tiberius's Display of an error
+# SQL Server answered with. Observed while a restarted SQL Server was still
+# recovering the database: the login fails with 4060 and 18456. The template
+# hides the message, so every server error of an RTR read is accepted. A
+# partitioned upstream instead times the read out (57014), which `classify`
+# already leaves indeterminate.
 _RTR_UPSTREAM_TEMPLATE = re.compile(
     r"^storage error: (error communicating with the server|error connecting to server"
     r"|connection closed|timeout waiting for server|Meta data fetch error: .*"
     r"|Input/output error: .*|direct|failed to lookup address information: .*"
     r"|An error occured during the attempt of performing I/O: .*"
-    r"|sql server client encountered I/O error: .*)$"
+    r"|sql server client encountered I/O error: .*|Token error: .*)$"
 )
 
 

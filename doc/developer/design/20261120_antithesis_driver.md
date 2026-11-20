@@ -219,10 +219,6 @@ No Antithesis run has been launched for it yet.
 - Paced DDL needs about an hour of continuous quiet and a ban on other DDL.
   It fits the driver only as an exclusive mode that pauses the other rules,
   or as part of the eventually.
-- A rollout is promoted only after its clusters stayed caught up for
-  `with_0dt_caught_up_check_stability_period`, ten minutes by default, which
-  the harness does not lower. Under faults few rollouts may get that far.
-  Should timelines draw a shorter period?
 - The timing bounds (statement cancel after 60 s, the 45 minute budget of
   the eventually, the disruption cooldowns) are guesses until the first runs
   on the simulated core.

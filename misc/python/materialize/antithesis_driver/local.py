@@ -19,9 +19,7 @@ there, rollouts and pod deletions included.
 Either way the driver writes its assertions to `sdk.jsonl` in `--output`, runs
 its eventually after `--duration` seconds, and exits. Nothing injects faults
 locally, so assertions on situations that need faults stay unmet, and in
-`standalone` so do the Kubernetes ones. A rollout needs more than ten
-minutes of stable clusters before it is promoted, see
-`with_0dt_caught_up_check_stability_period`.
+`standalone` so do the Kubernetes ones.
 """
 
 from __future__ import annotations

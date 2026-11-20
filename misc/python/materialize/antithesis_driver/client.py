@@ -262,6 +262,12 @@ class Session:
         return self._conn
 
     def _apply(self, conn: psycopg.Connection, settings: dict[str, str]) -> None:
+        # A setting an earlier operation needed must not leak into this one:
+        # `real_time_recency` left on makes every later read of a source
+        # contact its upstream.
+        for name in [n for n in self._settings if n not in settings]:
+            conn.execute(f"RESET {name}".encode())
+            del self._settings[name]
         for name, value in settings.items():
             if self._settings.get(name) != value:
                 conn.execute(f"SET {name} = {value}".encode())
