@@ -47,7 +47,7 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.docker import image_registry, image_suffix
+from materialize.docker import check_image_publishing, image_registry, image_suffix
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -1126,6 +1126,8 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        if push:
+            check_image_publishing()
         # Use a file lock to prevent parallel mzcompose processes from
         # racing on git clean / copy / strip for the same image directory.
         lock_dir = self.image.rd.root / "target" / "mzbuild-locks"
@@ -1865,6 +1867,7 @@ def publish_multiarch_images(
     tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
 ) -> None:
     """Publishes a set of docker images under a given tag."""
+    check_image_publishing()
     always_push_tags = ("latest", "unstable")
     ghcr_token = None if image_suffix() else os.getenv("GITHUB_GHCR_TOKEN")
     if ghcr_token:
