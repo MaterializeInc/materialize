@@ -915,18 +915,20 @@ impl AuthedClient {
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;
 
         session_config(&mut session);
-        let system_vars = adapter_client.get_system_vars().await;
-        for (key, val) in options {
-            const LOCAL: bool = false;
-            if let Err(err) =
-                session
-                    .vars_mut()
-                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
-            {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.to_string(),
-                    reason: err.to_string(),
-                })
+        if !options.is_empty() {
+            let system_vars = adapter_client.get_system_vars().await;
+            for (key, val) in options {
+                const LOCAL: bool = false;
+                if let Err(err) =
+                    session
+                        .vars_mut()
+                        .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
+                {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.to_string(),
+                        reason: err.to_string(),
+                    })
+                }
             }
         }
         let adapter_client = adapter_client.startup(session).await?;
