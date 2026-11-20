@@ -1622,10 +1622,30 @@ impl Catalog {
     /// `cache_build` identifies a provisioner-validated compatible writer whose
     /// local expressions may be reused. Its store is returned for written-plan
     /// reads without cache reconciliation. `None` keeps diagnostic replay uncached.
-    pub async fn open_committed(
+    pub fn open_committed(
+        config: StateConfig,
+        storage: Box<dyn DurableCatalogState>,
+        cache_build: Option<semver::Version>,
+    ) -> impl std::future::Future<Output = Result<OpenCommittedCatalog, CatalogError>> {
+        Self::open_committed_inner(config, storage, cache_build, false)
+    }
+
+    /// Opens a replica projection, deferring builtin-view optimization until an
+    /// item needs its exact description. This catalog must not plan SQL execution.
+    /// Admission, committed replay and immutable-plan selection are unchanged.
+    pub fn open_replica(
+        config: StateConfig,
+        storage: Box<dyn DurableCatalogState>,
+        cache_build: Option<semver::Version>,
+    ) -> impl std::future::Future<Output = Result<OpenCommittedCatalog, CatalogError>> {
+        Self::open_committed_inner(config, storage, cache_build, true)
+    }
+
+    async fn open_committed_inner(
         config: StateConfig,
         mut storage: Box<dyn DurableCatalogState>,
         cache_build: Option<semver::Version>,
+        defer_builtin_view_optimization: bool,
     ) -> Result<OpenCommittedCatalog, CatalogError> {
         use mz_storage_client::controller::StorageTxn;
         let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config));
@@ -1661,6 +1681,7 @@ impl Catalog {
                 is_bootstrap_complete,
             },
             cache_build,
+            defer_builtin_view_optimization,
         )
         .await?;
         storage.mark_bootstrap_complete().await;

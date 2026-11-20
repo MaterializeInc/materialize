@@ -300,7 +300,7 @@ pub(crate) async fn run(
         config.connection_context,
         persist.clone(),
     );
-    let opened = Catalog::open_committed(state_config, storage, Some(build.clone())).await?;
+    let opened = Catalog::open_replica(state_config, storage, Some(build.clone())).await?;
     let mut catalog = opened.catalog;
     let initial = opened.initial_updates;
     let txns_shard = opened.txn_wal_shard;

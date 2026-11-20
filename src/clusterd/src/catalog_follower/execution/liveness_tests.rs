@@ -113,7 +113,7 @@ async fn exercise_liveness() {
         .join()
         .await
         .unwrap();
-    let opened = Box::pin(Catalog::open_committed(
+    let opened = Box::pin(Catalog::open_replica(
         fixture.writer.replica_config().into_state(
             config.build_info,
             config.environment_id.clone(),

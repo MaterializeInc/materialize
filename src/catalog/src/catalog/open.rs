@@ -188,7 +188,7 @@ impl Catalog {
         config: StateConfig,
         input: crate::durable::CatalogSnapshot,
     ) -> Result<CatalogState, CatalogError> {
-        Self::reconstruct_state_and_updates(config, input, None)
+        Self::reconstruct_state_and_updates(config, input, None, false)
             .await
             .map(|result| result.state)
     }
@@ -198,6 +198,7 @@ impl Catalog {
         config: StateConfig,
         input: crate::durable::CatalogSnapshot,
         cache_build: Option<semver::Version>,
+        defer_builtin_view_optimization: bool,
     ) -> Result<InitializeStateResult, CatalogError> {
         let mut config = Self::diagnostic_state_config(&config);
         config.boot_ts = input.upper;
@@ -215,6 +216,7 @@ impl Catalog {
             txn.transaction_mut(),
             None,
             cache_build,
+            defer_builtin_view_optimization,
         )
         .await?;
         drop(cleanup);
@@ -288,9 +290,10 @@ impl Catalog {
                 })?;
                 let mut config = config;
                 config.skip_migrations = true;
-                let (mut result, cleanup) =
-                    Self::initialize_state_from_updates(config, updates, &mut txn, None, None)
-                        .await?;
+                let (mut result, cleanup) = Self::initialize_state_from_updates(
+                    config, updates, &mut txn, None, None, false,
+                )
+                .await?;
                 cleanup.await;
                 if txn.current_snapshot() != before {
                     return Err(CatalogError::Internal(
@@ -439,6 +442,7 @@ impl Catalog {
                 &mut txn,
                 Some((deploy_generation, reconciled)),
                 None,
+                false,
             )
             .await?;
             if before
@@ -476,6 +480,7 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         bootstrap: Option<(u64, Vec<GlobalId>)>,
         cache_build: Option<semver::Version>,
+        defer_builtin_view_optimization: bool,
     ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), CatalogError> {
         for builtin_role in BUILTIN_ROLES {
             assert!(
@@ -498,6 +503,7 @@ impl Catalog {
         let system_configuration = seed_system_vars(&config)?;
 
         let mut state = CatalogState {
+            defer_builtin_view_optimization,
             database_by_name: imbl::OrdMap::new(),
             database_by_id: imbl::OrdMap::new(),
             entry_by_id: imbl::OrdMap::new(),

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use maplit::btreemap;
 use mz_catalog::memory::error::ErrorKind;
-use mz_catalog::memory::objects::{CatalogItem, View};
+use mz_catalog::memory::objects::{CatalogItem, View, ViewLocalExpression};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -226,7 +226,7 @@ impl Coordinator {
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.locally_optimized_expr.as_inner().clone(),
+                view.optimized_expr().as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -454,7 +454,7 @@ impl Coordinator {
                     raw_dependencies: raw_expr.depends_on(),
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(typ, column_names.clone()),
-                    locally_optimized_expr: optimized_expr.into(),
+                    locally_optimized_expr: ViewLocalExpression::Optimized(optimized_expr.into()),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {

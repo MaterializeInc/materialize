@@ -14,16 +14,19 @@ birth instead of repurifying AT CREATION. Independent review, targeted controls,
 restored-code checks, lint and formatting passed. Evidence:
 `mv-refill-verification.md` and the preceding owner verification reports.
 
-**Next action:** implement the approved replica metadata-only reconstruction
-boundary. Preserve definitions, SQL types/dependencies, authority and selected
-plans while avoiding ordinary builtin-view MIR optimization. Exact storage and
-execution schemas remain required. Bring back any need for new durable metadata
-or a broader boundary. See `replica-metadata-boundary-proposal.md`.
-The schema probe confirms that substituting logical view descriptions changes
-downstream MV schemas. Selected MV plans already contain the exact descriptions,
-but those must be available before dependent sink planning, including incremental
-replay. See `replica-schema-boundary-witness.md`. Replica changes and after-change
-timings remain outstanding.
+**Next action:** check the remaining native-only removal items against current
+source, then run final-head lifecycle/progress and compatible-version acceptance.
+Scratch reauthentication is needed before further remote work and removal of the
+four completed timing runs' stopped databases/blob state. Their processes stopped,
+caps were restored, and evidence is archived locally.
+
+Replica reconstruction is verified: deferred views retain their optimizer context,
+and schema consumers restore required dependencies. Schema/cache, enforced-key
+Avro, replay, follower execution, negative controls, combined compilation and
+library lint pass. The metric fixture adaptation also passes its unchanged tests.
+Matched debug runs reduce replica startup CPU by 52% and fresh serving from 54.63
+to 50.51 seconds. Warm restart is unchanged and no RAM improvement is established.
+See `replica-metadata-verification.md` and `replica-startup-comparison.md`.
 
 The M3 scheduling cut is approved. Do not resume statement-by-statement retry
 conversions. `remaining-inline-owner-inventory.md` records deferred runtime and
@@ -35,10 +38,11 @@ M2, the 60s publication default and existing resource limits remain closed.
 
 ## Live gaps and constraints
 
-- Scratch access and clock synchronization are repaired. The replacement worker
-  has the current targeted fixture. Native binaries predate the staged SQL repairs and
-  need rebuilding for final acceptance. Completed runtimes stopped
-  and caps were restored. Keep builds off the editing VM and preserve existing caps.
+- Scratch authentication expired after the completed startup comparison. Current
+  implementation binaries are in `replica-startup-deferred/artifacts`. The shared
+  target clusterd is the full-reconstruction control and needs rebuilding before
+  use as current code. Completed runtimes stopped and restored caps. Keep builds
+  off the editing VM and preserve existing caps.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
@@ -82,12 +86,15 @@ controls verified these repairs. See the evidence pointers below.
 
 Debug timing showed whole restart at 8.155s versus 18.003s before, and promotion
 at 7.986s versus 12.736s. Shutdown and promotion-only relaunch repairs remove fixed
-waits. Fresh startup remains 54.326s versus pinned upstream's 30.271s. These are
+waits. Earlier fresh startup measured 54.326s versus pinned upstream's 30.271s. These are
 single observations with topology/readiness qualifications, not final acceptance.
 Cold profiling attributes 70.88 replica CPU-seconds to ordinary builtin-view
 optimization, with zero cold ordinary-view cache hits out of 844 decisions.
-The metadata boundary is approved but not implemented or measured after change.
-See `replica-metadata-boundary-proposal.md` for phase times and schema constraints.
+The matched reconstruction comparison now measures fresh serving at 54.63s versus
+50.51s, with replica CPU at 91.47 versus 43.75 CPU-seconds. These same-source control
+runs isolate clusterd and are not new upstream comparisons. Controller initialization
+and the adapter's own reconstruction remain on the critical path. See
+`replica-startup-comparison.md` for current phase times and limits.
 The broader launcher suite still has background panics in its image-replacement
 fixture, so it is not clean coverage of that behavior.
 
@@ -110,7 +117,7 @@ limits and the architecture-generated load assessment.
 ## Worker and evidence
 
 Worker `i-0f602658c617effda`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
-Scheduled shutdown: 2026-11-20 21:11:48 UTC. Deletion: 2026-11-20 22:08:52 UTC.
+Scheduled shutdown: 2026-11-21 01:08:33 UTC. Deletion: 2026-11-21 01:38:21 UTC.
 Recheck instance state and retention tags before restarting or extending it. Shutdown stops the instance and preserves
 its disk. Completed runtimes stopped and restored caps. Never overlap
 builds and runtimes. Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk
@@ -120,9 +127,10 @@ the user slice. Extend this owned worker within existing caps when needed.
 
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, base `6a209637` plus the verified
-TYPE, VIEW, INDEX and MV overlays. `mv-refill-restored-source-v1.json` and earlier
-source receipts identify tested code. Trust them rather than the displayed Git revision.
+`/home/ubuntu/materialize-m3-controller-followups`, with source overlays.
+`replica-build-inputs.json` verifies 3,441 tracked build inputs against the editing
+workspace. Artifact receipts distinguish the implementation and temporary control.
+Trust these receipts rather than the displayed worker Git revision.
 The previous worker's build cache and baseline worktree expired. The baseline
 remains pinned at `d9a2c5dc402fd9fa359607305669d05f27215cc4` and needs reconstruction
 before further paired runs.

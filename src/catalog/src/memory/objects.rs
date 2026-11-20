@@ -29,7 +29,7 @@ use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
@@ -1387,6 +1387,22 @@ impl Sink {
     }
 }
 
+/// A view's local expression, or the context needed to reconstruct it later.
+/// Deferral must preserve the description a full reconstruction would retain
+/// even if optimizer settings change before the first dependent item arrives.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ViewLocalExpression {
+    Optimized(Arc<OptimizedMirRelationExpr>),
+    Deferred(OptimizerFeatures),
+}
+
+impl ViewLocalExpression {
+    pub fn is_optimized(&self) -> bool {
+        matches!(self, Self::Optimized(_))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     /// Parse-able SQL that defines this view.
@@ -1398,8 +1414,9 @@ pub struct View {
     /// Direct collection dependencies of `raw_expr`, preserving collection versions.
     /// Must equal `raw_expr.depends_on()` and be replaced together with it.
     pub raw_dependencies: BTreeSet<GlobalId>,
-    /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
-    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Optimized mid-level expression. Replica reconstruction may omit it for
+    /// builtin views until a schema-dependent item needs their exact description.
+    pub locally_optimized_expr: ViewLocalExpression,
     /// Columns of this view.
     pub desc: RelationDesc,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
@@ -1411,6 +1428,16 @@ pub struct View {
 }
 
 impl View {
+    /// Returns the expression for planning, which requires full reconstruction.
+    pub fn optimized_expr(&self) -> &Arc<OptimizedMirRelationExpr> {
+        match &self.locally_optimized_expr {
+            ViewLocalExpression::Optimized(expr) => expr,
+            ViewLocalExpression::Deferred(_) => {
+                panic!("planning requires a fully reconstructed view")
+            }
+        }
+    }
+
     /// The single [`GlobalId`] this [`View`] can be referenced by.
     pub fn global_id(&self) -> GlobalId {
         self.global_id

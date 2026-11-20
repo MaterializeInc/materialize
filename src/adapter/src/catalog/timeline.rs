@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, GlobalId};
@@ -203,10 +203,8 @@ impl Catalog {
                         let on_id = state.get_entry_by_global_id(&index.on).id();
                         ids.push(on_id);
                     }
-                    CatalogItem::View(View {
-                        locally_optimized_expr: optimized_expr,
-                        ..
-                    }) => {
+                    CatalogItem::View(view) => {
+                        let optimized_expr = view.optimized_expr();
                         // If the definition contains a temporal function, the timeline must
                         // be timestamp dependent.
                         if optimized_expr.contains_temporal() {

@@ -1927,7 +1927,7 @@ async fn index_retention_protects_logical_input_eliminated_by_optimizer() {
         BTreeSet::from([live, eliminated])
     );
     assert_eq!(
-        view.locally_optimized_expr.depends_on(),
+        view.optimized_expr().depends_on(),
         BTreeSet::from([live]),
         "fixture must actually eliminate the second input"
     );

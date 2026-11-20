@@ -132,7 +132,7 @@ pub(super) async fn committed(
         .join()
         .await
         .expect("join native catalog");
-    let opened = Box::pin(Catalog::open_committed(
+    let opened = Box::pin(Catalog::open_replica(
         writer.replica_config().into_state(
             config.build_info,
             config.environment_id.clone(),

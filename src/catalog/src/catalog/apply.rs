@@ -40,7 +40,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_controller_types::clusters::{ReplicaConfig, ReplicaLogging};
-use mz_expr::MirScalarExpr;
+use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{
@@ -56,6 +56,7 @@ use mz_sql::names::{
     FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
+use mz_sql::plan::{CreateMaterializedViewPlan, CreateViewPlan, Plan, PlanContext};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
@@ -99,6 +100,74 @@ struct InProgressRetractions {
 }
 
 impl CatalogState {
+    /// Restores exact view descriptions before planning a schema-dependent item.
+    /// This is local reconstruction, not a catalog mutation or plan selection.
+    fn ensure_optimized_view_dependencies(
+        &mut self,
+        create_sql: &str,
+        local_expression_cache: &mut LocalExpressionCache,
+    ) -> Result<(), ItemError> {
+        if !self.defer_builtin_view_optimization {
+            return Ok(());
+        }
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, None, &self.for_system_session())?;
+        let mut roots: BTreeSet<_> = resolved_ids.items().copied().collect();
+        // SQL-implemented functions can introduce reads absent from name resolution.
+        let inputs = match plan {
+            Plan::CreateView(CreateViewPlan { view, .. }) => view.expr.depends_on(),
+            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+                materialized_view, ..
+            }) => materialized_view.expr.depends_on(),
+            _ => BTreeSet::new(),
+        };
+        roots.extend(inputs.iter().map(|id| self.get_entry_by_global_id(id).id()));
+        let mut pending: Vec<_> = roots.into_iter().map(|id| (id, false)).collect();
+        let mut seen = BTreeSet::new();
+        // Dependency chains are user-controlled. Use a postorder worklist rather
+        // than recursion, and replan each deferred view only once.
+        while let Some((id, ready)) = pending.pop() {
+            let entry = self.get_entry(&id);
+            let CatalogItem::View(view) = entry.item() else {
+                continue;
+            };
+            if view.locally_optimized_expr.is_optimized() {
+                continue;
+            }
+            if !ready {
+                if !seen.insert(id) {
+                    continue;
+                }
+                pending.push((id, true));
+                pending.extend(entry.uses().into_iter().map(|id| (id, false)));
+                continue;
+            }
+            let previous = entry.item().clone();
+            let previous_uses = entry.uses();
+            let global_id = view.global_id;
+            let sql = view.create_sql.clone();
+            // The definition already occupies its name. This only permits
+            // reconstructing that existing definition, not admitting new DDL.
+            let pcx = PlanContext::zero().with_ignore_if_exists_errors(true);
+            let item = self.parse_item(
+                global_id,
+                &sql,
+                &BTreeMap::new(),
+                Some(&pcx),
+                false,
+                None,
+                local_expression_cache,
+                Some(previous),
+            )?;
+            assert_eq!(
+                item.uses(),
+                previous_uses,
+                "view reconstruction changed dependencies"
+            );
+            self.entry_by_id.get_mut(&id).expect("existing view").item = item;
+        }
+        Ok(())
+    }
+
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
     /// Returns builtin table updates for initialization or an originating commit.
@@ -1207,6 +1276,14 @@ impl CatalogState {
                 // Indexes can't be versioned.
                 let versions = BTreeMap::new();
 
+                self.ensure_optimized_view_dependencies(
+                    &index.create_sql(),
+                    local_expression_cache,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("cannot reconstruct builtin dependencies: {error:?}")
+                });
+
                 let item = self
                     .parse_item(
                         global_id,
@@ -1353,6 +1430,11 @@ impl CatalogState {
 
                 // Builtin materialized views can't be versioned.
                 let versions = BTreeMap::new();
+
+                self.ensure_optimized_view_dependencies(&mv.create_sql(), local_expression_cache)
+                    .unwrap_or_else(|error| {
+                        panic!("cannot reconstruct builtin dependencies: {error:?}")
+                    });
 
                 let mut item = self
                     .parse_item(
@@ -1553,6 +1635,13 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
+                            self.ensure_optimized_view_dependencies(
+                                &create_sql,
+                                local_expression_cache,
+                            )
+                            .unwrap_or_else(|error| {
+                                panic!("cannot reconstruct item dependencies: {error:?}")
+                            });
                             let mut catalog_item = self
                                 .deserialize_item(
                                     global_id,
@@ -1598,6 +1687,13 @@ impl CatalogState {
                         retraction
                     }
                     None => {
+                        self.ensure_optimized_view_dependencies(
+                            &create_sql,
+                            local_expression_cache,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("cannot reconstruct item dependencies: {error:?}")
+                        });
                         let mut catalog_item = self
                             .deserialize_item(
                                 global_id,
@@ -2138,11 +2234,22 @@ impl CatalogState {
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
-                    let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
+                    let cached_expr = if state.defer_builtin_view_optimization {
+                        None
+                    } else {
+                        local_expression_cache.remove_cached_expression(&global_id)
+                    };
                     let handle = mz_ore::task::spawn_blocking(
                         || "parse view",
                         move || {
                             span.in_scope(|| {
+                                if task_state.defer_builtin_view_optimization {
+                                    let res = task_state
+                                        .parse_builtin_view_metadata(global_id, &create_sql)
+                                        .map(|item| (item, None))
+                                        .map_err(|err| (err, None));
+                                    return (id, global_id, res);
+                                }
                                 let res = task_state.parse_item_inner(
                                     global_id,
                                     &create_sql,

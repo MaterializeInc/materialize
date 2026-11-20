@@ -305,15 +305,12 @@ pub(crate) fn validate_read_then_write_dependencies(
             });
         };
 
-        if let CatalogItem::View(objects::View {
-            locally_optimized_expr: optimized_expr,
-            ..
-        })
-        | CatalogItem::MaterializedView(objects::MaterializedView {
-            locally_optimized_expr: optimized_expr,
-            ..
-        }) = entry.item()
-        {
+        let optimized_expr = match entry.item() {
+            CatalogItem::View(view) => Some(view.optimized_expr()),
+            CatalogItem::MaterializedView(view) => Some(&view.locally_optimized_expr),
+            _ => None,
+        };
+        if let Some(optimized_expr) = optimized_expr {
             if optimized_expr.contains_temporal() {
                 return Err(AdapterError::Unsupported(
                     "calls to mz_now in write statements",

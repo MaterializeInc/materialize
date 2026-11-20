@@ -496,6 +496,15 @@ its containing schema, without requiring `USAGE` on referenced secrets.
 
 ### The catalog is the source of truth for state that gets rebuilt from it
 
+Replica reconstruction may defer ordinary builtin-view optimization, but HIR
+descriptions are not execution schemas. Optimization can change inferred keys and
+nullability without changing scalar types. Restore the required view dependencies
+before reconstructing schema consumers, including builtin indexes and user items.
+Preserve the optimizer features captured with a deferred definition. Optimizing it
+under later settings can disagree with an already-reconstructed catalog. Cache
+validation must use those retained features too. Adapter planning still requires
+real optimized expressions, not placeholders.
+
 If a reconcile or refresh path rebuilds downstream state (for example a
 controller's per-replica configuration) from the catalog working copy, then the
 values it must preserve have to already be in that working copy. Do not leave

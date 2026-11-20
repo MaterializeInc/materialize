@@ -28,7 +28,7 @@ use crate::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    TableDataSource, Type, View, ViewLocalExpression,
 };
 use ipnet::IpNet;
 use itertools::Itertools;
@@ -107,6 +107,10 @@ use crate::optimize::{self, Optimize, infer_sql_type_for_catalog};
 /// storing the contents of this struct on disk.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
+    /// Only replica replay may defer builtin-view optimization. Before planning
+    /// any other item, its view dependencies must have exact descriptions.
+    #[serde(skip)]
+    pub(super) defer_builtin_view_optimization: bool,
     // State derived from the durable catalog. These fields should only be mutated in `open.rs` or
     // `apply.rs`. Some of these fields are not 100% derived from the durable catalog. Those
     // include:
@@ -602,6 +606,7 @@ impl CatalogState {
             maintained_input_requirements: Default::default(),
             read_protection_changes: Default::default(),
             catalog_read_protection_enabled: false,
+            defer_builtin_view_optimization: false,
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
         }
@@ -1556,6 +1561,37 @@ impl CatalogState {
         Ok((plan, resolved_ids))
     }
 
+    /// Reconstructs a builtin view's logical metadata without inventing MIR.
+    /// Its description is not suitable for planning schema-dependent items.
+    pub(super) fn parse_builtin_view_metadata(
+        &self,
+        global_id: GlobalId,
+        create_sql: &str,
+    ) -> Result<CatalogItem, ItemError> {
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, None, &self.for_system_session())?;
+        let Plan::CreateView(CreateViewPlan { view, .. }) = plan else {
+            panic!("builtin view definition must create a view");
+        };
+        let raw_dependencies = view.expr.depends_on();
+        let dependencies = raw_dependencies
+            .iter()
+            .map(|id| self.get_entry_by_global_id(id).id())
+            .collect();
+        Ok(CatalogItem::View(View {
+            create_sql: view.create_sql,
+            global_id,
+            desc: RelationDesc::new(view.expr.top_level_typ(), view.column_names),
+            raw_expr: Arc::new(view.expr),
+            raw_dependencies,
+            locally_optimized_expr: ViewLocalExpression::Deferred(
+                optimize::OptimizerConfig::from(self.system_config()).features,
+            ),
+            conn_id: None,
+            resolved_ids,
+            dependencies: DependencyIds(dependencies),
+        }))
+    }
+
     /// Restores an item from durable SQL, reusing validated transaction-local
     /// preparation only when its serialized definition matches exactly.
     pub(crate) fn deserialize_item(
@@ -1834,10 +1870,22 @@ impl CatalogState {
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 // Collect optimizer parameters.
-                let optimizer_config =
+                let mut optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
+                if let Some(CatalogItem::View(previous)) = &previous_item
+                    && previous.create_sql == create_sql
+                    && let ViewLocalExpression::Deferred(features) =
+                        &previous.locally_optimized_expr
+                {
+                    // Complete the original reconstruction, rather than changing
+                    // a retained definition's schema at its first use.
+                    optimizer_config.features = features.clone();
+                }
                 let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::View(view) => Some((view.raw_expr, view.locally_optimized_expr)),
+                    CatalogItem::View(view) => match view.locally_optimized_expr {
+                        ViewLocalExpression::Optimized(expr) => Some((view.raw_expr, expr)),
+                        ViewLocalExpression::Deferred(_) => None,
+                    },
                     _ => None,
                 });
 
@@ -1884,7 +1932,7 @@ impl CatalogState {
                     raw_expr,
                     raw_dependencies,
                     desc: RelationDesc::new(typ, view.column_names),
-                    locally_optimized_expr: optimized_expr,
+                    locally_optimized_expr: ViewLocalExpression::Optimized(optimized_expr),
                     conn_id: None,
                     resolved_ids,
                     dependencies: DependencyIds(dependencies),

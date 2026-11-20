@@ -310,13 +310,21 @@ avoid first-start misses. The adapter's disabled-cache publisher still checks
 handle presence rather than best-effort enablement, although native plan storage
 retains a handle. That adjacent cleanup is not part of the controller repair.
 
-Current lifecycle, DDL and subscription evidence shows one intentional candidate
+Replica reconstruction now defers ordinary builtin views outside schema-consuming
+dependency closures. A matched debug comparison reduces four-replica startup CPU
+from 91.47 to 43.75 CPU-seconds and fresh serving from 54.63 to 50.51 seconds.
+Warm whole-native restart remains about 8.19 seconds, and no RAM improvement is
+established. Controller initialization and the adapter's full reconstruction remain
+on the fresh-start path. Cross-executable cache reuse still requires a compatibility
+decision, not weaker namespace validation. See `replica-startup-comparison.md` for
+phase measurements, resource limits and evidence. No further optimization is included.
+
+Lifecycle, DDL and subscription evidence identifies one intentional candidate
 adapter restart at promotion, not two. The later clean DDL exit belongs to the
-retired predecessor. The process backend adds its fixed five-second relaunch
-delay to the expected candidate restart. Exit code 166 is also used for recovery
-from errors, so it alone cannot justify bypassing crash-loop backoff. Preserve
-per-process identity and reason when measuring this cost. See
-`current-promotion-adapter-exits.md`.
+retired predecessor. Planned promotion now uses exit code 168 and relaunches
+immediately. Recovery exits retain the five-second backoff. Preserve per-process
+identity and reason when measuring this cost. See `current-promotion-adapter-exits.md`
+and `startup-readiness-comparison.md`.
 
 ## Metadata-only identities after execution retirement
 

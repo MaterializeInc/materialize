@@ -1370,7 +1370,7 @@ impl Catalog {
                         exprs.insert(
                             view.global_id,
                             LocalExpressions {
-                                local_mir: (*view.locally_optimized_expr).clone(),
+                                local_mir: view.optimized_expr().as_ref().clone(),
                                 optimizer_features: optimizer_features.clone(),
                                 item_version: RelationVersion::root(),
                             },

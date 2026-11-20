@@ -1951,7 +1951,7 @@ async fn deployment_authority_filters_observations() {
             let CatalogItem::View(view) = item else {
                 panic!("expected view");
             };
-            let expr = view.locally_optimized_expr.as_inner();
+            let expr = view.optimized_expr().as_inner();
             let MirRelationExpr::Constant { rows, .. } = expr else {
                 panic!("literal observation filter did not evaluate: {expr:?}");
             };
@@ -3609,4 +3609,253 @@ async fn test_adapter_runtime_publication() {
     assert_eq!(reopened.state().get_adapter_runtime(id, generation), None);
     reopened.expire().await;
     catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn replica_reconstruction_preserves_schema_consumers() {
+    Catalog::with_debug(|catalog| async move {
+        let reader = catalog
+            .open_diagnostic_reader()
+            .await
+            .expect("diagnostic reader");
+        let input = reader
+            .into_snapshot_at(catalog.current_upper().await)
+            .await
+            .expect("committed snapshot");
+        let replica = Catalog::reconstruct_state_and_updates(
+            Catalog::diagnostic_state_config(&catalog.diagnostic_config),
+            input,
+            None,
+            true,
+        )
+        .await
+        .expect("replica reconstruction")
+        .state;
+        let mut deferred = 0;
+        let mut optimized = 0;
+        for (id, expected) in &catalog.state().entry_by_id {
+            let actual = replica.get_entry(id);
+            if let CatalogItem::View(view) = actual.item()
+                && !view.locally_optimized_expr.is_optimized()
+            {
+                deferred += 1;
+                let CatalogItem::View(full) = expected.item() else {
+                    panic!("view kind changed");
+                };
+                assert!(full.locally_optimized_expr.is_optimized());
+                assert_eq!(view.create_sql, full.create_sql);
+                assert_eq!(view.raw_dependencies, full.raw_dependencies);
+                assert_eq!(view.resolved_ids, full.resolved_ids);
+                assert_eq!(actual.uses(), expected.uses());
+                assert_eq!(
+                    view.desc
+                        .iter()
+                        .map(|(name, typ)| (name, &typ.scalar_type))
+                        .collect::<Vec<_>>(),
+                    full.desc
+                        .iter()
+                        .map(|(name, typ)| (name, &typ.scalar_type))
+                        .collect::<Vec<_>>()
+                );
+            } else {
+                if matches!(actual.item(), CatalogItem::View(_)) {
+                    optimized += 1;
+                }
+                assert_eq!(
+                    serde_json::to_value(actual.item()).expect("replica item"),
+                    serde_json::to_value(expected.item()).expect("full item"),
+                    "schema consumer {}",
+                    expected.name().item,
+                );
+                for dependency in actual.uses() {
+                    if let CatalogItem::View(view) = replica.get_entry(&dependency).item() {
+                        assert!(
+                            view.locally_optimized_expr.is_optimized(),
+                            "unoptimized dependency of {}",
+                            actual.name().item
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            deferred > 0,
+            "replicas must avoid unused builtin-view optimization"
+        );
+        assert!(
+            optimized > 0,
+            "schema consumers must retain exact descriptions"
+        );
+    })
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn replica_reconstruction_preserves_late_sink_schema() {
+    use crate::durable::TestCatalogStateBuilder;
+
+    Catalog::with_debug(|mut writer| async move {
+        // Read-only following observes this diagnostic catalog without granting
+        // native execution admission. No connector or dataflow is executed here.
+        let storage = TestCatalogStateBuilder::new(writer.diagnostic_config.persist_client.clone())
+            .with_organization_id(writer.config().environment_id.organization_id())
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open_read_only(&test_bootstrap_args())
+            .await
+            .expect("diagnostic follower");
+        let mut replica = Catalog::open_replica(
+            Catalog::diagnostic_state_config(&writer.diagnostic_config), storage, None,
+        ).await.expect("replica projection").catalog;
+        for name in ["pg_tables", "mz_compute_error_counts_per_worker"] {
+            let id = writer.entries().find(|entry| entry.name().item == name)
+                .expect("schema builtin").id();
+            let CatalogItem::View(view) = replica.get_entry(&id).item() else {
+                panic!("expected builtin view");
+            };
+            assert!(!view.locally_optimized_expr.is_optimized(), "exercise late restoration of {name}");
+        }
+
+        // The full catalog retains descriptors reconstructed before a setting
+        // changes. Deferred reconstruction must not silently choose new ones.
+        let ts = writer.current_upper().await;
+        writer.transact(None, None, ts, None, vec![
+            // Introspection dependencies are an explicit supported opt-in.
+            Op::UpdateSystemConfiguration {
+                name: "unsafe_enable_unstable_dependencies".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat("true".into()),
+            },
+            Op::UpdateSystemConfiguration {
+                name: "enable_letrec_fixpoint_analysis".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat("false".into()),
+            },
+        ]).await.expect("change optimizer configuration");
+        replica.sync_to_current_updates().await.expect("follow configuration");
+
+        // Cache eligibility belongs to the deferred definition's original
+        // context, not the setting in force when reconstruction finally runs.
+        {
+            use crate::expr_cache::LocalExpressions;
+            use crate::memory::objects::ViewLocalExpression;
+            let entry = writer.entries().find(|entry| entry.name().item == "mz_compute_error_counts_per_worker")
+                .expect("recursive builtin");
+            let CatalogItem::View(full) = entry.item() else { panic!("expected view") };
+            let deferred = replica.get_entry(&entry.id()).item().clone();
+            let CatalogItem::View(metadata) = &deferred else { panic!("expected view") };
+            let ViewLocalExpression::Deferred(features) = &metadata.locally_optimized_expr else {
+                panic!("configuration witness must still be deferred");
+            };
+            let pcx = mz_sql::plan::PlanContext::zero().with_ignore_if_exists_errors(true);
+            let mut parsing_state = writer.state().clone();
+            let mut parse = |cached, previous| parsing_state.with_enable_for_item_parsing(|state| {
+                state.parse_item_inner(
+                    full.global_id, &full.create_sql, &BTreeMap::new(), Some(&pcx), false, None,
+                    cached, previous,
+                )
+            });
+            let (current, uncached) = parse(None, None).expect("optimize under current settings");
+            let (local_mir, current_features) = uncached.expect("fresh optimization");
+            assert_ne!(&current_features, features);
+            let CatalogItem::View(current) = current else { panic!("expected view") };
+            assert_ne!(current.desc, full.desc, "fixture must expose configuration-dependent typing");
+            let matching = LocalExpressions {
+                local_mir: full.optimized_expr().as_ref().clone(),
+                optimizer_features: features.clone(),
+                item_version: mz_repr::RelationVersion::root(),
+            };
+            let mismatching = LocalExpressions {
+                local_mir,
+                optimizer_features: current_features,
+                item_version: mz_repr::RelationVersion::root(),
+            };
+            for (cached, hit) in [(matching, true), (mismatching, false)] {
+                let (restored, uncached) = parse(Some(cached), Some(deferred.clone()))
+                    .expect("restore original context");
+                let CatalogItem::View(restored) = restored else { panic!("expected view") };
+                assert_eq!(restored.desc, full.desc);
+                assert_eq!(uncached.is_none(), hit, "cache feature validation");
+            }
+        }
+
+        // DISTINCT over a nonconstant input supplies a real key. The sink must
+        // still preserve tableowner's optimizer-inferred nullability.
+        let definitions = [
+            ("error_schema_view", "CREATE VIEW materialize.public.error_schema_view AS SELECT worker_id, count FROM mz_introspection.mz_compute_error_counts_per_worker"),
+            ("schema_view", "CREATE VIEW materialize.public.schema_view AS SELECT schemaname AS schema_name, tablename AS name, tableowner AS owner FROM pg_catalog.pg_tables"),
+            ("schema_mv", "CREATE MATERIALIZED VIEW materialize.public.schema_mv IN CLUSTER quickstart AS SELECT DISTINCT schema_name, name, owner FROM materialize.public.schema_view"),
+            ("schema_function_view", "CREATE VIEW materialize.public.schema_function_view AS SELECT pg_catalog.pg_get_indexdef(0::oid) AS index_definition"),
+            ("schema_kafka", "CREATE CONNECTION materialize.public.schema_kafka TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT)"),
+            ("schema_csr", "CREATE CONNECTION materialize.public.schema_csr TO CONFLUENT SCHEMA REGISTRY (URL 'http://localhost:8081')"),
+            ("schema_sink", "CREATE SINK materialize.public.schema_sink IN CLUSTER quickstart FROM materialize.public.schema_mv INTO KAFKA CONNECTION materialize.public.schema_kafka (TOPIC 'replica-schema') KEY (schema_name, name, owner) FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.schema_csr ENVELOPE UPSERT"),
+        ];
+        let mut ids = Vec::new();
+        for (name, sql) in definitions {
+            let (id, global_id) = writer.allocate_user_id_for_test().await.expect("item ids");
+            let item = writer.state().deserialize_item(
+                global_id, sql, &BTreeMap::new(), &mut LocalExpressionCache::Closed, None,
+            ).expect("parse schema fixture");
+            let ts = writer.current_upper().await;
+            writer.transact(None, None, ts, None, vec![Op::CreateItem {
+                id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                        schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
+                    },
+                    item: name.into(),
+                },
+                item,
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            }]).await.expect("commit schema fixture");
+            ids.push(id);
+            replica.sync_to_current_updates().await.expect("incremental replica replay");
+            assert_eq!(
+                serde_json::to_value(replica.get_entry(&id).item()).expect("replica item"),
+                serde_json::to_value(writer.get_entry(&id).item()).expect("writer item"),
+                "incremental {name}",
+            );
+        }
+        let sink_id = *ids.last().expect("sink");
+        let CatalogItem::Sink(expected) = writer.get_entry(&sink_id).item() else {
+            panic!("expected sink");
+        };
+        let CatalogItem::Sink(actual) = replica.get_entry(&sink_id).item() else {
+            panic!("expected sink");
+        };
+        assert_eq!(
+            replica.state().storage_sink_description(actual, timely::progress::Antichain::from_elem(Timestamp::MIN)),
+            writer.state().storage_sink_description(expected, timely::progress::Antichain::from_elem(Timestamp::MIN)),
+        );
+        // Follow several commits at once, including rewritten dependent SQL.
+        let view_id = ids[1];
+        for to_name in ["schema_view_renamed", "schema_view_renamed_again"] {
+            let current_full_name = writer.resolve_full_name(writer.get_entry(&view_id).name(), None);
+            let ts = writer.current_upper().await;
+            writer.transact(None, None, ts, None, vec![Op::RenameItem {
+                id: view_id,
+                current_full_name,
+                to_name: to_name.into(),
+            }]).await.expect("rename schema input");
+        }
+        let updates = replica.sync_to_current_updates().await.expect("follow rename prefix");
+        assert!(updates.iter().map(|update| update.ts).collect::<BTreeSet<_>>().len() >= 2);
+        for id in &ids {
+            assert_eq!(
+                serde_json::to_value(replica.get_entry(id)).expect("replica entry"),
+                serde_json::to_value(writer.get_entry(id)).expect("writer entry"),
+                "renamed schema consumer {id}",
+            );
+        }
+        let ts = writer.current_upper().await;
+        let drops = ids.iter().rev().map(|id| crate::catalog::DropObjectInfo::Item(*id)).collect();
+        writer.transact(None, None, ts, None, vec![Op::DropObjects(drops)])
+            .await.expect("drop schema consumers");
+        replica.sync_to_current_updates().await.expect("follow schema drops");
+        for id in &ids {
+            assert!(writer.try_get_entry(id).is_none());
+            assert!(replica.try_get_entry(id).is_none());
+        }
+        replica.expire().await;
+    }).await;
 }
