@@ -6419,9 +6419,10 @@ def _hydra_verify(tls: HydraTls | None) -> str | bool:
 
 
 def _hydra_manifests(tls: HydraTls | None) -> list[dict[str, Any]]:
-    # `hydra serve all --dev` serves plain HTTP when no certificate is
-    # configured. With `serve.tls`, the public and admin endpoints both serve
-    # that certificate.
+    # NOTE: Hydra serves plain HTTP unless `serve.tls.enabled` is set. The
+    # certificate paths alone do not enable TLS (`driver/config/tls.go` in
+    # Hydra v2.2.0). With `serve.tls`, the public and admin endpoints both
+    # serve that certificate.
     # `secrets.system` must be >= 16 bytes; `dsn: memory` keeps everything
     # in-memory so no separate database is needed for the test.
     config: dict[str, Any] = {
@@ -6456,6 +6457,7 @@ def _hydra_manifests(tls: HydraTls | None) -> list[dict[str, Any]]:
     if tls:
         config["serve"] = {
             "tls": {
+                "enabled": True,
                 "cert": {"path": f"{OIDC_HYDRA_TLS_DIR}/tls.crt"},
                 "key": {"path": f"{OIDC_HYDRA_TLS_DIR}/tls.key"},
             }
