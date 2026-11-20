@@ -1754,7 +1754,7 @@ impl Coordinator {
 
     pub(crate) fn validate_resource_limit<F>(
         &self,
-        current_amount: usize,
+        current_amount: impl FnOnce() -> usize,
         new_instances: i64,
         resource_limit: F,
         resource_type: &str,
@@ -1774,7 +1774,7 @@ impl Coordinator {
 
     pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
-        current_amount: Numeric,
+        current_amount: impl FnOnce() -> Numeric,
         new_amount: Numeric,
         resource_limit: F,
         resource_type: &str,

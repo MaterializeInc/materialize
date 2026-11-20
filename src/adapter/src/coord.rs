@@ -2338,7 +2338,7 @@ impl Coordinator {
         );
         if enforce_credit_limit_at_bootstrap {
             self.validate_resource_limit_numeric(
-                Numeric::zero(),
+                Numeric::zero,
                 self.current_credit_consumption_rate(None),
                 |system_vars| {
                     self.license_key

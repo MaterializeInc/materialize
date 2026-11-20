@@ -1695,19 +1695,15 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
-        // Durable metadata can outlive its collection. Reconcile it with live
-        // collection state so orphaned mappings do not block finalization.
-        let mut active_collection_ids: BTreeSet<_> = {
-            let collections = self.collections.lock().expect("poisoned");
-            collections
+        let new_ids = if ids_to_drop.is_empty() {
+            Vec::new()
+        } else {
+            ids_to_add
                 .iter()
-                .filter_map(|(id, collection)| {
-                    (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
-                })
+                .chain(ids_to_register.keys())
+                .copied()
                 .collect()
         };
-        active_collection_ids.extend(ids_to_add.iter().copied());
-        active_collection_ids.extend(ids_to_register.keys().copied());
 
         txn.insert_collection_metadata(
             ids_to_add
@@ -1717,34 +1713,41 @@ impl StorageCollections for StorageCollectionsImpl {
         )?;
         txn.insert_collection_metadata(ids_to_register)?;
 
-        // Delete the metadata for any dropped collections.
         let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
-
-        // Only finalize the shards of dropped collections that don't have a primary.
-        // Otherwise the shard might still be in use by the primary.
-        let mut dropped_shards = BTreeSet::new();
-        {
+        if !dropped_mappings.is_empty() {
             let collections = self.collections.lock().expect("poisoned");
-            for (id, shard) in dropped_mappings {
-                let coll = collections.get(&id).expect("must exist");
-                if coll.primary.is_none() {
-                    dropped_shards.insert(shard);
+            // Only finalize shards whose dropped collection has no primary.
+            let dropped_shards: BTreeSet<_> = dropped_mappings
+                .into_iter()
+                .filter_map(|(id, shard)| {
+                    let collection = collections.get(&id).expect("must exist");
+                    collection.primary.is_none().then_some(shard)
+                })
+                .collect();
+
+            if !dropped_shards.is_empty() {
+                // Durable metadata can outlive a collection. Check references from
+                // live collections and collections created in this transaction.
+                let active_collection_ids = collections
+                    .iter()
+                    .filter_map(|(id, collection)| (!collection.is_dropped()).then_some(*id))
+                    .chain(new_ids)
+                    .collect();
+                drop(collections);
+                let (referenced_shards, dropped_shards) = partition_finalizable_shards(
+                    txn.get_collection_metadata(),
+                    &active_collection_ids,
+                    dropped_shards,
+                );
+                if !referenced_shards.is_empty() {
+                    mz_ore::soft_panic_or_log!(
+                        "dropped collections would finalize shards that active collections still use: \
+                         {referenced_shards:?}"
+                    );
                 }
+                txn.insert_unfinalized_shards(dropped_shards)?;
             }
         }
-        let remaining_metadata = txn.get_collection_metadata();
-        let (referenced_shards, dropped_shards) = partition_finalizable_shards(
-            remaining_metadata,
-            &active_collection_ids,
-            dropped_shards,
-        );
-        if !referenced_shards.is_empty() {
-            mz_ore::soft_panic_or_log!(
-                "dropped collections would finalize shards that active collections still use: \
-                 {referenced_shards:?}"
-            );
-        }
-        txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
