@@ -97,7 +97,7 @@ def get_pipeline_default_branch(fallback: str = "main"):
     return get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_DEFAULT_BRANCH, fallback)
 
 
-def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
+def get_merge_base(url: str | None = None) -> str:
     base_branch = get_pull_request_base_branch() or get_pipeline_default_branch()
     merge_base = git.get_common_ancestor_commit(
         remote=git.get_remote(url), branch=base_branch

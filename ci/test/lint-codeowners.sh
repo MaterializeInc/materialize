@@ -11,13 +11,15 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 auth=()
 if [[ "${GITHUB_TOKEN:-}" ]]; then
     auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
 fi
 
 errors=$(curl -fsSL "${auth[@]}" \
-    "https://api.github.com/repos/MaterializeInc/materialize/codeowners/errors?ref=${BUILDKITE_COMMIT:-main}" \
+    "https://api.github.com/repos/$(github_repo)/codeowners/errors?ref=${BUILDKITE_COMMIT:-main}" \
     | jq -r '.errors[].message')
 
 if [[ "$errors" ]]; then

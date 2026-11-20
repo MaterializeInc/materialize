@@ -45,7 +45,7 @@ hugo deploy --config config.toml,config.deployment.toml --force
 curl -fsSL \
     -H "Authorization: Bearer $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json" \
-    "https://api.github.com/repos/MaterializeInc/materialize/statuses/$BUILDKITE_COMMIT" \
+    "https://api.github.com/repos/$(github_repo)/statuses/$BUILDKITE_COMMIT" \
     --data "{\
         \"state\": \"success\",\
         \"description\": \"Deploy preview ready.\",\

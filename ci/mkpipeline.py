@@ -39,7 +39,7 @@ from typing import Any
 import requests
 import yaml
 
-from materialize import mzbuild, spawn, ui
+from materialize import git, mzbuild, spawn, ui
 from materialize.buildkite_insights.buildkite_api import generic_api
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
@@ -95,6 +95,9 @@ def post_ci_trigger_status() -> None:
     """Post a GitHub commit status linking to the CI trigger page for PRs."""
     if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
         return
+    # The trigger page resolves PR numbers in this repository only.
+    if git.get_github_repo().lower() != git.DEFAULT_GITHUB_REPO.lower():
+        return
     pr_number = os.environ["BUILDKITE_PULL_REQUEST"]
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
@@ -106,7 +109,7 @@ def post_ci_trigger_status() -> None:
         return
     try:
         resp = requests.post(
-            f"https://api.github.com/repos/MaterializeInc/materialize/statuses/{commit}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/statuses/{commit}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github.v3+json",
@@ -138,7 +141,7 @@ def get_pull_request_labels() -> set[str]:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         resp = requests.get(
-            f"https://api.github.com/repos/MaterializeInc/materialize/pulls/{pr}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/pulls/{pr}",
             headers=headers,
             timeout=30,
         )
@@ -1390,7 +1393,7 @@ def _changed_files_from_main() -> set[str]:
             headers["Authorization"] = f"Bearer {token}"
 
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/compare/main...{head}",
             headers=headers,
         )
         resp.raise_for_status()

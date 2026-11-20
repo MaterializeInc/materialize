@@ -33,7 +33,7 @@ printf "+++ Console preview: \033]1339;url='https://%s'\a\n" "$alias_url"
 curl -fsSL \
     -H "Authorization: Bearer $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json" \
-    "https://api.github.com/repos/MaterializeInc/materialize/statuses/$BUILDKITE_COMMIT" \
+    "https://api.github.com/repos/$(github_repo)/statuses/$BUILDKITE_COMMIT" \
     --data "{\
         \"state\": \"success\",\
         \"description\": \"Console preview ready.\",\
