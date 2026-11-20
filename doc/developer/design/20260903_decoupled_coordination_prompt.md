@@ -101,6 +101,18 @@ Ordinary contention must not halt a process or fail startup. Fix the surveyed
 sites at their existing boundaries without a general retry framework, and keep
 the ordering guarantees each conditional write provides.
 
+The M3 retry cut is now explicit: finish the in-progress MV allocation repair,
+then defer further statement-by-statement scheduling conversions. Remaining
+runtime and startup retry limitations must stay visible. This narrows the
+blanket responsiveness requirement, not write safety, native-only removal or
+final acceptance. Do not claim the remaining inline owners are cooperative.
+
+Proceed with the approved replica metadata-only reconstruction boundary without
+waiting on those deferred conversions. Preserve exact storage and execution
+schemas, real SQL types/dependencies, selected plans and fencing. Do not insert
+fake MIR or assume declared and inferred descriptions are equivalent. Bring back
+any need for new durable metadata or a broader boundary before implementing it.
+
 KafkaSources acceptance uses optimized builds with `--actions=10000
 --max-execution-time=20m` and a 60-minute job timeout, preserving the agreed CPU
 and memory limits. Run the pinned upstream base once with the same optimized

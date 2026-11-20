@@ -709,3 +709,25 @@ record. Unlike upstream's sticky running-sink selection, introducing a lower-ID
 eligible replica can change the selected execution. Do not retain placement only
 locally: different replicas could then select competing sink writers. Revisit
 stickiness separately if this handover cost warrants shared placement metadata.
+
+
+## Deferred inline retry ownership after the M3 cut
+
+M3 retains the completed staged owners and finishes MV allocation. Further
+scheduling conversions are deferred, not considered solved by acceptance tests.
+The current source inventory is in
+~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/remaining-inline-owner-inventory.md.
+
+Remaining families include plain catalog DDL, transaction-aware table/source
+changes, external connection/secret/sink completion, cluster operations and
+preallocation, system configuration, disconnect cleanup, fixed-birth MV and
+metric-sink commits, missing read grants, and direct/shared plan publication.
+Some startup loops also remain. Under sustained contention these can still stall
+their owning loop. Preserve their existing write, compensation, protection and
+acknowledgement guarantees when converting them.
+
+A shared pending-publication step can improve existing staged callers, but does
+not replace completion ownership for the other families. A blanket bounded error
+return or asynchronous success acknowledgement is not an approved shortcut.
+The replica metadata boundary and final native acceptance are not deferred by
+this scheduling cut.
