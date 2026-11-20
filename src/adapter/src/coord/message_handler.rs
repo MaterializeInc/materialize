@@ -341,7 +341,26 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::CreateViewStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                // Only these Ready messages follow backoff that released DDL
+                // admission. EXPLAIN shares allocation but does not acquire it.
+                if matches!(
+                    &stage,
+                    super::CreateViewStage::Commit(_)
+                        | super::CreateViewStage::Optimize(super::CreateViewOptimize {
+                            explain_ctx: super::ExplainContext::None,
+                            ..
+                        })
+                ) {
+                    self.defer_catalog_retry(
+                        ctx,
+                        super::PlanStatement::CreateView {
+                            stage: Box::new(stage),
+                            span,
+                        },
+                    );
+                } else {
+                    self.sequence_staged(ctx, span, stage).boxed_local().await;
+                }
             }
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
                 // Commit Ready messages only come from backoff that released admission.

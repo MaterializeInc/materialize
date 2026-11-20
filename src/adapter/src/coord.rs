@@ -901,12 +901,14 @@ pub struct CreateMetricSinkFinish {
 pub enum CreateViewStage {
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
+    Commit(CreateViewCommit),
     Explain(CreateViewExplain),
 }
 
 #[derive(Debug)]
 pub struct CreateViewOptimize {
     validity: PlanValidity,
+    planning_revision: u64,
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
@@ -917,6 +919,7 @@ pub struct CreateViewOptimize {
 #[derive(Debug)]
 pub struct CreateViewFinish {
     validity: PlanValidity,
+    planning_revision: u64,
     /// ID of this item in the Catalog.
     item_id: CatalogItemId,
     /// ID by with Compute will reference this View.
@@ -925,6 +928,16 @@ pub struct CreateViewFinish {
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct CreateViewCommit {
+    validity: PlanValidity,
+    planning_revision: u64,
+    ops: Vec<crate::catalog::Op>,
+    prepared: Option<ddl::CatalogTransactionState>,
+    item_name: String,
+    if_not_exists: bool,
 }
 
 #[derive(Debug)]
@@ -6149,6 +6162,10 @@ enum PlanStatement {
     },
     CreateIndex {
         stage: Box<CreateIndexStage>,
+        span: Span,
+    },
+    CreateView {
+        stage: Box<CreateViewStage>,
         span: Span,
     },
     CreateMaterializedView {

@@ -4331,6 +4331,9 @@ impl Coordinator {
             crate::coord::PlanStatement::CreateIndex { stage, span } => {
                 self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
+            crate::coord::PlanStatement::CreateView { stage, span } => {
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
+            }
             crate::coord::PlanStatement::CreateMaterializedView { stage, span } => {
                 self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }

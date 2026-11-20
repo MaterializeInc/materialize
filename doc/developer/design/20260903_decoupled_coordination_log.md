@@ -7,24 +7,19 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Login and network-policy writes now release the coordinator during metadata
-contention while retaining preparation. Targeted peer-contention regressions pass
-and fail with the former inline paths restored. Authentication, session cleanup
-and network-policy protection remain intact. A structural policy conflict retains
-its existing serialization error, not transparent SQL replanning. Review and
-targeted lint passed. See `startup-retry-verification.md` and
-`network-policy-verification.md` for evidence and limitations.
+Login, network-policy, TYPE and VIEW writes now yield during peer contention
+while retaining preparation in their existing owners. Targeted negative controls
+and restored-code checks pass. Structural validation, authentication and terminal
+notices remain intact. VIEW also preserves EXPLAIN's read-only transaction and
+no-DDL-admission behavior. Reviews, scoped lint and formatting passed. Evidence:
+`startup-retry-verification.md`, `network-policy-verification.md`,
+`type-verification.md` and `view-verification.md`.
 
-CREATE TYPE now retains preparation while yielding during both shared ID-pool
-refill and final-write contention. Peer-contention tests fail with each former
-inline path and pass with the repair. A committed reservation cannot certify a
-type plan invalidated by peer DDL. Review, targeted Clippy and formatting passed.
-See `type-verification.md` for evidence and remaining coverage limits.
-
-**Next action:** convert CREATE VIEW's inline refill and final write through its
-existing staged owner. Preserve replacement validation, IF NOT EXISTS notices
-and EXPLAIN's admission behavior. See `create-view-retry-owner-audit.md`.
-Other ID-pool callers remain explicit. Testing failpoints are approved.
+**Next action:** convert CREATE INDEX's remaining inline pool refill through
+Optimize. Preserve the original planning revision through Finish/Commit and take
+the compute snapshot only after allocation catch-up. Keep transient EXPLAIN
+unchanged. See `index-mv-refill-owner-audit.md`. MV's fixed-birth protection and
+inline final commit remain separate pending work. Testing failpoints are approved.
 
 Run final-head native acceptance and the compatible version-pair walkthrough after
 the retry work, not after each small change.
@@ -36,11 +31,14 @@ publication cadence, readiness intervals or resource limits.
 ## Live gaps and constraints
 
 - Scratch access and clock synchronization are repaired. The replacement worker
-  has current debug binaries and the targeted fixture. Completed runtimes stopped
+  has the current targeted fixture. Native binaries predate the VIEW repair and\n  need rebuilding for final acceptance. Completed runtimes stopped
   and caps were restored. Keep builds off the editing VM and preserve existing caps.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
+- Plan publication still contains an unprotected-environment alternative and a
+  coordinator await. Audit native admission and test consumers before removing
+  it. This remains native-only cleanup work, not part of the pool-refill change.
 - SQL owners with separate completion effects remain in the conditional-write
   retry survey. No finite overall login retry limit or strict/fail-open
   authentication policy change is approved.
@@ -111,7 +109,8 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `6a209637` plus the verified
-TYPE repair. `type-replacement-source.sha256` matches the local source.
+TYPE and VIEW overlays. `view-restored-source-v2.json` and earlier source
+receipts identify tested code. Trust them rather than the displayed Git revision.
 The previous worker's build cache and baseline worktree expired. The baseline
 remains pinned at `d9a2c5dc402fd9fa359607305669d05f27215cc4` and needs reconstruction
 before further paired runs.

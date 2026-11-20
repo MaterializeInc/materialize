@@ -25,7 +25,7 @@ use mz_catalog::durable::{
 };
 use mz_environmentd::test_util;
 use mz_ore::retry::Retry;
-use mz_postgres_util::{batch_execute, query_one, sql};
+use mz_postgres_util::{Sql, batch_execute, query_one, sql};
 
 const FAILPOINT: &str = "group_commit_before_apply_write";
 
@@ -265,6 +265,77 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
             ("manual_group".into(), "mz_system".into()),
         ]
     );
+    for statement in [
+        sql!("CREATE VIEW retry_view AS SELECT 17 AS n"),
+        sql!("CREATE OR REPLACE VIEW retry_view AS SELECT 19 AS n"),
+    ] {
+        complete_under_catalog_contention(
+            server,
+            &mut *peer,
+            CatalogConflict::Progress,
+            "view commit",
+            batch_execute(&admin, statement),
+        )
+        .await
+        .unwrap();
+    }
+    batch_execute(
+        &admin,
+        sql!("CREATE VIEW IF NOT EXISTS retry_view AS SELECT 99 AS n"),
+    )
+    .await
+    .unwrap();
+    let value: i32 = query_one(&admin, sql!("SELECT n FROM retry_view"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(value, 19);
+
+    complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::IdAllocation,
+        "view ID pool refill",
+        batch_execute(&admin, sql!("CREATE VIEW refill_view AS SELECT 23 AS n")),
+    )
+    .await
+    .unwrap();
+    let value: i32 = query_one(&admin, sql!("SELECT n FROM refill_view"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(value, 23);
+
+    batch_execute(&admin, sql!("BEGIN READ ONLY"))
+        .await
+        .unwrap();
+    let explanation = complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::IdAllocation,
+        "EXPLAIN ID pool refill",
+        query_one(
+            &admin,
+            sql!("EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW explained_view AS SELECT 31 AS n"),
+            &[],
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(explanation.get::<_, String>(0).contains("Constant"));
+    batch_execute(&admin, sql!("COMMIT")).await.unwrap();
+    peer.sync_to_current_updates().await.unwrap();
+    assert!(
+        !peer
+            .snapshot()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|(key, value)| Item::from_key_value(key, value))
+            .any(|item| item.name == "explained_view")
+    );
+
     complete_under_catalog_contention(
         server,
         &mut *peer,
@@ -300,84 +371,28 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
         .get(0);
     assert_eq!(value, 10);
 
-    // A committed ID reservation does not certify the previously selected type.
-    // Follow peer DDL before constructing the final catalog candidate.
-    let type_id = query_one(
+    reject_stale_definition_after_refill(
         &admin,
-        sql!("SELECT id FROM mz_types WHERE name = 'refill_list'"),
-        &[],
+        &mut *peer,
+        "refill_list",
+        "stale_list",
+        sql!("CREATE TYPE stale_list AS LIST (ELEMENT TYPE = refill_list)"),
+    )
+    .await;
+    batch_execute(
+        &admin,
+        sql!("CREATE TYPE view_input_list AS LIST (ELEMENT TYPE = int)"),
     )
     .await
-    .unwrap()
-    .get::<_, String>(0)
-    .parse()
     .unwrap();
-    let hook = RemoveCatalogHook("user_id_pool_after_refill");
-    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
-    let (resume_tx, resume_rx) = mpsc::channel();
-    let rendezvous = Mutex::new(Some((parked_tx, resume_rx)));
-    fail::cfg_callback(hook.0, move || {
-        let Some((parked, resume)) = rendezvous.lock().unwrap().take() else {
-            return;
-        };
-        tokio::task::block_in_place(|| {
-            let _ = parked.send(());
-            let _ = resume.recv_timeout(Duration::from_secs(180));
-        });
-    })
-    .unwrap();
-    let release = ReleaseCandidate(resume_tx);
-    let drop_type = async {
-        parked_rx.await.expect("TYPE committed its pool refill");
-        loop {
-            peer.sync_to_current_updates().await.unwrap();
-            let mut txn = match peer.transaction().await {
-                Ok(txn) => txn,
-                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                }
-                Err(error) => panic!("open peer type drop: {error}"),
-            };
-            // This standalone type has no comments, plans or durable dependents.
-            txn.remove_item(type_id).unwrap();
-            let ts = txn.upper();
-            let _ = txn.get_and_commit_op_updates();
-            match txn.commit(ts).await {
-                Ok(()) => break,
-                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(error) => panic!("peer type drop: {error}"),
-            }
-        }
-        drop(release);
-    };
-    let creation = batch_execute(
+    reject_stale_definition_after_refill(
         &admin,
-        sql!("CREATE TYPE stale_list AS LIST (ELEMENT TYPE = refill_list)"),
-    );
-    let ((), result) = tokio::join!(drop_type, creation);
-    drop(hook);
-    let error = result.expect_err("allocation must not recertify a stale type plan");
-    let mz_postgres_util::PostgresError::Postgres(error) = error else {
-        panic!("expected SQL rejection, got {error:?}");
-    };
-    assert_eq!(
-        error.as_db_error().unwrap().message(),
-        "type \"refill_list\" does not exist"
-    );
-    // A raw durable peer does not publish the derived mz_types retraction.
-    // Check the authoritative state, not that separately published projection.
-    peer.sync_to_current_updates().await.unwrap();
-    let mut items = peer
-        .snapshot()
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .map(|(key, value)| Item::from_key_value(key, value));
-    assert!(!items.any(|item| matches!(item.name.as_str(), "refill_list" | "stale_list")));
+        &mut *peer,
+        "view_input_list",
+        "stale_view",
+        sql!("CREATE VIEW stale_view AS SELECT LIST[1]::view_input_list AS n"),
+    )
+    .await;
 
     batch_execute(
         &admin,
@@ -517,6 +532,93 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
     peer.expire().await;
 }
 
+/// The named type must have no durable dependents or auxiliary metadata.
+async fn reject_stale_definition_after_refill(
+    admin: &tokio_postgres::Client,
+    peer: &mut dyn DurableCatalogState,
+    type_name: &str,
+    attempted_name: &str,
+    statement: Sql,
+) {
+    // A committed ID reservation does not certify the previously selected type.
+    // Follow peer DDL before constructing the final catalog candidate.
+    let type_id = query_one(
+        admin,
+        sql!("SELECT id FROM mz_types WHERE name = $1"),
+        &[&type_name],
+    )
+    .await
+    .unwrap()
+    .get::<_, String>(0)
+    .parse()
+    .unwrap();
+    let hook = RemoveCatalogHook("user_id_pool_after_refill");
+    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let rendezvous = Mutex::new(Some((parked_tx, resume_rx)));
+    fail::cfg_callback(hook.0, move || {
+        let Some((parked, resume)) = rendezvous.lock().unwrap().take() else {
+            return;
+        };
+        tokio::task::block_in_place(|| {
+            let _ = parked.send(());
+            let _ = resume.recv_timeout(Duration::from_secs(180));
+        });
+    })
+    .unwrap();
+    let release = ReleaseCandidate(resume_tx);
+    let drop_type = async {
+        parked_rx
+            .await
+            .expect("definition committed its pool refill");
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+                Err(error) => panic!("open peer type drop: {error}"),
+            };
+            // This standalone type has no comments, plans or durable dependents.
+            txn.remove_item(type_id).unwrap();
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("peer type drop: {error}"),
+            }
+        }
+        drop(release);
+    };
+    let creation = batch_execute(admin, statement);
+    let ((), result) = tokio::join!(drop_type, creation);
+    drop(hook);
+    let error = result.expect_err("allocation must not recertify a stale definition");
+    let mz_postgres_util::PostgresError::Postgres(error) = error else {
+        panic!("expected SQL rejection, got {error:?}");
+    };
+    assert_eq!(
+        error.as_db_error().unwrap().message(),
+        format!("type \"{type_name}\" does not exist")
+    );
+    // A raw durable peer does not publish the derived mz_types retraction.
+    // Check the authoritative state, not that separately published projection.
+    peer.sync_to_current_updates().await.unwrap();
+    let mut items = peer
+        .snapshot()
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|(key, value)| Item::from_key_value(key, value));
+    assert!(!items.any(|item| item.name == type_name || item.name == attempted_name));
+}
+
 enum CatalogConflict {
     Progress,
     IdAllocation,
@@ -569,13 +671,13 @@ impl CatalogConflict {
 
 /// Defeat prepared catalog candidates with real peer progress while checking that
 /// the coordinator still serves unrelated commands. The caller checks the result.
-async fn complete_under_catalog_contention<T>(
+async fn complete_under_catalog_contention<T, E: std::fmt::Debug>(
     server: &test_util::TestServer,
     peer: &mut dyn DurableCatalogState,
     conflict: CatalogConflict,
     name: &str,
-    operation: impl std::future::Future<Output = T>,
-) -> T {
+    operation: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
     let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
     let hook = RemoveCatalogHook(conflict.failpoint());
     fail::cfg_callback(hook.0, move || {
@@ -601,13 +703,22 @@ async fn complete_under_catalog_contention<T>(
     let frontend = async {
         let mut operation = Box::pin(operation);
         assert!(futures::poll!(&mut operation).is_pending());
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while conflicts.load(Ordering::SeqCst) < 4 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        // Extended-protocol operations must keep polling through preparation
+        // before they can submit the execution that encounters contention.
+        tokio::select! {
+            result = &mut operation => {
+                panic!("{name} completed before peer contention: {:?}", result.err());
             }
-        })
-        .await
-        .expect("operation did not encounter peer contention");
+            result = tokio::time::timeout(Duration::from_secs(30), async {
+                while conflicts.load(Ordering::SeqCst) < 4 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => {
+                result.unwrap_or_else(|error| {
+                    panic!("{name} did not encounter peer contention: {error}");
+                });
+            }
+        }
         assert!(futures::poll!(&mut operation).is_pending());
 
         let responsive = tokio::time::timeout(

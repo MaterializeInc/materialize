@@ -27,9 +27,9 @@ use tracing::Span;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
-    Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
-    ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
-    infer_sql_type_for_catalog,
+    Coordinator, CreateViewCommit, CreateViewExplain, CreateViewFinish, CreateViewOptimize,
+    CreateViewStage, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult,
+    Staged, infer_sql_type_for_catalog,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
@@ -45,6 +45,7 @@ impl Staged for CreateViewStage {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
             Self::Finish(stage) => &mut stage.validity,
+            Self::Commit(stage) => &mut stage.validity,
             Self::Explain(stage) => &mut stage.validity,
         }
     }
@@ -55,8 +56,9 @@ impl Staged for CreateViewStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            CreateViewStage::Optimize(stage) => coord.create_view_optimize(stage).await,
-            CreateViewStage::Finish(stage) => coord.create_view_finish(ctx.session(), stage).await,
+            CreateViewStage::Optimize(stage) => coord.create_view_optimize(ctx, stage).await,
+            CreateViewStage::Finish(stage) => coord.create_view_finish(ctx.session(), stage),
+            CreateViewStage::Commit(stage) => coord.create_view_commit(ctx, stage).await,
             CreateViewStage::Explain(stage) => {
                 coord.create_view_explain(ctx.session(), stage).await
             }
@@ -280,6 +282,7 @@ impl Coordinator {
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
+            planning_revision: self.catalog().transient_revision(),
             plan,
             resolved_ids,
             explain_ctx,
@@ -289,14 +292,37 @@ impl Coordinator {
     #[instrument]
     async fn create_view_optimize(
         &mut self,
-        CreateViewOptimize {
+        ctx: &ExecuteContext,
+        stage: CreateViewOptimize,
+    ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        let ids = self.try_allocate_user_id().await?;
+        if self.catalog().transient_revision() != stage.planning_revision {
+            // Allocation may catch up peer definitions, even on success.
+            if matches!(stage.explain_ctx, ExplainContext::None) {
+                self.release_ddl_lock(ctx.session().conn_id());
+            }
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        let Some((item_id, global_id)) = ids else {
+            if matches!(stage.explain_ctx, ExplainContext::None) {
+                self.release_ddl_lock(ctx.session().conn_id());
+            }
+            let delay = self.read_protection_conflict_delay();
+            return Ok(StageResult::Await(Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                Ok(Box::new(CreateViewStage::Optimize(stage)))
+            })));
+        };
+        let CreateViewOptimize {
             validity,
+            planning_revision,
             plan,
             resolved_ids,
             explain_ctx,
-        }: CreateViewOptimize,
-    ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let (item_id, global_id) = self.allocate_user_id().await?;
+        } = stage;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -334,6 +360,7 @@ impl Coordinator {
                             } else {
                                 CreateViewStage::Finish(CreateViewFinish {
                                     validity,
+                                    planning_revision,
                                     item_id,
                                     global_id,
                                     plan,
@@ -375,10 +402,12 @@ impl Coordinator {
     }
 
     #[instrument]
-    async fn create_view_finish(
-        &mut self,
+    fn create_view_finish(
+        &self,
         session: &Session,
         CreateViewFinish {
+            validity,
+            planning_revision,
             item_id,
             global_id,
             plan:
@@ -401,6 +430,11 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        // Replacement DROP lists require the original structural snapshot,
+        // not merely continued existence of the expression's dependencies.
+        if self.catalog().transient_revision() != planning_revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
@@ -431,16 +465,53 @@ impl Coordinator {
             },
         ];
 
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
+        Ok(StageResult::Immediate(Box::new(CreateViewStage::Commit(
+            CreateViewCommit {
+                validity,
+                planning_revision,
+                ops,
+                prepared: None,
+                item_name: name.item,
+                if_not_exists,
+            },
+        ))))
+    }
+
+    #[instrument]
+    async fn create_view_commit(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        mut stage: CreateViewCommit,
+    ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        match self
+            .try_catalog_transact_with_context(ctx, &stage.ops, &mut stage.prepared)
+            .await
+        {
+            Ok(false) => {
+                self.release_ddl_lock(ctx.session().conn_id());
+                let delay = self.read_protection_conflict_delay();
+                Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateViewStage::Commit(stage)))
+                })))
+            }
+            Ok(true) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "view",
-                });
+            })) if stage.if_not_exists => {
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: stage.item_name,
+                        ty: "view",
+                    });
                 Ok(StageResult::Response(ExecuteResponse::CreatedView))
+            }
+            Err(AdapterError::CatalogSnapshotChanged) => {
+                self.release_ddl_lock(ctx.session().conn_id());
+                Err(AdapterError::CatalogSnapshotChanged)
             }
             Err(err) => Err(err),
         }
