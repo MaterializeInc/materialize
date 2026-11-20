@@ -1138,11 +1138,12 @@ where
 
 fn last_value_inner<'a>(
     args: Vec<Datum<'a>>,
-    order_by_rows: &Vec<Row>,
+    order_by_rows: &[Row],
     window_frame: &WindowFrame,
 ) -> Vec<Datum<'a>> {
     let length = args.len();
     let mut results: Vec<Datum> = Vec::with_capacity(length);
+    let mut peer_end = 0;
     for (idx, (current_datum, order_by_row)) in args.iter().zip_eq(order_by_rows).enumerate() {
         let last_value = match &window_frame.end_bound {
             WindowFrameBound::CurrentRow => match &window_frame.units {
@@ -1153,15 +1154,13 @@ fn last_value_inner<'a>(
                     // The peer group is the group of rows with the same ORDER BY value
                     // Note: Range is only supported for the default window frame (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
                     // which is why it does not appear in the other branches
-                    let target_idx = order_by_rows[idx..]
-                        .iter()
-                        .enumerate()
-                        .take_while(|(_, row)| *row == order_by_row)
-                        .last()
-                        .unwrap()
-                        .0
-                        + idx;
-                    args[target_idx]
+                    if idx == peer_end {
+                        peer_end = idx + 1;
+                        while peer_end < length && &order_by_rows[peer_end] == order_by_row {
+                            peer_end += 1;
+                        }
+                    }
+                    args[peer_end - 1]
                 }
                 // GROUPS is not supported, and forbidden during planning
                 WindowFrameUnits::Groups => unreachable!(),
