@@ -1404,6 +1404,14 @@ fn test_pgtest_mz_execution_time() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_fetch_subscribe_empty() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/fetch-subscribe-empty.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_notice() {
     pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
 }

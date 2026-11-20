@@ -1,0 +1,53 @@
+# A FETCH on a SUBSCRIBE cursor is answered before the first row exists. For an
+# empty relation the subscribe's first batch is empty, and whatever is buffered
+# by then has to be flushed with it. A client that waits for BindComplete
+# before it reads rows otherwise blocks until a row arrives or the FETCH times
+# out.
+
+send
+Query {"query": "CREATE TABLE fetch_subscribe_empty (a int)"}
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR SUBSCRIBE fetch_subscribe_empty"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+
+send
+Parse {"query": "FETCH 1 c WITH (timeout = '1h')"}
+Bind
+Execute
+Sync
+----
+
+# No row exists yet, so the FETCH is still waiting when this is answered.
+until
+BindComplete
+----
+ParseComplete
+BindComplete
+
+send conn=writer
+Query {"query": "INSERT INTO fetch_subscribe_empty VALUES (1)"}
+----
+
+until conn=writer
+ReadyForQuery
+----
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+
+until ignore=DataRow
+ReadyForQuery
+----
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
