@@ -75,6 +75,9 @@ def test_upgrade_base_patch_preserves_unrelated_release_code(tmp_path: Path) -> 
         == original
     )
     assert images.HALT_EVIDENCE_SOURCE.read_text() in recorder
+    assert "$crate::process::halt_exit_code(&message)" in release
+    assert '&["code at version", "cannot read data with version"],' in recorder
+    assert '&["fenced out old deployment; rebooting as leader"],' in recorder
     assert "antithesis_sdk" not in recorder
     assert "antithesis::" not in patched
     macro = patched.split("macro_rules! halt {", 1)[1].split("\n}", 1)[0]

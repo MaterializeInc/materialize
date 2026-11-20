@@ -98,6 +98,11 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
   for messages on the reviewed `DESIGNED_HALTS` list, a dedicated failed
   property for halts of filed bugs, and `Materialize process
   halted for an unexpected reason` for everything else;
+- a designed halt as exit code 143 in place of 166
+  (`mz_ore::process::halt_exit_code`), so the platform's `No unexpected
+  container exits`, which skips 0, 137 and 143, fails only for the other
+  halts. The upgrade base gets the same exit code from its build patch
+  (`images.upgrade_base_exit_code`);
 - every soft assertion that logs instead of panicking as
   `Materialize soft assertion failed`;
 - optional-hit safety assertions placed with `mz_ore::antithesis_always!` and

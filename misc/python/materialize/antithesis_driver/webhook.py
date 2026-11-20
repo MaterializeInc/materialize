@@ -48,6 +48,7 @@ TARGETS = ("src", "tbl")
 """A webhook source and a webhook table."""
 SENDERS = 4
 MAX_QUEUED = 32
+MALFORMED_SHARE = 0.05
 SETTINGS = {"transaction_isolation": "'strict serializable'", "cluster": "quickstart"}
 VALUES = ("", "'", '"', "\\", "κλειδί", "x" * 3000)
 
@@ -57,6 +58,8 @@ class Request:
     id: int
     target: str
     value: str | None
+    malformed: bool = False
+    """Its body is not JSON, so the webhook must reject it."""
     sent_at: float | None = None
     acked_at: float | None = None
     """When the 200 arrived. Without one, the outcome is unknown."""
@@ -140,6 +143,8 @@ class Webhooks:
     def _send(self, r: Request) -> None:
         url = f"http://{self.ctx.config.host}:{HTTP_PORT}/api/webhook/materialize/{SCHEMA}/{r.target}"
         body = json.dumps({"id": r.id, "v": r.value})
+        if r.malformed:
+            body = body[:-1]
         with self._lock:
             r.sent_at = time.monotonic()
         try:
@@ -153,7 +158,13 @@ class Webhooks:
         except requests.RequestException as e:
             log(f"webhook: {type(e).__name__}")
             status = None
-        if status == 200:
+        if r.malformed:
+            always(
+                status != 200,
+                "webhook: a request whose body is not JSON is never accepted",
+                {"id": r.id, "target": r.target},
+            )
+        elif status == 200:
             with self._lock:
                 r.acked_at = time.monotonic()
         sometimes(
@@ -169,7 +180,12 @@ class Webhooks:
                 return Status.NOT_SENT
             batch = []
             for _ in range(self.batch):
-                r = Request(self._next_id, d.choice(TARGETS), self._value(d))
+                r = Request(
+                    self._next_id,
+                    d.choice(TARGETS),
+                    self._value(d),
+                    d.boolean(MALFORMED_SHARE),
+                )
                 self._next_id += 1
                 self.requests[r.id] = r
                 batch.append(r)

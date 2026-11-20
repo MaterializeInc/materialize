@@ -45,7 +45,16 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 
 from materialize.antithesis import serializability as sz
-from materialize.antithesis_driver.client import Op, Outcome, Status, commit
+from materialize.antithesis_driver.client import (
+    ABANDON_LINGER_SECONDS,
+    ABANDON_SHARE,
+    NOT_SENT,
+    Op,
+    Outcome,
+    Status,
+    abandon,
+    commit,
+)
 from materialize.antithesis_driver.context import RULE_WAIT_SECONDS, Context, log
 from materialize.antithesis_driver.draw import Draw
 
@@ -67,6 +76,8 @@ count as indeterminate."""
 TIMED_READS = 4000
 """Strict and strong session reads kept for the timestamp order checks."""
 LARGE_HISTORY_OPS = 500
+BURST_MAX = 8
+"""Sessions one burst may use, which leaves some to the other components."""
 ACK_TO_READ_GAP_S = 0.1
 
 ISOLATIONS = (sz.STRICT, sz.SERIALIZABLE, sz.STRONG_SESSION)
@@ -267,11 +278,14 @@ class History:
             return None
         return self.epochs[self.current]
 
-    def write(self, d: Draw) -> Status:
+    def write(
+        self, d: Draw, session: int | None = None, wait: float = RULE_WAIT_SECONDS
+    ) -> Status:
         epoch = self._live_epoch()
         if epoch is None:
             return Status.NOT_SENT
-        session = d.integer(0, len(self.ctx.sessions.sessions) - 1)
+        if session is None:
+            session = d.integer(0, len(self.ctx.sessions.sessions) - 1)
         isolation = self._isolation(d)
         key = d.integer(0, KEYS - 1)
         # `INSERT ... SELECT` is a read-modify-write, which Materialize does
@@ -300,16 +314,23 @@ class History:
                 f"INSERT INTO {table(epoch.number, key)} (v) VALUES ({record.op_id})"
             )
             in_txn = d.boolean(self.txn_append_share)
+        linger = d.choice(ABANDON_LINGER_SECONDS) if d.boolean(ABANDON_SHARE) else None
 
         def execute(conn: psycopg.Connection) -> int:
             if not in_txn:
+                if linger is not None:
+                    abandon(conn, statement.encode(), linger)
                 return conn.execute(statement.encode()).rowcount
             conn.execute(b"BEGIN")
             rowcount = conn.execute(statement.encode()).rowcount
+            if linger is not None:
+                abandon(conn, b"COMMIT", linger)
             commit(conn)
             return rowcount
 
         def complete(outcome: Outcome[int]) -> None:
+            if self._forget_unsent(epoch, record, outcome):
+                return
             with self._lock:
                 record.complete = outcome.end
                 record.session = outcome.session
@@ -337,8 +358,20 @@ class History:
                 complete,
                 {"transaction_isolation": f"'{isolation}'", "cluster": PLAIN_CLUSTER},
             ),
-            RULE_WAIT_SECONDS,
+            wait,
         )
+
+    def _forget_unsent(self, epoch: Epoch, record: Record, outcome: Outcome) -> bool:
+        """Drop the record of an operation whose session was busy.
+
+        While sessions are stuck most operations are not sent. Kept, they
+        would fill an epoch that then rotates with little to check.
+        """
+        if outcome.error is not NOT_SENT:
+            return False
+        with self._lock:
+            epoch.records.pop(record.op_id, None)
+        return True
 
     def _read_op(
         self, epoch: Epoch, record: Record, read_paths: list[ReadPath], in_txn: bool
@@ -370,6 +403,8 @@ class History:
             return rows
 
         def complete(outcome: Outcome[list[tuple[Any, ...]]]) -> None:
+            if self._forget_unsent(epoch, record, outcome):
+                return
             observations: list[sz.Observation] = []
             timestamps: set[str] = set()
             uptime = None
@@ -419,11 +454,14 @@ class History:
         }
         return Op("history read", execute, complete, settings)
 
-    def read(self, d: Draw) -> Status:
+    def read(
+        self, d: Draw, session: int | None = None, wait: float = RULE_WAIT_SECONDS
+    ) -> Status:
         epoch = self._live_epoch()
         if epoch is None:
             return Status.NOT_SENT
-        session = d.integer(0, len(self.ctx.sessions.sessions) - 1)
+        if session is None:
+            session = d.integer(0, len(self.ctx.sessions.sessions) - 1)
         isolation = self._isolation(d)
         derived = d.boolean()
         read_paths: list[ReadPath] = []
@@ -437,8 +475,27 @@ class History:
         in_txn = len(read_paths) > 1 and d.boolean(self.txn_read_share)
         record = self._record(epoch, kind=sz.Kind.READ, isolation=isolation)
         return self.ctx.sessions.call(
-            session, self._read_op(epoch, record, read_paths, in_txn), RULE_WAIT_SECONDS
+            session, self._read_op(epoch, record, read_paths, in_txn), wait
         )
+
+    def burst(self, d: Draw) -> Status:
+        """Operations on several sessions at once.
+
+        One operation per rule leaves most sessions idle, and an epoch with
+        too few operations for a large cycle search.
+        """
+        sessions = len(self.ctx.sessions.sessions)
+        first = d.integer(0, sessions - 1)
+        count = d.integer(2, min(BURST_MAX, sessions))
+        status = Status.NOT_SENT
+        for i in range(count):
+            operation = self.write if d.boolean() else self.read
+            # Only the last one waits, so the others are in flight together.
+            wait = RULE_WAIT_SECONDS if i == count - 1 else 0.0
+            sent = operation(d, session=(first + i) % sessions, wait=wait)
+            if sent != Status.NOT_SENT:
+                status = sent
+        return status
 
     def rotate(self, d: Draw) -> Status:
         """Start the next epoch once the current one is full."""

@@ -45,10 +45,13 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from materialize.antithesis import ivm_model as model
 from materialize.antithesis import sql
 from materialize.antithesis_driver.client import (
+    ABANDON_LINGER_SECONDS,
+    ABANDON_SHARE,
     Op,
     Outcome,
     Status,
     Target,
+    abandon,
     classify,
     connect,
     report_driver_error,
@@ -187,8 +190,11 @@ class Views:
             self._next_op += 1
             self.writes[op] = "pending"
         statement = write_statement(kind, op, self.now_ms, d)
+        linger = d.choice(ABANDON_LINGER_SECONDS) if d.boolean(ABANDON_SHARE) else None
 
         def execute(conn: psycopg.Connection) -> None:
+            if linger is not None:
+                abandon(conn, statement.encode(), linger)
             conn.execute(statement.encode())
 
         def complete(outcome: Outcome[None]) -> None:

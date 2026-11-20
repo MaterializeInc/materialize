@@ -48,6 +48,7 @@ import tempfile
 from pathlib import Path
 
 from materialize import MZ_ROOT, mzbuild, rustc_flags, spawn
+from materialize.antithesis import exit_evidence
 from materialize.mz_version import MzVersion
 from materialize.version_list import get_published_minor_mz_versions
 from materialize.xcompile import Arch
@@ -78,7 +79,7 @@ UPGRADE_BASE_RECORDED_HALT = r"""macro_rules! halt {
             ::std::concat!(::std::file!(), ":", ::std::line!()),
             &message,
         );
-        $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
+        $crate::process::exit_thread_safe($crate::process::halt_exit_code(&message));
     }}
 }"""
 UPGRADE_BASE_RECORDER = """#[cfg(target_os = "linux")]
@@ -95,6 +96,33 @@ pub fn record_halt(code: i32, location: &str, message: &str) {
     let _ = (code, location, message);
 }
 """
+
+# The release has no list of designed halts, so it gets the one of this
+# checkout, see `mz_ore::process::halt_exit_code`.
+UPGRADE_BASE_EXIT_CODE = """
+/// The exit code of a halt with this message: that of a SIGTERM for a
+/// designed halt, which Antithesis does not report as an unexpected exit.
+#[doc(hidden)]
+pub fn halt_exit_code(message: &str) -> i32 {
+    const DESIGNED: &[&[&str]] = &[
+%s    ];
+    let designed = DESIGNED
+        .iter()
+        .any(|parts| parts.iter().all(|part| message.contains(part)));
+    if designed { 143 } else { HALT_EXIT_CODE }
+}
+"""
+
+
+def upgrade_base_exit_code() -> str:
+    rows = []
+    for rule in exit_evidence.load_halt_rules():
+        if not all(part.isascii() and part.isprintable() for part in rule.matches):
+            raise ValueError("a designed halt match is not printable ASCII")
+        # A JSON string of printable ASCII is also a Rust string literal.
+        parts = ", ".join(json.dumps(part) for part in rule.matches)
+        rows.append(f"        &[{parts}],\n")
+    return UPGRADE_BASE_EXIT_CODE % "".join(rows)
 
 
 UPGRADE_BASE_ORIGINAL_PANIC = r"""        let location = if let Some(loc) = panic_info.location() {
@@ -116,6 +144,7 @@ def upgrade_base_patch_digest() -> str:
         UPGRADE_BASE_ORIGINAL_HALT,
         UPGRADE_BASE_RECORDED_HALT,
         UPGRADE_BASE_RECORDER,
+        upgrade_base_exit_code(),
         UPGRADE_BASE_ORIGINAL_PANIC,
         UPGRADE_BASE_RECORDED_PANIC,
         UPGRADE_BASE_LABEL,
@@ -132,8 +161,8 @@ def _halt_macro_records(source: str) -> bool:
 
 
 def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
-    """Add only the halt recorder, and its call from the panic hook, to the
-    freshly checked-out release source.
+    """Add only the halt recorder, its call from the panic hook, and the exit
+    code of designed halts to the freshly checked-out release source.
 
     Returns False, leaving the source unchanged, for a release whose `halt!`
     already records halts. Its recorder is active only in its own Antithesis
@@ -154,7 +183,10 @@ def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
         raise ValueError("upgrade-base panic.rs has an unsupported panic hook")
     recorded = original.replace(UPGRADE_BASE_ORIGINAL_HALT, UPGRADE_BASE_RECORDED_HALT)
     path.write_text(
-        recorded + "\n" + UPGRADE_BASE_RECORDER % HALT_EVIDENCE_SOURCE.read_text()
+        recorded
+        + "\n"
+        + UPGRADE_BASE_RECORDER % HALT_EVIDENCE_SOURCE.read_text()
+        + upgrade_base_exit_code()
     )
     panic_path.write_text(
         panic_source.replace(UPGRADE_BASE_ORIGINAL_PANIC, UPGRADE_BASE_RECORDED_PANIC)

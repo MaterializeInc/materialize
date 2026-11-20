@@ -31,6 +31,33 @@ pub fn record_halt(code: i32, location: &str, message: &str) {
     let _ = (code, location, message);
 }
 
+/// The exit code of a designed [`halt!`](crate::halt) in the Antithesis build
+/// flavor: that of a process ended by SIGTERM.
+pub const DESIGNED_HALT_EXIT_CODE: i32 = 143;
+
+/// The exit code of a [`halt!`](crate::halt) with this message.
+///
+/// Antithesis reports a container exit as a failed property unless its code
+/// is 0, 137 or 143. With the `antithesis` feature a halt that
+/// [`classify_halt`](crate::antithesis::classify_halt) finds designed
+/// therefore exits with [`DESIGNED_HALT_EXIT_CODE`], which leaves that
+/// property to the halts nobody reviewed. The halt record in the termination
+/// message still tells such an exit apart from a signal. It does not exit 0,
+/// after which the environmentd entrypoint sleeps forever.
+#[doc(hidden)]
+pub fn halt_exit_code(message: &str) -> i32 {
+    #[cfg(feature = "antithesis")]
+    if matches!(
+        crate::antithesis::classify_halt(message),
+        crate::antithesis::HaltClass::Designed(_)
+    ) {
+        return DESIGNED_HALT_EXIT_CODE;
+    }
+    #[cfg(not(feature = "antithesis"))]
+    let _ = message;
+    HALT_EXIT_CODE
+}
+
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
 ///
 /// This is `EX_TEMPFAIL` from `sysexits.h`. Shells, tini and Kubernetes report
@@ -79,7 +106,7 @@ macro_rules! halt {
             ::std::concat!(::std::file!(), ":", ::std::line!()),
             &message,
         );
-        $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
+        $crate::process::exit_thread_safe($crate::process::halt_exit_code(&message));
     }}
 }
 
@@ -174,5 +201,23 @@ pub fn set_current_thread_name(name: &str) {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = name;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[crate::test]
+    fn halt_exit_codes() {
+        let designed = halt_exit_code("fenced out old deployment; rebooting as leader");
+        #[cfg(feature = "antithesis")]
+        assert_eq!(designed, DESIGNED_HALT_EXIT_CODE);
+        #[cfg(not(feature = "antithesis"))]
+        assert_eq!(designed, HALT_EXIT_CODE);
+        assert_eq!(
+            halt_exit_code("a halt site nobody reviewed"),
+            HALT_EXIT_CODE
+        );
     }
 }

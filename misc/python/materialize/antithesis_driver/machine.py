@@ -303,6 +303,10 @@ class Driver(hegel.StateMachine):
     def history_read(self, tc: hegel.TestCase) -> None:
         guarded("history read", components().history.read, tc)
 
+    @hegel.rule(weight=4)
+    def history_burst(self, tc: hegel.TestCase) -> None:
+        guarded("history burst", components().history.burst, tc)
+
     @hegel.rule()
     def history_rotate(self, tc: hegel.TestCase) -> None:
         guarded("history rotate", components().history.rotate, tc)

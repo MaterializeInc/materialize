@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import threading
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -442,3 +443,90 @@ def test_webhook_judge_requires_rows_acknowledged_before_a_visible_send() -> Non
     assert odd.phantoms == [("tbl", "1")]
     assert odd.altered == [("src", 3)]
     assert odd.unknown_visible == 1
+
+
+def test_an_abandoned_statement_has_an_unknown_outcome() -> None:
+    class PgConn:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def send_query(self, query: bytes) -> None:
+            self.sent.append(query)
+
+        def flush(self) -> int:
+            return 0
+
+    class Conn:
+        def __init__(self) -> None:
+            self.pgconn = PgConn()
+            self.closed = False
+            self.broken = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = client.Session.__new__(client.Session)
+    session.name = "s"
+    session.connections = 1
+    session._settings = {}
+    conn: Any = Conn()
+    session._conn = conn
+    op = client.Op(
+        "write", lambda c: client.abandon(c, b"INSERT", 0.0), lambda outcome: None
+    )
+    outcome = session._run(op)
+    assert conn.pgconn.sent == [b"INSERT"] and conn.closed
+    assert outcome.unknown
+    # The next operation gets a connection of its own.
+    assert session._conn is None
+
+
+def test_history_forgets_an_operation_that_was_not_sent() -> None:
+    h = history.History.__new__(history.History)
+    h._lock = threading.Lock()
+    epoch = history.Epoch(0)
+    record = history.Record(
+        op_id=1, kind=sz.Kind.APPEND, invoke=1.0, isolation=sz.STRICT, write_key=0
+    )
+    epoch.records[1] = record
+    busy_elsewhere = sql.Classified(sql.Outcome.REJECTED, "40001", "serialization")
+    rejected = client.Outcome(None, busy_elsewhere, 1.0, 2.0, "s0.1")
+    assert not h._forget_unsent(epoch, record, rejected) and 1 in epoch.records
+    unsent = client.Outcome(None, client.NOT_SENT, 1.0, 1.0, "s0")
+    assert h._forget_unsent(epoch, record, unsent) and not epoch.records
+
+
+@pytest.mark.parametrize("status, accepted", [(400, False), (200, True)])
+def test_webhook_malformed_body_must_not_be_accepted(
+    monkeypatch: pytest.MonkeyPatch, status: int, accepted: bool
+) -> None:
+    from materialize.antithesis_driver import webhook
+
+    recorder = Recorder()
+    monkeypatch.setattr(webhook, "always", recorder)
+    monkeypatch.setattr(webhook, "sometimes", Recorder())
+    bodies: list[bytes] = []
+
+    class Response:
+        status_code = status
+
+    def post(url: str, data: bytes, **kwargs: Any) -> Response:
+        bodies.append(data)
+        return Response()
+
+    monkeypatch.setattr(webhook.requests, "post", post)
+
+    class Ctx:
+        class config:
+            host = "unused.invalid"
+
+    w = webhook.Webhooks.__new__(webhook.Webhooks)
+    w.ctx = Ctx()  # pyright: ignore[reportAttributeAccessIssue]
+    w._lock = threading.Lock()
+    r = webhook.Request(1, "src", "a", malformed=True)
+    w._send(r)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(bodies[0])
+    assert r.acked_at is None
+    message = "webhook: a request whose body is not JSON is never accepted"
+    assert (message in recorder.failed()) == accepted

@@ -393,6 +393,15 @@ spec:
       - name: sql-server
         image: ${SQL_SERVER_IMAGE}
         imagePullPolicy: IfNotPresent
+        # A SQL Server killed during its first start can fail its next start
+        # and exit 255. It is not the system under test, so a failure exits
+        # like a SIGTERM, which the platform's `No unexpected container
+        # exits` skips. A SQL Server that stays down still fails the driver's
+        # source checks.
+        command:
+        - /bin/bash
+        - -c
+        - /opt/mssql/bin/launch_sqlservr.sh /opt/mssql/bin/sqlservr || exit 143
         ports:
         - containerPort: 1433
         env:

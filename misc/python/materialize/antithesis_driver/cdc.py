@@ -45,6 +45,7 @@ from materialize.antithesis_driver.draw import Draw
 CLUSTER = "sources"
 TABLES = 3
 CHECKPOINT_EVERY = 64
+DROP_COMMIT_RESPONSE_SHARE = 0.02
 MAX_ADDED_COLUMNS = 8
 SETTINGS = {"transaction_isolation": "'strict serializable'", "cluster": "quickstart"}
 INTERESTING_VALUES = ("", "NULL", "'", '"', "\\", "κλειδί", "x" * 3000)
@@ -317,6 +318,10 @@ class Dialect(Protocol):
     def report_caught_up(self, caught_up: bool, details: dict[str, Any]) -> None: ...
 
 
+class ResponseDropped(Exception):
+    pass
+
+
 class CdcSource:
     def __init__(self, ctx: Context, dialect: Dialect) -> None:
         self.ctx = ctx
@@ -433,6 +438,7 @@ class CdcSource:
 
     def write(self, d: Draw) -> Status:
         plans = self._plans(d)
+        drop_response = d.boolean(DROP_COMMIT_RESPONSE_SHARE)
         with self._lock:
             txn_id = self._next_txn
             self._next_txn += 1
@@ -460,6 +466,17 @@ class CdcSource:
                     self.committing = txn
                 phase = "commit"
                 self.dialect.commit(cur)
+                if drop_response:
+                    # Proceed as if the connection had died before the
+                    # acknowledgement arrived. A fault does that only when it
+                    # lands in the few milliseconds a COMMIT is in flight.
+                    self._discard(
+                        ResponseDropped("the driver dropped a COMMIT response")
+                    )
+                    with self._lock:
+                        self.committing = None
+                        self.unresolved = txn
+                    return
                 acked = Txn(txn_id, plans, txn.begun, time.monotonic())
                 with self._lock:
                     self.committing = None

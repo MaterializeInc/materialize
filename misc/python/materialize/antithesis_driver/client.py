@@ -35,7 +35,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Generic, TypeVar
+from typing import Generic, NoReturn, TypeVar
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
@@ -102,6 +102,37 @@ def commit(conn: psycopg.Connection) -> None:
     cursor = conn.execute(b"COMMIT")
     if cursor.statusmessage != "COMMIT":
         raise RolledBack(cursor.statusmessage)
+
+
+class Abandoned(Exception):
+    """The driver closed the connection without reading a statement's response."""
+
+
+ABANDON_SHARE = 0.02
+"""How many of a component's writes the driver abandons."""
+ABANDON_LINGER_SECONDS = (0.0, 0.01, 0.2)
+"""How long an abandoned connection stays open. The longest lets most
+statements finish, the shortest closes while the server still reads."""
+ABANDONED = sql.Classified(
+    sql.Outcome.INDETERMINATE, None, "abandoned: the driver closed the connection"
+)
+
+
+def abandon(conn: psycopg.Connection, statement: bytes, linger: float) -> NoReturn:
+    """Send `statement`, then close the connection `linger` seconds later
+    without reading the response, as a client that dies mid-statement does.
+
+    The server may or may not run the statement to completion, so its outcome
+    is indeterminate. Faults lose a response this way only when they land in
+    the few milliseconds a statement is in flight.
+    """
+    conn.pgconn.send_query(statement)
+    # The connection is non-blocking: 1 means the kernel took only a part.
+    while conn.pgconn.flush() == 1:
+        time.sleep(0.001)
+    time.sleep(linger)
+    conn.close()
+    raise Abandoned()
 
 
 class Status(Enum):
@@ -305,8 +336,8 @@ class Session:
             start = time.monotonic()
             value = op.execute(conn)
             return Outcome(value, None, start, time.monotonic(), self._ident())
-        except (psycopg.Error, OSError, RolledBack) as e:
-            classified = op.classify(e)
+        except (psycopg.Error, OSError, RolledBack, Abandoned) as e:
+            classified = ABANDONED if isinstance(e, Abandoned) else op.classify(e)
             end = time.monotonic()
             conn = self._conn
             if conn is None or conn.broken or conn.closed:

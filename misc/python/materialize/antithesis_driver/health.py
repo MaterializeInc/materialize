@@ -24,7 +24,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     always,
 )
 
-from materialize.antithesis import crash_loops
+from materialize.antithesis import crash_loops, halt_proof
 from materialize.antithesis_driver.client import Target, connect
 from materialize.antithesis_driver.context import Context, log
 
@@ -85,17 +85,19 @@ CRASHLOOP_SAMPLE_S = 5.0
 READER_LEASE_EXPIRED_EXIT_CODE = 168
 
 
-def exit_class(exit_code: int, reason: str | None) -> str:
+def exit_class(exit_code: int, reason: str | None, message: str | None = None) -> str:
     """The class of a container exit, as the legacy recovery check names it.
 
     `halt!` exits 166 and the panic hook aborts (134), 101 is an unwinding
-    panic, 137 and 143 are SIGKILL and SIGTERM from outside.
+    panic, 137 and 143 are SIGKILL and SIGTERM from outside. A designed halt
+    exits 143 too (`mz_ore::process::halt_exit_code`), and differs from a
+    SIGTERM by the halt record in its termination message.
     """
     if reason == "OOMKilled":
         return "oom"
     if exit_code == 0:
         return "clean"
-    if exit_code == 166:
+    if exit_code == 166 or (exit_code == 143 and _halt_recorded(message)):
         return "halt"
     if exit_code == READER_LEASE_EXPIRED_EXIT_CODE:
         return "reader_lease_expired"
@@ -104,6 +106,14 @@ def exit_class(exit_code: int, reason: str | None) -> str:
     if exit_code in (101, 134):
         return "panic"
     return "unknown"
+
+
+def _halt_recorded(message: str | None) -> bool:
+    try:
+        halt_proof.parse(message or "")
+    except ValueError:
+        return False
+    return True
 
 
 def samples(kube: Any) -> list[crash_loops.Sample]:
@@ -123,7 +133,11 @@ def samples(kube: Any) -> list[crash_loops.Sample]:
                         # not only once its backoff ends.
                         restart_count=cs.restart_count + (1 if current else 0),
                         exit_class=(
-                            exit_class(termination.exit_code, termination.reason)
+                            exit_class(
+                                termination.exit_code,
+                                termination.reason,
+                                termination.message,
+                            )
                             if termination
                             else None
                         ),
