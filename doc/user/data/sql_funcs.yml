@@ -747,6 +747,11 @@
       `number`, `boolean`, and `null`
     url: /sql/types/jsonb#jsonb_typeof
 
+  - signature: 'jq(j: jsonb, program: text) -> jsonb'
+    description: The result of applying the literal [jq](https://jqlang.org/manual/)
+      program `program` to `j`
+    url: /sql/functions/jq
+
   - signature: 'jsonb_strip_nulls(j: jsonb) -> jsonb'
     description: "`j` with all object fields with a value of `null` removed. Other
       `null` values remain"
