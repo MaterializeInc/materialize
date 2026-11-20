@@ -22,7 +22,7 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::config::{AsyncSleep, Sleep};
+use aws_sdk_s3::config::{AsyncSleep, RequestChecksumCalculation, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
@@ -264,6 +264,12 @@ impl S3BlobConfig {
                 .read_timeout(READ_TIMEOUT_MARKER)
                 .build(),
         );
+        // S3 rejects uploads to buckets with Object Lock retention unless they
+        // carry a checksum, so don't rely on the SDK default for it. The env var
+        // stays an escape hatch for S3-compatible stores that reject checksums.
+        if std::env::var_os("AWS_REQUEST_CHECKSUM_CALCULATION").is_none() {
+            loader = loader.request_checksum_calculation(RequestChecksumCalculation::WhenSupported);
+        }
 
         let client = mz_aws_util::s3::new_client(&loader.load().await);
         Ok(S3BlobConfig {
