@@ -3160,7 +3160,12 @@ where
 
                 // Send AllowCompaction command directly to the instance
                 if let Some(instance) = self.instances.get_mut(&cluster_id) {
-                    instance.send(StorageCommand::AllowCompaction(key, frontier.clone()));
+                    // Replicas act on the empty frontier only, see
+                    // `StorageCommand::AllowCompaction`. Sending the others costs a command per
+                    // collection each time its upper advances.
+                    if frontier.is_empty() {
+                        instance.send(StorageCommand::AllowCompaction(key, frontier.clone()));
+                    }
                 } else {
                     soft_panic_or_log!(
                         "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}"
@@ -3879,6 +3884,7 @@ where
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
             instance.refresh_state_metrics();
+            instance.reduce_history();
         }
     }
 }

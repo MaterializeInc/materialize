@@ -64,6 +64,13 @@ impl CommandHistory {
         }
     }
 
+    /// Reduces the history if commands were added since its last reduction.
+    pub fn reduce_if_grown(&mut self) {
+        if self.commands.len() > self.reduced_count {
+            self.reduce();
+        }
+    }
+
     /// Reduces the command history to a minimal form.
     pub fn reduce(&mut self) {
         use StorageCommand::*;

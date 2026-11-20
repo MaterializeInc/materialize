@@ -161,16 +161,14 @@ pub enum ComputeControllerResponse {
     /// produced. (The sink may produce no responses if its dataflow is dropped
     /// before completion.)
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
-    /// A response reporting advancement of a collection's upper frontier.
+    /// A response reporting advancement of the upper frontiers of compute collections.
     ///
     /// Once a collection's upper (aka "write frontier") has advanced to beyond a given time, the
     /// contents of the collection as of that time have been sealed and cannot change anymore.
-    FrontierUpper {
-        /// The ID of a compute collection.
-        id: GlobalId,
-        /// The new upper frontier of the identified compute collection.
-        upper: Antichain<Timestamp>,
-    },
+    ///
+    /// A collection can be listed more than once, with its later entries carrying the more
+    /// advanced uppers.
+    FrontierUppers(Vec<(GlobalId, Antichain<Timestamp>)>),
 }
 
 /// Notification and summary of a received and forwarded [`crate::protocol::response::ComputeResponse::PeekResponse`].
@@ -1227,7 +1225,11 @@ impl ComputeController {
         }
 
         // Return a ready response, if any.
-        self.stashed_response.take()
+        let mut response = self.stashed_response.take()?;
+        if let ComputeControllerResponse::FrontierUppers(uppers) = &mut response {
+            self.stashed_response = drain_frontier_uppers(&mut self.response_rx, uppers);
+        }
+        Some(response)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1315,6 +1317,30 @@ impl ComputeController {
 
         Ok(())
     }
+}
+
+/// Moves the frontier updates at the head of `rx` into `uppers`.
+///
+/// Returns the first response of another kind, which the caller has to deliver next to keep
+/// responses in order.
+fn drain_frontier_uppers(
+    rx: &mut mpsc::UnboundedReceiver<ComputeControllerResponse>,
+    uppers: &mut Vec<(GlobalId, Antichain<Timestamp>)>,
+) -> Option<ComputeControllerResponse> {
+    /// The caller handles a batch without turning to its other work, so this bounds how long a
+    /// backlog of updates can keep it from that work.
+    const MAX_BATCH: usize = 1024;
+
+    // Instances report each advancement separately. Delivering them one at a time costs the
+    // caller a `ready`/`process` turn per collection per advancement.
+    while uppers.len() < MAX_BATCH {
+        match rx.try_recv() {
+            Ok(ComputeControllerResponse::FrontierUppers(more)) => uppers.extend(more),
+            Ok(other) => return Some(other),
+            Err(_) => break,
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
