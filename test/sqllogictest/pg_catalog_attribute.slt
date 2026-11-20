@@ -218,8 +218,8 @@ WHERE typname = 'list';
 list  0
 
 # pg_type.typlen matches PostgreSQL. JDBC derives its identifier length limit
-# from typlen of `name`. Types with no PostgreSQL counterpart, pseudo-types,
-# and user-defined types report NULL.
+# from typlen of `name`. Pseudo-types with no pgwire type and user-defined
+# types report NULL.
 query TI
 SELECT typname, typlen
 FROM pg_type
@@ -230,7 +230,7 @@ WHERE typname IN (
 ORDER BY typname;
 ----
 _int4  -1
-_record  NULL
+_record  -1
 anyelement  NULL
 bool  1
 char  1

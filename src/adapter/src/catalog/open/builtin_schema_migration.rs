@@ -330,24 +330,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_kafka_source_tables",
         ),
-        // `mz_type_pg_metadata` gained a trailing `typsend` column. See the NOTE
-        // above: this version must stay at the workspace's current dev version
-        // until the change ships.
-        MigrationStep::replacement(
-            "26.40.0-dev.0",
-            CatalogItemType::Table,
-            MZ_INTERNAL_SCHEMA,
-            "mz_type_pg_metadata",
-        ),
-        // `mz_type_pg_metadata` gained a trailing `typlen` column. See the NOTE
-        // above: this version must stay at the workspace's current dev version
-        // until the change ships.
-        MigrationStep::replacement(
-            "26.47.0-dev.0",
-            CatalogItemType::Table,
-            MZ_INTERNAL_SCHEMA,
-            "mz_type_pg_metadata",
-        ),
         // Converting the connection-detail builtin tables to materialized views
         // changes their catalog fingerprint, so each needs an explicit
         // replacement step.
@@ -604,6 +586,50 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_comments",
         ),
+        // The type relations are converted from builtin tables to builtin views.
+        // A view has no shard, so each step drops the table's shard.
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_types",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_array_types",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_base_types",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_list_types",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_map_types",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_pseudo_types",
+        ),
     ]
 });
 
@@ -642,6 +668,19 @@ impl MigrationStep {
                 object_name: name.into(),
             },
             mechanism: Mechanism::Replacement,
+        }
+    }
+
+    /// Helper to construct a `Drop` migration step.
+    fn drop(version: &str, type_: CatalogItemType, schema: &str, name: &str) -> Self {
+        Self {
+            version: Version::parse(version).expect("valid"),
+            object: SystemObjectDescription {
+                schema_name: schema.into(),
+                object_type: type_,
+                object_name: name.into(),
+            },
+            mechanism: Mechanism::Drop,
         }
     }
 }

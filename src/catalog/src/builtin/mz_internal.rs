@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog_protos::objects::CatalogItemType;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -34,6 +35,7 @@ use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATI
 
 use crate::memory::objects::DataSourceDesc;
 
+use super::builtin::gid_mapping_object_type;
 use super::{
     ANALYTICS_SELECT, BuiltinConnection, BuiltinIndex, BuiltinMaterializedView, BuiltinSource,
     BuiltinTable, BuiltinView, Cardinality, LinkProperties, MONITOR_REDACTED_SELECT,
@@ -1054,11 +1056,11 @@ WHERE data->>'kind' = 'Cluster'
     });
 
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
-/// in the `mz_types` table as part of our public, stable API.
-pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+/// in `mz_types` as part of our public, stable API.
+pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_type_pg_metadata",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
+    oid: oid::VIEW_MZ_TYPE_PG_METADATA_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
@@ -1071,7 +1073,18 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("typlen", SqlScalarType::Int16.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
+    sql: Box::leak(
+        format!(
+            "
+SELECT m.id, t.typinput, t.typreceive, t.typsend, t.typlen
+FROM mz_internal.mz_builtin_types t
+JOIN mz_internal.mz_builtin_object_mappings m
+    ON m.schema_name = t.schema_name AND m.name = t.name AND m.object_type = {object_type}
+WHERE t.typinput IS NOT NULL AND t.typreceive IS NOT NULL AND t.typsend IS NOT NULL",
+            object_type = gid_mapping_object_type(CatalogItemType::Type),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

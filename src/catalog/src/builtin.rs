@@ -1211,17 +1211,17 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_SINKS),
         Builtin::MaterializedView(&MZ_VIEWS),
-        Builtin::Table(&MZ_TYPES),
-        Builtin::Table(&MZ_TYPE_PG_METADATA),
-        Builtin::Table(&MZ_ARRAY_TYPES),
-        Builtin::Table(&MZ_BASE_TYPES),
-        Builtin::Table(&MZ_LIST_TYPES),
-        Builtin::Table(&MZ_MAP_TYPES),
+        Builtin::View(&MZ_TYPES),
+        Builtin::View(&MZ_TYPE_PG_METADATA),
+        Builtin::View(&MZ_ARRAY_TYPES),
+        Builtin::View(&MZ_BASE_TYPES),
+        Builtin::View(&MZ_LIST_TYPES),
+        Builtin::View(&MZ_MAP_TYPES),
         Builtin::MaterializedView(&MZ_ROLES),
         Builtin::Table(&MZ_ROLE_AUTH),
         Builtin::MaterializedView(&MZ_ROLE_MEMBERS),
         Builtin::MaterializedView(&MZ_ROLE_PARAMETERS),
-        Builtin::Table(&MZ_PSEUDO_TYPES),
+        Builtin::View(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
@@ -1571,7 +1571,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     // themselves. The real ones are built below.
     {
         let ontology_preview = ontology::generate_views(&builtin_items);
-        let builtin_reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let builtin_reporter_preview: Vec<_> =
+            builtin::builtins(&builtin_types, &builtin_items).collect();
         let generator_input: Vec<_> = builtin_types
             .iter()
             .chain(builtin_funcs.iter())
@@ -1598,7 +1599,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
 
     // Generate builtin relations reporting builtin objects last, since they need a complete view
     // of all other builtins.
-    let mut builtin_builtins = builtin::builtins(&builtin_items).collect();
+    let mut builtin_builtins = builtin::builtins(&builtin_types, &builtin_items).collect();
 
     // Construct the full list of builtins, retaining dependency order.
     let mut builtins = Vec::new();
