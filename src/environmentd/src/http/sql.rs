@@ -21,6 +21,7 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use futures::Future;
+use futures::SinkExt;
 use futures::future::BoxFuture;
 
 use http::StatusCode;
@@ -489,11 +490,22 @@ async fn run_ws_request(
     execute_request(client, req, ws).await
 }
 
-/// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
+/// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`] and flushes it.
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
+    feed_ws_response(ws, resp).await?;
+    ws.flush().await?;
+
+    Ok(())
+}
+
+/// Queues a single [`WebSocketResponse`] on the provided [`WebSocket`] without flushing it, so
+/// the caller must flush before it waits on anything but the socket.
+///
+/// The queue stays bounded. Once it exceeds tungstenite's `write_buffer_size` it is written to
+/// the socket, and a socket that is not writable makes the next call wait.
+async fn feed_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg.into());
-    ws.send(msg).await?;
+    ws.feed(Message::Text(msg.into())).await?;
 
     Ok(())
 }
@@ -1160,7 +1172,7 @@ impl ResultSender for WebSocket {
                                 result_size = result_size.saturating_add(row.byte_len());
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
-                                if let Err(e) = send_ws_response(
+                                if let Err(e) = feed_ws_response(
                                     self,
                                     WebSocketResponse::Row(
                                         datums
@@ -1182,6 +1194,12 @@ impl ResultSender for WebSocket {
                                         Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
                                     );
                                 }
+                            }
+                            if let Err(e) = self.flush().await {
+                                return (
+                                    Err(e.into()),
+                                    Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                                );
                             }
                         }
                         Some(PeekResponseUnary::Error(err)) => {
@@ -1354,7 +1372,7 @@ async fn stream_ws_peek_rows(
                         ));
                     }
                     let datums = datum_vec.borrow_with(row);
-                    send_ws_response(
+                    feed_ws_response(
                         ws,
                         WebSocketResponse::Row(
                             datums
@@ -1370,6 +1388,7 @@ async fn stream_ws_peek_rows(
                     .await?;
                     rows_returned += 1;
                 }
+                ws.flush().await?;
             }
             Some(PeekResponseUnary::Error(error)) => {
                 return Ok(ws_peek_result(
