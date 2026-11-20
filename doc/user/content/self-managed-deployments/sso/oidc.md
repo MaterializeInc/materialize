@@ -491,12 +491,13 @@ is established, it persists until disconnected, regardless of token expiry.
 *OAuth sign-in for MCP clients is available starting in v26.31.*
 
 Materialize provides built-in [MCP servers](/developer-tools/mcp-server/) at
-`/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
-can authenticate with OAuth instead of an [MCP
-token](/developer-tools/mcp-server/mcp-agent/#method-2-token-based-authentication).
+`/api/mcp`, `/api/mcp/agent`, and `/api/mcp/developer`. When SSO is enabled,
+MCP clients can authenticate with OAuth instead of an [MCP
+token](/developer-tools/mcp-server/materialize-mcp/#step-2-get-your-mcp-token).
 Materialize publishes OAuth 2.0 Protected Resource Metadata ([RFC
 9728](https://datatracker.ietf.org/doc/html/rfc9728)) at
-`/.well-known/oauth-protected-resource`, which MCP-aware clients use to
+`/.well-known/oauth-protected-resource` and at
+`/.well-known/oauth-protected-resource/api/mcp`. MCP-aware clients use it to
 discover your identity provider automatically.
 
 Unlike the Console, which authenticates with an ID token, MCP clients present an
@@ -562,11 +563,12 @@ requirements:
 ### Configure your MCP client
 
 1. **Connect.** For example, to connect Claude Code to the
-   `materialize-agent` MCP server with a pre-registered client:
+   [`/api/mcp`](/developer-tools/mcp-server/materialize-mcp/) MCP server with a
+   pre-registered client:
 
    ```shell
-   claude mcp add --transport http materialize-agent \
-     https://<host>:6876/api/mcp/agent \
+   claude mcp add --transport http materialize \
+     https://<host>:6876/api/mcp \
      --client-id <YOUR_CLIENT_ID> --callback-port 8080
    ```
 

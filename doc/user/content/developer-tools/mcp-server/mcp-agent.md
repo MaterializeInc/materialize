@@ -17,6 +17,13 @@ Context Protocol (MCP) server (`/api/mcp/agent`, port 6876) for querying data
 products. The server is provided directly by Materialize; no sidecar process or
 external server is required.
 
+{{< tip >}}
+For new setups, we recommend the [`materialize-mcp`
+server](/developer-tools/mcp-server/materialize-mcp/) at `/api/mcp`. It has the
+same data product tools and the `query` tool, and it can also read the system
+catalog.
+{{< /tip >}}
+
 ## Overview
 
 The `materialize-agent` MCP server lets AI agents query business-facing data

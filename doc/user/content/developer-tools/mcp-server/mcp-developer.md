@@ -17,6 +17,13 @@ Materialize provides a built-in `materialize-developer` Model Context Protocol
 observability. The server is provided directly by Materialize; no sidecar
 process or external server is required.
 
+{{< tip >}}
+For new setups, we recommend the [`materialize-mcp`
+server](/developer-tools/mcp-server/materialize-mcp/) at `/api/mcp`. Its
+`query` tool reads the system catalog and your objects, and the server also
+lists your data products.
+{{< /tip >}}
+
 ## Overview
 
 You can connect an MCP-compatible client (such as Claude Code, Claude Cowork,
