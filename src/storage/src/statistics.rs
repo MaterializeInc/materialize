@@ -1134,7 +1134,7 @@ impl AggregatedStatistics {
     /// Emit a _global_ snapshot of data. This does not include objects whose workers have not
     /// initialized gauges for the current epoch.
     pub fn snapshot(&mut self) -> (Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>) {
-        if !self.worker_id == 0 {
+        if self.worker_id != 0 {
             return (Vec::new(), Vec::new());
         }
 
