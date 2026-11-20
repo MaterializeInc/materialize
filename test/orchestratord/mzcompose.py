@@ -4076,6 +4076,7 @@ def workflow_recreate_with_last_known_status(
     definition["materialize"]["spec"]["environmentdExtraEnv"] = [
         {"name": "RECREATE_WITH_LAST_KNOWN_STATUS_TEST", "value": "true"},
     ]
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
     apply_materialize(definition)
     wait_for_generation(2)
 
