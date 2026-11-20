@@ -20,6 +20,55 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.51.1
+*Released to Materialize Cloud: 2026-11-19 (v26.51.0)* <br>
+*Released to Materialize Self-Managed: 2026-11-20* <br>
+
+### Significant increases in query throughput {#v26.51-qps}
+
+Read-only queries now finish in the session that runs them, instead of taking a round trip through the coordinator. Together with the [improvements in v26.49](#v26.49-qps), Materialize can now serve more than twice as many queries per second as v26.48 with 32 or more concurrent clients.
+
+![Queries per second from 16 to 512 concurrent clients against environmentd running 32 CPUs, v26.48 versus v26.49 versus v26.51: with statement logging on, v26.51 improves QPS over v26.48 by 117% to 164%, for example from 3,302 to 7,487 at 512 clients, and with statement logging off, by 74% to 351%, for example from 5,918 to 24,514 at 512 clients](/images/releases/v2651_qps.png)
+
+We tested v26.48, v26.49, and v26.51, running `environmentd` with 32 CPUs and between 16 and 512 concurrent clients issuing point lookups against an indexed view. At 512 clients, we observed throughput in v26.51 improved over v26.48 by 127% with [statement logging](/self-managed-deployments/query-history/) on, and by 314% with statement logging off. With statement logging off, the gain peaked at 351%, at 128 clients.
+
+### Better freshness when adding tables to MySQL sources {#v26.51-mysql-add-table-freshness}
+
+{{< private-preview />}}
+
+When you add a table to a MySQL source, with `CREATE TABLE ... FROM SOURCE`, Materialize can now snapshot the new table while reading the binlog, as it can for [PostgreSQL sources](#v26.47-postgres-add-table-freshness). This means that existing tables continue making progress during the snapshot. Previously, if you added a new table, progress on existing tables would be halted until the new table's snapshot finished.
+
+### Improvements {#v26.51-improvements}
+- **Up to 88% faster hydration and up to 64% less memory for upsert sources, enabled by default on Materialize Self-Managed**: The [new upsert source implementation and buffer pool](#v26.48-upsert-hydration), which in real-world usage on Materialize Cloud cut upsert source hydration times by 49–88% and memory usage by 13–64%, are now enabled by default on Self-Managed, matching Materialize Cloud. This applies to all existing clusters and to new clusters, as long as they have swap enabled, which is the Self-Managed default. Clusters without swap keep the previous implementation. To revert, run `ALTER SYSTEM SET enable_upsert_v2 = false` (<red>*Materialize Self-Managed only*</red>).
+- **Source creation in a transaction tolerates concurrent DDL**: Building on the [concurrent DDL support for rename and swap transactions](#v26.49-improvements) in v26.49, a transaction that creates a source no longer fails when another session commits an unrelated catalog change while it is running; the statements are replanned against the current catalog and committed atomically.
+- **Faster reads from Google Cloud Storage**: Materialize now fetches a stored object in concurrent 8 MiB ranges rather than over a single connection, which took the median read of a 128 MiB object from about 520 ms to about 125 ms in a benchmark on an `n2-standard-16` instance.
+- **A faster Console object explorer**: The workflow graph now draws from a synced copy of the object graph instead of waiting on queries. Opening another object's graph went from about 1,261 ms to about 21 ms in a local measurement. The Maintained Objects critical path panel now reads only the objects upstream of its probe rather than the whole environment, cutting its median call from about 1,400 ms to about 287 ms at 1,000 objects.
+- **Consistent column defaults in the catalog**: `mz_catalog.mz_columns.default` now reports SQL `NULL` rather than the string `'NULL'` for table columns without a default, matching sources, views, and materialized views; if you manage tables with the Materialize Terraform provider, upgrade it to v0.11.13 or later before you upgrade Materialize.
+- **Balancers drain connections on Self-Managed**: The operator now gives balancer pods a 10-minute termination grace period, configurable through the new `balancerd.terminationGracePeriodSeconds` Helm value, so an eviction, rollout, or node drain lets open client connections finish draining instead of cutting them after 30 seconds.
+- **Iceberg sink schema errors name the offending column**: When an Iceberg sink finds an existing table whose schema does not match, the error now names the first field that differs and how it differs, for example `column_499` having type `string` in the table but `long` in the sink, instead of printing both schemas in full.
+- **`dbt-materialize` 1.9.13**: Version 1.9.13 of the dbt adapter is released, fixing a `refresh_interval` that sets both `at` and `at_creation` rendering without a separating comma and failing to create the materialized view, `deploy_promote` stopping after the swap commits when `git` is not installed, the permission hints `deploy_init` prints not quoting names that need it, the non-empty-schema hint naming an operation that does not exist, and a profile pointing at PostgreSQL retrying instead of failing with a clear message.
+
+### Guides {#v26.51-guides}
+- [Serve results during source stalls](/serve-results/source-stalls/)
+- [Handle upstream constraint changes](/ingest-data/sql-server/source-versioning/#handle-upstream-constraint-changes) for SQL Server sources
+- [Bin packing](/self-managed-deployments/deployment-guidelines/bin-packing/) (<red>*Materialize Self-Managed only*</red>)
+- [Observability tools](/observability/self-managed/o11y-tools/) (<red>*Materialize Self-Managed only*</red>)
+
+### Bug Fixes {#v26.51-bug-fixes}
+- Fixed a dataflow retaining memory proportional to the largest batch it consolidated until the dataflow was dropped, a regression introduced in v26.50.0 that affected consolidation during rendering, including the final consolidation of top-K results.
+- Fixed `environmentd` dropping its connections to every healthy cluster replica at once when it had been too busy to poll them, because a connection read reported a timeout before the keepalives already waiting in its socket buffer.
+- Fixed a cluster process halting with a "cannot serve requested as_of" error, and then repeatedly on replay, after the cluster's only replica reconnected following a network interruption.
+- Fixed a replica crash-looping after a restart when a materialized view with a refresh schedule was being replaced and its replacement carried an error past the last refresh.
+- Fixed a panic at startup when a materialized view awaiting replacement had read further than the view it replaces had written, for example when the replacement reads a table created after the original last wrote.
+- Fixed `environmentd` aborting when the HTTP or WebSocket SQL API returned a `NULL` in an `ARRAY`, `LIST`, or `MAP` built from elements of differing nullability, such as `ARRAY[ROW(1), ROW(x)]`; these constructors now take their element type from all elements rather than the first, as `UNION`, `VALUES`, and `CASE` already do.
+- Fixed `CREATE TABLE` silently accepting a column-level `COLLATE` clause that the planner never applied, which also left such a table unable to be re-planned at startup; unsupported collations are now rejected.
+- Fixed `GRANT` and `REVOKE ... ON ALL ... IN SCHEMA mz_temp` not raising an error, as the other privilege statements against the temporary schema do.
+- Fixed `array_fill` returning a one-dimensional empty array when a requested dimension was zero, and raising an array size error for an empty dimension list; it now returns a zero-dimensional empty array in both cases, matching PostgreSQL.
+- Fixed a refresh schedule or hydration burst being stranded, and an otherwise allowed resize being blocked, when the set of sizes a cluster's owner may use shrank while the cluster controller was realizing a configuration that `ALTER CLUSTER` had already accepted.
+- Fixed the MCP server's catalog-query validation missing three ways to reference a user object — `TABLE t`, a schema-qualified name shadowed by a common table expression, and the `[u1 AS …]` ID form — and rejecting valid catalog queries that use `TABLE` or `WITH MUTUALLY RECURSIVE`.
+- Fixed the Console's role graph breaking every request in the browser tab, until reload, for anyone who opened it after a role named `__proto__` or `cache` was given a member.
+- Updated the Console's nginx base image to nginx 1.31.9, the security update described in [v26.50.2](#v26502) (<red>*Materialize Self-Managed only*</red>).
+
 ## v26.50.2, v26.49.2, v26.44.2, v26.41.3 {#v26502}
 *Released to Materialize Self-Managed: 2026-11-19* <br>
 
