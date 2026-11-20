@@ -21,6 +21,8 @@
 //!    shard's schema in-place. Only works for backward-compatible changes.
 //!  * [`Mechanism::Replacement`] creates a new shard to serve the builtin collection in the new
 //!    version. Works for all schema changes but discards existing data.
+//! * [`Mechanism::Drop`] removes an existing shard in the new version. This is used when converting
+//!   a durable builtin collection to a view.
 //!
 //! Which mechanism to use is selected through entries in the `MIGRATIONS` list. In general, the
 //! `Evolution` mechanism should be used when possible, as it avoids data loss.
@@ -76,12 +78,15 @@ use crate::catalog::migrate::get_migration_version;
 /// can delete all migration steps with versions before `(N-1).0.0`.
 ///
 /// Exception: when a builtin's `SystemObjectDescription` changes — e.g. a builtin table is
-/// converted to a materialized view (see `migrate_builtin_tables_to_mvs`), or a builtin is
+/// converted to a materialized view (see `migrate_builtin_item_types`), or a builtin is
 /// renamed or removed — existing steps naming the old description must be removed regardless
 /// of version, because `validate_migration_steps` panics on steps that don't resolve to a
 /// current builtin. This is safe only if a `Replacement` step for the new description is added
 /// at the conversion version: every environment that needed the removed steps upgrades from an
 /// even older version, so the new replacement subsumes them.
+///
+/// For a builtin converted to a view, that step is a `Drop`, because a view is not a storage
+/// collection. `Migration::run` soft-asserts that no view is left with a shard.
 ///
 /// Smallest supported version: 0.147.0
 static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
@@ -654,6 +659,11 @@ enum Mechanism {
     ///
     /// Works for arbitrary schema changes but loses existing contents.
     Replacement,
+    /// Shard drop.
+    ///
+    /// For a builtin that stopped being a storage collection, such as a table converted to a
+    /// view. Its shard is finalized and it gets no new one.
+    Drop,
 }
 
 /// The result of a builtin schema migration.
@@ -756,6 +766,8 @@ pub(super) async fn run(
 /// Result produced by `Migration::run`.
 struct MigrationRunResult {
     new_shards: BTreeMap<GlobalId, ShardId>,
+    /// IDs of items whose shards have been dropped using the `Drop` mechanism.
+    dropped_collections: BTreeSet<GlobalId>,
     new_fingerprints: BTreeMap<SystemObjectDescription, String>,
     shards_to_finalize: BTreeSet<ShardId>,
     cleanup_action: BoxFuture<'static, ()>,
@@ -765,6 +777,7 @@ impl Default for MigrationRunResult {
     fn default() -> Self {
         Self {
             new_shards: BTreeMap::new(),
+            dropped_collections: BTreeSet::new(),
             new_fingerprints: BTreeMap::new(),
             shards_to_finalize: BTreeSet::new(),
             cleanup_action: async {}.boxed(),
@@ -776,7 +789,8 @@ impl MigrationRunResult {
     /// Apply this migration result to the given transaction.
     fn apply(&self, txn: &mut Transaction<'_>) {
         // Update collection metadata.
-        let replaced_ids = self.new_shards.keys().copied().collect();
+        let mut replaced_ids: BTreeSet<_> = self.new_shards.keys().copied().collect();
+        replaced_ids.extend(self.dropped_collections.iter().copied());
         let old_metadata = txn.delete_collection_metadata(replaced_ids);
         txn.insert_collection_metadata(self.new_shards.clone())
             .expect("inserting unique shards IDs after deleting existing entries");
@@ -836,6 +850,17 @@ struct Migration {
     migration_shard: ShardId,
     /// Additional configuration.
     config: BuiltinItemMigrationConfig,
+}
+
+/// Whether a migration step may use `mechanism` for a `builtin`.
+fn supports_migration_step(builtin: &Builtin<NameReference>, mechanism: Mechanism) -> bool {
+    use Builtin::*;
+    match builtin {
+        Table(..) | Source(..) | MaterializedView(..) => mechanism != Mechanism::Drop,
+        // The only shard a view can have is the one left from when it was a storage collection.
+        View(..) => mechanism == Mechanism::Drop,
+        Log(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
+    }
 }
 
 /// Whether `builtin` participates in a forced migration using `mechanism`.
@@ -912,12 +937,25 @@ impl Migration {
 
         info!("executing migration plan: {plan:?}");
 
+        // A view cannot use a shard. One that has a shard was a storage collection in the source
+        // version and must need a `Drop` step.
+        for (object, info) in &self.system_objects {
+            let has_stray_shard =
+                matches!(info.builtin, Builtin::View(..)) && info.shard_id.is_some();
+            soft_assert_or_log!(
+                !has_stray_shard || plan.drop.contains(object),
+                "builtin {object:?} became a view without a `Drop` step for its shard",
+            );
+        }
+
         self.migrate_evolve(&plan.evolve).await?;
         let new_shards = self.migrate_replace(&plan.replace).await?;
+        let dropped_collections = self.migrate_drop(&plan.drop)?;
 
         let mut migrated_objects = BTreeSet::new();
         migrated_objects.extend(plan.evolve);
         migrated_objects.extend(plan.replace);
+        migrated_objects.extend(plan.drop);
 
         let new_fingerprints = self.update_fingerprints(&migrated_objects)?;
 
@@ -925,6 +963,7 @@ impl Migration {
 
         Ok(MigrationRunResult {
             new_shards,
+            dropped_collections,
             new_fingerprints,
             shards_to_finalize,
             cleanup_action,
@@ -1011,10 +1050,10 @@ impl Migration {
             };
 
             let builtin = object_info.builtin;
-            use Builtin::*;
             assert!(
-                matches!(builtin, Table(..) | Source(..) | MaterializedView(..)),
-                "schema migration not supported for builtin: {builtin:?}",
+                supports_migration_step(builtin, step.mechanism),
+                "{:?} migration not supported for builtin: {builtin:?}",
+                step.mechanism,
             );
         }
     }
@@ -1026,11 +1065,13 @@ impl Migration {
 
         // Select a mechanism for each object, according to the requested migrations:
         //  * If any `Replacement` was requested, use `Replacement`.
+        //  * If any `Drop` was requested, use `Drop`.
         //  * Otherwise, (i.e. only `Evolution` was requested), use `Evolution`.
         let mut by_object = BTreeMap::new();
         for step in steps {
             if let Some(entry) = by_object.get_mut(&step.object) {
                 *entry = match (step.mechanism, *entry) {
+                    (Mechanism::Drop, _) | (_, Mechanism::Drop) => Mechanism::Drop,
                     (Mechanism::Evolution, Mechanism::Evolution) => Mechanism::Evolution,
                     (Mechanism::Replacement, _) | (_, Mechanism::Replacement) => {
                         Mechanism::Replacement
@@ -1046,6 +1087,7 @@ impl Migration {
             match mechanism {
                 Mechanism::Evolution => plan.evolve.push(object),
                 Mechanism::Replacement => plan.replace.push(object),
+                Mechanism::Drop => plan.drop.push(object),
             }
         }
 
@@ -1065,7 +1107,19 @@ impl Migration {
         match mechanism {
             Mechanism::Evolution => plan.evolve = objects,
             Mechanism::Replacement => plan.replace = objects,
+            Mechanism::Drop => unreachable!("forced migrations use evolution or replacement"),
         }
+
+        // Although there exists no explicit forced migration for Drop, we still want to clear
+        // any shards that now belong to views. Thus we include them in the plan for drop and
+        // Migration::run ensures only views with shards are dropped via `drop_shardless`.
+        let views = self
+            .system_objects
+            .iter()
+            .filter(|(_, info)| matches!(info.builtin, Builtin::View(..)))
+            .map(|(object, _)| object.clone())
+            .collect();
+        plan.drop = views;
 
         plan
     }
@@ -1079,6 +1133,8 @@ impl Migration {
     /// nothing to evolve or replace. Applied to every plan, forced or versioned, so that both
     /// paths agree; a read-only process that reached `migrate_evolve_one` with such an object
     /// would otherwise bail out and crash-loop.
+    ///
+    /// A view has a shard to drop only if it was a storage collection in the source version.
     fn drop_shardless(&self, mut plan: Plan) -> Plan {
         let has_shard = |object: &SystemObjectDescription| {
             self.system_objects
@@ -1087,6 +1143,7 @@ impl Migration {
         };
         plan.evolve.retain(has_shard);
         plan.replace.retain(has_shard);
+        plan.drop.retain(has_shard);
         plan
     }
 
@@ -1288,6 +1345,30 @@ impl Migration {
         };
 
         Ok(replaced_shards)
+    }
+
+    /// Migrate the given objects using the `Drop` mechanism, returning their IDs.
+    ///
+    /// Nothing happens in persist here. `MigrationRunResult::apply` removes the collection
+    /// metadata and queues the shards for finalization.
+    fn migrate_drop(
+        &self,
+        objects: &[SystemObjectDescription],
+    ) -> anyhow::Result<BTreeSet<GlobalId>> {
+        let mut ids_to_drop = BTreeSet::new();
+        for object in objects {
+            if let Some(info) = self.system_objects.get(object) {
+                ids_to_drop.insert(info.global_id);
+            } else {
+                bail!("missing id for builtin {object:?}");
+            }
+        }
+
+        if !ids_to_drop.is_empty() {
+            info!(?objects, ?ids_to_drop, "migrating by drop");
+        }
+
+        Ok(ids_to_drop)
     }
 
     /// Try to get or insert replacement shards for the given IDs into the migration shard, at
@@ -1602,6 +1683,8 @@ struct Plan {
     evolve: Vec<SystemObjectDescription>,
     /// Objects to migrate using the `Replacement` mechanism.
     replace: Vec<SystemObjectDescription>,
+    /// Objects to migrate using the `Drop` mechanism.
+    drop: Vec<SystemObjectDescription>,
 }
 
 /// Types and persist codec impls for the migration shard used by the `Replacement` mechanism.

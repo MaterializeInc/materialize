@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mz_catalog::builtin::{BuiltinSource, BuiltinTable};
+use mz_catalog::builtin::{BuiltinSource, BuiltinTable, BuiltinView};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{RelationDesc, SqlScalarType};
@@ -26,6 +26,30 @@ use semver::Version;
 use tracing::info;
 
 use super::*;
+use crate::catalog::Catalog;
+
+#[mz_ore::test]
+fn drop_is_the_only_mechanism_for_a_view() {
+    let (_, table) = make_builtin_table("table".into());
+    let (_, view) = make_builtin_view("view".into());
+    for mechanism in [
+        Mechanism::Evolution,
+        Mechanism::Replacement,
+        Mechanism::Drop,
+    ] {
+        let is_drop = mechanism == Mechanism::Drop;
+        assert_eq!(
+            supports_migration_step(view, mechanism),
+            is_drop,
+            "{mechanism:?} step naming a view"
+        );
+        assert_eq!(
+            supports_migration_step(table, mechanism),
+            !is_drop,
+            "{mechanism:?} step naming a table"
+        );
+    }
+}
 
 #[mz_ore::test]
 fn hydration_history_forced_migration_policy() {
@@ -156,6 +180,166 @@ fn test_evolution_skips_builtin_without_shard() {
             "{name}: the builtin without a shard must be skipped"
         );
     }
+}
+
+/// A table converted to a view reaches the migration as a view that still has the table's shard.
+/// Its `Drop` step must remove that shard without allocating a new one, where the `Replacement`
+/// of a table allocates one. A forced migration ignores the steps and must find the view by
+/// itself.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_drop_leaves_view_without_shard() {
+    let persist_client = PersistClientCache::new_no_metrics()
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("in-memory persist");
+
+    let (table_object, table_builtin) = make_builtin_table("table".into());
+    let (converted_object, converted_builtin) = make_builtin_view("converted".into());
+    let (plain_object, plain_builtin) = make_builtin_view("plain".into());
+    let (table_id, converted_id, plain_id) = (
+        GlobalId::System(1),
+        GlobalId::System(2),
+        GlobalId::System(3),
+    );
+    let mut system_objects = BTreeMap::new();
+    system_objects.insert(
+        table_object.clone(),
+        ObjectInfo {
+            global_id: table_id,
+            shard_id: Some(ShardId::new()),
+            builtin: evolve_builtin_desc(table_builtin),
+            fingerprint: table_builtin.fingerprint(),
+        },
+    );
+    // `migrate_builtin_item_types` rewrote this mapping from table to view, which keeps the
+    // table's shard and fingerprint.
+    system_objects.insert(
+        converted_object.clone(),
+        ObjectInfo {
+            global_id: converted_id,
+            shard_id: Some(ShardId::new()),
+            builtin: converted_builtin,
+            fingerprint: table_builtin.fingerprint(),
+        },
+    );
+    // A view that was never a storage collection.
+    system_objects.insert(
+        plain_object,
+        ObjectInfo {
+            global_id: plain_id,
+            shard_id: None,
+            builtin: plain_builtin,
+            fingerprint: plain_builtin.fingerprint(),
+        },
+    );
+
+    let target_version = Version::new(0, 3, 0);
+    let steps = vec![
+        MigrationStep {
+            version: Version::new(0, 2, 0),
+            object: table_object,
+            mechanism: Mechanism::Replacement,
+        },
+        MigrationStep {
+            version: Version::new(0, 2, 0),
+            object: converted_object,
+            mechanism: Mechanism::Drop,
+        },
+    ];
+
+    // Upgrading from a dev version forces an `Evolution` of every object, which evolves the
+    // table in place. The platform checks force a `Replacement` instead, which replaces it.
+    let cases = [
+        ("versioned", Version::new(0, 1, 0), None, true),
+        (
+            "forced-evolution",
+            Version::parse("0.1.0-dev.0").unwrap(),
+            None,
+            false,
+        ),
+        (
+            "forced-replacement",
+            Version::new(0, 1, 0),
+            Some("replacement"),
+            true,
+        ),
+    ];
+    for (case, source_version, force_migration, table_replaced) in cases {
+        let migration_shard_id = ShardId::new();
+        for (mode, read_only) in [("read-only", true), ("leader", false)] {
+            let name = format!("{case}-{mode}");
+            let migration = Migration {
+                source_version: source_version.clone(),
+                target_version: target_version.clone(),
+                deploy_generation: 1,
+                system_objects: system_objects.clone(),
+                migration_shard: migration_shard_id,
+                config: BuiltinItemMigrationConfig {
+                    persist_client: persist_client.clone(),
+                    read_only,
+                    force_migration: force_migration.map(String::from),
+                },
+            };
+            let res = migration
+                .run(&steps)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: migration failed: {e}"));
+            assert_eq!(
+                res.dropped_collections,
+                BTreeSet::from([converted_id]),
+                "{name}: the converted view, and no other object, must lose its shard"
+            );
+            assert!(
+                !res.new_shards.contains_key(&converted_id),
+                "{name}: the converted view must not get a new shard"
+            );
+            assert_eq!(
+                res.new_shards.contains_key(&table_id),
+                table_replaced,
+                "{name}: the table must get a new shard only when it is replaced"
+            );
+        }
+    }
+}
+
+/// The durable effect of a migration: a replaced collection is pointed at its new shard, a
+/// dropped one keeps no shard, and both old shards are queued for finalization.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_apply_drops_shard_without_replacement() {
+    Catalog::with_debug(|catalog| async move {
+        {
+            let mut storage = catalog.storage().await;
+            let mut txn = storage.transaction().await.expect("transaction");
+
+            let replaced_id = GlobalId::System(1_000_001);
+            let dropped_id = GlobalId::System(1_000_002);
+            let (replaced_old, replaced_new, dropped_old) =
+                (ShardId::new(), ShardId::new(), ShardId::new());
+            txn.insert_collection_metadata(
+                [(replaced_id, replaced_old), (dropped_id, dropped_old)].into(),
+            )
+            .expect("ids have no shards yet");
+
+            let result = MigrationRunResult {
+                new_shards: [(replaced_id, replaced_new)].into(),
+                dropped_collections: [dropped_id].into(),
+                ..Default::default()
+            };
+            result.apply(&mut txn);
+
+            let metadata = txn.get_collection_metadata();
+            assert_eq!(metadata.get(&replaced_id), Some(&replaced_new));
+            assert_eq!(metadata.get(&dropped_id), None);
+            let unfinalized = txn.get_unfinalized_shards();
+            assert!(unfinalized.contains(&replaced_old));
+            assert!(unfinalized.contains(&dropped_old));
+            assert!(!unfinalized.contains(&replaced_new));
+        }
+        catalog.expire().await;
+    })
+    .await;
 }
 
 #[test] // allow(test-attribute)
@@ -423,6 +607,30 @@ fn make_builtin_table(name: String) -> (SystemObjectDescription, &'static Builti
     (object, builtin)
 }
 
+fn make_builtin_view(name: String) -> (SystemObjectDescription, &'static Builtin<NameReference>) {
+    let object = SystemObjectDescription {
+        schema_name: "schema".into(),
+        object_type: CatalogItemType::View,
+        object_name: name.clone(),
+    };
+
+    let builtin = BuiltinView {
+        name: name.leak(),
+        schema: "schema",
+        oid: 1,
+        desc: RelationDesc::builder()
+            .with_column("a", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "SELECT 'a' AS a",
+        access: Vec::new(),
+        ontology: None,
+    };
+    let builtin = leak(Builtin::View(leak(builtin)));
+
+    (object, builtin)
+}
+
 fn make_builtin_source(name: String) -> (SystemObjectDescription, &'static Builtin<NameReference>) {
     let object = SystemObjectDescription {
         schema_name: "schema".into(),
@@ -550,9 +758,13 @@ fn init_persist(sim: &mut turmoil::Sim) -> PersistLocation {
 #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_migration_steps_resolve_to_builtins() {
     for step in MIGRATIONS.iter() {
+        let Some((_, builtin)) = BUILTIN_LOOKUP.get(&step.object) else {
+            panic!("migration step for non-existent builtin: {:?}", step.object);
+        };
         assert!(
-            BUILTIN_LOOKUP.contains_key(&step.object),
-            "migration step for non-existent builtin: {:?}",
+            supports_migration_step(builtin, step.mechanism),
+            "{:?} migration not supported for builtin: {:?}",
+            step.mechanism,
             step.object
         );
     }
