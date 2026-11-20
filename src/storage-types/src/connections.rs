@@ -1732,6 +1732,13 @@ impl KafkaConnection {
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
                 options.insert("ssl.ca.pem".into(), root_cert.clone());
+            } else if let Ok(ca_file) = std::env::var("SSL_CERT_FILE") {
+                // librdkafka ignores `SSL_CERT_FILE` when it finds a CA bundle
+                // at one of its built-in paths, which would skip the bundle
+                // `--additional-trust-bundle` installs. Setting the location
+                // alongside `ssl.ca.pem` would make a connection's own CA add
+                // to these CAs instead of replacing them.
+                options.insert("ssl.ca.location".into(), ca_file.into());
             }
             if let Some(identity) = &tls.identity {
                 options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
