@@ -54,6 +54,9 @@
 /src/build-id                       @MaterializeInc/cluster
 /src/build-info                     @MaterializeInc/testing @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter
+# changes to the builtin registry snapshots decide LIR_VERSION bumps
+/src/catalog/tests/builtin_registry.rs @MaterializeInc/adapter @MaterializeInc/cluster
+/src/catalog/tests/snapshots/builtin_registry* @MaterializeInc/adapter @MaterializeInc/cluster
 /src/catalog-debug                  @MaterializeInc/adapter
 /src/catalog-decode                 @MaterializeInc/adapter
 /src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
