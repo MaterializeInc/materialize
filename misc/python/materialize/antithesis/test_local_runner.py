@@ -1,0 +1,1020 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+
+from materialize.antithesis import local_runner as runner
+from materialize.antithesis import local_scheduler as scheduling
+
+
+def command(
+    tmp_path,
+    name="parallel_driver_history",
+    family="history",
+    mode="parallel",
+    body="import time; time.sleep(0.15)",
+):
+    path = tmp_path / f"{name}.py"
+    path.write_text(body)
+    return scheduling.Command(path, family, mode)
+
+
+def worker(path, seed, output):
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "materialize.antithesis.local_runner",
+            "--worker",
+            str(path),
+            "--seed",
+            str(seed),
+        ],
+        env={**os.environ, "ANTITHESIS_SDK_LOCAL_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def test_child_seed_controls_real_workload_random_draws(tmp_path):
+    source = command(
+        tmp_path,
+        body="import json; from materialize.antithesis.rng import rng; print(json.dumps([rng.randrange(1000000) for _ in range(10)]))",
+    )
+    results = [
+        worker(source.path, seed, tmp_path / f"sdk-{i}.jsonl")
+        for i, seed in enumerate((17, 17, 18))
+    ]
+    assert all(result.returncode == 0 for result in results)
+    values = [result.stdout.splitlines()[-1] for result in results]
+    assert values[0] == values[1] != values[2]
+    assert scheduling.child_seed(1, source.path.name, 1) != scheduling.child_seed(
+        1, source.path.name, 2
+    )
+
+
+@pytest.mark.parametrize("family,limit", list(scheduling.EXCLUSIVE.items()))
+def test_only_known_exclusive_families_are_capped(tmp_path, family, limit):
+    source = command(tmp_path, family=family)
+    assert scheduling.compatible(source, [source] * (limit - 1), 8)
+    assert not scheduling.compatible(source, [source] * limit, 8)
+    ordinary = command(tmp_path, name="parallel_driver_history_other")
+    assert scheduling.compatible(ordinary, [ordinary] * 7, 8)
+
+
+def test_serial_can_share_with_anytime_but_not_other_drivers(tmp_path):
+    ordinary = command(tmp_path)
+    serial = command(tmp_path, "serial_driver_test", "serial_test", "serial")
+    check = command(tmp_path, "anytime_check", "check", "anytime")
+    assert scheduling.compatible(serial, [check], 8)
+    assert scheduling.compatible(check, [serial], 8)
+    assert not scheduling.compatible(serial, [ordinary], 8)
+    assert not scheduling.compatible(ordinary, [serial], 8)
+
+
+def test_ordinary_fault_aliases_share_one_local_slot(tmp_path):
+    first = command(tmp_path, "parallel_driver_fault_a", "pod_restarts")
+    alias = command(tmp_path, "parallel_driver_fault_b", "pod_restarts")
+    assert not scheduling.compatible(alias, [first], 12)
+    for family in ("history", "ivm", "upsert_recovery"):
+        scoped = command(tmp_path, f"parallel_driver_{family}_interleaving", family)
+        assert scheduling.compatible(scoped, [first], 12)
+
+
+@pytest.mark.parametrize("family", ["history", "ivm"])
+def test_cr_interleavers_share_one_slot_without_serializing_other_sql(tmp_path, family):
+    first = scheduling.Command(
+        command(tmp_path, "parallel_driver_first", "history").path,
+        "history",
+        "parallel",
+        "cr_interleaving",
+    )
+    alias = scheduling.Command(
+        command(tmp_path, "parallel_driver_alias", family).path,
+        family,
+        "parallel",
+        "cr_interleaving",
+    )
+    assert not scheduling.compatible(alias, [first], 12)
+    assert not scheduling.compatible(first, [alias], 12)
+    for name, mode in (
+        ("parallel_driver_writes", "parallel"),
+        ("anytime_check", "anytime"),
+    ):
+        ordinary = command(tmp_path, name, family, mode)
+        assert scheduling.compatible(ordinary, [first], 12)
+        assert scheduling.compatible(first, [ordinary], 12)
+
+
+@pytest.mark.parametrize("interval", [0.0, 3.0])
+def test_local_fault_cooldown_follows_completion_without_stalling_sql(
+    monkeypatch, tmp_path, interval
+):
+    now = [100.0]
+    monkeypatch.setattr(scheduling.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        scheduling.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    monkeypatch.setattr(scheduling.os, "killpg", lambda *args: None)
+    created = []
+
+    class Process:
+        def __init__(self, args, **kwargs):
+            self.pid = 200000 + len(created)
+            self.returncode = None
+            self.finished = now[0] + (2 if "fault" in args[5] else 0.2)
+            created.append(self)
+
+        def poll(self):
+            if now[0] >= self.finished:
+                self.returncode = 0
+            return self.returncode
+
+    monkeypatch.setattr(scheduling.subprocess, "Popen", Process)
+    sources = [
+        command(tmp_path, "parallel_driver_fault_a", "pod_restarts"),
+        command(tmp_path, "parallel_driver_fault_b", "pod_restarts"),
+        command(tmp_path, "parallel_driver_history", "history"),
+        command(tmp_path, "parallel_driver_history_interleaving", "history"),
+        command(tmp_path, "parallel_driver_ivm_interleaving", "ivm"),
+        command(tmp_path, "parallel_driver_upsert_interleaving", "upsert_recovery"),
+    ]
+    scheduler = scheduling.Scheduler(
+        tmp_path, 12, 7, 100, 0.1, 5, drain_timeout=3, fault_interval=interval
+    )
+    scheduler.phase(sources, 8)
+    faults = sorted(
+        (row for row in scheduler.completed if row["family"] == "pod_restarts"),
+        key=lambda row: row["started"],
+    )
+    assert len(faults) >= 2
+    assert faults[0]["started"] == 100.0
+    assert {row["command"] for row in faults} == {
+        source.path.name for source in sources[:2]
+    }
+    assert scheduler.max_running == 12
+    assert all(
+        row["returncode"] == 0 and row["incomplete"] is None
+        for row in scheduler.completed
+    )
+    for first, following in zip(faults, faults[1:]):
+        assert following["started"] >= first["finished"] + interval
+    if interval:
+        for source in sources[2:]:
+            assert any(
+                row["command"] == source.path.name
+                and faults[0]["finished"]
+                < row["started"]
+                < faults[0]["finished"] + interval
+                for row in scheduler.completed
+            )
+
+
+def test_higher_concurrency_runs_overlapping_ordinary_writers(tmp_path):
+    source = command(tmp_path)
+    scheduler = scheduling.Scheduler(tmp_path, 8, 17, 5, 0.1, 5)
+    scheduler.phase([source], 1)
+    assert scheduler.max_running == 8
+    assert (source.path.name, source.path.name) in scheduler.overlaps
+    assert scheduler.completed
+    assert len({row["seed"] for row in scheduler.completed}) == len(scheduler.completed)
+    assert all(row["finished"] >= row["started"] for row in scheduler.completed)
+
+
+def test_process_group_cleanup_kills_term_ignoring_descendant(tmp_path):
+    child_pid = tmp_path / "child.pid"
+    body = f"""
+import subprocess,sys,time
+subprocess.Popen([sys.executable,'-c',"import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); open({str(child_pid)!r},'w').write(str(os.getpid())); time.sleep(60)"])
+time.sleep(60)
+"""
+    source = command(tmp_path, body=body)
+    scheduler = scheduling.Scheduler(tmp_path, 1, 1, 5, 0.1, 5)
+    scheduler.start(source)
+    try:
+        deadline = time.monotonic() + 5
+        while not child_pid.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert child_pid.exists()
+        pid = int(child_pid.read_text())
+    finally:
+        scheduler.reap(phase_end=True)
+    stat = Path(f"/proc/{pid}/stat")
+    deadline = time.monotonic() + 1
+    while (
+        stat.exists()
+        and stat.read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    assert scheduler.completed[0]["incomplete"] == "phase_deadline"
+
+
+def test_real_sdk_false_invariants_are_failures_even_with_exit_zero(tmp_path):
+    pytest.importorskip("antithesis")
+    source = command(
+        tmp_path,
+        body="""
+from antithesis.assertions import always_or_unreachable, unreachable, sometimes
+always_or_unreachable(False, 'actual wrong result')
+unreachable('actual unexpected error')
+sometimes(False, 'optional coverage is not an invariant failure')
+""",
+    )
+    result = worker(source.path, 1, tmp_path / "real.sdk.jsonl")
+    assert result.returncode == 0
+    proof = runner.evidence(tmp_path)
+    assert {row["assertion"]["message"] for row in proof["false_hits"]} == {
+        "actual wrong result",
+        "actual unexpected error",
+    }
+
+
+def test_declarations_false_guidance_and_other_rounds_do_not_fake_failures_or_witnesses(
+    tmp_path,
+):
+    records = [
+        {
+            "antithesis_assert": {
+                "id": "unhit",
+                "message": "optional",
+                "hit": False,
+                "condition": False,
+                "assert_type": "always",
+            }
+        },
+        {"workload_coverage": {"message": "absent witness", "observed": False}},
+        {
+            "antithesis_interleaving": {
+                "round": "a",
+                "stage": "disruption",
+                "outcome": "acked",
+                "mode": "held_append",
+            }
+        },
+        {
+            "antithesis_interleaving": {
+                "round": "b",
+                "stage": "checked",
+                "successful_reads": 1,
+            }
+        },
+    ]
+    path = tmp_path / "invocation.sdk.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in records))
+    proof = runner.evidence(tmp_path)
+    assert not proof["false_hits"] and not proof["evaluated_invariants"]
+    assert len(proof["declared_only_invariants"]) == 1
+    assert (
+        not proof["positive_witnesses"] and not proof["diagnostic_checked_fault_rounds"]
+    )
+    with path.open("a") as output:
+        output.write(
+            json.dumps(
+                {
+                    "antithesis_interleaving": {
+                        "round": "a",
+                        "stage": "checked",
+                        "successful_reads": 1,
+                    }
+                }
+            )
+            + "\n"
+        )
+    proof = runner.evidence(tmp_path)
+    assert len(proof["diagnostic_checked_fault_rounds"]) == 1
+    assert not proof["coherent_fault_rounds"]
+
+
+def _history_protocol():
+    metadata = {
+        "profile": "transactions",
+        "command": "parallel_driver_history_interleavings.py",
+        "round": "71:123",
+        "mode": "held_append",
+        "epoch": 3,
+        "key": 1,
+        "read_key": None,
+    }
+    return [
+        {**metadata, "stage": "start"},
+        {
+            **metadata,
+            "stage": "disruption",
+            "action": "delete",
+            "outcome": "acked",
+            "role": "clusterd",
+            "pod_uid": "6ee856f5-508c-4b74-b803-df57fbf28340",
+            "cluster_id": "u2",
+        },
+        {**metadata, "stage": "write", "write_id": 17, "outcome": "ok"},
+        {
+            **metadata,
+            "stage": "checked",
+            "write_id": 17,
+            "read_id": 19,
+            "successful_reads": 1,
+            "observed_write": True,
+        },
+        {**metadata, "stage": "end", "outcome": "completed"},
+    ]
+
+
+def _protocol_evidence(tmp_path, records):
+    (tmp_path / "protocol.sdk.jsonl").write_text(
+        "".join(json.dumps({"antithesis_interleaving": row}) + "\n" for row in records)
+    )
+    return runner.evidence(tmp_path)
+
+
+def test_coherent_protocol_does_not_claim_strict_fault_exposure(tmp_path):
+    proof = _protocol_evidence(tmp_path, _history_protocol())
+    assert len(proof["coherent_fault_rounds"]) == 1
+    assert len(proof["diagnostic_checked_fault_rounds"]) == 1
+    assert not proof["authoritative_fault_witnesses"]
+    assert "checked_fault_rounds" not in proof
+
+
+@pytest.mark.parametrize(
+    "index,changes",
+    [
+        (3, {"observed_write": False}),
+        (4, {"outcome": "unresolved"}),
+        (3, {"epoch": 4}),
+        (3, {"write_id": 18}),
+        (1, {"role": "environmentd"}),
+        (1, {"pod_uid": None}),
+        (2, {"outcome": "rejected"}),
+        (2, {"command": "parallel_driver_other.py"}),
+    ],
+)
+def test_incomplete_or_conflicting_protocol_stays_diagnostic(tmp_path, index, changes):
+    records = _history_protocol()
+    records[index].update(changes)
+    proof = _protocol_evidence(tmp_path, records)
+    assert len(proof["diagnostic_checked_fault_rounds"]) == 1
+    assert not proof["coherent_fault_rounds"]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing_start", "missing_end", "early_check", "duplicate_write"]
+)
+def test_protocol_requires_complete_ordered_round(tmp_path, mutation):
+    records = _history_protocol()
+    if mutation == "missing_start":
+        records.pop(0)
+    elif mutation == "missing_end":
+        records.pop()
+    elif mutation == "early_check":
+        records[1], records[3] = records[3], records[1]
+    else:
+        records.insert(3, dict(records[2]))
+    proof = _protocol_evidence(tmp_path, records)
+    assert len(proof["diagnostic_checked_fault_rounds"]) == 1
+    assert not proof["coherent_fault_rounds"]
+
+
+def test_racing_write_may_finish_before_delete_ack_without_proving_exposure(tmp_path):
+    records = _history_protocol()
+    for record in records:
+        record["mode"] = "race_append"
+    records[1], records[2] = records[2], records[1]
+    proof = _protocol_evidence(tmp_path, records)
+    assert len(proof["coherent_fault_rounds"]) == 1
+    assert not proof["authoritative_fault_witnesses"]
+
+
+def test_strict_exposure_requires_positive_authoritative_coverage(tmp_path):
+    proof = _protocol_evidence(tmp_path, _history_protocol())
+    assert not proof["authoritative_fault_witnesses"]
+    message = "coverage: a later read checked a write unresolved throughout an active-generation delete"
+    observation = {
+        "message": message,
+        "observed": True,
+        "location": {"file": "/usr/lib/materialize/antithesis/telemetry_coverage.py"},
+        "details": {
+            "combinations": [
+                ["Applied", "environmentd_active", "append", "index", "ok"]
+            ],
+            "reads": 1,
+        },
+    }
+    path = tmp_path / "coverage.sdk.jsonl"
+    for changes in ({"observed": False}, {"location": {"file": "/tmp/other.py"}}):
+        path.write_text(
+            json.dumps({"workload_coverage": {**observation, **changes}}) + "\n"
+        )
+        assert not runner.evidence(tmp_path)["authoritative_fault_witnesses"]
+    path.write_text(json.dumps({"workload_coverage": observation}) + "\n")
+    proof = runner.evidence(tmp_path)
+    assert set(proof["authoritative_fault_witnesses"]) == {message}
+    assert proof["fault_round_attribution_available"] is False
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"harness_health": {"valid": False}},
+        {"workload_harness_error": {"component": "ledger"}},
+        {"antithesis_error": {"message": "invalid details"}},
+        {"workload_coverage": {"message": "invalid boolean", "observed": "yes"}},
+        {"antithesis_interleaving": None},
+    ],
+)
+def test_invalid_health_sdk_and_harness_payloads_are_not_clean(tmp_path, record):
+    if record == {"antithesis_interleaving": None}:
+        record = {"antithesis_interleaving": {"round": 7}}
+    (tmp_path / "bad.sdk.jsonl").write_text(json.dumps(record) + "\n")
+    assert runner.evidence(tmp_path)["harness_errors"]
+
+
+def test_counter_delta_uses_only_this_local_interval_and_rejects_reset():
+    before = {
+        "commands": [
+            {"profile": "contracts", "command": "driver", "completed": 19, "cpu_s": 3.0}
+        ]
+    }
+    after = {
+        "commands": [
+            {"profile": "contracts", "command": "driver", "completed": 21, "cpu_s": 3.2}
+        ]
+    }
+    delta = runner.counter_delta(before, after, "commands", ("profile", "command"))
+    assert delta[0]["completed"] == 2
+    assert delta[0]["cpu_s"] == pytest.approx(0.2)
+    with pytest.raises(ValueError, match="regressed"):
+        runner.counter_delta(after, before, "commands", ("profile", "command"))
+
+
+def test_counter_delta_omits_retained_rows_without_current_work():
+    previous = {
+        "comparisons": [
+            {"command": "old.py", "outcome": "passed", "units": 1000},
+            {"command": "current.py", "outcome": "passed", "units": 4},
+        ]
+    }
+    current = {
+        "comparisons": [
+            previous["comparisons"][0],
+            {"command": "current.py", "outcome": "passed", "units": 5},
+        ]
+    }
+    assert runner.counter_delta(
+        previous, current, "comparisons", ("command", "outcome")
+    ) == [{"command": "current.py", "outcome": "passed", "units": 1}]
+
+
+@pytest.fixture
+def experiment(monkeypatch, tmp_path):
+    monkeypatch.setenv("MZ_ANTITHESIS_STATE_DIR", str(tmp_path / "state"))
+    setup = command(tmp_path, "first_configure", "configure", "first", "pass")
+    driver = command(
+        tmp_path,
+        "parallel_driver_test",
+        "test",
+        "parallel",
+        "import time; time.sleep(0.02)",
+    )
+    checker = command(tmp_path, "finally_check", "check", "finally", "pass")
+    monkeypatch.setattr(runner, "discover", lambda directory: [setup, driver, checker])
+    healthy = {
+        "telemetry_available": True,
+        "harness_health": {"valid": True, "errors": 0},
+        "active_commands": 0,
+    }
+    monkeypatch.setattr(
+        runner,
+        "telemetry_snapshot",
+        lambda output, label: {
+            **healthy,
+            "comparisons": (
+                []
+                if label == "before"
+                else [
+                    {
+                        "profile": "transactions",
+                        "command": driver.path.name,
+                        "family": "test",
+                        "path": "table",
+                        "outcome": "passed",
+                        "units": 1,
+                    }
+                ]
+            ),
+        },
+    )
+    args = argparse.Namespace(
+        output=tmp_path / "result",
+        templates=tmp_path,
+        profile="transactions",
+        duration=0.25,
+        concurrency=2,
+        seed=7,
+        command_timeout=1,
+        setup_timeout=2,
+        shutdown_grace=0.05,
+        check_interval=5,
+        include=[],
+        check=[],
+        require_witness=[],
+        require_comparison=[],
+        skip_first=True,
+    )
+    return args, driver, checker, setup
+
+
+def test_initial_false_sdk_assertion_stops_before_workloads(monkeypatch, experiment):
+    args, driver, _, setup = experiment
+    args.skip_first = False
+    setup.path.write_text(
+        "from antithesis.assertions import always_or_unreachable; always_or_unreachable(False,'bad initialization')"
+    )
+    assert runner.run(args) == 1
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["stage"] == "initialization" and report["false_hits"]
+    assert not any(row["command"] == driver.path.name for row in report["schedule"])
+
+
+@pytest.mark.parametrize(
+    "option,patterns",
+    [
+        ("include", ["parallel_driver_test.py", "parallel_driver_ivm_checks.py"]),
+        ("include", ["first_configure.py"]),
+        ("include", ["finally_check.py"]),
+        ("check", ["finally_check.py", "eventually_misspelled.py"]),
+        ("check", ["parallel_driver_test.py"]),
+        ("check", ["first_configure.py"]),
+    ],
+)
+def test_every_pattern_must_match_its_phase_before_any_mutation(
+    monkeypatch, experiment, option, patterns
+):
+    args, _, _, _ = experiment
+    args.skip_first = False
+    setattr(args, option, patterns)
+    scheduler = Mock(
+        side_effect=AssertionError("scheduler constructed before preflight")
+    )
+    monkeypatch.setattr(runner, "Scheduler", scheduler)
+    snapshot = Mock(side_effect=AssertionError("health checked before preflight"))
+    monkeypatch.setattr(runner, "telemetry_snapshot", snapshot)
+    with pytest.raises(ValueError, match="unmatched --" + option):
+        runner.run(args)
+    assert not args.output.exists()
+    assert not Path(os.environ["MZ_ANTITHESIS_STATE_DIR"]).exists()
+    scheduler.assert_not_called()
+    snapshot.assert_not_called()
+
+
+def test_pattern_preflight_keeps_legal_globs_and_distinct_check_phases(
+    monkeypatch, experiment
+):
+    args, driver, final, setup = experiment
+    anytime = command(args.templates, "anytime_health", "check", "anytime", "pass")
+    eventual = command(
+        args.templates, "eventually_health", "check", "eventually", "pass"
+    )
+    commands = [setup, driver, anytime, eventual, final]
+    discovered = []
+
+    def discover(directory):
+        discovered.append(directory)
+        return commands
+
+    monkeypatch.setattr(runner, "discover", discover)
+    args.include = ["parallel_driver_*.py", "anytime_*.py"]
+    args.check = ["anytime_*.py", "eventually_*.py", "anytime_health.py"]
+    all_commands, selected, checks = runner._select_commands(args)
+    assert discovered == [args.templates / args.profile]
+    assert all_commands == commands
+    assert selected == [driver, anytime]
+    assert checks == [anytime, eventual]
+    args.include = []
+    args.check = ["finally_*.py"]
+    assert runner._select_commands(args) == (
+        commands,
+        [driver, anytime],
+        [final],
+    )
+    assert not args.output.exists()
+    assert not Path(os.environ["MZ_ANTITHESIS_STATE_DIR"]).exists()
+
+
+def test_required_comparison_preflight_rejects_unselected_commands(
+    monkeypatch, experiment
+):
+    args, _, final, _ = experiment
+    args.require_comparison = [final.path.name]
+    scheduler = Mock(
+        side_effect=AssertionError("scheduler constructed before preflight")
+    )
+    monkeypatch.setattr(runner, "Scheduler", scheduler)
+    with pytest.raises(ValueError, match="unmatched --require-comparison"):
+        runner.run(args)
+    assert not args.output.exists()
+    scheduler.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "outcome,units", [("passed", 0), ("skipped", 7), ("failed", 7)]
+)
+def test_required_comparison_rejects_deferral_even_with_another_oracle(
+    monkeypatch, experiment, outcome, units
+):
+    args, driver, final, _ = experiment
+    args.check = [final.path.name]
+    args.drain_timeout = 1
+    args.require_comparison = ["*test.py", final.path.name]
+    original_snapshot = runner.telemetry_snapshot
+
+    def snapshot(output, label):
+        value = original_snapshot(output, label)
+        value["comparisons"].append(
+            {
+                "profile": args.profile,
+                "command": final.path.name,
+                "family": "test",
+                "path": "table",
+                "outcome": outcome,
+                "units": units if label == "after" else 0,
+            }
+        )
+        return value
+
+    monkeypatch.setattr(runner, "telemetry_snapshot", snapshot)
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["has_evaluated_oracle"]
+    assert report["required_comparisons_missing"] == [final.path.name]
+    assert report["comparison_commands"] == [driver.path.name]
+
+
+def test_required_comparison_requires_each_matching_admitted_command(
+    monkeypatch, experiment
+):
+    args, driver, final, _ = experiment
+    args.check = [final.path.name]
+    args.drain_timeout = 1
+    args.require_comparison = ["*.py"]
+    original_snapshot = runner.telemetry_snapshot
+
+    def snapshot(output, label):
+        value = original_snapshot(output, label)
+        if label == "after":
+            value["comparisons"].append(
+                {
+                    "profile": args.profile,
+                    "command": final.path.name,
+                    "family": "test",
+                    "path": "table",
+                    "outcome": "passed",
+                    "units": 2,
+                }
+            )
+        return value
+
+    monkeypatch.setattr(runner, "telemetry_snapshot", snapshot)
+    assert runner.run(args) == 0
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["requested_comparisons"] == ["*.py"]
+    assert report["required_comparisons_missing"] == []
+    assert report["comparison_commands"] == sorted([driver.path.name, final.path.name])
+
+
+@pytest.mark.parametrize("foreign", ["old_cohort", "unadmitted", "other_profile"])
+def test_required_comparison_cannot_borrow_unrelated_work(
+    monkeypatch, experiment, foreign
+):
+    args, driver, _, _ = experiment
+    args.require_comparison = [driver.path.name]
+    args.drain_timeout = 1
+    healthy = {
+        "telemetry_available": True,
+        "harness_health": {"valid": True, "errors": 0},
+        "active_commands": 0,
+    }
+
+    def snapshot(output, label):
+        return {
+            **healthy,
+            "comparisons": [
+                {
+                    "profile": "other" if foreign == "other_profile" else args.profile,
+                    "command": (
+                        "unselected.py" if foreign == "unadmitted" else driver.path.name
+                    ),
+                    "family": "test",
+                    "path": "table",
+                    "outcome": "passed",
+                    "units": (
+                        10
+                        if label == "before"
+                        else (10 if foreign == "old_cohort" else 11)
+                    ),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(runner, "telemetry_snapshot", snapshot)
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["required_comparisons_missing"] == [driver.path.name]
+    assert not report["comparison_commands"]
+    assert not report["has_evaluated_oracle"]
+
+
+def test_sticky_invalid_baseline_stops_before_workloads(monkeypatch, experiment):
+    args, _, _, _ = experiment
+    monkeypatch.setattr(
+        runner,
+        "telemetry_snapshot",
+        lambda *args: {
+            "telemetry_available": False,
+            "harness_health": {"valid": False},
+        },
+    )
+    assert runner.run(args) == 1
+    assert json.loads((args.output / "summary.json").read_text())["stage"] == "baseline"
+
+
+def test_requested_check_timeout_is_incomplete_not_a_passing_experiment(
+    monkeypatch, experiment
+):
+    args, driver, _, setup = experiment
+    checker = command(args.templates, "eventually_check", "check", "eventually")
+    checker.path.write_text("import time; time.sleep(60)")
+    monkeypatch.setattr(runner, "discover", lambda directory: [setup, driver, checker])
+    args.check = [checker.path.name]
+    args.command_timeout = 0.1
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["has_evaluated_oracle"] and report["status"] == "incomplete"
+    checks = [row for row in report["schedule"] if row["command"] == checker.path.name]
+    assert len(checks) == 1 and checks[0]["incomplete"] in (
+        "command_timeout",
+        "phase_deadline",
+    )
+
+
+def test_final_hook_is_skipped_after_driver_truncation(experiment):
+    args, driver, checker, _ = experiment
+    driver.path.write_text("import time; time.sleep(60)")
+    args.check = [checker.path.name]
+    assert runner.run(args) == 2
+    report = json.loads((args.output / "summary.json").read_text())
+    assert report["skipped_requested_checks"] == [checker.path.name]
+    assert not any(row["command"] == checker.path.name for row in report["schedule"])
+
+
+def test_bounded_drain_allows_natural_driver_completion_and_final_check(experiment):
+    args, driver, checker, _ = experiment
+    args.duration = 0.05
+    args.concurrency = 1
+    args.drain_timeout = 1
+    args.check = [checker.path.name]
+    driver.path.write_text("import time; time.sleep(0.15)")
+    assert runner.run(args) == 0
+    report = json.loads((args.output / "summary.json").read_text())
+    drivers = [row for row in report["schedule"] if row["command"] == driver.path.name]
+    assert len(drivers) == 1 and drivers[0]["incomplete"] is None
+    assert drivers[0]["finished"] > report["admission_end"]
+    assert 0 < report["drain_elapsed_seconds"] < 1
+    assert not report["skipped_requested_checks"]
+    assert any(
+        row["command"] == checker.path.name and row["incomplete"] is None
+        for row in report["schedule"]
+    )
+
+
+def test_drain_still_bounds_a_stubborn_driver(tmp_path):
+    source = command(tmp_path, body="import time; time.sleep(60)")
+    scheduler = scheduling.Scheduler(tmp_path, 1, 1, 5, 0.05, 5, drain_timeout=0.1)
+    started = time.monotonic()
+    scheduler.phase([source], 0.05)
+    assert time.monotonic() - started < 2
+    assert scheduler.admission_end is not None
+    assert 0.08 <= scheduler.drain_elapsed < 1
+    assert scheduler.completed[0]["incomplete"] == "phase_deadline"
+
+
+def test_current_scheduler_state_cannot_be_shared(monkeypatch, experiment):
+    import fcntl
+
+    args, _, _, _ = experiment
+    state = Path(os.environ["MZ_ANTITHESIS_STATE_DIR"])
+    state.mkdir()
+    with (state / "local-scheduler.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="another local scheduler"):
+            runner.run(args)
+
+
+@pytest.mark.parametrize(
+    "family,entrypoint,expected_group",
+    [
+        ("history", "interleaving_driver", "cr_interleaving"),
+        ("ivm", "interleaving_main", "cr_interleaving"),
+        ("ivm", "load_main", ""),
+    ],
+)
+def test_generated_profile_discovery_uses_authoritative_source_family(
+    tmp_path, family, entrypoint, expected_group
+):
+    source = tmp_path / "original.py"
+    source.write_text(
+        f"from materialize.antithesis.drivers.{family} import {entrypoint} as run\n"
+    )
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "first_configure.py").write_text(
+        f"from materialize.antithesis.telemetry import run_command\nrun_command('transactions', {str(source)!r})\n"
+    )
+    (profile / "parallel_driver_interleave.py").write_text(
+        f"from materialize.antithesis.telemetry import run_command\nrun_command('transactions', {str(source)!r})\n"
+    )
+    found = runner.discover(profile)
+    assert [item.family for item in found] == [family, family]
+    assert [item.admission_group for item in found] == [expected_group, expected_group]
+    (profile / "parallel_driver_raw.py").write_text(source.read_text())
+    with pytest.raises(ValueError, match="measured wrapper"):
+        runner.discover(profile)
+
+
+def test_cli_requires_an_explicit_cluster_and_preserves_context_isolation(monkeypatch):
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(sys, "argv", ["local", "down"])
+    with pytest.raises(SystemExit) as raised:
+        local.main()
+    assert raised.value.code == 2
+    monkeypatch.setattr(local, "CLUSTER", "old")
+    monkeypatch.setattr(local, "CONTEXT", "kind-old")
+    invoked = []
+    monkeypatch.setattr(
+        local, "down", lambda: invoked.append((local.CLUSTER, local.CONTEXT))
+    )
+    monkeypatch.setattr(sys, "argv", ["local", "--cluster-name", "owned-test", "down"])
+    assert local.main() == 0
+    assert invoked == [("owned-test", "kind-owned-test")]
+
+
+def test_local_up_uses_a_cluster_specific_manifests_directory(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(local, "CLUSTER", "owned")
+    monkeypatch.setattr(local, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(local, "license_key", lambda: "test-license")
+    for name in ("ensure_cluster", "load_images", "apply", "wait_for_setup"):
+        monkeypatch.setattr(local, name, Mock())
+    render = Mock()
+    monkeypatch.setattr(local.render, "render", render)
+    local.up(tmp_path, skip_build=True)
+    assert render.call_args.args[0] == tmp_path / "owned" / "manifests"
+
+
+@pytest.mark.parametrize("interval", [None, 0.0, 7.5])
+def test_fault_interval_is_forwarded_through_host_and_remote_cli(
+    monkeypatch, tmp_path, interval
+):
+    from materialize.antithesis import local
+
+    monkeypatch.setattr(local, "CLUSTER", "owned")
+    monkeypatch.setattr(local, "CONTEXT", "kind-owned")
+    pod = {"metadata": {"name": "workload"}, "status": {"phase": "Running"}}
+    monkeypatch.setattr(
+        local,
+        "kubectl",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, json.dumps({"items": [pod]}), ""
+        ),
+    )
+    sent = []
+    monkeypatch.setattr(
+        local.subprocess,
+        "run",
+        lambda args, **kwargs: sent.append(args)
+        or subprocess.CompletedProcess(args, 0),
+    )
+    argv = [
+        "local",
+        "--cluster-name",
+        "owned",
+        "run",
+        "--output",
+        str(tmp_path / "result"),
+        "--concurrency",
+        "12",
+    ]
+    if interval is not None:
+        argv.extend(("--fault-interval", str(interval)))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert local.main() == 0
+    expected = 30.0 if interval is None else interval
+    remote = sent[0]
+    assert float(remote[remote.index("--fault-interval") + 1]) == expected
+    parsed = []
+    monkeypatch.setattr(runner, "run", lambda args: parsed.append(args) or 0)
+    monkeypatch.setattr(sys, "argv", ["runner", *remote[remote.index("--output") :]])
+    assert runner.main() == 0
+    assert parsed[0].fault_interval == expected and parsed[0].concurrency == 12
+
+
+def test_remote_runner_passes_fault_interval_to_scheduler(monkeypatch, experiment):
+    args, _, _, _ = experiment
+    args.fault_interval = 7.5
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda args, scheduler, *rest: observed.append(scheduler.fault_interval) or 0,
+    )
+    assert runner.run(args) == 0
+    assert observed == [7.5]
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+@pytest.mark.parametrize("host", [False, True])
+def test_fault_interval_rejects_invalid_values_before_running(
+    monkeypatch, tmp_path, value, host
+):
+    from materialize.antithesis import local
+
+    target = local if host else runner
+    invoke = Mock(side_effect=AssertionError("invalid interval reached execution"))
+    monkeypatch.setattr(target, "run", invoke)
+    prefix = ["local", "--cluster-name", "owned", "run"] if host else ["runner"]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [*prefix, "--output", str(tmp_path / "result"), "--fault-interval", value],
+    )
+    with pytest.raises(SystemExit) as raised:
+        target.main()
+    assert raised.value.code == 2
+    invoke.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["first", "check"])
+def test_sigterm_during_setup_or_check_cleans_owned_command_group(tmp_path, stage):
+    pid_file = tmp_path / "owned.pid"
+    sleeping = f"import os,time; open({str(pid_file)!r},'w').write(str(os.getpid())); time.sleep(60)"
+    setup = command(
+        tmp_path, "first_configure", body=sleeping if stage == "first" else "pass"
+    )
+    driver = command(tmp_path, "parallel_driver_test", body="pass")
+    check = command(
+        tmp_path, "eventually_check", body=sleeping if stage == "check" else "pass"
+    )
+    helper = tmp_path / "experiment.py"
+    helper.write_text(f"""
+import argparse
+from pathlib import Path
+from materialize.antithesis import local_runner as r
+from materialize.antithesis.local_scheduler import Command
+r.discover=lambda directory:[Command(Path({str(setup.path)!r}),'configure','first'),Command(Path({str(driver.path)!r}),'test','parallel'),Command(Path({str(check.path)!r}),'check','eventually')]
+r.telemetry_snapshot=lambda *args:{{'telemetry_available':True,'harness_health':{{'valid':True,'errors':0}},'active_commands':0}}
+a=argparse.Namespace(output=Path({str(tmp_path / 'run')!r}),templates=Path({str(tmp_path)!r}),profile='transactions',duration=0.15,concurrency=1,seed=1,command_timeout=10,setup_timeout=10,shutdown_grace=0.05,check_interval=5,include=[],check=[{check.path.name!r}],require_witness=[],skip_first={stage == 'check'!r})
+r.run(a)
+""")
+    with (tmp_path / "scheduler.log").open("w") as log:
+        proc = subprocess.Popen(
+            [sys.executable, str(helper)],
+            env={**os.environ, "MZ_ANTITHESIS_STATE_DIR": str(tmp_path / "state")},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert pid_file.exists()
+            pid = int(pid_file.read_text())
+            proc.terminate()
+            proc.wait(timeout=5)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+    stat = Path(f"/proc/{pid}/stat")
+    assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
