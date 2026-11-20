@@ -209,7 +209,8 @@
     "uuid": "^14.0.3"
   },
   "browserslist": [
-    "defaults"
+    "defaults",
+    "not chrome < 112"
   ],
   "volta": {
     "node": "26.13.1",
