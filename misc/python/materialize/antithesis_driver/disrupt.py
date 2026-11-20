@@ -102,7 +102,8 @@ class Kube:
                 pods = [
                     p
                     for p in pods
-                    if (p.metadata.labels or {}).get("materialize.cloud/app")
+                    if p.metadata is not None
+                    and (p.metadata.labels or {}).get("materialize.cloud/app")
                     == "environmentd"
                 ]
             else:
