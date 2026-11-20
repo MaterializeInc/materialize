@@ -7845,11 +7845,14 @@ def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
         try:
             deadline = time.time() + 30
             while time.time() < deadline:
-                read, write = (int(f) for f in c.sql_query(query)[0])
-                assert read <= write, (
-                    f"read frontier of idx advanced to {read}, past its write"
-                    f" frontier {write}, while its replica was reconnecting"
-                )
+                # The controller publishes frontiers on a 1s tick, so the row
+                # of a just-created index may not exist yet.
+                for row in c.sql_query(query):
+                    read, write = (int(f) for f in row)
+                    assert read <= write, (
+                        f"read frontier of idx advanced to {read}, past its write"
+                        f" frontier {write}, while its replica was reconnecting"
+                    )
                 time.sleep(1)
             assert (
                 reconnects() > connects_before
