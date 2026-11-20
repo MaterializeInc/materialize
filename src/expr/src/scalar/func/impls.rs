@@ -131,6 +131,8 @@ pub(crate) fn text_preserves_uniqueness(ty: &SqlScalarType) -> bool {
         | SqlScalarType::Int2Vector
         | SqlScalarType::MzTimestamp
         | SqlScalarType::MzAclItem
-        | SqlScalarType::AclItem => true,
+        | SqlScalarType::AclItem
+        | SqlScalarType::Inet
+        | SqlScalarType::Cidr => true,
     }
 }
