@@ -512,8 +512,6 @@ name                           comment
 --------------------------------------
 mz_cluster_replica_sizes       ""
 mz_egress_ips                  ""
-mz_functions                   ""
-mz_operators                   ""
 mz_role_auth                   ""
 
 > SHOW VIEWS FROM mz_catalog
@@ -521,9 +519,11 @@ name                       comment
 -----------------------------------
 mz_array_types             ""
 mz_base_types              ""
+mz_functions               ""
 mz_list_types              ""
 mz_map_types               ""
 mz_objects                 ""
+mz_operators               ""
 mz_pseudo_types            ""
 mz_relations               ""
 mz_recent_storage_usage    ""
@@ -602,7 +602,6 @@ mz_wallclock_lag_history                     source  <null>     ""
 > SHOW TABLES FROM mz_internal
 name                                     comment
 ------------------------------------------------
-mz_aggregates                            ""
 mz_cluster_replica_size_internal         ""
 mz_license_keys                          ""
 mz_object_arrangement_size_history       ""
@@ -618,12 +617,15 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_aggregates                            ""
 mz_builtin_columns                       ""
+mz_builtin_functions                     ""
 mz_builtin_index_columns                 ""
 mz_builtin_indexes                       ""
 mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
 mz_builtin_object_mappings               ""
+mz_builtin_operators                     ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
 mz_builtin_types                         ""
@@ -851,7 +853,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-16
+13
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
