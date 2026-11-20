@@ -70,6 +70,6 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_v0.10.x` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "09ccef4f2669acb5b6fa971b095a0ad06cc1ea51" }
