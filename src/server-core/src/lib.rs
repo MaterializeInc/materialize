@@ -380,10 +380,15 @@ where
                 // client. PostgreSQL sets TCP_NODELAY on both sides of its
                 // sockets, so it seems sane to just do the same.
                 //
-                // If set_nodelay fails, it's a programming error, so panic.
+                // NOTE: On macOS, set_nodelay fails with EINVAL when the peer
+                // reset the connection before we accepted it, so a failure
+                // drops only that connection.
                 //
                 // [0]: https://news.ycombinator.com/item?id=10608356
-                conn.set_nodelay(true).expect("set_nodelay failed");
+                if let Err(e) = conn.set_nodelay(true) {
+                    error!("failed setting TCP_NODELAY: {e}");
+                    continue;
+                }
                 // Enable TCP keepalives to avoid any idle connection timeouts that may
                 // be enforced by networking devices between us and the client. Idle SQL
                 // connections are expected--e.g., a `SUBSCRIBE` to a view containing
@@ -650,17 +655,77 @@ impl TlsCliArgs {
     }
 }
 
-// macOS caps the backlog at `kern.ipc.somaxconn`, 128 by default, so the queue
-// length is only meaningful on Linux.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 
+    use socket2::{Domain, Socket, Type};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
+    use tokio_metrics::TaskMetrics;
 
-    use super::{LISTEN_BACKLOG, listen};
+    #[cfg(target_os = "linux")]
+    use super::LISTEN_BACKLOG;
+    use super::{Connection, ConnectionHandler, ServeConfig, Server, listen, serve};
 
+    struct ReplyServer;
+
+    impl Server for ReplyServer {
+        const NAME: &'static str = "reply";
+
+        fn handle_connection(
+            &self,
+            mut conn: Connection,
+            _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
+        ) -> ConnectionHandler {
+            Box::pin(async move {
+                conn.write_all(b"ok").await?;
+                Ok(())
+            })
+        }
+    }
+
+    // CI runs on Linux, where `set_nodelay` succeeds on a reset socket, so
+    // only macOS exercises the error path.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn serve_survives_connection_reset_before_accept() {
+        let (handle, conns) = listen(&SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let addr = handle.local_addr();
+
+        // Complete the handshake, then close with SO_LINGER 0 so the kernel
+        // sends RST while the connection still sits in the accept queue.
+        let reset = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+        reset.connect(&addr.into()).unwrap();
+        reset.set_linger(Some(Duration::ZERO)).unwrap();
+        drop(reset);
+
+        let server = mz_ore::task::spawn(|| "serve", async move {
+            serve(ServeConfig {
+                server: ReplyServer,
+                conns,
+                dyncfg: None,
+            })
+            .await
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0; 2];
+        tokio::time::timeout(Duration::from_secs(10), client.read_exact(&mut buf))
+            .await
+            .expect("timed out waiting for a reply")
+            .expect("server did not reply after a reset connection");
+        assert_eq!(&buf, b"ok");
+        assert!(
+            !server.is_finished(),
+            "serve exited after a reset connection"
+        );
+    }
+
+    // macOS caps the backlog at `kern.ipc.somaxconn`, 128 by default, so the
+    // queue length is only meaningful on Linux.
+    #[cfg(target_os = "linux")]
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
     async fn listen_queues_backlog_connections_before_accepting() {
