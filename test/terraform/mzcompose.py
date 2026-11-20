@@ -208,15 +208,22 @@ def testdrive(no_reset: bool, use_https: bool = True) -> Testdrive:
 
 
 def get_tag(tag: str | None) -> str:
-    tag = tag or ci_util.dev_docker_tag()
-    # The clusters pull images by their plain names and without credentials,
-    # so fail before provisioning anything.
+    return tag or ci_util.dev_docker_tag()
+
+
+def check_deployable(tag: str) -> None:
+    """Fail if the clusters cannot pull the images of `tag`.
+
+    Call this only when about to deploy. A cleanup-only run resolves the
+    default tag of the checkout, whatever the setup run deployed, and has to
+    reach its destroy.
+    """
+    # The clusters pull images by their plain names and without credentials.
     if is_internal_image_tag(tag):
         raise UIError(
             f"cannot deploy the private images of {tag}",
             hint="Pass --tag with a released version.",
         )
-    return tag
 
 
 def get_operator_version() -> str:
@@ -1068,6 +1075,8 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     tag = get_tag(args.tag)
+    if args.setup:
+        check_deployable(tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
     aws = AWS(path)
     mz_debug_build_thread: threading.Thread | None = None
@@ -1112,6 +1121,8 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     for major in sorted({v.major for v in all_versions if v >= v26}):
         previous_tags.append(min(v for v in all_versions if v.major == major))
     tag = get_tag(args.tag)
+    if args.setup:
+        check_deployable(tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)
     mz_debug_build_thread: threading.Thread | None = None
@@ -1189,6 +1200,7 @@ def workflow_aws_persistent_setup(
     args = parser.parse_args()
 
     tag = get_tag(args.tag)
+    check_deployable(tag)
     aws = AWS(PATH_AWS_PERSISTENT)
     try:
         aws.setup(PREFIX_AWS_PERSISTENT, True, tag)
@@ -1429,6 +1441,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     tag = get_tag(args.tag)
+    if args.setup:
+        check_deployable(tag)
     path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
     state = State(path, use_https=False)
     run_project = gcp_run_project()
@@ -1625,6 +1639,8 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     args = parser.parse_args()
 
     tag = get_tag(args.tag)
+    if args.setup:
+        check_deployable(tag)
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
     state = State(path)
     resource_group, name_prefix = azure_run_names()
