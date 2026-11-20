@@ -74,6 +74,8 @@ export interface MultiSelectFilterPanelProps<
   column: Column<TData, unknown>;
   items: readonly T[];
   getLabel?: (item: T) => React.ReactNode;
+  /** What the search matches an item by. Defaults to the item itself. */
+  getSearchText?: (item: T) => string;
   searchable?: boolean;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -90,6 +92,7 @@ export const MultiSelectFilterPanel = <
   column,
   items,
   getLabel,
+  getSearchText,
   searchable = false,
   searchPlaceholder = "Search...",
   emptyMessage = "No results",
@@ -101,8 +104,10 @@ export const MultiSelectFilterPanel = <
   const visibleItems = React.useMemo(() => {
     if (!searchable || !search) return items;
     const q = search.toLowerCase();
-    return items.filter((item) => item.toLowerCase().includes(q));
-  }, [items, search, searchable]);
+    return items.filter((item) =>
+      (getSearchText?.(item) ?? item).toLowerCase().includes(q),
+    );
+  }, [getSearchText, items, search, searchable]);
 
   const toggle = (item: T) => {
     const next = selected.includes(item)
