@@ -62,6 +62,9 @@ pub enum StorageCommand {
     /// Enable compaction in storage-managed collections.
     ///
     /// A collection id and a frontier after which accumulations must be correct.
+    ///
+    /// Replicas act on the empty frontier only, by dropping the collection (see
+    /// `StorageState::handle_storage_command`), so the controller sends no other frontier.
     AllowCompaction(GlobalId, Antichain<Timestamp>),
     RunSink(Box<RunSinkCommand>),
     /// Run a dataflow which will ingest data from an external source and only __stage__ it in

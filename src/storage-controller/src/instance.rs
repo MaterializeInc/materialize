@@ -780,6 +780,16 @@ impl Instance {
             .set(u64::cast_from(connected_replica_count));
     }
 
+    /// Reduces the command history if it gained commands since its last reduction.
+    ///
+    /// This method is invoked by `Controller::maintain`.
+    pub(super) fn reduce_history(&mut self) {
+        // `CommandHistory::push` reduces only once the history has doubled, and commands arrive
+        // only when objects change. On its own that keeps the definitions of dropped and altered
+        // objects in memory until enough later changes have piled up.
+        self.history.reduce_if_grown();
+    }
+
     /// Returns the set of replica IDs that are actively running the given
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {

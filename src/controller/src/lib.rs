@@ -536,7 +536,8 @@ impl Controller {
                 Some(ControllerResponse::CopyToResponse(id, tail))
             }
             ComputeControllerResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_updates(&[(id, upper)])
+                let uppers = self.compute.collect_frontier_uppers(id, upper);
+                self.handle_frontier_updates(&uppers)
             }
         });
         Ok(response)
