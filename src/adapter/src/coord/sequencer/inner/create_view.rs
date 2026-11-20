@@ -395,6 +395,7 @@ impl Coordinator {
                         }
                     };
 
+                    fail::fail_point!("create_view_optimization_complete");
                     Ok(Box::new(stage))
                 })
             },
@@ -403,7 +404,7 @@ impl Coordinator {
 
     #[instrument]
     fn create_view_finish(
-        &self,
+        &mut self,
         session: &Session,
         CreateViewFinish {
             validity,
@@ -433,6 +434,7 @@ impl Coordinator {
         // Replacement DROP lists require the original structural snapshot,
         // not merely continued existence of the expression's dependencies.
         if self.catalog().transient_revision() != planning_revision {
+            self.release_ddl_lock(session.conn_id());
             return Err(AdapterError::CatalogSnapshotChanged);
         }
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);

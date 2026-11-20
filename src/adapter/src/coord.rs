@@ -833,6 +833,7 @@ pub enum CreateIndexStage {
 #[derive(Debug)]
 pub struct CreateIndexOptimize {
     validity: PlanValidity,
+    planning_revision: u64,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
@@ -843,6 +844,7 @@ pub struct CreateIndexOptimize {
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
+    planning_revision: u64,
     item_id: CatalogItemId,
     global_id: GlobalId,
     plan: plan::CreateIndexPlan,
@@ -4857,6 +4859,7 @@ impl Coordinator {
     async fn try_allocate_user_id(
         &mut self,
     ) -> Result<Option<(CatalogItemId, GlobalId)>, AdapterError> {
+        fail::fail_point!("user_id_pool_before_allocate");
         if let Some(id) = self.user_id_pool.allocate() {
             return Ok(Some((CatalogItemId::User(id), GlobalId::User(id))));
         }

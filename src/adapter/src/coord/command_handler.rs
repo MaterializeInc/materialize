@@ -1784,6 +1784,7 @@ impl Coordinator {
                     ctx,
                     ps: PlanStatement::Statement { stmt, params },
                 });
+                fail::fail_point!("ddl_statement_enqueued");
                 return;
             }
         }

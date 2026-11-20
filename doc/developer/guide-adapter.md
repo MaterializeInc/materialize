@@ -103,6 +103,12 @@ VIEW allocation retries also reacquire DDL admission before optimization. EXPLAI
 shares allocation but must not acquire DDL admission on retry. Preserve its existing
 transaction context and keep replacement drop lists tied to their planning revision.
 
+INDEX allocation follows the same bounded path, but its EXPLAIN still allocates
+only transient IDs. Take the compute-instance snapshot after allocation catch-up.
+Optimization completion preserves the original planning revision through plan
+publication and commit. If asynchronous optimization is invalidated, release DDL
+admission before replanning so a queued statement can take its turn.
+
 Dequeuing serialized DDL reserves its existing guard before asynchronous catalog
 certification. Resume below transaction setup and lock acquisition, but recheck
 freshness and the live revision before name resolution. A wakeup is not an admission

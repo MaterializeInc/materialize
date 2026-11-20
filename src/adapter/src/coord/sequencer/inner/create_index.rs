@@ -56,8 +56,8 @@ impl Staged for CreateIndexStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
-            CreateIndexStage::Finish(stage) => coord.create_index_finish(stage).await,
+            CreateIndexStage::Optimize(stage) => coord.create_index_optimize(ctx, stage).await,
+            CreateIndexStage::Finish(stage) => coord.create_index_finish(ctx, stage).await,
             CreateIndexStage::Commit(stage) => coord.create_index_commit(ctx, stage).await,
             CreateIndexStage::Explain(stage) => {
                 coord.create_index_explain(ctx.session(), stage).await
@@ -288,6 +288,7 @@ impl Coordinator {
         );
         Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,
+            planning_revision: self.catalog().transient_revision(),
             plan,
             resolved_ids,
             explain_ctx,
@@ -297,28 +298,47 @@ impl Coordinator {
     #[instrument]
     async fn create_index_optimize(
         &mut self,
-        CreateIndexOptimize {
+        ctx: &ExecuteContext,
+        stage: CreateIndexOptimize,
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        let (item_id, global_id) = if matches!(stage.explain_ctx, ExplainContext::None) {
+            let ids = self.try_allocate_user_id().await?;
+            if self.catalog().transient_revision() != stage.planning_revision {
+                self.release_ddl_lock(ctx.session().conn_id());
+                return Err(AdapterError::CatalogSnapshotChanged);
+            }
+            let Some(ids) = ids else {
+                self.release_ddl_lock(ctx.session().conn_id());
+                let delay = self.read_protection_conflict_delay();
+                return Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateIndexStage::Optimize(stage)))
+                })));
+            };
+            ids
+        } else {
+            self.allocate_transient_id()
+        };
+        let CreateIndexOptimize {
             validity,
+            planning_revision,
             plan,
             resolved_ids,
             explain_ctx,
-        }: CreateIndexOptimize,
-    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        } = stage;
         let plan::CreateIndexPlan {
             index: plan::Index { cluster_id, .. },
             ..
         } = &plan;
 
-        // Collect optimizer parameters.
+        // Allocation can apply peer definitions. Collect execution and catalog
+        // snapshots only after revalidating the original plan against them.
         let compute_instance = self
             .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            self.allocate_user_id().await?
-        } else {
-            self.allocate_transient_id()
-        };
-
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
@@ -372,6 +392,7 @@ impl Coordinator {
                             } else {
                                 CreateIndexStage::Finish(CreateIndexFinish {
                                     validity,
+                                    planning_revision,
                                     item_id,
                                     global_id,
                                     plan,
@@ -408,6 +429,7 @@ impl Coordinator {
                             }
                         }
                     };
+                    fail::fail_point!("create_index_optimization_complete");
                     Ok(Box::new(stage))
                 })
             },
@@ -416,11 +438,17 @@ impl Coordinator {
 
     #[instrument]
     async fn create_index_finish(
-        &self,
+        &mut self,
+        ctx: &ExecuteContext,
         stage: CreateIndexFinish,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        if self.catalog().transient_revision() != stage.planning_revision {
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
         let CreateIndexFinish {
             validity,
+            planning_revision,
             item_id,
             global_id,
             plan:
@@ -475,7 +503,7 @@ impl Coordinator {
         let df_meta = self.render_create_item_notices(&name, global_id, &on_desc, &raw_df_meta);
 
         // Write the plan before committing the object and its selection together.
-        let planning_revision = self.catalog().transient_revision();
+        // Publication does not recertify the original planning snapshot.
         let selection = self
             .catalog()
             .prepare_item_plan(

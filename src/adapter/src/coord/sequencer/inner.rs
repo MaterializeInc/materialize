@@ -4300,6 +4300,7 @@ impl Coordinator {
         }
         match ps {
             crate::coord::PlanStatement::Statement { stmt, params } => {
+                fail::fail_point!("ddl_statement_dequeued");
                 crate::coord::trace_create_mv_phase(ctx.session(), Some(&stmt), "ddl_lock_dequeue");
                 tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                     session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),

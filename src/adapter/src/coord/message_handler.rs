@@ -324,8 +324,16 @@ impl Coordinator {
                 );
             }
             Message::CreateIndexStageReady { ctx, span, stage } => {
-                // Commit Ready messages only come from backoff that released admission.
-                if matches!(stage, super::CreateIndexStage::Commit(_)) {
+                // Only allocation/commit backoff releases admission. Optimizer
+                // completion and transient EXPLAIN keep their existing routes.
+                if matches!(
+                    &stage,
+                    super::CreateIndexStage::Commit(_)
+                        | super::CreateIndexStage::Optimize(super::CreateIndexOptimize {
+                            explain_ctx: super::ExplainContext::None,
+                            ..
+                        })
+                ) {
                     self.defer_catalog_retry(
                         ctx,
                         super::PlanStatement::CreateIndex {

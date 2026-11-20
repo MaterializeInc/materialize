@@ -7,19 +7,21 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Login, network-policy, TYPE and VIEW writes now yield during peer contention
-while retaining preparation in their existing owners. Targeted negative controls
-and restored-code checks pass. Structural validation, authentication and terminal
-notices remain intact. VIEW also preserves EXPLAIN's read-only transaction and
-no-DDL-admission behavior. Reviews, scoped lint and formatting passed. Evidence:
-`startup-retry-verification.md`, `network-policy-verification.md`,
-`type-verification.md` and `view-verification.md`.
+Login, network-policy, TYPE, VIEW and INDEX writes now yield during peer
+contention while retaining preparation in their existing owners. INDEX preserves
+its original planning revision through allocation and publication. INDEX and VIEW
+release admission before replanning invalidated optimization, allowing queued DDL
+its turn. Targeted controls, restored-code checks, independent review, scoped lint
+and formatting passed. EXPLAIN retains each statement's existing allocation and
+transaction behavior. Evidence: `startup-retry-verification.md`,
+`network-policy-verification.md`, `type-verification.md`, `view-verification.md`
+and `index-verification.md`.
 
-**Next action:** convert CREATE INDEX's remaining inline pool refill through
-Optimize. Preserve the original planning revision through Finish/Commit and take
-the compute snapshot only after allocation catch-up. Keep transient EXPLAIN
-unchanged. See `index-mv-refill-owner-audit.md`. MV's fixed-birth protection and
-inline final commit remain separate pending work. Testing failpoints are approved.
+**Next action:** convert CREATE MATERIALIZED VIEW's inline pool refill through
+its existing Optimize stage. Preserve original planning revision, transient
+EXPLAIN and fixed-refresh holds across allocation backoff. See
+`index-mv-refill-owner-audit.md`. Fixed-birth final commit and native plan
+publication remain separate pending work. Testing failpoints are approved.
 
 Run final-head native acceptance and the compatible version-pair walkthrough after
 the retry work, not after each small change.
@@ -31,14 +33,18 @@ publication cadence, readiness intervals or resource limits.
 ## Live gaps and constraints
 
 - Scratch access and clock synchronization are repaired. The replacement worker
-  has the current targeted fixture. Native binaries predate the VIEW repair and\n  need rebuilding for final acceptance. Completed runtimes stopped
+  has the current targeted fixture. Native binaries predate the INDEX repair and
+  need rebuilding for final acceptance. Completed runtimes stopped
   and caps were restored. Keep builds off the editing VM and preserve existing caps.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
 - Plan publication still contains an unprotected-environment alternative and a
-  coordinator await. Audit native admission and test consumers before removing
-  it. This remains native-only cleanup work, not part of the pool-refill change.
+  coordinator await. `plan-publication-native-audit.md` identifies three native
+  SQL callers and the removable fallback. Preserve unprotected diagnostic catalogs
+  and low-level storage tests. Publication continuations must retain fixed MV
+  holds and revalidate metric-sink preparation. Rewrite publication is a separate
+  scope decision. None of these audit recommendations is implemented.
 - SQL owners with separate completion effects remain in the conditional-write
   retry survey. No finite overall login retry limit or strict/fail-open
   authentication policy change is approved.
@@ -109,8 +115,8 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `6a209637` plus the verified
-TYPE and VIEW overlays. `view-restored-source-v2.json` and earlier source
-receipts identify tested code. Trust them rather than the displayed Git revision.
+TYPE, VIEW and INDEX overlays. `index-verified-source-remote.json` and earlier
+source receipts identify tested code. Trust them rather than the displayed Git revision.
 The previous worker's build cache and baseline worktree expired. The baseline
 remains pinned at `d9a2c5dc402fd9fa359607305669d05f27215cc4` and needs reconstruction
 before further paired runs.

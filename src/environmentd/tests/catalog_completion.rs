@@ -336,6 +336,81 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
             .any(|item| item.name == "explained_view")
     );
 
+    batch_execute(&admin, sql!("INSERT INTO existing_table VALUES (41), (43)"))
+        .await
+        .unwrap();
+    complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::IdAllocation,
+        "index ID pool refill",
+        batch_execute(
+            &admin,
+            sql!("CREATE INDEX refill_index ON existing_table (a)"),
+        ),
+    )
+    .await
+    .unwrap();
+    let sum: i64 = query_one(&admin, sql!("SELECT sum(a) FROM existing_table"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(sum, 84);
+    let indexes: i64 = query_one(
+        &admin,
+        sql!("SELECT count(*) FROM mz_indexes WHERE name = 'refill_index'"),
+        &[],
+    )
+    .await
+    .unwrap()
+    .get(0);
+    assert_eq!(indexes, 1);
+
+    batch_execute(
+        &admin,
+        sql!("CREATE TYPE index_input_list AS LIST (ELEMENT TYPE = int)"),
+    )
+    .await
+    .unwrap();
+    let reservations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&reservations);
+    let hook = RemoveCatalogHook("user_id_pool_after_refill");
+    fail::cfg_callback(hook.0, move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+    let explanation = query_one(
+        &admin,
+        sql!("EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX explained_index ON existing_table ((LIST[a])::index_input_list)"),
+        &[],
+    ).await.unwrap();
+    drop(hook);
+    assert!(explanation.get::<_, String>(0).contains("existing_table"));
+    assert_eq!(
+        reservations.load(Ordering::SeqCst),
+        0,
+        "INDEX EXPLAIN must remain transient"
+    );
+    peer.sync_to_current_updates().await.unwrap();
+    assert!(
+        !peer
+            .snapshot()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|(key, value)| Item::from_key_value(key, value))
+            .any(|item| item.name == "explained_index")
+    );
+    reject_stale_definition_after_refill(
+        &admin,
+        &mut *peer,
+        "index_input_list",
+        "stale_index",
+        sql!("CREATE INDEX stale_index ON existing_table ((LIST[a])::index_input_list)"),
+    )
+    .await;
+
     complete_under_catalog_contention(
         server,
         &mut *peer,
@@ -529,6 +604,27 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
     .unwrap();
     assert_eq!(preserved.get::<_, String>(0), rule.get::<_, String>(0));
     assert_eq!(preserved.get::<_, String>(1), rule.get::<_, String>(1));
+    for (hook, type_name, setup, creation, waiter) in [
+        (
+            "create_index_optimization_complete",
+            "index_revision_bump",
+            sql!("CREATE TYPE index_revision_bump AS LIST (ELEMENT TYPE = int)"),
+            sql!("CREATE INDEX admission_index ON existing_table (a)"),
+            sql!("CREATE ROLE index_admission_waiter"),
+        ),
+        (
+            "create_view_optimization_complete",
+            "view_revision_bump",
+            sql!("CREATE TYPE view_revision_bump AS LIST (ELEMENT TYPE = int)"),
+            sql!("CREATE VIEW admission_view AS SELECT 17 AS n"),
+            sql!("CREATE ROLE view_admission_waiter"),
+        ),
+    ] {
+        yield_after_invalidated_optimization(
+            server, &mut *peer, hook, type_name, setup, creation, waiter,
+        )
+        .await;
+    }
     peer.expire().await;
 }
 
@@ -571,28 +667,7 @@ async fn reject_stale_definition_after_refill(
         parked_rx
             .await
             .expect("definition committed its pool refill");
-        loop {
-            peer.sync_to_current_updates().await.unwrap();
-            let mut txn = match peer.transaction().await {
-                Ok(txn) => txn,
-                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                }
-                Err(error) => panic!("open peer type drop: {error}"),
-            };
-            // This standalone type has no comments, plans or durable dependents.
-            txn.remove_item(type_id).unwrap();
-            let ts = txn.upper();
-            let _ = txn.get_and_commit_op_updates();
-            match txn.commit(ts).await {
-                Ok(()) => break,
-                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(error) => panic!("peer type drop: {error}"),
-            }
-        }
+        drop_standalone_type(peer, type_id).await;
         drop(release);
     };
     let creation = batch_execute(admin, statement);
@@ -617,6 +692,139 @@ async fn reject_stale_definition_after_refill(
         .into_iter()
         .map(|(key, value)| Item::from_key_value(key, value));
     assert!(!items.any(|item| item.name == type_name || item.name == attempted_name));
+}
+
+/// The type must have no durable dependents or auxiliary metadata. This raw
+/// writer does not publish the separately derived mz_types retraction.
+async fn drop_standalone_type(peer: &mut dyn DurableCatalogState, type_id: mz_repr::CatalogItemId) {
+    loop {
+        peer.sync_to_current_updates().await.unwrap();
+        let mut txn = match peer.transaction().await {
+            Ok(txn) => txn,
+            Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+            Err(error) => panic!("open peer type drop: {error}"),
+        };
+        // This standalone type has no comments, plans or durable dependents.
+        txn.remove_item(type_id).unwrap();
+        let ts = txn.upper();
+        let _ = txn.get_and_commit_op_updates();
+        match txn.commit(ts).await {
+            Ok(()) => break,
+            Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!("peer type drop: {error}"),
+        }
+    }
+}
+
+async fn yield_after_invalidated_optimization(
+    server: &test_util::TestServer,
+    peer: &mut dyn DurableCatalogState,
+    optimization_hook: &'static str,
+    type_name: &str,
+    setup: Sql,
+    creation: Sql,
+    waiter: Sql,
+) {
+    let creator = server.connect().await.unwrap();
+    let waiter_client = server.connect().await.unwrap();
+    let observer = server.connect().await.unwrap();
+    batch_execute(&creator, setup).await.unwrap();
+    let type_id = query_one(
+        &creator,
+        sql!("SELECT id FROM mz_types WHERE name = $1"),
+        &[&type_name],
+    )
+    .await
+    .unwrap()
+    .get::<_, String>(0)
+    .parse()
+    .unwrap();
+
+    let admissions = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&admissions);
+    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let (replanned_tx, replanned_rx) = tokio::sync::oneshot::channel();
+    let first = Mutex::new(Some((parked_tx, resume_rx)));
+    let hook = RemoveCatalogHook(optimization_hook);
+    fail::cfg_callback(hook.0, move || {
+        let pending = first.lock().unwrap().take();
+        if let Some((parked, resume)) = pending {
+            // The optimizer already runs on a blocking thread.
+            let _ = parked.send(());
+            let _ = resume.recv_timeout(Duration::from_secs(180));
+        }
+    })
+    .unwrap();
+    let release = ReleaseCandidate(resume_tx);
+    let control = async move {
+        parked_rx
+            .await
+            .expect("optimizer did not finish its first preparation");
+        let adapter = server.inner.adapter_client();
+        let revision = adapter
+            .catalog_snapshot_expensive()
+            .await
+            .transient_revision();
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        let queued = Mutex::new(Some(queued_tx));
+        let enqueue_hook = RemoveCatalogHook("ddl_statement_enqueued");
+        fail::cfg_callback(enqueue_hook.0, move || {
+            let pending = queued.lock().unwrap().take();
+            if let Some(queued) = pending {
+                let _ = queued.send(());
+            }
+        })
+        .unwrap();
+        // Check before allocation can conflict and release admission itself.
+        // Otherwise allocator backoff could mask a missing Finish release.
+        let allocation_hook = RemoveCatalogHook("user_id_pool_before_allocate");
+        let replanned = Mutex::new(Some(replanned_tx));
+        fail::cfg_callback(allocation_hook.0, move || {
+            let pending = replanned.lock().unwrap().take();
+            if let Some(replanned) = pending {
+                let _ = replanned.send(observed.load(Ordering::SeqCst) > 0);
+            }
+        })
+        .unwrap();
+        let admission_hook = RemoveCatalogHook("ddl_statement_dequeued");
+        fail::cfg_callback(admission_hook.0, move || {
+            admissions.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+
+        let exercise = async {
+            queued_rx.await.expect("waiter did not join the DDL queue");
+            drop(enqueue_hook);
+            drop_standalone_type(peer, type_id).await;
+            // Certification catches up the coordinator, not only a detached
+            // SQL snapshot. None of the creator's dependencies have changed.
+            query_one(&observer, sql!("SELECT 1"), &[]).await.unwrap();
+            let current = adapter.catalog_snapshot_expensive().await;
+            assert!(current.try_get_entry(&type_id).is_none());
+            assert_ne!(current.transient_revision(), revision);
+            drop(release);
+            assert!(
+                replanned_rx
+                    .await
+                    .expect("creator did not restart allocation"),
+                "{optimization_hook}: invalidated optimization bypassed queued DDL",
+            );
+            drop(allocation_hook);
+            drop(admission_hook);
+        };
+        // Admission, rather than acknowledgement ordering, is the contract.
+        // A legitimate write conflict may make the waiter yield its own turn.
+        let ((), result) = tokio::join!(exercise, batch_execute(&waiter_client, waiter));
+        result
+    };
+    tokio::try_join!(control, batch_execute(&creator, creation)).unwrap();
+    drop(hook);
 }
 
 enum CatalogConflict {
