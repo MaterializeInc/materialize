@@ -66,3 +66,21 @@ Input: `subscribe`, `start`. The output is `{"sql": ...}`, or
 
 Input: `cursor`, `max_rows`, optional `timeout_ms`. The output is
 `{"sql": ...}`, or `{"error": "usage"}`.
+
+### `classify.json`
+
+Input: `sqlstate` (or `null`), `message`, `phase`. The output is the
+classification.
+
+### `resolve_object_check.json`
+
+Input: `otherwise`, `change`. The output is the outcome.
+
+### `resolve_index_check.json`
+
+Input: `indexes`, the names of the indexes on the subscribing cluster that
+serve the object. The output is `{"kind": ...}`.
+
+### `compare_identity.json`
+
+Input: `stored`, `current` (or `null`). The output is the change.

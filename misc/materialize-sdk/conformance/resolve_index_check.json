@@ -1,0 +1,20 @@
+{
+  "function": "resolve_index_check",
+  "cases": [
+    {
+      "name": "no index means the history is lost",
+      "input": {"indexes": []},
+      "expect": {"kind": "history_lost"}
+    },
+    {
+      "name": "an index on the cluster limits the history",
+      "input": {"indexes": ["orders_idx"]},
+      "expect": {"kind": "indexed_target"}
+    },
+    {
+      "name": "several indexes on the cluster limit the history",
+      "input": {"indexes": ["a_idx", "b_idx"]},
+      "expect": {"kind": "indexed_target"}
+    }
+  ]
+}
