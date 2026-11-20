@@ -24,6 +24,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 
 import { ProcessMetricsSample } from "~/api/materialize/cluster/replicaProcessMetrics";
+import { ErrorCode } from "~/api/materialize/types";
 import Alert from "~/components/Alert";
 import TextLink from "~/components/TextLink";
 import { useMaterializationLag } from "~/platform/clusters/queries";
@@ -244,6 +245,12 @@ export const WorkerCpuPanel = ({
       replicaName: replica.name,
       workerCount,
     });
+  // Reading runs on the cluster as the signed-in role, so the read itself is
+  // the privilege check. Asking the catalog up front costs it a dataflow on
+  // every visit.
+  const isUsageDenied =
+    state.status === "error" &&
+    state.errorCode === ErrorCode.INSUFFICIENT_PRIVILEGE;
   const processSamples = useReplicaProcessSamples({
     replicaId: replica.id,
     windowMinutes: REPLICA_CPU_WINDOW_MINUTES,
@@ -418,6 +425,7 @@ export const WorkerCpuPanel = ({
         ((measurement.endMs - measurement.startMs) * 1e6),
     );
 
+  const hasReport = measurement && verdict && queryHistory;
   return (
     <VStack spacing={7} alignItems="stretch">
       <Flex
@@ -460,7 +468,7 @@ export const WorkerCpuPanel = ({
               size="sm"
               variant="outline"
               onClick={measure}
-              isDisabled={!measure || isMeasuringAgain}
+              isDisabled={!measure || isMeasuringAgain || isUsageDenied}
             >
               Measure again
             </Button>
@@ -482,12 +490,12 @@ export const WorkerCpuPanel = ({
           }
         />
       )}
-      {state.status === "error" && readings.length === 0 ? (
+      {state.status === "error" && readings.length === 0 && !isUsageDenied ? (
         <Alert
           variant="error"
           message={`Couldn't read worker CPU on ${replica.name}: ${state.error}`}
         />
-      ) : measurement && verdict && queryHistory ? (
+      ) : hasReport ? (
         <Verdict
           clusterName={clusterName}
           replica={replica}
@@ -511,12 +519,13 @@ export const WorkerCpuPanel = ({
               ? last.atMs - state.stretchStartMs
               : 0
           }
-          status={state.status}
+          status={isUsageDenied ? "idle" : state.status}
           latestCpu={replicaCpu.at(-1)}
           lastReading={last}
           lifetimeObjects={lifetimeObjects}
           objectName={objectName}
           onStart={start}
+          isUsageDenied={isUsageDenied}
         />
       )}
       {measurement && (
@@ -589,7 +598,8 @@ export const WorkerCpuPanel = ({
             `Couldn't load ${clusterName}'s objects, so rows show ids instead of names.`}
         </Text>
       )}
-      {state.status !== "idle" && (
+      {/* Without a report, the first look states a denial instead. */}
+      {state.status !== "idle" && !(isUsageDenied && !hasReport) && (
         <SamplingStatus
           replicaName={replica.name}
           state={state}
@@ -617,7 +627,13 @@ const SamplingStatus = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   let message: string;
-  if (state.status === "error") {
+  if (
+    state.status === "error" &&
+    state.errorCode === ErrorCode.INSUFFICIENT_PRIVILEGE
+  ) {
+    message =
+      "You'll need USAGE privilege on this cluster to measure its workers.";
+  } else if (state.status === "error") {
     // With no readings, the error shows in place of the report instead.
     message =
       state.readings.length > 0

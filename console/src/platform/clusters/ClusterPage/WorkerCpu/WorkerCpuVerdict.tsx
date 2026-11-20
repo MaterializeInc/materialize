@@ -199,6 +199,8 @@ export interface FirstLookProps {
   objectName: (objectId: string) => string;
   /** Starts reading, for an `idle` sampler. */
   onStart: (() => void) | undefined;
+  /** Whether the role is known to lack USAGE on the cluster reading runs on. */
+  isUsageDenied?: boolean;
 }
 
 /** What's known before the first minute is measured. */
@@ -212,6 +214,7 @@ export const FirstLook = ({
   lifetimeObjects,
   objectName,
   onStart,
+  isUsageDenied = false,
 }: FirstLookProps) => {
   // Metrics land about once a minute, so an older point is stale.
   const isCpuCurrent =
@@ -245,12 +248,23 @@ export const FirstLook = ({
             <HStack>
               <Button
                 size="sm"
-                variant="primary"
+                // A disabled primary button stays purple, which reads as
+                // clickable beside the reason it isn't.
+                variant={isUsageDenied ? "tertiary" : "primary"}
                 onClick={onStart}
-                isDisabled={!onStart}
+                isDisabled={!onStart || isUsageDenied}
               >
                 Start measuring
               </Button>
+              {isUsageDenied && (
+                <Text>
+                  You&apos;ll need{" "}
+                  <Text as="span" textStyle="monospace">
+                    USAGE
+                  </Text>{" "}
+                  privilege on this cluster to measure its workers.
+                </Text>
+              )}
             </HStack>
           </VStack>
         }
