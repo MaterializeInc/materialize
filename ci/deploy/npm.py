@@ -39,7 +39,7 @@ class NpmPackageVersion:
 
 
 def generate_version(
-    crate_version: VersionInfo, build_identifier: int | None
+    crate_version: VersionInfo, build_identifier: int | None, git_tag: str | None
 ) -> NpmPackageVersion:
     node_version = str(crate_version)
     is_development = False
@@ -55,13 +55,12 @@ def generate_version(
         )
         is_development = True
     else:
-        buildkite_tag = os.environ.get("BUILDKITE_TAG")
-        # For self-managed branch the buildkite tag is not set, but we are still not in a prerelease version
-        if buildkite_tag:
-            # buildkite_tag starts with a 'v' and node_version does not.
+        # For self-managed branch the tag is not set, but we are still not in a prerelease version
+        if git_tag:
+            # git_tag starts with a 'v' and node_version does not.
             assert (
-                buildkite_tag == f"v{node_version}"
-            ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
+                git_tag == f"v{node_version}"
+            ), f"Git tag ({git_tag}) does not match environmentd version ({crate_version})"
     return NpmPackageVersion(
         rust=crate_version, node=node_version, is_development=is_development
     )
@@ -79,13 +78,23 @@ def build_package(version: NpmPackageVersion, crate_path: Path) -> Path:
         package["name"] = package["name"].removesuffix("-wasm")
         package["version"] = version.node
         package["license"] = "SEE LICENSE IN 'LICENSE'"
-        package["repository"] = "github:MaterializeInc/materialize"
+        package["repository"] = {
+            "type": "git",
+            "url": "git+https://github.com/MaterializeInc/materialize.git",
+        }
         package_file.seek(0)
         json.dump(package, package_file, indent=2)
     return package_path
 
 
-def release_package(version: NpmPackageVersion, package_path: Path) -> None:
+def stage_package(
+    version: NpmPackageVersion, package_path: Path, out_dir: Path
+) -> None:
+    """Pack the package into `out_dir` and append it to `out_dir/plan.txt`.
+
+    Each plan line is `<tarball> <publish tag> <name@version> [<extra dist-tag>]`,
+    consumed by the publish job in .github/workflows/publish.yml.
+    """
     with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
@@ -106,34 +115,33 @@ def release_package(version: NpmPackageVersion, package_path: Path) -> None:
                     version.node,
                 )
                 dist_tag = None
-        logger.info("Releasing %s %s", name, version.node)
-        set_npm_credentials(package_path)
         # If we do not specify a dist tag, this automatically is tagged as
         # `latest`. So, force a dist tag for release builds that are lower than
         # the stable version. This usually happens when we cut a hotfix release
         # for the in-production version after a release has been cut for the
         # next version.
-        spawn.runv(
-            [
-                "npm",
-                "publish",
-                "--access",
-                "public",
-                "--tag",
-                cast(str, dist_tag or branch_tag),
-            ],
-            cwd=package_path,
-        )
-        # If we didn't tag the release with the branch tag, add it now.
-        if dist_tag == "latest" and branch_tag:
-            spawn.runv(
-                ["npm", "dist-tag", "add", f"{name}@{version.node}", branch_tag],
+        publish_tag = cast(str, dist_tag or branch_tag)
+        # If we didn't tag the release with the branch tag, add it after publishing.
+        extra_tag = branch_tag if dist_tag == "latest" and branch_tag else ""
+        out_dir.mkdir(parents=True, exist_ok=True)
+        packed = json.loads(
+            spawn.capture(
+                ["npm", "pack", "--json", "--pack-destination", str(out_dir.resolve())],
                 cwd=package_path,
             )
+        )
+        tarball = packed[0]["filename"]
+        logger.info("Staged %s %s as %s", name, version.node, tarball)
+        with open(out_dir / "plan.txt", "a") as plan:
+            plan.write(f"{tarball} {publish_tag} {name}@{version.node} {extra_tag}\n")
 
 
 def build_all(
-    workspace: cargo.Workspace, version: NpmPackageVersion, *, do_release: bool = True
+    workspace: cargo.Workspace,
+    version: NpmPackageVersion,
+    *,
+    do_release: bool = True,
+    out_dir: Path,
 ) -> None:
     for crate_name in PUBLISH_CRATES:
         crate_path = workspace.all_crates[crate_name].path
@@ -141,8 +149,7 @@ def build_all(
         package_path = build_package(version, crate_path)
         logger.info("Built %s", crate_path)
         if do_release:
-            release_package(version, package_path)
-            logger.info("Released %s", package_path)
+            stage_package(version, package_path, out_dir)
         else:
             logger.info("Skipping release for %s", package_path)
 
@@ -173,12 +180,6 @@ def version_exists_in_npm(name: str, version: NpmPackageVersion) -> bool:
     return True
 
 
-def set_npm_credentials(package_path: Path) -> None:
-    (package_path / ".npmrc").write_text(
-        "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n"
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         "npm.py", description="build and publish NPM packages"
@@ -194,7 +195,18 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         dest="do_release",
         default=True,
-        help="Whether or not the built package should be released",
+        help="Whether to stage the built packages for publishing",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=MZ_ROOT / "npm-dist",
+        help="Where to write the packed tarballs and publish plan",
+    )
+    parser.add_argument(
+        "--git-tag",
+        default=os.environ.get("BUILDKITE_TAG"),
+        help="The release tag being built, checked against the crate version",
     )
     parser.add_argument(
         "--build-id",
@@ -216,12 +228,10 @@ if __name__ == "__main__":
             )
         else:
             build_id = int(os.environ["BUILDKITE_BUILD_NUMBER"])
-    if args.do_release and "NPM_TOKEN" not in os.environ:
-        raise ValueError("'NPM_TOKEN' must be set")
     root_workspace = cargo.Workspace(MZ_ROOT)
     wasm_workspace = cargo.Workspace(MZ_ROOT / "misc" / "wasm")
     crate_version = VersionInfo.parse(
         root_workspace.crates["mz-environmentd"].version_string
     )
-    version = generate_version(crate_version, build_id)
-    build_all(wasm_workspace, version, do_release=args.do_release)
+    version = generate_version(crate_version, build_id, args.git_tag)
+    build_all(wasm_workspace, version, do_release=args.do_release, out_dir=args.out_dir)
