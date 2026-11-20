@@ -31,8 +31,57 @@ Syntax element | Description
 * `DELETE` cannot be used inside [transactions](../begin).
 * `DELETE` can reference [read-write tables](../create-table) but not
   [sources](../create-source) or read-only tables.
-* **Low performance.** While processing a `DELETE` statement, Materialize cannot
-  process other `INSERT`, `UPDATE`, or `DELETE` statements.
+* **Concurrency.** `DELETE` does not take a table-wide write lock. `DELETE`,
+  `UPDATE`, and `INSERT ... SELECT` run under optimistic concurrency control: a
+  bounded number run concurrently, so a long-running one can delay other such
+  statements (including on unrelated tables), and a statement that conflicts with
+  a concurrent write to the same table is retried automatically. Plain
+  `INSERT ... VALUES` is not blocked.
+* **Large deletes.** A single `DELETE` that matches a very large number of rows
+  can exceed `max_result_size` or `statement_timeout`. See
+  [Large `DELETE` statements](#large-delete-statements).
+
+### Large `DELETE` statements
+
+Materialize processes a `DELETE` by reading every row the statement matches back
+through the cluster so it can retract it. The work therefore scales with the
+number of rows matched, not just the size of the table or the complexity of the
+`WHERE` clause.
+
+A `DELETE` has two limits:
+
+- **Size.** The rows a `DELETE` matches can total at most `max_result_size`
+  (default 1 GiB). A larger `DELETE` fails with `total result exceeds max size`
+  and removes no rows.
+- **Time.** [`statement_timeout`](../set) (default 60 seconds) covers the
+  statement until its commit, including time spent waiting behind other
+  `DELETE`, `UPDATE`, and `INSERT ... SELECT` statements. If the timeout fires
+  during the commit, the `DELETE` can still succeed.
+
+To tell whether a `DELETE` is at risk before running it, time the matching
+`SELECT`: a `DELETE` does roughly the same work as selecting the rows it matches.
+If `SELECT * FROM <table> WHERE <condition>` does not return comfortably within
+`statement_timeout`, a `DELETE` with the same `WHERE` clause will not complete
+either. A `DELETE` that fails with a statement timeout removes no rows (the
+statement is atomic), so it is safe to retry as smaller batches.
+
+To delete more than fits in one statement, split it into smaller statements that
+each match fewer rows, for example by key range:
+
+```mzsql
+-- Instead of one large delete:
+DELETE FROM events WHERE ts < '2026-01-01';
+
+-- Delete in smaller batches by key range:
+DELETE FROM events WHERE ts < '2026-01-01' AND id BETWEEN 0 AND 99999;
+DELETE FROM events WHERE ts < '2026-01-01' AND id BETWEEN 100000 AND 199999;
+-- ...continue until all matching rows are removed.
+```
+
+Raising `statement_timeout` or increasing the cluster size can help a moderately
+large `DELETE` complete, but a very large read-back can still fail, so splitting
+the statement is the reliable approach. The same guidance applies to large
+[`UPDATE`](../update) statements, which use the same mechanism.
 
 ## Examples
 
