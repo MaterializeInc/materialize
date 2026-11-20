@@ -17,11 +17,11 @@ backend secret:
 - The **blob store** (for example, S3, `persist_backend_url`), which holds the
   data as immutable blobs.
 
-Materialize finds its catalog shard from the instance's environment ID
-(`spec.environmentId`), and the catalog records every other shard. An instance
-finds its data only when its environment ID and both URLs match the original.
-With a different environment ID, it starts a new, empty environment in the
-same database and bucket.
+Materialize finds its catalog shard from the instance's environment ID, and the
+catalog records every other shard. The environment ID comes from your license
+key, so an instance finds its data only with the same license key and both
+URLs as the original. With a different environment ID, it starts a new, empty
+environment in the same database and bucket.
 
 A backup is a copy of the metadata database. Restoring it rolls consensus back
 to a state that references blobs Materialize has since compacted away. Object
@@ -50,17 +50,10 @@ compacts away per day. Watch their size, and size the retention window with
 that cost in mind.
 
 The AWS `storage` module of the [Materialize Terraform modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
-turns on versioning and the multipart-upload rule by default. Its default
-noncurrent expiry of 7 days equals the `database` module's default backup
-retention, which leaves no margin, so raise it:
-
-```hcl
-module "storage" {
-  # ...
-  enable_bucket_versioning           = true
-  noncurrent_version_expiration_days = 14
-}
-```
+turns on versioning by default. It expires noncurrent versions after 30 days,
+which covers the `database` module's default of 7 days of backups. If you
+raise the backup retention past about 23 days, raise the `storage` module's
+`noncurrent_version_expiration_days` with it.
 
 Versioning doesn't protect against losing the bucket or the account. For that,
 replicate the bucket to another region or account.
@@ -101,16 +94,17 @@ points at that data exactly as before. Keep the following outside the
 Kubernetes cluster, for example in a secret manager:
 
 - **The backend secret**: `metadata_backend_url`, `persist_backend_url`, and
-  `license_key`. The path in `persist_backend_url` is part of the location: the
-  same bucket under another path holds no data.
-- **The environment ID.** If your license key carries one, the operator uses it
-  and rejects any other, so keeping the key keeps the ID. Otherwise, the
-  operator generates a random ID when you first create the instance. Read it
-  back with `kubectl get materialize <name> -n <namespace> -o
-  jsonpath='{.spec.environmentId}'`, and set it in your manifest, or in the
-  Terraform module's `environment_id`.
+  `license_key`. The license key sets the environment ID. The path in
+  `persist_backend_url` is part of the location: the same bucket under another
+  path holds no data.
 - **The Materialize version** (`spec.environmentdImageRef`) at the time of each
   backup. Restoring a backup starts Materialize at that version.
+
+{{< note >}}
+If your license key doesn't set an environment ID, the operator generates a
+random one when you first create the instance. In that case, also keep
+`spec.environmentId`, and set it on the restored instance.
+{{< /note >}}
 
 ### Restore role
 
@@ -166,28 +160,28 @@ MZ_NAME=main                           # the Materialize resource's name
 
 ### Step 1. Stop Materialize
 
-1. Save the `Materialize` resource, and note its environment ID, image, and
-   backend secret name:
+1. Save the `Materialize` resource, and note its image, backend secret name,
+   and active generation:
 
    ```shell
    kubectl -n $MZ_NAMESPACE get materialize $MZ_NAME -o yaml > materialize.yaml
    kubectl -n $MZ_NAMESPACE get materialize $MZ_NAME \
-     -o jsonpath='{.spec.environmentId}{"\n"}{.spec.environmentdImageRef}{"\n"}{.spec.backendSecretName}{"\n"}'
+     -o jsonpath='{.spec.environmentdImageRef}{"\n"}{.spec.backendSecretName}{"\n"}{.status.activeGeneration}{"\n"}'
    ```
 
    `environmentdImageRef` is the version running now. If you upgraded after
-   the backup, it is newer than the backup's version.
+   the backup, it is newer than the backup's version. You need the active
+   generation in [step 4](#step-4-start-materialize).
 
 1. Delete the `Materialize` resource. This stops environmentd, every cluster
    replica, balancerd, and the console, and leaves the backend secret and the
    data alone:
 
    ```shell
-   kubectl -n $MZ_NAMESPACE delete materialize $MZ_NAME
+   kubectl -n $MZ_NAMESPACE delete materialize $MZ_NAME --wait=true
    ```
 
-   With Terraform, set the `materialize-instance` module's `environment_id` to
-   the recorded ID, then destroy only the `Materialize` resource:
+   With Terraform, destroy only the `Materialize` resource:
 
    ```shell
    terraform destroy \
@@ -319,11 +313,30 @@ az postgres flexible-server show --resource-group <group> --name <new server> \
 
 If the database moved to a new server, point `metadata_backend_url` in the
 backend secret at it before step 3. The user and password are the same as on
-the source. With Terraform, update the module inputs that build the URL, and
-run only
+the source.
+
+With Terraform, the new server has a different name from the one in your
+configuration. On RDS, you can rename the instances so that the restored one
+takes the original's name and endpoint, and `metadata_backend_url` doesn't
+change. Then swap it into Terraform's state:
+
+```shell
+aws rds modify-db-instance --db-instance-identifier <instance> \
+  --new-db-instance-identifier <instance>-old --apply-immediately
+aws rds wait db-instance-available --db-instance-identifier <instance>-old
+aws rds modify-db-instance --db-instance-identifier <new instance> \
+  --new-db-instance-identifier <instance> --apply-immediately
+aws rds wait db-instance-available --db-instance-identifier <instance>
+
+terraform state rm 'module.database.module.db.module.db_instance.aws_db_instance.this[0]'
+terraform import 'module.database.module.db.module.db_instance.aws_db_instance.this[0]' <instance>
+terraform plan   # Check that the plan doesn't replace the instance.
+```
+
+Delete `<instance>-old` once you've verified the restore. Otherwise, update the
+module inputs that build `metadata_backend_url`, and run only
 `terraform apply -target='module.materialize_instance.kubernetes_secret.materialize_backend'`.
-A full `terraform apply` would start Materialize too early. The new server
-isn't in Terraform's state yet; import it once the restore is done.
+A full `terraform apply` would start Materialize too early.
 
 The user in `metadata_backend_url` must own the restored tables. If another
 user ran the restore, run `REASSIGN OWNED BY <restoring user> TO <Materialize's
@@ -347,13 +360,21 @@ was running when the backup was taken. That isn't necessarily the version in
    postgres://materialize:<password>@<host>:5432/materialize?sslmode=require&options=--search_path=consensus
    ```
 
-1. Store it and `persist_backend_url` in a secret, which keeps the password out
-   of the Job spec and your shell history:
+1. Store it and `persist_backend_url` in a secret. To keep the password out of
+   your shell history, copy both values from the backend secret into files,
+   and edit the consensus URI in its file:
 
    ```shell
+   umask 077
+   kubectl -n $MZ_NAMESPACE get secret <backend secret> \
+     -o jsonpath='{.data.persist_backend_url}' | base64 -d > blob-uri
+   kubectl -n $MZ_NAMESPACE get secret <backend secret> \
+     -o jsonpath='{.data.metadata_backend_url}' | base64 -d > consensus-uri
+   $EDITOR consensus-uri
+
    kubectl -n persist-restore create secret generic persist-restore \
-     --from-literal=CONSENSUS_URI='<consensus URI>' \
-     --from-literal=BLOB_URI='<persist_backend_url>'
+     --from-file=CONSENSUS_URI=consensus-uri --from-file=BLOB_URI=blob-uri
+   rm blob-uri consensus-uri
    ```
 
 1. Save this Job as `persist-restore.yaml`, with `<version>` set to the
@@ -428,26 +449,55 @@ was running when the backup was taken. That isn't necessarily the version in
 
 ### Step 4. Start Materialize
 
-From the saved `materialize.yaml`, remove `status` and the `metadata` fields
-that Kubernetes fills in (`uid`, `resourceVersion`, `creationTimestamp`,
-`generation`, `managedFields`, and the
-`kubectl.kubernetes.io/last-applied-configuration` annotation). Keep
-`spec.environmentId`, and set `spec.environmentdImageRef` to the backup's
-version. Then apply it:
+Edit the saved `materialize.yaml`:
 
-```shell
-kubectl apply -f materialize.yaml
+- Remove `status`, and the `metadata` fields that Kubernetes fills in: `uid`,
+  `resourceVersion`, `creationTimestamp`, `generation`, `managedFields`,
+  `finalizers`, and the `kubectl.kubernetes.io/last-applied-configuration`
+  annotation.
+- Set `spec.environmentdImageRef` to the backup's version.
+- Add the annotation `materialize.cloud/last-known-active-generation`, set to
+  the active generation from step 1. Without it, the operator deploys
+  generation 1, which the restored catalog has already fenced out, and
+  environmentd exits with `Fence(DeployGeneration { ... })` on every start.
+
+```yaml
+metadata:
+  annotations:
+    materialize.cloud/last-known-active-generation: "<active generation>"
 ```
 
-With Terraform, set the `materialize-instance` module's `environmentd_version`
-to the backup's version, then run `terraform apply`, with `environment_id`
-still set.
+Then create it:
+
+```shell
+kubectl create -f materialize.yaml
+```
+
+The operator reads the annotation only when it creates the resource's status,
+so it must be in the manifest. Adding it afterward has no effect.
+
+With Terraform, set the `materialize-instance` module's `annotations` and
+`environmentd_version` instead, then run `terraform apply`:
+
+```hcl
+module "materialize_instance" {
+  # ...
+  environmentd_version = "<backup's version>"
+  annotations = {
+    "materialize.cloud/last-known-active-generation" = "<active generation>"
+  }
+}
+```
+
+You can leave the annotation set afterward; the operator ignores it once the
+resource exists.
 
 Upgrade again, if you need to, only after you verify the restore.
 
-The operator names pods and services after the new resource's UID, so the
-services come back under new names. Update anything that refers to them by
-name, such as an Ingress, a load balancer target, or a port-forward.
+The operator prefixes pod and service names with a random ID that it generates
+for each new resource, so the services come back under new names. Update
+anything that refers to them by name, such as an Ingress, a load balancer
+target, or a port-forward.
 
 ### Step 5. Verification
 
