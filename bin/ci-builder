@@ -382,6 +382,16 @@ case "$cmd" in
                     --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
                 )
             fi
+            # Lets git in the container fetch from a private repository.
+            if [[ "${BUILDKITE:-}" && "$(github_repo)" != "MaterializeInc/materialize" ]]; then
+                # shellcheck disable=SC2016
+                git_credential_helper='!f() { token=${GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN:-$GITHUB_TOKEN}; test "$1" = get && test -n "$token" && printf "username=x-access-token\npassword=%s\n" "$token"; }; f'
+                args+=(
+                    --env GIT_CONFIG_COUNT=1
+                    --env GIT_CONFIG_KEY_0=credential.https://github.com.helper
+                    --env "GIT_CONFIG_VALUE_0=$git_credential_helper"
+                )
+            fi
         fi
 
         if [[ $detach_container == "true" ]]; then

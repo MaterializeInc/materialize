@@ -13,7 +13,7 @@ Test the consistency with another mz version.
 
 import argparse
 
-from materialize.docker import image_registry
+from materialize.docker import mz_image
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -109,7 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Materialized(
             name="mz_other",
-            image=f"{image_registry()}/materialized:{tag_mz_other}",
+            image=mz_image("materialized", tag_mz_other),
             ports=[
                 f"{port_mz_default_other}:{port_mz_default_internal}",
                 f"{port_mz_system_other}:{port_mz_system_internal}",

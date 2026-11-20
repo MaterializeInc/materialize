@@ -37,6 +37,7 @@ from psycopg import sql as psycopg_sql
 from semver.version import Version
 
 from materialize import MZ_ROOT, buildkite, ci_util, spawn
+from materialize.docker import image_suffix, is_internal_image_tag, mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -122,7 +123,31 @@ def get_version(tag: str | None = None) -> MzVersion:
 
 
 def get_image(image: str, tag: str | None) -> str:
-    return f"{image.rsplit(':', 1)[0]}:{get_tag(tag)}"
+    name = image.rsplit(":", 1)[0].removesuffix(image_suffix())
+    return f"{name}:{get_tag(tag)}"
+
+
+def load_images_into_kind(c: Composition, tag: str | None = None) -> None:
+    """Load the images of this build, or of the internal build at `tag`, into
+    the kind cluster under the plain names the chart uses."""
+    services = [
+        "orchestratord",
+        "environmentd",
+        "clusterd",
+        "console",
+        "balancerd",
+    ]
+    if tag:
+        sources = [mz_image(service, tag) for service in services]
+        for source in sources:
+            spawn.runv(["docker", "pull", source])
+    else:
+        c.pull_images(*services)
+        sources = [c.compose["services"][service]["image"] for service in services]
+    images = [get_image(source, tag) for source in sources]
+    for source, image in zip(sources, images):
+        spawn.runv(["docker", "tag", source, image])
+    spawn.runv(["kind", "load", "docker-image", "--name", KIND_CLUSTER_NAME] + images)
 
 
 def get_upgrade_target(
@@ -2648,6 +2673,8 @@ def workflow_documentation_defaults(
             shutil.rmtree(dir)
         os.mkdir(dir)
         recreate_kind_cluster()
+        if image_suffix():
+            load_images_into_kind(c)
 
         helm_install_cert_manager()
 
@@ -5272,31 +5299,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
             ]
         )
 
-    if not args.tag:
-        services = [
-            "orchestratord",
-            "environmentd",
-            "clusterd",
-            "console",
-            "balancerd",
-        ]
-        c.pull_images(*services)
-        for service in services:
-            spawn.runv(
-                [
-                    "docker",
-                    "tag",
-                    c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service]["image"], None),
-                ]
-            )
-        spawn.runv(
-            ["kind", "load", "docker-image", "--name", cluster]
-            + [
-                get_image(c.compose["services"][service]["image"], None)
-                for service in services
-            ]
-        )
+    # The cluster pulls released versions itself.
+    if not args.tag or is_internal_image_tag(args.tag):
+        load_images_into_kind(c, args.tag)
 
     definition: dict[str, Any] = {}
 

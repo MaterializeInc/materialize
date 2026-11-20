@@ -13,6 +13,7 @@ import sys
 import time
 
 from materialize import MZ_ROOT
+from materialize.docker import mz_image
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -300,7 +301,7 @@ def workflow_start_version(c: Composition, parser: WorkflowArgumentParser) -> No
 
     print(f"Docker image: materialize/materialized:{version_str}")
     mz_service = Materialized(
-        image=f"materialize/materialized:{version_str}" if version_str else None,
+        image=mz_image("materialized", version_str) if version_str else None,
         system_parameter_defaults={"enable_rbac_checks": "false"},
     )
 

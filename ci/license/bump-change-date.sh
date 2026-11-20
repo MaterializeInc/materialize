@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 git_date=$(date "+%B %d, %Y 00:00:00 UTC")
 change_date=$(date -d "+4 years" "+%B %d, %Y")
 version_date=$(date "+%Y%m%d")
@@ -34,4 +36,4 @@ sed -Ei \
     LICENSE
 git add LICENSE
 git commit -m "LICENSE: update change date"
-git push "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/materialize.git" main
+git push "https://materializebot:$GITHUB_TOKEN@github.com/$(github_repo).git" main

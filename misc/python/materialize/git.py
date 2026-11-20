@@ -24,7 +24,55 @@ from materialize.util import YesNoOnce
 
 VERSION_TYPE = TypeVar("VERSION_TYPE", bound=TypedVersionBase)
 
-MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
+DEFAULT_GITHUB_REPO = "MaterializeInc/materialize"
+
+
+def _org_repos(git_command: list[str]) -> set[str]:
+    """The repositories in the organization of `DEFAULT_GITHUB_REPO` among the
+    remote URLs that `git_command` prints, or `BUILDKITE_REPO` in Buildkite."""
+    urls = os.getenv("BUILDKITE_REPO")
+    if not urls:
+        try:
+            urls = spawn.capture(git_command, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            urls = ""
+    owner = DEFAULT_GITHUB_REPO.split("/")[0].lower()
+    repos = set()
+    for url in urls.split():
+        # Both git@github.com:owner/name.git and https://github.com/owner/name.
+        repo = url.partition("github.com")[2][1:].removesuffix(".git")
+        if repo.lower().startswith(f"{owner}/"):
+            repos.add(repo)
+    return repos
+
+
+@functools.cache
+def get_github_repos() -> frozenset[str]:
+    """The "owner/name" of every GitHub repository this checkout could belong
+    to: all its remotes in the organization of `DEFAULT_GITHUB_REPO`."""
+    return frozenset(_org_repos(["git", "remote", "--verbose"]))
+
+
+@functools.cache
+def get_github_repo() -> str:
+    """The "owner/name" of the GitHub repository this checkout belongs to.
+
+    In Buildkite this is the repository the pipeline builds. Locally it is the
+    remote the current branch tracks, or `origin` without one. A fork there
+    does not count, so next comes the one remote in the organization of
+    `DEFAULT_GITHUB_REPO`, and last `DEFAULT_GITHUB_REPO`.
+    """
+    # Without an argument this prints the URL of the branch's default remote.
+    default_remote = _org_repos(["git", "ls-remote", "--get-url"])
+    for repos in (default_remote, get_github_repos()):
+        if len(repos) == 1:
+            return next(iter(repos))
+    return DEFAULT_GITHUB_REPO
+
+
+def get_remote_url() -> str:
+    return f"https://github.com/{get_github_repo()}"
+
 
 fetched_tags_in_remotes: set[str | None] = set()
 
@@ -129,7 +177,7 @@ def get_version_tags(
     version_type: type[VERSION_TYPE],
     newest_first: bool = True,
     fetch: bool = True,
-    remote_url: str = MATERIALIZE_REMOTE_URL,
+    remote_url: str | None = None,
 ) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
@@ -193,7 +241,9 @@ def is_ancestor(earlier: str, later: str) -> bool:
     """True if earlier is in an ancestor of later"""
     try:
         headers = {"Accept": "application/vnd.github+json"}
-        if token := os.getenv("GITHUB_TOKEN"):
+        if token := os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+            "GITHUB_TOKEN"
+        ):
             headers["Authorization"] = f"Bearer {token}"
 
         # GitHub resolves the ref "HEAD" server-side to the repo's default
@@ -203,7 +253,7 @@ def is_ancestor(earlier: str, later: str) -> bool:
         api_later = rev_parse(later) if later == "HEAD" else later
 
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/{api_earlier}...{api_later}",
+            f"https://api.github.com/repos/{get_github_repo()}/compare/{api_earlier}...{api_later}",
             headers=headers,
         )
         resp.raise_for_status()
@@ -318,9 +368,10 @@ def try_get_remote_name_by_url(url: str) -> str | None:
 
 
 def get_remote(
-    url: str = MATERIALIZE_REMOTE_URL,
+    url: str | None = None,
     default_remote_name: str = "origin",
 ) -> str:
+    url = url or get_remote_url()
     # Alternative syntax
     remote = try_get_remote_name_by_url(url) or try_get_remote_name_by_url(
         url.replace("https://github.com/", "git@github.com:")
@@ -336,11 +387,13 @@ def get_common_ancestor_commit(remote: str, branch: str) -> str:
     try:
         head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
         headers = {"Accept": "application/vnd.github+json"}
-        if token := os.getenv("GITHUB_TOKEN"):
+        if token := os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+            "GITHUB_TOKEN"
+        ):
             headers["Authorization"] = f"Bearer {token}"
 
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/{head}...{branch}",
+            f"https://api.github.com/repos/{get_github_repo()}/compare/{head}...{branch}",
             headers=headers,
         )
         resp.raise_for_status()
@@ -372,7 +425,7 @@ def is_on_release_version() -> bool:
 def contains_commit(
     commit_sha: str,
     target: str = "HEAD",
-    remote_url: str = MATERIALIZE_REMOTE_URL,
+    remote_url: str | None = None,
 ) -> bool:
     return is_ancestor(commit_sha, target)
 

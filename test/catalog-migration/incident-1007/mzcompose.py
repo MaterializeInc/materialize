@@ -37,7 +37,7 @@ current, the repair fires and the same query succeeds.
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import image_registry
+from materialize.docker import mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
@@ -106,7 +106,7 @@ def _start_at(c: Composition, version: MzVersion | None) -> None:
         image: str | None = None
         label = "current"
     else:
-        image = f"{image_registry()}/materialized:{version}"
+        image = mz_image("materialized", version)
         label = str(version)
     print(f"Starting Materialize at {label} ({image})")
     with c.override(_mz(image=image), fail_on_new_service=False):

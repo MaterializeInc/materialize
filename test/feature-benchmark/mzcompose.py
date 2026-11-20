@@ -21,7 +21,7 @@ import uuid
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import image_registry, is_image_tag_of_release_version
+from materialize.docker import is_image_tag_of_release_version, mz_image
 from materialize.feature_benchmark.benchmark_result_evaluator import (
     BenchmarkResultEvaluator,
 )
@@ -226,16 +226,16 @@ def run_one_scenario(
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
-        mz_image = f"{image_registry()}/materialized:{tag}" if tag else None
+        materialized_image = mz_image("materialized", tag) if tag else None
         mz = create_mz_service(
-            mz_image,
+            materialized_image,
             size,
             additional_system_parameter_defaults,
             args.azurite,
         )
         # Keep clusterd on the same registry as materialized; both services of
         # one instance must be pulled from the same place.
-        clusterd_image = f"{image_registry()}/clusterd:{tag}" if tag else None
+        clusterd_image = mz_image("clusterd", tag) if tag else None
         clusterd = create_clusterd_service(
             clusterd_image,
             size,
@@ -246,9 +246,9 @@ def run_one_scenario(
             print(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
-            mz_image = f"{image_registry()}/materialized:latest"
+            materialized_image = mz_image("materialized", "latest")
             mz = create_mz_service(
-                mz_image,
+                materialized_image,
                 size,
                 additional_system_parameter_defaults,
                 args.azurite,
@@ -256,7 +256,7 @@ def run_one_scenario(
             # Fall back to latest for clusterd too, so the two services of the
             # instance stay on a matching tag instead of pairing latest
             # materialized with a missing-tag clusterd.
-            clusterd_image = f"{image_registry()}/clusterd:latest"
+            clusterd_image = mz_image("clusterd", "latest")
             clusterd = create_clusterd_service(
                 clusterd_image,
                 size,
@@ -368,13 +368,13 @@ def resolve_tag(
 
 
 def create_mz_service(
-    mz_image: str | None,
+    materialized_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
     azurite: bool,
 ) -> Materialized:
     return Materialized(
-        image=mz_image,
+        image=materialized_image,
         default_size=default_size,
         # Avoid clashes with the Kafka sink progress topic across restarts
         environment_id=f"local-az1-{uuid.uuid4()}-0",

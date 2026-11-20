@@ -42,6 +42,7 @@ from humanize import naturalsize
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
+from materialize.docker import image_suffix
 from materialize.mzcompose.composition import (
     Composition,
     UnknownCompositionError,
@@ -479,6 +480,7 @@ class SqlCommand(Command):
         ghcr_prefix = "ghcr.io/materializeinc/"
         if image.startswith(ghcr_prefix):
             image = image.removeprefix(ghcr_prefix)
+        image = image.removesuffix(image_suffix())
 
         if image == "materialize/materialized":
             deps = composition.repo.resolve_dependencies(
