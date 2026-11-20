@@ -955,14 +955,24 @@ impl DatumColumnDecoder {
                     .into_value();
                 Datum::Numeric(OrderedDecimal(val))
             }),
-            DatumColumnDecoder::String(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::String),
-            DatumColumnDecoder::Bytes(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::Bytes),
+            DatumColumnDecoder::String(array) => {
+                let datum = if array.is_valid(idx) {
+                    Datum::String(array.value(idx))
+                } else {
+                    Datum::Null
+                };
+                packer.push(datum);
+                return;
+            }
+            DatumColumnDecoder::Bytes(array) => {
+                let datum = if array.is_valid(idx) {
+                    Datum::Bytes(array.value(idx))
+                } else {
+                    Datum::Null
+                };
+                packer.push(datum);
+                return;
+            }
             DatumColumnDecoder::Date(array) => {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let date = Date::from_pg_epoch(x).expect("failed to roundtrip");

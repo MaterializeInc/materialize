@@ -1798,25 +1798,25 @@ where
     data.extend_from_slice(bytes);
 }
 
+/// Appends `tag`, the length of `bytes` in the width that `tag` stands for, and `bytes`.
 fn push_lengthed_bytes<D>(data: &mut D, bytes: &[u8], tag: Tag)
 where
     D: Vector<u8>,
 {
+    let len = bytes.len().to_le_bytes();
     match tag {
         Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => {
-            let len = bytes.len().to_le_bytes();
-            data.push(len[0]);
+            data.extend_from_slice(&[tag.into(), len[0]]);
         }
         Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
-            let len = bytes.len().to_le_bytes();
-            data.extend_from_slice(&len[0..2]);
+            data.extend_from_slice(&[tag.into(), len[0], len[1]]);
         }
         Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
-            let len = bytes.len().to_le_bytes();
+            data.push(tag.into());
             data.extend_from_slice(&len[0..4]);
         }
         Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
-            let len = bytes.len().to_le_bytes();
+            data.push(tag.into());
             data.extend_from_slice(&len);
         }
         _ => unreachable!(),
@@ -1936,6 +1936,22 @@ const TINY: usize = 1 << 8;
 const SHORT: usize = 1 << 16;
 const LONG: usize = 1 << 32;
 
+/// Appends `tag` followed by the first `len` bytes of `payload`, with a single write.
+#[inline(always)]
+fn push_tagged<D, const N: usize>(data: &mut D, tag: u8, payload: &[u8; N], len: usize)
+where
+    D: Vector<u8>,
+{
+    const { assert!(N <= 16) };
+    debug_assert!(len <= N, "payload of {N} bytes is shorter than {len}");
+    // NOTE: A write of the tag and one of the payload each check the capacity and move
+    // the length of `data`, which is most of the cost of pushing a short datum.
+    let mut buf = [0; 17];
+    buf[0] = tag;
+    buf[1..][..N].copy_from_slice(payload);
+    data.extend_from_slice(&buf[..1 + len]);
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -1953,8 +1969,7 @@ where
             let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt16_0) + delta;
 
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbs));
         }
         Datum::Int32(i) => {
             // The family alternates the signs at each width, so the width is two tags apart and
@@ -1965,8 +1980,7 @@ where
             let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt32_0) + delta;
 
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbs));
         }
         Datum::Int64(i) => {
             // The family alternates the signs at each width, so the width is two tags apart and
@@ -1977,40 +1991,33 @@ where
             let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt64_0) + delta;
 
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbs));
         }
         Datum::UInt8(i) => {
             let mbu = min_bytes_unsigned(i);
             let tag = u8::from(Tag::UInt8_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbu));
         }
         Datum::UInt16(i) => {
             let mbu = min_bytes_unsigned(i);
             let tag = u8::from(Tag::UInt16_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbu));
         }
         Datum::UInt32(i) => {
             let mbu = min_bytes_unsigned(i);
             let tag = u8::from(Tag::UInt32_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbu));
         }
         Datum::UInt64(i) => {
             let mbu = min_bytes_unsigned(i);
             let tag = u8::from(Tag::UInt64_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_tagged(data, tag, &i.to_le_bytes(), usize::from(mbu));
         }
         Datum::Float32(f) => {
-            data.push(Tag::Float32.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            push_tagged(data, Tag::Float32.into(), &f.to_bits().to_le_bytes(), 4);
         }
         Datum::Float64(f) => {
-            data.push(Tag::Float64.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            push_tagged(data, Tag::Float64.into(), &f.to_bits().to_le_bytes(), 8);
         }
         Datum::Date(d) => {
             data.push(Tag::Date.into());
@@ -2023,8 +2030,7 @@ where
         Datum::Timestamp(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestamp.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+                push_tagged(data, Tag::CheapTimestamp.into(), &nanos.to_le_bytes(), 8);
             } else {
                 data.push(Tag::Timestamp.into());
                 push_naive_date(data, datetime.date());
@@ -2034,8 +2040,7 @@ where
         Datum::TimestampTz(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestampTz.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+                push_tagged(data, Tag::CheapTimestampTz.into(), &nanos.to_le_bytes(), 8);
             } else {
                 data.push(Tag::TimestampTz.into());
                 push_naive_date(data, datetime.date());
@@ -2043,8 +2048,7 @@ where
             }
         }
         Datum::Interval(i) => {
-            data.push(Tag::Interval.into());
-            data.extend_from_slice(&i.months.to_le_bytes());
+            push_tagged(data, Tag::Interval.into(), &i.months.to_le_bytes(), 4);
             data.extend_from_slice(&i.days.to_le_bytes());
             data.extend_from_slice(&i.micros.to_le_bytes());
         }
@@ -2055,7 +2059,6 @@ where
                 SHORT..LONG => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
-            data.push(tag.into());
             push_lengthed_bytes(data, bytes, tag);
         }
         Datum::String(string) => {
@@ -2065,7 +2068,6 @@ where
                 SHORT..LONG => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
-            data.push(tag.into());
             push_lengthed_bytes(data, string.as_bytes(), tag);
         }
         Datum::List(list) => {
@@ -2075,12 +2077,10 @@ where
                 SHORT..LONG => Tag::ListLong,
                 _ => Tag::ListHuge,
             };
-            data.push(tag.into());
             push_lengthed_bytes(data, list.data, tag);
         }
         Datum::Uuid(u) => {
-            data.push(Tag::Uuid.into());
-            data.extend_from_slice(u.as_bytes());
+            push_tagged(data, Tag::Uuid.into(), u.as_bytes(), 16);
         }
         Datum::Array(array) => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -2096,8 +2096,7 @@ where
         }
         Datum::JsonNull => data.push(Tag::JsonNull.into()),
         Datum::MzTimestamp(t) => {
-            data.push(Tag::MzTimestamp.into());
-            data.extend_from_slice(&t.encode());
+            push_tagged(data, Tag::MzTimestamp.into(), &t.encode(), 8);
         }
         Datum::Dummy => data.push(Tag::Dummy.into()),
         Datum::Numeric(mut n) => {
