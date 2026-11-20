@@ -276,7 +276,7 @@ async fn selected_plan_refreshes() {
         if let Some((known, upper)) = frontier {
             let upper = upper
                 .map(|t| Sql::literal(&t.to_string()))
-                .unwrap_or(sql!("NULL"));
+                .unwrap_or_else(|| sql!("NULL"));
             batch_execute(
                 &client,
                 sql!(
