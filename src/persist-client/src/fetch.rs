@@ -24,6 +24,9 @@ use itertools::EitherOrBoth;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_ore::halt;
+use mz_ore::metrics::IntCounter;
+use mz_ore::process::halt_with_code;
 use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
 use mz_persist::indexed::columnar::parquet::BlobTraceBatchPartReader;
@@ -55,7 +58,7 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{
     BatchPart, HollowBatchPart, ProtoHollowBatchPart, ProtoInlineBatchPart,
 };
-use crate::read::LeasedReaderId;
+use crate::read::{LeasedReaderId, READER_LEASE_EXPIRED_EXIT_CODE};
 use crate::schema::{PartMigration, SchemaCache};
 
 pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
@@ -354,6 +357,37 @@ pub enum MissingBlobDiagnosis {
     },
 }
 
+/// How a fetch that found its part's blob missing should fail. Only
+/// `fetch_leased_part` exits as the variant says; `shard_source` reports every
+/// variant through its `ErrorHandler`.
+#[derive(Debug)]
+pub(crate) enum MissingBlobExit {
+    /// Halt with [READER_LEASE_EXPIRED_EXIT_CODE].
+    LeaseExpired,
+    /// Halt: the shard was tombstoned.
+    Halt,
+    /// Panic: a GC or lease bug, so it reaches Sentry.
+    Panic,
+}
+
+impl MissingBlobDiagnosis {
+    /// Classifies this diagnosis. Counts a lost lease in `expired_live_read`.
+    pub(crate) fn exit(&self, expired_live_read: &IntCounter) -> MissingBlobExit {
+        match self {
+            MissingBlobDiagnosis::LeaseExpired { .. } => {
+                expired_live_read.inc();
+                MissingBlobExit::LeaseExpired
+            }
+            MissingBlobDiagnosis::ShardTombstoned { .. } => MissingBlobExit::Halt,
+            // `Unknown` usually means a consensus partition, which can also cost
+            // the lease, but we can't confirm that here, so it panics like a bug.
+            MissingBlobDiagnosis::LeasePresent { .. } | MissingBlobDiagnosis::Unknown { .. } => {
+                MissingBlobExit::Panic
+            }
+        }
+    }
+}
+
 impl fmt::Display for MissingBlobDiagnosis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -537,12 +571,17 @@ where
             // from being deleted by garbage collection, and all blob implementations are
             // linearizable so there should be no possibility of stale reads.
             //
-            // If we do have a bug and a reader does encounter a missing blob, the state
-            // cannot be recovered, and our best option is to panic and retry the whole
-            // process.
-            let diagnostics =
+            // So a missing blob means a lost lease or a bug. Callers have no error channel, so exit.
+            let diagnosis =
                 missing_blob_diagnostics(schema_cache.applier(), reader_id.clone()).await;
-            panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
+            let message = format_args!("could not fetch batch part {blob_key}: {diagnosis}");
+            match diagnosis.exit(&metrics.lease.expired_live_read) {
+                MissingBlobExit::LeaseExpired => {
+                    halt_with_code(READER_LEASE_EXPIRED_EXIT_CODE, message)
+                }
+                MissingBlobExit::Halt => halt!("{message}"),
+                MissingBlobExit::Panic => panic!("{message}"),
+            }
         }
     };
     let part_cfg = BatchFetcherConfig::new(cfg);

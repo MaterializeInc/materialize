@@ -9349,6 +9349,7 @@ dependencies = [
  "prost-build",
  "rand 0.10.3",
  "serde",
+ "tempfile",
  "timely",
  "tokio",
  "tracing",
