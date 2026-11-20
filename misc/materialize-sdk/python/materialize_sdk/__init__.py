@@ -19,6 +19,7 @@ The rules of the subscribe protocol live in the Rust protocol core, which this
 package binds. This package runs them over a psycopg connection.
 """
 
+from materialize_sdk import _values
 from materialize_sdk._errors import (
     ProtocolError,
     SdkError,
@@ -27,6 +28,7 @@ from materialize_sdk._errors import (
     UsageError,
 )
 from materialize_sdk._live import LiveSubscription
+from materialize_sdk._values import *  # noqa: F403
 
 __all__ = [
     "LiveSubscription",
@@ -36,3 +38,4 @@ __all__ = [
     "TimestampTooLarge",
     "UsageError",
 ]
+__all__ += _values.__all__

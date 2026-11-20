@@ -17,7 +17,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from materialize_sdk._values import Classification
 
 
 class SdkError(Exception):
@@ -44,7 +47,7 @@ class ServerError(SdkError):
     """
 
     def __init__(
-        self, message: str, sqlstate: str | None, classification: dict[str, Any]
+        self, message: str, sqlstate: str | None, classification: Classification
     ) -> None:
         super().__init__(message)
         self.sqlstate = sqlstate

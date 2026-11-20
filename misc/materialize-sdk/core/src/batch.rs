@@ -79,11 +79,12 @@ pub fn check_limits(
 
 /// What the batcher hands to the consumer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// Part of the initial snapshot, released early to bound memory. The
-    /// snapshot completes with the next [`Batch`], which has
-    /// [`Batch::is_snapshot`] set. A chunk carries no frontier, so nothing can
+    /// snapshot completes with the next batch, which is marked as the
+    /// snapshot. A chunk carries no frontier, so nothing can
     /// be committed until that batch arrives, and a restart before it delivers
     /// the whole snapshot again. A target therefore writes chunks where the
     /// next snapshot can replace them.
@@ -114,6 +115,7 @@ impl Event {
 /// Every update at a time in `[lower, upper)` that was not in an earlier
 /// event, in timestamp order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Batch {
     lower: Option<Frontier>,
     upper: Frontier,
