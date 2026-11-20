@@ -6,6 +6,7 @@ design is in `doc/developer/design/20260706_materialize_sdk.md`.
 - `core/`: the protocol core, a Rust library with no I/O that every language
   package wraps.
 - `conformance/`: language-neutral test vectors that every package runs.
+- `rust/`: the Rust package, over `tokio-postgres`.
 
 This directory is its own Cargo workspace, outside the Materialize workspace.
 
