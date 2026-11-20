@@ -43,4 +43,11 @@ python3 -m venv "$venv"
     npm ci --quiet
     npm run build
     npm test
+    # The published package holds the WebAssembly build.
+    npm pack --dry-run --json | node -e '
+        const files = JSON.parse(require("fs").readFileSync(0))[0].files.map((f) => f.path);
+        if (!files.includes("core/materialize_sdk_node_bg.wasm")) {
+            console.error("the package leaves out the WebAssembly build");
+            process.exit(1);
+        }'
 )
