@@ -191,6 +191,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 883  substr
 884  btrim
 885  btrim
+910  inet_in
 936  substring
 937  substring
 938  generate_series
@@ -259,6 +260,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 1242  boolin
 1244  byteain
 1245  charin
+1267  cidr_in
 1268  parse_ident
 1269  pg_column_size
 1282  quote_ident
@@ -487,6 +489,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2474  timestamp_recv
 2476  timestamptz_recv
 2478  interval_recv
+2496  inet_recv
+2498  cidr_recv
 2502  anyarray_recv
 2504  pg_get_ruledef
 2505  pg_get_viewdef

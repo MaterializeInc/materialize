@@ -304,7 +304,6 @@ pub(crate) fn any_bytes_stats() -> impl Strategy<Value = BytesStats> {
         Just(FixedSizeBytesStatsKind::PackedInterval),
         Just(FixedSizeBytesStatsKind::PackedNumeric),
         Just(FixedSizeBytesStatsKind::Uuid),
-        Just(FixedSizeBytesStatsKind::PackedInet),
     ]);
 
     Union::new(vec![

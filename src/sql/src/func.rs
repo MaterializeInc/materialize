@@ -793,7 +793,14 @@ impl ParamType {
 
     /// Is `self` the preferred parameter type for its `TypeCategory`?
     fn prefers_self(&self) -> bool {
-        if let Some(pt) = TypeCategory::from_param(self).preferred_type() {
+        // NOTE: an unknown argument earns no credit for `inet`. With it,
+        // `$1 + $1::bigint` would resolve to `inet + bigint` instead of
+        // `bigint + bigint`. PostgreSQL never credits unknown arguments here.
+        let category = TypeCategory::from_param(self);
+        if category == TypeCategory::NetworkAddress {
+            return false;
+        }
+        if let Some(pt) = category.preferred_type() {
             *self == pt
         } else {
             false
@@ -1031,7 +1038,9 @@ where
         .filter(|i| i.params.matches_argtypes(ecx, &types))
         .collect();
 
-    let f = find_match(ecx, &types, impls).map_err(|candidates| {
+    let f = find_match(ecx, &types, impls.clone())
+        .or_else(|candidates| binary_op_exact_match(&spec, &types, &impls).ok_or(candidates));
+    let f = f.map_err(|candidates| {
         let arg_types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
@@ -1078,6 +1087,41 @@ where
     })?;
 
     (f.op.0)(ecx, args, &f.params, order_by)
+}
+
+/// PostgreSQL's `binary_oper_exact`: for a binary operator with one
+/// unknown-typed operand, assume the unknown operand has the other operand's
+/// type and return the implementation that matches that pair exactly.
+///
+/// PostgreSQL runs this before the best-match algorithm. Materialize runs it
+/// only after `find_match` reports an ambiguity, because running it first
+/// changes how existing queries resolve: `now() - '1 day'` would pick
+/// `timestamptz - timestamptz` and fail to parse the literal.
+fn binary_op_exact_match<'a, R>(
+    spec: &FuncSpec,
+    types: &[CoercibleScalarType],
+    impls: &[&'a FuncImpl<R>],
+) -> Option<&'a FuncImpl<R>> {
+    if !matches!(spec, FuncSpec::Op(_)) {
+        return None;
+    }
+    let known = match types {
+        [
+            CoercibleScalarType::Uncoerced,
+            CoercibleScalarType::Coerced(t),
+        ]
+        | [
+            CoercibleScalarType::Coerced(t),
+            CoercibleScalarType::Uncoerced,
+        ] => t,
+        _ => return None,
+    };
+    let pair = [known, known];
+    let mut matches = impls.iter().filter(|i| i.params.exact_match(&pair));
+    match (matches.next(), matches.next()) {
+        (Some(f), None) => Some(*f),
+        _ => None,
+    }
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -3534,6 +3578,16 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     bail_unsupported!("varcharin")
                 }) => VarChar, 1046;
         },
+        "inet_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| {
+                bail_unsupported!("inet_in")
+            }) => Inet, 910;
+        },
+        "cidr_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| {
+                bail_unsupported!("cidr_in")
+            }) => Cidr, 1267;
+        },
         "uuid_in" => Scalar {
             params!(String) => Operation::variadic(|_ecx, _exprs| {
                 bail_unsupported!("uuid_in")
@@ -3671,6 +3725,16 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 Operation::nullary(|_ecx| {
                     catalog_name_only!("timestamptz_recv")
                 }) => TimestampTz, 2476;
+        },
+        "inet_recv" => Scalar {
+            params!(Internal) =>
+                Operation::nullary(|_ecx| catalog_name_only!("inet_recv"))
+                => Inet, 2496;
+        },
+        "cidr_recv" => Scalar {
+            params!(Internal) =>
+                Operation::nullary(|_ecx| catalog_name_only!("cidr_recv"))
+                => Cidr, 2498;
         },
         "uuid_recv" => Scalar {
             params!(Internal) =>
