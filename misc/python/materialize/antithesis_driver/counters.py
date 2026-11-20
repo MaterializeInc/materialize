@@ -339,11 +339,12 @@ class Counters:
         )
 
     def rotate(self, d: Draw) -> Status:
-        g = self.current
-        if self._creating or (g is not None and g.ops < GENERATION_OPS):
-            return Status.NOT_SENT
-        self._creating = True
-        nxt = Generation(self._next_number, self.keys)
+        with self._lock:
+            g = self.current
+            if self._creating or (g is not None and g.ops < GENERATION_OPS):
+                return Status.NOT_SENT
+            self._creating = True
+            nxt = Generation(self._next_number, self.keys)
 
         def execute(conn: psycopg.Connection) -> None:
             for statement in nxt.statements():
