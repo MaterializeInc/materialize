@@ -87,3 +87,20 @@ wasm-bindgen generates the binding's TypeScript declarations, and the build
 type-checks the package against them. The live tests run when
 `MATERIALIZE_URL` is set.
 
+
+## Try it
+
+`rust/examples/valkey.rs` keeps a Valkey hash equal to a Materialize table,
+view, source, or materialized view with a unique key. From
+`misc/materialize-sdk`:
+
+```
+MATERIALIZE_URL="host=localhost port=6875 user=materialize" \
+VALKEY_URL=redis://localhost:6379 \
+SOURCE=orders KEY=id \
+cargo run --example valkey
+```
+
+`valkey-cli HGETALL orders` then shows one field per key. The example's docs
+describe the format, and why each connection starts with a snapshot. The
+nightly pipeline runs it through `test/materialize-sdk`.
