@@ -78,7 +78,8 @@ IPv4-mapped IPv6 addresses stay IPv6, as in PostgreSQL.
 
 `macaddr` and `macaddr8` are separate datums because they are distinct types
 with their own comparison. `macaddr -> macaddr8` inserts `FF:FE` in the middle,
-and `macaddr8 -> macaddr` errors unless bytes 4 and 5 are `FF:FE`.
+and `macaddr8 -> macaddr` errors unless bytes 4 and 5 are `FF:FE`
+(`macaddr8 data out of range to convert to macaddr`).
 
 ### Encodings
 
@@ -135,7 +136,11 @@ against PostgreSQL 16 before merge. Expected:
 - `inet -> cidr`: assignment, zeroes host bits.
 - `inet`/`cidr -> text`, `varchar`, `char`: assignment, through output.
 - `text -> inet`/`cidr`/`macaddr`/`macaddr8`: explicit, through input.
-- `macaddr <-> macaddr8`: implicit.
+- `macaddr <-> macaddr8`: implicit in both directions (`pg_cast` rows with
+  `castcontext = 'i'` in PostgreSQL 16 and 18). Because both directions are
+  implicit, PostgreSQL rejects `macaddr8 = macaddr` with `operator is not
+  unique`. Materialize's operator resolution must reproduce that rather than
+  pick one side.
 
 ### Operators and functions
 
@@ -225,8 +230,6 @@ Two PRs, each complete on its own:
 
 ## Open questions
 
-- Does PostgreSQL's `pg_cast` mark `macaddr8 -> macaddr` implicit or
-  assignment? Check before merge.
 - Should `<<` pushdown use the persist stats directly, or first be rewritten
   to a range predicate during MIR optimization? The second gives other
   optimizations the same benefit and is probably the better seam.
