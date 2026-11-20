@@ -1460,6 +1460,7 @@ fn managed_replica_config(managed: &ClusterVariantManaged) -> ReplicaConfig {
             billed_as: None,
             internal: false,
             pending: false,
+            slot: None,
         },
         logging: logging.clone(),
         arrangement_compression: *arrangement_compression,
@@ -1698,6 +1699,7 @@ mod tests {
                 billed_as,
                 internal,
                 pending,
+                slot,
             } => {
                 assert_eq!(size, managed.size);
                 assert_eq!(availability_zones, managed.availability_zones);
@@ -1707,6 +1709,7 @@ mod tests {
                 assert_eq!(billed_as, None);
                 assert!(!internal);
                 assert!(!pending);
+                assert_eq!(slot, None);
             }
             ReplicaLocation::Unmanaged { .. } => panic!("expected a managed location"),
         }

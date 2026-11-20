@@ -71,6 +71,7 @@ fn observed(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
     ObservedReplica {
         replica_id,
         name: name.to_string(),
+        slot: replica_id,
         shape: Some(shape(size)),
         internal: false,
         billed_as: false,
@@ -83,6 +84,7 @@ fn foreign(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
     ObservedReplica {
         replica_id,
         name: name.to_string(),
+        slot: replica_id,
         shape: Some(shape(size)),
         internal: true,
         billed_as: false,
@@ -446,6 +448,7 @@ impl FakeCtx {
                 cluster_id,
                 name,
                 shape,
+                slot,
                 ..
             } => {
                 if let Some(state) = self.states.get_mut(cluster_id) {
@@ -453,6 +456,7 @@ impl FakeCtx {
                     state.replicas.push(ObservedReplica {
                         replica_id: replica(next_id),
                         name: name.clone(),
+                        slot: slot.unwrap_or(replica(next_id)),
                         shape: Some(shape.clone()),
                         internal: false,
                         billed_as: false,
@@ -608,6 +612,78 @@ async fn wrong_shape_replica_dropped() {
     if let Decision::CreateReplica { shape, .. } = creates[0] {
         assert_eq!(shape.size, "200cc");
     }
+}
+
+/// The slots of the creates applied so far, in order.
+fn created_slots(ctx: &FakeCtx) -> Vec<Option<ReplicaId>> {
+    ctx.creates()
+        .into_iter()
+        .filter_map(|d| match d {
+            Decision::CreateReplica { slot, .. } => Some(*slot),
+            _ => None,
+        })
+        .collect()
+}
+
+#[mz_ore::test(tokio::test)]
+async fn same_shape_creates_open_their_own_slots() {
+    let c = cluster(1);
+    let states = vec![state(
+        c,
+        "100cc",
+        3,
+        vec![observed(replica(1), "r1", "100cc")],
+    )];
+    let mut ctx = FakeCtx::new(states);
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(
+        created_slots(&ctx),
+        vec![None, None],
+        "steady replicas must not share a slot"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn replacements_inherit_distinct_slots() {
+    // A 100cc rf=2 cluster reconfiguring to 200cc rf=3.
+    let c = cluster(1);
+    let (state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        2,
+        vec![
+            observed(replica(1), "r1", "100cc"),
+            observed(replica(2), "r2", "100cc"),
+        ],
+        record("200cc", 3, 9_000_000),
+        BTreeSet::new(),
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    let controller = controller();
+
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(
+        created_slots(&ctx),
+        vec![Some(replica(1)), Some(replica(2)), None],
+        "each replacement inherits a different predecessor's slot, the third opens its own"
+    );
+
+    // Cut over. The slots outlive the replicas they are named after.
+    ctx.ready = ctx.states[&c]
+        .replicas
+        .iter()
+        .map(|r| r.replica_id)
+        .collect();
+    controller.reconcile(&mut ctx).await;
+    let slots: BTreeSet<ReplicaId> = ctx.states[&c].replicas.iter().map(|r| r.slot).collect();
+    assert_eq!(ctx.states[&c].size, "200cc");
+    assert_eq!(
+        slots,
+        BTreeSet::from([replica(1), replica(2), replica(5)]),
+        "the steady set occupies three distinct slots after the cut-over"
+    );
 }
 
 // ----- A second, fake additive strategy, to exercise the union/diff. -----
@@ -1905,6 +1981,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         replicas: vec![ObservedReplica {
             replica_id: replica(1),
             name: "r0".to_string(),
+            slot: replica(1),
             shape: Some(ReplicaShape {
                 size: "100cc".to_string(),
                 availability_zones: AvailabilityZones(vec!["az1".to_string()]),

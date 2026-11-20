@@ -698,6 +698,7 @@ Snapshot {
                         internal: false,
                         billed_as: None,
                         pending: false,
+                        slot: None,
                     },
                 ),
                 arrangement_compression: false,

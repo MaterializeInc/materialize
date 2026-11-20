@@ -248,12 +248,14 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
                 billed_as,
                 internal,
                 pending,
+                slot,
             } => proto::ReplicaLocation::Managed(proto::ManagedLocation {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
                 billed_as: billed_as.clone(),
                 internal: *internal,
                 pending: *pending,
+                slot: slot.map(|slot| slot.into_proto()),
             }),
         }
     }
@@ -270,6 +272,7 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
                 internal: location.internal,
                 size: location.size,
                 pending: location.pending,
+                slot: location.slot.map(RustType::from_proto).transpose()?,
             }),
         }
     }

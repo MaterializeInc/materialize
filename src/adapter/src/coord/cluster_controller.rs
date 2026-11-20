@@ -432,6 +432,11 @@ impl Coordinator {
             .map(|replica| ObservedReplica {
                 replica_id: replica.replica_id,
                 name: replica.name.clone(),
+                slot: match &replica.config.location {
+                    mz_controller::clusters::ReplicaLocation::Managed(location) => location.slot,
+                    mz_controller::clusters::ReplicaLocation::Unmanaged(_) => None,
+                }
+                .unwrap_or(replica.replica_id),
                 shape: replica_shape(&replica.config),
                 internal: replica.config.location.internal(),
                 billed_as: replica.config.location.billed_as().is_some(),
@@ -786,12 +791,14 @@ impl Coordinator {
                     cluster_id,
                     name,
                     shape,
+                    slot,
                     reason,
                     ..
                 } => {
                     let replica_id = replica_ids.next().expect("one pre-allocated id per create");
                     let reason = audit_reason_for_create(reason);
-                    match self.build_create_replica_op(cluster_id, replica_id, name, &shape, reason)
+                    match self
+                        .build_create_replica_op(cluster_id, replica_id, name, &shape, slot, reason)
                     {
                         Ok(Some(op)) => mutations.push(op),
                         Ok(None) => return None,
@@ -965,6 +972,7 @@ impl Coordinator {
         replica_id: ReplicaId,
         name: String,
         shape: &ReplicaShape,
+        slot: Option<ReplicaId>,
         reason: ReplicaCreateDropReason,
     ) -> Result<Option<Op>, mz_catalog::memory::error::Error> {
         let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
@@ -982,6 +990,7 @@ impl Coordinator {
             internal: false,
             size: shape.size.clone(),
             pending: false,
+            slot,
         };
         let azs: Option<&[String]> = if shape.availability_zones.0.is_empty() {
             None
