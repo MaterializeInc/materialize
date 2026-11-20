@@ -9,6 +9,7 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -205,12 +206,18 @@ pub unsafe fn install_additional_trust_bundle(path: &Path) -> Result<PathBuf, an
     }
     let merged = merge_trust_bundles(system.certs, &additional)
         .with_context(|| format!("parsing additional trust bundle {}", path.display()))?;
-    // The process ID keeps processes that share a temporary directory, as
-    // under the process orchestrator, from overwriting each other's bundles.
-    let merged_path =
-        std::env::temp_dir().join(format!("mz-trust-bundle-{}.pem", std::process::id()));
-    std::fs::write(&merged_path, merged)
-        .with_context(|| format!("writing merged CA bundle {}", merged_path.display()))?;
+    // The temporary directory may be shared with other users, as under the
+    // process orchestrator. Writing to a predictable name there would let
+    // another user pre-create the file and keep write access to the CAs this
+    // process trusts, so create it exclusively under a random name.
+    let mut file = tempfile::Builder::new()
+        .prefix("mz-trust-bundle-")
+        .suffix(".pem")
+        .tempfile()
+        .context("creating merged CA bundle")?;
+    file.write_all(merged.as_bytes())
+        .with_context(|| format!("writing merged CA bundle {}", file.path().display()))?;
+    let (_, merged_path) = file.keep().context("keeping merged CA bundle")?;
     // SAFETY: the caller guarantees that the process has not spawned threads.
     unsafe { std::env::set_var(SSL_CERT_FILE, &merged_path) };
     Ok(merged_path)

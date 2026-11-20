@@ -6397,8 +6397,8 @@ def run_oidc_auth(c: Composition, parser: WorkflowArgumentParser, tls: bool) -> 
     args = parser.parse_args()
 
     version = get_version(args.tag)
-    # `additionalTrustBundle` needs v26.52.
-    min_version = MzVersion.parse_mz("v26.52.0-dev.0" if tls else "v26.16.0-dev.0")
+    # `additionalTrustBundle` needs v26.53.
+    min_version = MzVersion.parse_mz("v26.53.0-dev.0" if tls else "v26.16.0-dev.0")
     if version < min_version:
         raise ValueError(
             f"OIDC auth with tls={tls} requires environmentd >= {min_version}, got {version}"
