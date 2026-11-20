@@ -67,9 +67,14 @@ async fn prepare(
             &MetricsRegistry::new(),
             std::time::Duration::from_secs(60),
         ),
+        true,
     )
     .await
     .expect("prepare curated selections")
+    .resume(catalog, true)
+    .await
+    .expect("publish curated selections")
+    .expect("inline preparation completed")
 }
 
 async fn commit(catalog: &mut Catalog, ops: Vec<Op>) {
