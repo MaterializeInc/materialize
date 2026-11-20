@@ -46,6 +46,113 @@ fn hydration_history_forced_migration_policy() {
     }
 }
 
+/// Runs a migration without steps on a fresh turmoil host and returns the shards it allocated for
+/// builtins that had none.
+fn run_allocation(
+    sim: &mut turmoil::Sim<'_>,
+    host: &'static str,
+    persist_location: &PersistLocation,
+    migration_shard: ShardId,
+    read_only: bool,
+    system_objects: &BTreeMap<SystemObjectDescription, ObjectInfo>,
+) -> BTreeMap<GlobalId, ShardId> {
+    let result = Rc::new(RefCell::new(None));
+    let host_result = Rc::clone(&result);
+    let persist_location = persist_location.clone();
+    let system_objects = system_objects.clone();
+    sim.host(host, move || {
+        let result = Rc::clone(&host_result);
+        let persist_location = persist_location.clone();
+        let system_objects = system_objects.clone();
+        async move {
+            let persist_cache = PersistClientCache::new_for_turmoil();
+            let persist_client = persist_cache.open(persist_location).await.unwrap();
+            let migration = Migration {
+                source_version: Version::new(0, 1, 0),
+                target_version: Version::new(0, 2, 0),
+                deploy_generation: 1,
+                system_objects,
+                migration_shard,
+                config: BuiltinItemMigrationConfig {
+                    persist_client,
+                    read_only,
+                    force_migration: None,
+                },
+            };
+            let res = migration.run(&[]).await.unwrap();
+            result.borrow_mut().replace(res.allocated_shards);
+            Ok(())
+        }
+    });
+    sim.bounce(host);
+    while result.borrow().is_none() {
+        sim.step().unwrap();
+    }
+    result.borrow_mut().take().unwrap()
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_new_builtin_keeps_shard_across_promotion() {
+    configure_tracing_for_turmoil();
+
+    let mut sim = turmoil::Builder::new().build();
+    let persist_location = init_persist(&mut sim);
+    let migration_shard = ShardId::new();
+
+    let new_builtin = |name: &str, id| {
+        let (object, builtin) = make_builtin_table(name.into());
+        let info = ObjectInfo {
+            global_id: GlobalId::System(id),
+            shard_id: None,
+            builtin,
+            fingerprint: builtin.fingerprint(),
+        };
+        (object, info)
+    };
+    let id = GlobalId::System(7);
+    let objects = BTreeMap::from([new_builtin("new_table", 7)]);
+
+    let read_only = run_allocation(
+        &mut sim,
+        "read-only",
+        &persist_location,
+        migration_shard,
+        true,
+        &objects,
+    );
+    assert!(read_only.contains_key(&id), "new builtin got no shard");
+
+    let leader = run_allocation(
+        &mut sim,
+        "leader",
+        &persist_location,
+        migration_shard,
+        false,
+        &objects,
+    );
+    assert_eq!(
+        leader, read_only,
+        "the promoted leader must reuse the shard allocated while read-only"
+    );
+
+    // The same ID assigned to a different builtin, as happens when the system ID allocator moved
+    // between the read-only boot and promotion.
+    let shifted = BTreeMap::from([new_builtin("other_table", 7)]);
+    let shifted = run_allocation(
+        &mut sim,
+        "shifted-leader",
+        &persist_location,
+        migration_shard,
+        false,
+        &shifted,
+    );
+    assert_ne!(
+        shifted[&id], read_only[&id],
+        "a shard allocated for another builtin must not be reused"
+    );
+}
+
 /// A builtin that the source version never had has no shard registered. An `Evolution` step for
 /// it, registered at a version above the source, must be skipped rather than bail out: the leader
 /// allocates the shard at the target schema during bootstrap, and a read-only process that bailed

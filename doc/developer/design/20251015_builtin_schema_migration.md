@@ -95,6 +95,21 @@ Note that the deploy generation is included in the migration shard key to suppor
 Without the deploy generation in the key, these upgrades would interfere in unintended ways.
 While the scenario is not one we expect to occur during normal operation, we cannot rule out that it will ever occur in a self-managed context.
 
+### New Builtin Collections
+
+A builtin storage collection that is new in the target version has no shard in the durable catalog.
+A read-only process cannot commit one, so a shard ID it picked on its own would be lost at promotion.
+The leader would pick a different shard, and compute reconciliation would then discard every dataflow that reads or writes the collection, although the read-only process had already hydrated it.
+
+To avoid this, shards for new builtin collections are recorded in the migration shard in the same way as replacement shards, and the leader reuses them.
+
+The `GlobalId` of a new builtin is also allocated in the catalog transaction the read-only process never commits.
+The leader allocates it again, and gets a different one if another process added builtins in the meantime.
+Entries for new builtins therefore also record the builtin's type, schema, and name, and an entry is only reused for the builtin it was created for.
+On a mismatch the leader allocates a fresh shard.
+
+The read-only process owns these shards exclusively, so it writes them before promotion under the same conditions as replacement shards.
+
 ### Supporting Concurrent Processes
 
 To prepare for use-case-isolation, which requires running multiple adapter processes concurrently, we need to make sure that builtin schema migration doesn't fail when processes of the same version race to perform it.
