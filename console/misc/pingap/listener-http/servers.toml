@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Holds every table that depends on the listener's scheme. pingap reads all
+# tables from every file; only the file names must be its own, or it tries
+# to rewrite the directory at start.
+
+[servers.console]
+addr = "$ENV:MZ_CONSOLE_LISTEN_ADDR"
+locations = ["api", "oauth_metadata", "metrics_loopback", "static", "app"]
+prometheus_metrics = "/_mz_console_metrics"
+access_log = "combined"
+
+# Plain HTTP whether or not the console serves TLS.
+[servers.metrics]
+addr = "$ENV:MZ_CONSOLE_METRICS_LISTEN_ADDR"
+locations = ["metrics", "metrics_not_found"]
+
+[upstreams.console_self]
+addrs = ["$ENV:MZ_CONSOLE_LOOPBACK_ADDR"]
