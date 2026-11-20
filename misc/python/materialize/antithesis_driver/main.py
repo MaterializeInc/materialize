@@ -27,7 +27,6 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     reachable,
 )
@@ -43,6 +42,8 @@ WORKLOAD_ACTIVE = Path(
     os.environ.get("MZ_ANTITHESIS_WORKLOAD_ACTIVE", "/workload-active")
 )
 DERIVED_CLUSTER = "driver"
+SOURCE_CLUSTER = "sources"
+"""Holds the sources and sinks. The disruptions leave its replica count alone."""
 STANDALONE_SYSTEM_PARAMETERS = {
     # Strong session serializable is the only isolation level with
     # per-session guarantees. The Kubernetes config sets these in the
@@ -50,6 +51,7 @@ STANDALONE_SYSTEM_PARAMETERS = {
     # override `ALTER SYSTEM`.
     "enable_session_timelines": "true",
     "max_connections": "1000",
+    "allow_real_time_recency": "true",
 }
 
 
@@ -60,7 +62,9 @@ def retry(name: str, step: Callable[[], None]) -> None:
         try:
             step()
             return
-        except (psycopg.Error, OSError, RuntimeError) as e:
+        except Exception as e:
+            # Setup has no deadline of its own: the upstreams and the broker
+            # can fail in any way while they start.
             reason = f"{type(e).__name__}: {str(e).strip().splitlines()[0] if str(e).strip() else ''}"
             if reason != last:
                 log(f"waiting for {name}: {reason}")
@@ -169,17 +173,22 @@ def admin_setup(config: Config, statements: list[str]) -> None:
             if not config.kubernetes:
                 for name, value in STANDALONE_SYSTEM_PARAMETERS.items():
                     conn.execute(f"ALTER SYSTEM SET {name} = {value}".encode())
-            exists = conn.execute(
-                b"SELECT 1 FROM mz_clusters WHERE name = %s", (DERIVED_CLUSTER,)
-            ).fetchone()
-            if exists is None:
-                conn.execute(
-                    f"CREATE CLUSTER {DERIVED_CLUSTER}"
-                    f" (SIZE '{config.replica_sizes[0]}', REPLICATION FACTOR 1)".encode()
-                )
-                conn.execute(
-                    f"GRANT ALL ON CLUSTER {DERIVED_CLUSTER} TO materialize".encode()
-                )
+            # The sink checks read views `AS OF` a past frontier, which needs
+            # their history retained. The Kubernetes ConfigMap does not sync
+            # this flag, so `ALTER SYSTEM` holds there too.
+            conn.execute(b"ALTER SYSTEM SET enable_logical_compaction_window = true")
+            for cluster in (DERIVED_CLUSTER, SOURCE_CLUSTER):
+                exists = conn.execute(
+                    b"SELECT 1 FROM mz_clusters WHERE name = %s", (cluster,)
+                ).fetchone()
+                if exists is None:
+                    conn.execute(
+                        f"CREATE CLUSTER {cluster}"
+                        f" (SIZE '{config.replica_sizes[0]}', REPLICATION FACTOR 1)".encode()
+                    )
+                    conn.execute(
+                        f"GRANT ALL ON CLUSTER {cluster} TO materialize".encode()
+                    )
 
     def user_setup() -> None:
         with connect(user, "driver-setup") as conn:
@@ -215,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
             conn.execute(b"SELECT 1")
 
     retry("SQL", serving)
-    admin_setup(config, machine.setup_statements())
+    c = machine.prepare(config)
+    retry("the upstream setup", c.setup_upstreams)
+    admin_setup(config, c.setup_statements())
     retry("SQL", serving)
     setup_complete({"host": host, "kubernetes": kubernetes})
     # The pod's readiness probe.
@@ -224,5 +235,5 @@ def main(argv: list[str] | None = None) -> int:
     (state_dir / "setup-complete").touch()
     wait_for_workload_active()
     reachable("the workload starts", {"host": host})
-    machine.run(config, sys.argv[1:] if argv is None else argv)
+    machine.run(sys.argv[1:] if argv is None else argv)
     return 0

@@ -160,7 +160,26 @@ class Target:
     """Connect as `mz_system` on the internal port."""
 
 
-def connect(target: Target, application_name: str) -> psycopg.Connection:
+@dataclass(frozen=True)
+class Upstream:
+    """A Postgres server outside Materialize, such as a source's upstream."""
+
+    url: str
+
+
+def connect(target: Target | Upstream, application_name: str) -> psycopg.Connection:
+    if isinstance(target, Upstream):
+        return psycopg.connect(
+            target.url,
+            autocommit=True,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
+            tcp_user_timeout=TCP_USER_TIMEOUT_MS,
+            keepalives=1,
+            keepalives_idle=5,
+            keepalives_interval=2,
+            keepalives_count=3,
+            application_name=application_name,
+        )
     options = "-c cluster=mz_catalog_server" if target.internal else None
     return psycopg.connect(
         host=target.host,
@@ -202,7 +221,7 @@ class Session:
     def __init__(
         self,
         name: str,
-        target: Target,
+        target: Target | Upstream,
         statement_timeout_ms: int,
         lock: threading.Lock,
     ) -> None:
@@ -322,7 +341,7 @@ class Pool:
     def __init__(
         self,
         name: str,
-        target: Target,
+        target: Target | Upstream,
         size: int,
         statement_timeout_ms: int = 30_000,
     ) -> None:

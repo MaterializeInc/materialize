@@ -23,8 +23,11 @@ comparison with the Test Composer workload it replaced, are in
 | Contended counters (`counters.py`) | Read-then-write `UPDATE` and `INSERT ... SELECT` stay within the bounds of increments acknowledged and attempted |
 | Atomic commits (`atomic.py`) | No read sees part of a multi-table write transaction, or a rolled-back one |
 | IVM (`views.py`) | Twelve view kinds, each as an indexed view and a materialized view, equal a Python reference (`ivm_model.py`) on single reads and at every closed timestamp of a `SUBSCRIBE` |
+| Postgres source (`pg.py`) | Serial upstream transactions over three tables and a ledger, their unknown commits resolved upstream. One read of progress, ledger and exports: the ledger is a whole-transaction prefix of the commit order, consistent with the mapped LSN, and every export equals its table replayed to that prefix, also after upstream `ADD COLUMN`. Real-time recency reads see every transaction committed before them |
+| Kafka source (`kafka.py`) | Produces to a topic that a background consumer tails as the ground truth. The none and upsert envelope exports equal the topic below the mapped offsets, the offsets are monotone, acknowledged produces are in the topic |
+| Kafka sinks (`kafka.py`) | A Debezium sink of a view and an upsert sink of an aggregate, both tailed read-committed. Stream invariants of `sink_oracle.py`, consolidated output equals the view at a committed frontier, and after faults stop equals the model of acknowledged writes |
 | Disruptions (`disrupt.py`) | Replica changes, deletions of environmentd, clusterd and orchestratord pods, and 0dt rollouts, some manually promoted, with kills in a chosen phase. `activeGeneration` never decreases |
-| After faults stop (`health.py`, each component's `eventually`) | The CR settles, SQL serves, replicas come online, every pending statement finishes, every component's final read succeeds and passes its checks, no pod crash-loops |
+| After faults stop (`health.py`, each component's `eventually`) | The CR settles, SQL serves, replicas come online, every pending statement finishes, every component's final read succeeds and passes its checks, sources catch up with every acknowledged upstream write, run, and advance, sinks run and reach every acknowledged write, no pod crash-loops |
 
 A guarantee is an `always`, which fails when a run never evaluates it, and a
 situation worth reaching is a `sometimes` or `reachable`, which fails when a
@@ -35,8 +38,13 @@ as `::materialize_driver passes properties`, which fails if the state machine
 raised.
 
 Not ported yet, in the order the design doc gives: the rollout status claims,
-exit evidence, Postgres and Kafka sources, Kafka sinks, read-only isolation,
-and the smaller families listed there.
+exit evidence, upstream TRUNCATE and DROP with their known-bug buckets, upsert
+decode-error recovery, read-only isolation, and the smaller families listed
+there.
+
+The Postgres source and the Kafka components run when the driver has an
+upstream Postgres URL (`MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL`) and a broker
+(`MZ_ANTITHESIS_KAFKA_BROKER`), as the manifests give it.
 
 ## Running locally
 
@@ -47,10 +55,11 @@ bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --dur
 bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --duration 300 kind
 ```
 
-`standalone` runs the driver on this machine against a fresh
-`materialize/materialized` container. `kind` deploys these manifests into a
-kind cluster with a release's published environmentd, clusterd and
-orchestratord images and a locally built driver image, and needs `kind`,
+`standalone` runs the driver on this machine against fresh
+`materialize/materialized`, Postgres and Redpanda containers on one Docker
+network. `kind` deploys these manifests into a kind cluster with a release's
+published environmentd, clusterd and orchestratord images and a locally built
+driver image, and needs `kind`,
 `kubectl`, `helm` and the license key (`MZ_CI_LICENSE_KEY` or
 `~/.config/materialize/antithesis-license-key`). Either runs the workload for
 `--duration` seconds, then the eventually, and lists the assertions a run

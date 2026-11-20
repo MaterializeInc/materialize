@@ -139,6 +139,10 @@ session rebinding models, `halt_proof.py`, `exit_evidence.py`,
 | Contended counters | `drivers/counters.py` | the bounds and log checks and their messages, plus a post-fault read |
 | Atomic commits | `drivers/atomic_commits.py` | `atomic_commits_model.py` unchanged, each read judged against what was settled before it began |
 | IVM | `drivers/ivm.py` | the views and the reference of `ivm_model.py`, checked on the consistent cut of one `SELECT` and at every closed timestamp of a `SUBSCRIBE`, with the legacy messages of the latter |
+| Postgres sources | `drivers/postgres_sources.py` | the ledger, LSN and export checks and their messages, in the bucket without a terminal upstream op. A single upstream writer resolves unknown commits with `txid_status`, so the upstream model is exact. Real-time recency reads, and a post-fault catch-up check, which the legacy workload lacked |
+| Kafka sources | `drivers/kafka_sources.py` | the progress, offset and export checks and their messages against a continuously tailed topic, and a post-fault catch-up check |
+| Kafka sinks | `drivers/kafka_sinks.py` | `sink_oracle.py` unchanged, the stream, view and model checks and their messages, against continuously tailed topics |
+| Source status | `drivers/source_status.py` | export frontiers advance after faults stop, and every source runs |
 | Rollouts | `drivers/rollouts.py` | requests with both strategies, manual promotion, pod deletion in a drawn phase, `activeGeneration` monotonicity, settling after faults |
 | Pod restarts | `drivers/pod_restarts.py` | deletion of environmentd, clusterd and orchestratord pods with a UID precondition and the same grace menu |
 | Recovery | `drivers/recovery.py` | canary, replicas online, CR up to date, crash loops (`crash_loops.py`), plus every session draining and a `SUBSCRIBE` advancing |
@@ -154,9 +158,10 @@ much of the port is mechanical:
    zero-delay patch still lands in a short Promoting window.
 2. Exit evidence (`halt_proof.py` and `exit_evidence.py` are pure): every
    environmentd and clusterd exit explained by a designed halt.
-3. Postgres and Kafka sources, Kafka sinks (`sink_oracle.py` is pure), upsert
-   recovery (`upsert_recovery_model.py` is pure). The inventory found that
-   nothing checks source contents after faults stop: add it.
+3. Upstream TRUNCATE, DROP and re-export for the Postgres source, with the
+   legacy buckets for the known bugs after an ingestion restart, which need
+   restart detection. Upsert decode-error recovery (`upsert_recovery_model.py`
+   is pure). The persistcli shard audit.
 4. Read-only isolation (`isolation.py` is pure) and the timestamp oracle
    samples.
 5. Bounded `SUBSCRIBE` and index handover, which, like the IVM subscriber,

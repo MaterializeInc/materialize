@@ -44,6 +44,17 @@ class Config:
     workload, whatever the draws decide."""
     eventually_disabled: bool
     """Local loop only: never run the eventually."""
+    upstream_postgres_url: str | None
+    """The upstream Postgres of the Postgres source, as the driver reaches it.
+    Without it, the Postgres source is off."""
+    upstream_postgres_mz_host: str | None
+    """The same server's `host` or `host:port` as Materialize reaches it, if
+    that differs."""
+    kafka_broker: str | None
+    """The Kafka broker, as the driver reaches it. Without it, the Kafka source
+    and sinks are off."""
+    kafka_mz_broker: str | None
+    """The same broker as Materialize reaches it."""
 
     @staticmethod
     def from_env(host: str, kubernetes: bool) -> Config:
@@ -58,6 +69,15 @@ class Config:
             ),
             eventually_after_seconds=float(after) if after else None,
             eventually_disabled=os.environ.get("MZ_ANTITHESIS_NO_EVENTUALLY") == "1",
+            upstream_postgres_url=os.environ.get("MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL"),
+            upstream_postgres_mz_host=os.environ.get(
+                "MZ_ANTITHESIS_UPSTREAM_POSTGRES_MZ_HOST"
+            ),
+            kafka_broker=os.environ.get("MZ_ANTITHESIS_KAFKA_BROKER"),
+            kafka_mz_broker=os.environ.get(
+                "MZ_ANTITHESIS_KAFKA_MZ_BROKER",
+                os.environ.get("MZ_ANTITHESIS_KAFKA_BROKER"),
+            ),
         )
 
 

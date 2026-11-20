@@ -160,3 +160,64 @@ def no_crash_loops(kube: Any, deadline: float) -> None:
         "No Materialize pod crash-loops after faults stop",
         {"covered": covered, "crash_loops": loops, "window_s": CRASHLOOP_WINDOW_S},
     )
+
+
+def sources_progress(ctx: Context, deadline: float) -> None:
+    """After faults stop, every source runs and its exports advance.
+
+    The driver issues no upstream operation that errors an export, so every
+    export must make progress past the time this check starts.
+    """
+    system = Target(ctx.config.host, internal=True)
+
+    def now() -> tuple[bool, Any]:
+        rows = query(system, "SELECT mz_now()::text")
+        return True, int(rows[0][0])
+
+    ok, t0 = poll(now, deadline, "sources: mz_now")
+    if not ok:
+        return
+
+    def advanced() -> tuple[bool, Any]:
+        rows = query(
+            system,
+            "SELECT o.name, f.write_frontier::text"
+            " FROM mz_catalog.mz_objects o"
+            " JOIN mz_internal.mz_frontiers f ON f.object_id = o.id"
+            " WHERE o.id LIKE 'u%' AND (o.type = 'source'"
+            " OR o.id IN (SELECT id FROM mz_catalog.mz_tables WHERE source_id IS NOT NULL))",
+        )
+        behind = sorted(
+            name for name, frontier in rows if frontier is None or int(frontier) <= t0
+        )
+        return bool(rows) and not behind, {
+            "t0": t0,
+            "behind": behind,
+            "objects": len(rows),
+        }
+
+    passed, details = poll(advanced, deadline, "sources: frontiers")
+    always(
+        passed,
+        "source progress: a continuously running export advances its write frontier past the wall clock within the wedge bound",
+        details,
+    )
+
+    def running() -> tuple[bool, Any]:
+        rows = query(
+            system,
+            "SELECT s.name, st.status FROM mz_catalog.mz_sources s"
+            " JOIN mz_internal.mz_source_statuses st ON s.id = st.id"
+            " WHERE s.id LIKE 'u%' AND s.type IN ('postgres', 'kafka')",
+        )
+        stalled = sorted(
+            f"{name}: {status}" for name, status in rows if status != "running"
+        )
+        return bool(rows) and not stalled, {"stalled": stalled}
+
+    passed, details = poll(running, deadline, "sources: statuses")
+    always(
+        passed,
+        "source progress: every source reports running after faults stop",
+        details,
+    )

@@ -40,6 +40,9 @@ from materialize import MZ_ROOT, spawn
 
 DRIVER_IMAGE = "antithesis-driver"
 STANDALONE_CONTAINER = "mz-antithesis-driver"
+UPSTREAM_CONTAINER = "mz-antithesis-driver-pg"
+BROKER_CONTAINER = "mz-antithesis-driver-redpanda"
+NETWORK = "mz-antithesis-driver"
 LICENSE_KEY_FILE = Path.home() / ".config" / "materialize" / "antithesis-license-key"
 
 
@@ -186,16 +189,65 @@ def report(output: Path) -> int:
 
 
 def standalone(args: argparse.Namespace) -> int:
+    from materialize.antithesis import render
+
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
     (output / "sdk.jsonl").unlink(missing_ok=True)
-    subprocess.run(["docker", "rm", "-f", STANDALONE_CONTAINER], capture_output=True)
+    containers = [STANDALONE_CONTAINER, UPSTREAM_CONTAINER, BROKER_CONTAINER]
+    subprocess.run(["docker", "rm", "-f", *containers], capture_output=True)
+    subprocess.run(["docker", "network", "rm", NETWORK], capture_output=True)
+    spawn.runv(["docker", "network", "create", NETWORK])
+    run = ["docker", "run", "-d", "--network", NETWORK, "--name"]
     spawn.runv(
         [
-            "docker",
-            "run",
-            "-d",
-            "--name",
+            *run,
+            UPSTREAM_CONTAINER,
+            "-p",
+            "15432:5432",
+            "-e",
+            "POSTGRES_PASSWORD=postgres",
+            "-e",
+            "POSTGRES_DB=upstream",
+            render.DEFAULT_IMAGES["POSTGRES_IMAGE"],
+            "-c",
+            "wal_level=logical",
+            "-c",
+            "max_wal_senders=20",
+            "-c",
+            "max_replication_slots=20",
+        ]
+    )
+    # Materialize reaches the broker inside the network, the driver from the
+    # host: one listener each.
+    spawn.runv(
+        [
+            *run,
+            BROKER_CONTAINER,
+            "-p",
+            "19092:19092",
+            render.DEFAULT_IMAGES["REDPANDA_IMAGE"],
+            "redpanda",
+            "start",
+            "--overprovisioned",
+            "--smp=1",
+            "--memory=512M",
+            "--reserve-memory=0M",
+            "--node-id=0",
+            "--check=false",
+            "--kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092",
+            f"--advertise-kafka-addr=internal://{BROKER_CONTAINER}:9092,external://localhost:19092",
+            "--set",
+            "redpanda.enable_transactions=true",
+            "--set",
+            "redpanda.enable_idempotence=true",
+            "--set",
+            "redpanda.auto_create_topics_enabled=false",
+        ]
+    )
+    spawn.runv(
+        [
+            *run,
             STANDALONE_CONTAINER,
             "-p",
             "6875:6875",
@@ -213,6 +265,10 @@ def standalone(args: argparse.Namespace) -> int:
         "MZ_ANTITHESIS_WORKLOAD_ACTIVE": str(active),
         "MZ_ANTITHESIS_REPLICA_SIZES": "25cc,100cc",
         "MZ_ANTITHESIS_EVENTUALLY_AFTER": str(args.duration),
+        "MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL": "postgres://postgres:postgres@localhost:15432/upstream",
+        "MZ_ANTITHESIS_UPSTREAM_POSTGRES_MZ_HOST": f"{UPSTREAM_CONTAINER}:5432",
+        "MZ_ANTITHESIS_KAFKA_BROKER": "localhost:19092",
+        "MZ_ANTITHESIS_KAFKA_MZ_BROKER": f"{BROKER_CONTAINER}:9092",
         "ANTITHESIS_SDK_LOCAL_OUTPUT": str(output / "sdk.jsonl"),
     }
     try:
@@ -235,9 +291,8 @@ def standalone(args: argparse.Namespace) -> int:
         print(f"driver exited with {result.returncode}, log in {output / 'driver.log'}")
     finally:
         if not args.keep:
-            subprocess.run(
-                ["docker", "rm", "-f", STANDALONE_CONTAINER], capture_output=True
-            )
+            subprocess.run(["docker", "rm", "-f", *containers], capture_output=True)
+            subprocess.run(["docker", "network", "rm", NETWORK], capture_output=True)
     return report(output)
 
 
