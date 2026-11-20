@@ -19,6 +19,11 @@ boundary. Preserve definitions, SQL types/dependencies, authority and selected
 plans while avoiding ordinary builtin-view MIR optimization. Exact storage and
 execution schemas remain required. Bring back any need for new durable metadata
 or a broader boundary. See `replica-metadata-boundary-proposal.md`.
+The schema probe confirms that substituting logical view descriptions changes
+downstream MV schemas. Selected MV plans already contain the exact descriptions,
+but those must be available before dependent sink planning, including incremental
+replay. See `replica-schema-boundary-witness.md`. Replica changes and after-change
+timings remain outstanding.
 
 The M3 scheduling cut is approved. Do not resume statement-by-statement retry
 conversions. `remaining-inline-owner-inventory.md` records deferred runtime and
@@ -37,10 +42,10 @@ M2, the 60s publication default and existing resource limits remain closed.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
-- Native item-plan admission still has an unprotected optional-cache fallback.
-  Remove that execution alternative without removing diagnostic catalogs or
-  low-level storage APIs. `plan-publication-native-audit.md` identifies the boundary.
-  Moving publication waits and further retry owners are deferred by the approved
+- Catalog test Clippy fails on eight existing `unwrap_used` findings in
+  `catalog/retention/tests.rs` and `expr_cache.rs`. See
+  `native-plan-admission-verification.md`. No lint suppression was added.
+- Moving publication waits and further retry owners are deferred by the approved
   cut. No finite overall login retry limit or authentication-policy change is approved.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
   failure after a fixed 5s wait. Its exact rerun passed without changes, but the
@@ -62,6 +67,12 @@ M2, the 60s publication default and existing resource limits remain closed.
   or unrelated optimization.
 
 ## Verified outcomes and limits
+
+Native item-plan admission requires read protection and immutable publication,
+even when optional caching is disabled. The no-selection fallback is removed.
+Targeted checks passed, including an old-code negative control and restored-code
+verification. Diagnostic catalogs and low-level plan storage remain supported.
+See `native-plan-admission-verification.md`.
 
 Shared dependency, refresh and shard rows derive from durable state. Startup
 history pruning is conditional, and compute-free storage-usage collection claims

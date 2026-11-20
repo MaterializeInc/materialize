@@ -1944,7 +1944,8 @@ impl Catalog {
     }
 
     /// Durably prepares a new item's plan and returns the selection to commit with its DDL.
-    /// Unprotected environments use the optional expression cache and return no selection.
+    /// Requires catalog read protection and an open immutable-plan store. Optional
+    /// expression caching cannot substitute for durable plan publication.
     pub async fn prepare_item_plan(
         &self,
         id: GlobalId,
@@ -1954,6 +1955,12 @@ impl Catalog {
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
     ) -> Result<Vec<Op>, CatalogError> {
+        if !self.state.catalog_read_protection_enabled() {
+            return Err(CatalogError::internal(
+                "prepare maintained plan",
+                "catalog read protection is not enabled",
+            ));
+        }
         // Make sure we're not caching the result of timestamp selection, as
         // it will almost certainly be wrong if we re-install the dataflow at
         // a later time.
@@ -1980,16 +1987,9 @@ impl Catalog {
             optimizer_features,
             item_version: RelationVersion::root(),
         };
-        let selection = if self.state.catalog_read_protection_enabled() {
-            let selection = self.write_plans(BTreeMap::from([(id, global)])).await?;
-            self.update_expression_cache(local_exprs, Vec::new(), Default::default())
-                .await;
-            selection
-        } else {
-            self.update_expression_cache(local_exprs, vec![(id, global)], Default::default())
-                .await;
-            Vec::new()
-        };
+        let selection = self.write_plans(BTreeMap::from([(id, global)])).await?;
+        self.update_expression_cache(local_exprs, Vec::new(), Default::default())
+            .await;
         Ok(selection)
     }
 

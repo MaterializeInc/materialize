@@ -249,7 +249,7 @@ async fn prototype_native_plan_namespace_preserves_admission() {
             .expect("fresh catalog");
         let defaults =
             BTreeMap::from([("enable_catalog_read_protection".into(), enabled.to_string())]);
-        let catalog = Catalog::open_debug_catalog_inner(
+        let mut catalog = Catalog::open_debug_catalog_inner(
             persist.clone(),
             storage,
             SYSTEM_TIME.clone(),
@@ -268,6 +268,81 @@ async fn prototype_native_plan_namespace_preserves_admission() {
             Catalog::expression_build_version(&mz_build_info::DUMMY_BUILD_INFO).to_string()
         };
         assert_eq!(catalog.state().written_plan_namespace(), expected);
+
+        // Item admission requires immutable publication even when optional
+        // caching is disabled. Diagnostic catalogs remain valid, but cannot
+        // silently admit maintained items without a plan selection.
+        let id = GlobalId::User(999999);
+        fn prepare(
+            catalog: &Catalog,
+        ) -> impl std::future::Future<Output = Result<Vec<Op>, crate::catalog::CatalogError>> + '_
+        {
+            let mut mir =
+                mz_compute_types::dataflows::DataflowDescription::new("admission".to_owned());
+            let mut lir =
+                mz_compute_types::dataflows::DataflowDescription::new("admission".to_owned());
+            mir.as_of = Some(timely::progress::Antichain::from_elem(Timestamp::from(7)));
+            lir.as_of = mir.as_of.clone();
+            mir.until = timely::progress::Antichain::from_elem(Timestamp::from(9));
+            lir.until = mir.until.clone();
+            lir.initial_storage_as_of =
+                Some(timely::progress::Antichain::from_elem(Timestamp::from(3)));
+            catalog.prepare_item_plan(
+                GlobalId::User(999999),
+                None,
+                mir,
+                lir,
+                Default::default(),
+                Default::default(),
+            )
+        }
+        let result = prepare(&catalog).await;
+        if enabled {
+            let ops = result.expect("publish without optional cache");
+            let [
+                Op::SetWrittenPlan {
+                    id: selected_id,
+                    build_version,
+                    expected_revision,
+                    revision: Some(revision),
+                    imports,
+                    ..
+                },
+            ] = ops.as_slice()
+            else {
+                panic!("expected one durable plan selection");
+            };
+            assert_eq!(*selected_id, id);
+            assert_eq!(build_version, &expected);
+            assert_eq!(*expected_revision, None);
+            assert!(imports.is_empty());
+            assert_eq!(catalog.state().written_plan(id, &expected), None);
+            let plans = catalog
+                .read_written_plans(vec![(id, *revision)])
+                .await
+                .expect("durable publication precedes selection");
+            let plan = &plans[&id];
+            assert_eq!(plan.global_mir.as_of, None);
+            assert!(plan.global_mir.until.is_empty());
+            assert_eq!(plan.physical_plan.as_of, None);
+            assert!(plan.physical_plan.until.is_empty());
+            assert_eq!(
+                plan.physical_plan.initial_storage_as_of,
+                Some(timely::progress::Antichain::from_elem(Timestamp::from(3)))
+            );
+
+            let store = catalog.expr_cache_handle.take();
+            let error = prepare(&catalog).await.expect_err("store is required");
+            assert!(error.to_string().contains("expression store is not open"));
+            catalog.expr_cache_handle = store;
+        } else {
+            let error = result.expect_err("protection is required for item admission");
+            assert!(
+                error
+                    .to_string()
+                    .contains("catalog read protection is not enabled")
+            );
+        }
         drop(catalog);
 
         if !enabled {
