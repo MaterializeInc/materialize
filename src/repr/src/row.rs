@@ -42,6 +42,7 @@ use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
 use crate::adt::date::Date;
+use crate::adt::inet::Inet;
 use crate::adt::interval::Interval;
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric;
@@ -1268,6 +1269,9 @@ enum Tag {
     UInt64_48,
     UInt64_56,
     UInt64,
+
+    // Payload is `Inet::encode_packed`.
+    Inet,
 }
 
 impl Tag {
@@ -1783,6 +1787,11 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
                 AclItem::decode_binary(&read_byte_array::<N>(data)).expect("invalid aclitem");
             Datum::AclItem(acl_item)
         }
+        Tag::Inet => {
+            let (inet, len) = Inet::decode_packed(data).expect("invalid inet");
+            *data = &data[len..];
+            Datum::Inet(inet)
+        }
     }
 }
 
@@ -2164,6 +2173,10 @@ where
             data.push(Tag::AclItem.into());
             data.extend_from_slice(&acl_item.encode_binary());
         }
+        Datum::Inet(inet) => {
+            data.push(Tag::Inet.into());
+            data.extend_from_slice(&inet.encode_packed()[..inet.packed_len()]);
+        }
     }
 }
 
@@ -2276,6 +2289,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         }
         Datum::MzAclItem(_) => 1 + MzAclItem::binary_size(),
         Datum::AclItem(_) => 1 + AclItem::binary_size(),
+        Datum::Inet(inet) => 1 + inet.packed_len(),
     }
 }
 

@@ -2231,6 +2231,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_network_types,
+        desc: "the inet and cidr types",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_try_cast,
         desc: "TRY_CAST(<expr> AS <type>) syntax",
         default: true,

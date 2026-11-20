@@ -52,6 +52,7 @@ use uuid::Uuid;
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateOrder, DateTimeField, ParsedDateTime};
+use crate::adt::inet::Inet;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
@@ -947,6 +948,40 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", uuid);
+    Nestable::Yes
+}
+
+/// Parses `inet` text input. Unlike most types, PostgreSQL does not trim
+/// whitespace for `inet` and `cidr`.
+pub fn parse_inet(s: &str) -> Result<Inet, ParseError> {
+    crate::adt::inet::parse_inet(s).ok_or_else(|| ParseError::invalid_input_syntax("inet", s))
+}
+
+/// Parses `cidr` text input.
+pub fn parse_cidr(s: &str) -> Result<Inet, ParseError> {
+    crate::adt::inet::parse_cidr(s).map_err(|host_bits_set| {
+        let err = ParseError::invalid_input_syntax("cidr", s);
+        if host_bits_set {
+            err.with_details("Value has bits set to right of mask")
+        } else {
+            err
+        }
+    })
+}
+
+pub fn format_inet<F>(buf: &mut F, inet: Inet) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", inet);
+    Nestable::Yes
+}
+
+pub fn format_cidr<F>(buf: &mut F, inet: Inet) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", inet.display(Inet::fmt_cidr));
     Nestable::Yes
 }
 

@@ -1200,10 +1200,10 @@ SELECT to_jsonb(1.234::DECIMAL)
 ----
 1.234
 
-# query T
-# SELECT to_jsonb('10.1.0.0/16'::INET)
-# ----
-# "10.1.0.0/16"
+query T
+SELECT to_jsonb('10.1.0.0/16'::INET)
+----
+"10.1.0.0/16"
 
 # query T
 # SELECT to_jsonb(ARRAY[[1,2],[3,4]])

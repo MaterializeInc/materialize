@@ -1192,6 +1192,8 @@ pub enum CatalogType<T: TypeReference> {
     VarChar,
     Int2Vector,
     MzAclItem,
+    Inet,
+    Cidr,
 }
 
 impl CatalogType<IdReference> {

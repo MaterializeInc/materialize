@@ -1,0 +1,384 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the inet and cidr types. Most cases are ported from PostgreSQL's
+# src/test/regress/sql/inet.sql, and expected results match PostgreSQL except
+# where noted. GiST and SP-GiST index cases are omitted.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_network_types = false
+----
+COMPLETE 0
+
+query error the inet and cidr types is not supported
+SELECT '1.2.3.4'::inet
+
+query error the inet and cidr types is not supported
+CREATE TABLE t (c cidr)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_network_types = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE inet_tbl (c cidr, i inet)
+
+statement ok
+INSERT INTO inet_tbl (c, i) VALUES
+  ('192.168.1', '192.168.1.226/24'),
+  ('192.168.1.0/26', '192.168.1.226'),
+  ('192.168.1', '192.168.1.0/24'),
+  ('192.168.1', '192.168.1.0/25'),
+  ('192.168.1', '192.168.1.255/24'),
+  ('192.168.1', '192.168.1.255/25'),
+  ('10', '10.1.2.3/8'),
+  ('10.0.0.0', '10.1.2.3/8'),
+  ('10.1.2.3', '10.1.2.3/32'),
+  ('10.1.2', '10.1.2.3/24'),
+  ('10.1', '10.1.2.3/16'),
+  ('10', '10.1.2.3/8'),
+  ('10', '11.1.2.3/8'),
+  ('10', '9.1.2.3/8'),
+  ('10:23::f1', '10:23::f1/64'),
+  ('10:23::8000/113', '10:23::ffff'),
+  ('::ffff:1.2.3.4', '::4.3.2.1/24')
+
+query error invalid input syntax for type cidr: Value has bits set to right of mask: "192.168.1.2/30"
+INSERT INTO inet_tbl (c, i) VALUES ('192.168.1.2/30', '192.168.1.226')
+
+query error invalid input syntax for type cidr: "1234::1234::1234"
+INSERT INTO inet_tbl (c, i) VALUES ('1234::1234::1234', '::1.2.3.4')
+
+query error invalid input syntax for type cidr: Value has bits set to right of mask: "ffff:ffff:ffff:ffff::/24"
+SELECT 'ffff:ffff:ffff:ffff::/24'::text::cidr
+
+query TT rowsort
+SELECT c, i FROM inet_tbl
+----
+
+query TTTT rowsort
+SELECT i, host(i), text(i), family(i) FROM inet_tbl
+----
+
+query TT rowsort
+SELECT c, abbrev(c) FROM inet_tbl
+----
+
+query TT rowsort
+SELECT i, abbrev(i) FROM inet_tbl
+----
+
+query TTTT rowsort
+SELECT c, broadcast(c), i, broadcast(i) FROM inet_tbl
+----
+
+query TTTT rowsort
+SELECT c, network(c), i, network(i) FROM inet_tbl
+----
+
+query TTTT rowsort
+SELECT c, masklen(c), i, masklen(i) FROM inet_tbl
+----
+
+query TTTT rowsort
+SELECT c, masklen(c), i, masklen(i) FROM inet_tbl WHERE masklen(c) <= 8
+----
+
+query TT rowsort
+SELECT c, i FROM inet_tbl WHERE c = i
+----
+
+query TTTTTTTTTTTTT rowsort
+SELECT i, c,
+  i < c AS lt, i <= c AS le, i = c AS eq,
+  i >= c AS ge, i > c AS gt, i <> c AS ne,
+  i << c AS sb, i <<= c AS sbe,
+  i >> c AS sup, i >>= c AS spe,
+  i && c AS ovr
+  FROM inet_tbl
+----
+
+query TT
+SELECT max(i), min(i) FROM inet_tbl
+----
+
+query TT
+SELECT max(c), min(c) FROM inet_tbl
+----
+
+query T rowsort
+SELECT set_masklen(text(i)::inet, 24) FROM inet_tbl
+----
+
+query TTT rowsort
+SELECT i, netmask(i), hostmask(i) FROM inet_tbl
+----
+
+query TT rowsort
+SELECT c, set_masklen(c, 16) FROM inet_tbl WHERE family(c) = 4
+----
+
+query error invalid mask length: 33
+SELECT set_masklen('1.2.3.4'::inet, 33)
+
+query T
+SELECT set_masklen('1.2.3.4/8'::inet, -1)
+----
+
+# Containment through an index and a materialized view, which exercises the
+# persist encoding of both types.
+statement ok
+CREATE INDEX inet_idx ON inet_tbl (i)
+
+query TT rowsort
+SELECT * FROM inet_tbl WHERE i << '192.168.1.0/24'::cidr
+----
+
+query TT rowsort
+SELECT * FROM inet_tbl WHERE i <<= '192.168.1.0/24'::cidr
+----
+
+query TT rowsort
+SELECT * FROM inet_tbl WHERE '192.168.1.0/24'::cidr >>= i
+----
+
+query TT rowsort
+SELECT * FROM inet_tbl WHERE '192.168.1.0/24'::cidr >> i
+----
+
+query TT rowsort
+SELECT * FROM inet_tbl WHERE i && '192.168.1.0/24'::cidr
+----
+
+statement ok
+CREATE MATERIALIZED VIEW inet_mv AS SELECT c, i, network(i) AS n FROM inet_tbl
+
+query TTT rowsort
+SELECT * FROM inet_mv WHERE n = c
+----
+
+query TT rowsort
+SELECT i, ~i FROM inet_tbl
+----
+
+query TTT rowsort
+SELECT i, c, i & c FROM inet_tbl
+----
+
+query TTT rowsort
+SELECT i, c, i | c FROM inet_tbl
+----
+
+query TT rowsort
+SELECT i, i + 500 FROM inet_tbl
+----
+
+query TT rowsort
+SELECT i, i - 500 FROM inet_tbl
+----
+
+query TTT rowsort
+SELECT i, c, i - c FROM inet_tbl
+----
+
+query T
+SELECT '127.0.0.1'::inet + 257
+----
+
+query T
+SELECT ('127.0.0.1'::inet + 257) - 257
+----
+
+query T
+SELECT '127::1'::inet + 257
+----
+
+query T
+SELECT ('127::1'::inet + 257) - 257
+----
+
+query T
+SELECT 257 + '127.0.0.1'::inet
+----
+
+query T
+SELECT '127.0.0.2'::inet - ('127.0.0.2'::inet + 500)
+----
+
+query T
+SELECT '127.0.0.2'::inet - ('127.0.0.2'::inet - 500)
+----
+
+query T
+SELECT '127::2'::inet - ('127::2'::inet + 500)
+----
+
+query T
+SELECT '127::2'::inet - ('127::2'::inet - 500)
+----
+
+query error result is out of range
+SELECT '127.0.0.1'::inet + 10000000000
+
+query error result is out of range
+SELECT '127.0.0.1'::inet - 10000000000
+
+query error result is out of range
+SELECT '126::1'::inet - '127::2'::inet
+
+query error result is out of range
+SELECT '127::1'::inet - '126::2'::inet
+
+query T
+SELECT '127::1'::inet + 10000000000
+----
+
+query T
+SELECT '127::1'::inet - '127::2'::inet
+----
+
+query error cannot AND inet values of different sizes
+SELECT '1.2.3.4'::inet & '::1'::inet
+
+statement ok
+INSERT INTO inet_tbl (c, i) VALUES ('10', '10::/8')
+
+query error cannot merge addresses from different families
+SELECT inet_merge(c, i) FROM inet_tbl
+
+query T rowsort
+SELECT inet_merge(c, i) FROM inet_tbl WHERE inet_same_family(c, i)
+----
+
+# Text conversion. The cast always prints the mask, while concat, format and
+# to_jsonb use the output function, as in PostgreSQL.
+query TTTT
+SELECT '1.2.3.4'::inet::text, concat('1.2.3.4'::inet), format('%s', '1.2.3.4'::inet), to_jsonb('1.2.3.4'::inet)
+----
+
+query TT
+SELECT '10.0.0.0/8'::cidr::text, '10.0.0.0/8'::cidr::inet
+----
+
+query T
+SELECT '192.168.1.2/24'::inet::cidr
+----
+
+query T
+SELECT cidr('192.168.1.2/24'::inet)
+----
+
+query T
+SELECT pg_typeof('1.2.3.4'::inet + 1)
+----
+
+query T
+SELECT ARRAY['1.2.3.4'::inet, '10.0.0.0/8']
+----
+
+query T
+SELECT a FROM (VALUES
+  ('0.0.0.0/0'::inet),
+  ('0.0.0.0/1'::inet),
+  ('0.0.0.0/32'::inet),
+  ('0.0.0.1/0'::inet),
+  ('0.0.0.1/1'::inet),
+  ('127.126.127.127/0'::inet),
+  ('127.127.127.127/0'::inet),
+  ('127.128.127.127/0'::inet),
+  ('192.168.1.0/24'::inet),
+  ('192.168.1.0/25'::inet),
+  ('192.168.1.1/23'::inet),
+  ('192.168.1.1/5'::inet),
+  ('192.168.1.1/6'::inet),
+  ('192.168.1.1/25'::inet),
+  ('192.168.1.2/25'::inet),
+  ('192.168.1.1/26'::inet),
+  ('192.168.1.2/26'::inet),
+  ('192.168.1.2/23'::inet),
+  ('192.168.1.255/5'::inet),
+  ('192.168.1.255/6'::inet),
+  ('192.168.1.3/1'::inet),
+  ('192.168.1.3/23'::inet),
+  ('192.168.1.4/0'::inet),
+  ('192.168.1.5/0'::inet),
+  ('255.0.0.0/0'::inet),
+  ('255.1.0.0/0'::inet),
+  ('255.2.0.0/0'::inet),
+  ('255.255.000.000/0'::inet),
+  ('255.255.000.000/0'::inet),
+  ('255.255.000.000/15'::inet),
+  ('255.255.000.000/16'::inet),
+  ('255.255.255.254/32'::inet),
+  ('255.255.255.000/32'::inet),
+  ('255.255.255.001/31'::inet),
+  ('255.255.255.002/31'::inet),
+  ('255.255.255.003/31'::inet),
+  ('255.255.255.003/32'::inet),
+  ('255.255.255.001/32'::inet),
+  ('255.255.255.255/0'::inet),
+  ('255.255.255.255/0'::inet),
+  ('255.255.255.255/0'::inet),
+  ('255.255.255.255/1'::inet),
+  ('255.255.255.255/16'::inet),
+  ('255.255.255.255/16'::inet),
+  ('255.255.255.255/31'::inet),
+  ('255.255.255.255/32'::inet),
+  ('255.255.255.253/32'::inet),
+  ('255.255.255.252/32'::inet),
+  ('255.3.0.0/0'::inet),
+  ('0000:0000:0000:0000:0000:0000:0000:0000/0'::inet),
+  ('0000:0000:0000:0000:0000:0000:0000:0000/128'::inet),
+  ('0000:0000:0000:0000:0000:0000:0000:0001/128'::inet),
+  ('10:23::f1/64'::inet),
+  ('10:23::f1/65'::inet),
+  ('10:23::ffff'::inet),
+  ('127::1'::inet),
+  ('127::2'::inet),
+  ('8000:0000:0000:0000:0000:0000:0000:0000/1'::inet),
+  ('::1:ffff:ffff:ffff:ffff/128'::inet),
+  ('::2:ffff:ffff:ffff:ffff/128'::inet),
+  ('::4:3:2:0/24'::inet),
+  ('::4:3:2:1/24'::inet),
+  ('::4:3:2:2/24'::inet),
+  ('ffff:83e7:f118:57dc:6093:6d92:689d:58cf/70'::inet),
+  ('ffff:84b0:4775:536e:c3ed:7116:a6d6:34f0/44'::inet),
+  ('ffff:8566:f84:5867:47f1:7867:d2ba:8a1a/69'::inet),
+  ('ffff:8883:f028:7d2:4d68:d510:7d6b:ac43/73'::inet),
+  ('ffff:8ae8:7c14:65b3:196:8e4a:89ae:fb30/89'::inet),
+  ('ffff:8dd0:646:694c:7c16:7e35:6a26:171/104'::inet),
+  ('ffff:8eef:cbf:700:eda3:ae32:f4b4:318b/121'::inet),
+  ('ffff:90e7:e744:664:a93:8efe:1f25:7663/122'::inet),
+  ('ffff:9597:c69c:8b24:57a:8639:ec78:6026/111'::inet),
+  ('ffff:9e86:79ea:f16e:df31:8e4d:7783:532e/88'::inet),
+  ('ffff:a0c7:82d3:24de:f762:6e1f:316d:3fb2/23'::inet),
+  ('ffff:fffa:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:fffb:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:fffc:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:fffd:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:fffe:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:fffa:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:fffb:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:fffc:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:fffd::/128'::inet),
+  ('ffff:ffff:ffff:fffd:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:fffe::/128'::inet),
+  ('ffff:ffff:ffff:fffe:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:ffff:4:3:2:0/24'::inet),
+  ('ffff:ffff:ffff:ffff:4:3:2:1/24'::inet),
+  ('ffff:ffff:ffff:ffff:4:3:2:2/24'::inet),
+  ('ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/0'::inet),
+  ('ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128'::inet)
+) AS i(a) ORDER BY a
+----

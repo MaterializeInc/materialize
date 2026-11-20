@@ -586,6 +586,70 @@ pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_INET: BuiltinType<NameReference> = BuiltinType {
+    name: "inet",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_INET_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Inet,
+        array_id: None,
+        pg_metadata: Some(CatalogTypePgMetadata {
+            typinput_oid: 910,
+            typreceive_oid: 2496,
+            typsend_oid: 2497,
+        }),
+    },
+};
+
+pub const TYPE_INET_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_inet",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_INET_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_INET.name,
+        },
+        array_id: None,
+        pg_metadata: Some(CatalogTypePgMetadata {
+            typinput_oid: 750,
+            typreceive_oid: 2400,
+            typsend_oid: 2401,
+        }),
+    },
+};
+
+pub const TYPE_CIDR: BuiltinType<NameReference> = BuiltinType {
+    name: "cidr",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_CIDR_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Cidr,
+        array_id: None,
+        pg_metadata: Some(CatalogTypePgMetadata {
+            typinput_oid: 1267,
+            typreceive_oid: 2498,
+            typsend_oid: 2499,
+        }),
+    },
+};
+
+pub const TYPE_CIDR_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_cidr",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_CIDR_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_CIDR.name,
+        },
+        array_id: None,
+        pg_metadata: Some(CatalogTypePgMetadata {
+            typinput_oid: 750,
+            typreceive_oid: 2400,
+            typsend_oid: 2401,
+        }),
+    },
+};
+
 pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
     name: "jsonb",
     schema: PG_CATALOG_SCHEMA,

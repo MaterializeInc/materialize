@@ -2793,6 +2793,8 @@ where
         }
         Jsonb => Ok(strconv::format_jsonb(buf, JsonbRef::from_datum(d))),
         Uuid => Ok(strconv::format_uuid(buf, d.unwrap_uuid())),
+        Inet => Ok(strconv::format_inet(buf, d.unwrap_inet())),
+        Cidr => Ok(strconv::format_cidr(buf, d.unwrap_inet())),
         Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, d.unwrap_list(), |buf, d| {

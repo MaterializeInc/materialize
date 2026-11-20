@@ -80,6 +80,7 @@ impl TypeCategory {
             | SqlScalarType::Jsonb
             | SqlScalarType::Uuid
             | SqlScalarType::MzAclItem => Self::UserDefined,
+            SqlScalarType::Inet | SqlScalarType::Cidr => Self::NetworkAddress,
             SqlScalarType::Date
             | SqlScalarType::Time
             | SqlScalarType::Timestamp { .. }
@@ -154,6 +155,7 @@ impl TypeCategory {
             | CatalogType::Jsonb
             | CatalogType::Uuid
             | CatalogType::MzAclItem => Self::UserDefined,
+            CatalogType::Inet | CatalogType::Cidr => Self::NetworkAddress,
             CatalogType::Date
             | CatalogType::Time
             | CatalogType::Timestamp
@@ -200,7 +202,6 @@ impl TypeCategory {
             | Self::Enum
             | Self::Geometric
             | Self::List
-            | Self::NetworkAddress
             | Self::Pseudo
             | Self::Range
             | Self::Unknown
@@ -210,6 +211,7 @@ impl TypeCategory {
             Self::Numeric => Some(SqlScalarType::Float64),
             Self::String => Some(SqlScalarType::String),
             Self::Timespan => Some(SqlScalarType::Interval),
+            Self::NetworkAddress => Some(SqlScalarType::Inet),
         }
     }
 }
@@ -916,6 +918,8 @@ impl From<SqlScalarBaseType> for ParamType {
             Int2Vector => SqlScalarType::Int2Vector,
             MzTimestamp => SqlScalarType::MzTimestamp,
             MzAclItem => SqlScalarType::MzAclItem,
+            Inet => SqlScalarType::Inet,
+            Cidr => SqlScalarType::Cidr,
         };
         ParamType::Plain(s)
     }
@@ -3190,6 +3194,47 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 element_type: Box::new(SqlScalarType::TimestampTz { precision: None }),
             }, 3938;
         },
+        "abbrev" => Scalar {
+            params!(Inet) => UnaryFunc::InetAbbrev(func::InetAbbrev) => String, 598;
+            params!(Cidr) => UnaryFunc::CidrAbbrev(func::CidrAbbrev) => String, 599;
+        },
+        "broadcast" => Scalar {
+            params!(Inet) => UnaryFunc::InetBroadcast(func::InetBroadcast) => Inet, 698;
+        },
+        "cidr" => Scalar {
+            params!(Inet) => UnaryFunc::InetNetwork(func::InetNetwork) => Cidr, 1715;
+        },
+        "family" => Scalar {
+            params!(Inet) => UnaryFunc::InetFamily(func::InetFamily) => Int32, 711;
+        },
+        "host" => Scalar {
+            params!(Inet) => UnaryFunc::InetHost(func::InetHost) => String, 699;
+        },
+        "hostmask" => Scalar {
+            params!(Inet) => UnaryFunc::InetHostmask(func::InetHostmask) => Inet, 1362;
+        },
+        "inet_merge" => Scalar {
+            params!(Inet, Inet) => BinaryFunc::from(func::InetMerge) => Cidr, 4063;
+        },
+        "inet_same_family" => Scalar {
+            params!(Inet, Inet) => BinaryFunc::from(func::InetSameFamily) => Bool, 4071;
+        },
+        "masklen" => Scalar {
+            params!(Inet) => UnaryFunc::InetMasklen(func::InetMasklen) => Int32, 697;
+        },
+        "netmask" => Scalar {
+            params!(Inet) => UnaryFunc::InetNetmask(func::InetNetmask) => Inet, 696;
+        },
+        "network" => Scalar {
+            params!(Inet) => UnaryFunc::InetNetwork(func::InetNetwork) => Cidr, 683;
+        },
+        "set_masklen" => Scalar {
+            params!(Inet, Int32) => BinaryFunc::from(func::InetSetMasklen) => Inet, 605;
+            params!(Cidr, Int32) => BinaryFunc::from(func::CidrSetMasklen) => Cidr, 635;
+        },
+        "text" => Scalar {
+            params!(Inet) => UnaryFunc::CastInetToString(func::CastInetToString) => String, 730;
+        },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper) => String, 871;
             params!(RangeAny) => UnaryFunc::RangeUpper(func::RangeUpper) => AnyElement, 3849;
@@ -3725,6 +3770,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(TimestampTz) => AggregateFunc::MaxTimestampTz => TimestampTz, 2127;
             params!(Numeric) => AggregateFunc::MaxNumeric => Numeric, oid::FUNC_MAX_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MaxInterval => Interval, 2128;
+            params!(Inet) => AggregateFunc::MaxInet => Inet, 3564;
             params!(Time) => AggregateFunc::MaxTime => Time, 2123;
             params!(ArrayAny) => AggregateFunc::MaxArray => ArrayAny, 2050;
             params!(ListAny) => AggregateFunc::MaxList => ListAny, oid::FUNC_MAX_LIST_OID;
@@ -3749,6 +3795,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(TimestampTz) => AggregateFunc::MinTimestampTz => TimestampTz, 2143;
             params!(Numeric) => AggregateFunc::MinNumeric => Numeric, oid::FUNC_MIN_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MinInterval => Interval, 2144;
+            params!(Inet) => AggregateFunc::MinInet => Inet, 3565;
             params!(Time) => AggregateFunc::MinTime => Time, 2139;
             params!(ArrayAny) => AggregateFunc::MinArray => ArrayAny, 2051;
             params!(ListAny) => AggregateFunc::MinList => ListAny, oid::FUNC_MIN_LIST_OID;
@@ -5644,6 +5691,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             } => Time, 1849;
             params!(Numeric, Numeric) => BF::from(func::AddNumeric) => Numeric, 1758;
             params!(RangeAny, RangeAny) => BF::from(func::RangeUnion) => RangeAny, 3898;
+            params!(Inet, Int64) => BF::from(func::AddInetInt64) => Inet, 2637;
+            params!(Int64, Inet) => {
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddInetInt64)))
+            } => Inet, 2638;
         },
         "-" => Scalar {
             params!(Int16) => UnaryFunc::NegInt16(func::NegInt16) => Int16, 559;
@@ -5674,6 +5725,8 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Jsonb, Int64) => BF::from(func::JsonbDeleteInt64) => Jsonb, 3286;
             params!(Jsonb, String) => BF::from(func::JsonbDeleteString) => Jsonb, 3285;
             params!(RangeAny, RangeAny) => BF::from(func::RangeDifference) => RangeAny, 3899;
+            params!(Inet, Int64) => BF::from(func::SubInetInt64) => Inet, 2639;
+            params!(Inet, Inet) => BF::from(func::SubInet) => Int64, 2640;
             // TODO(jamii) there should be corresponding overloads for
             // Array(Int64) and Array(String)
         },
@@ -5723,6 +5776,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt16, UInt16) => BF::from(func::BitAndUint16) => UInt16, oid::FUNC_AND_UINT16;
             params!(UInt32, UInt32) => BF::from(func::BitAndUint32) => UInt32, oid::FUNC_AND_UINT32;
             params!(UInt64, UInt64) => BF::from(func::BitAndUint64) => UInt64, oid::FUNC_AND_UINT64;
+            params!(Inet, Inet) => BF::from(func::InetAnd) => Inet, 2635;
         },
         "|" => Scalar {
             params!(Int16, Int16) => BF::from(func::BitOrInt16) => Int16, 1875;
@@ -5731,6 +5785,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt16, UInt16) => BF::from(func::BitOrUint16) => UInt16, oid::FUNC_OR_UINT16;
             params!(UInt32, UInt32) => BF::from(func::BitOrUint32) => UInt32, oid::FUNC_OR_UINT32;
             params!(UInt64, UInt64) => BF::from(func::BitOrUint64) => UInt64, oid::FUNC_OR_UINT64;
+            params!(Inet, Inet) => BF::from(func::InetOr) => Inet, 2636;
         },
         "#" => Scalar {
             params!(Int16, Int16) => BF::from(func::BitXorInt16) => Int16, 1876;
@@ -5751,6 +5806,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt64, UInt32) => BF::from(func::BitShiftLeftUint64)
                 => UInt64, oid::FUNC_SHIFT_LEFT_UINT64;
             params!(RangeAny, RangeAny) => BF::from(func::RangeBefore) => Bool, 3893;
+            params!(Inet, Inet) => BF::from(func::InetSubnet) => Bool, 931;
+        },
+        "<<=" => Scalar {
+            params!(Inet, Inet) => BF::from(func::InetSubnetEq) => Bool, 932;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BF::from(func::BitShiftRightInt16) => Int16, 1879;
@@ -5763,6 +5822,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt64, UInt32) => BF::from(func::BitShiftRightUint64)
                 => UInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
             params!(RangeAny, RangeAny) => BF::from(func::RangeAfter) => Bool, 3894;
+            params!(Inet, Inet) => BF::from(func::InetSupernet) => Bool, 933;
+        },
+        ">>=" => Scalar {
+            params!(Inet, Inet) => BF::from(func::InetSupernetEq) => Bool, 934;
         },
 
         // ILIKE
@@ -5827,6 +5890,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 => UInt32, oid::FUNC_BIT_NOT_UINT32_OID;
             params!(UInt64) => UnaryFunc::BitNotUint64(func::BitNotUint64)
                 => UInt64, oid::FUNC_BIT_NOT_UINT64_OID;
+            params!(Inet) => UnaryFunc::InetNot(func::InetNot) => Inet, 2634;
             params!(String, String)
                 => BinaryFunc::IsRegexpMatchCaseSensitive(
                     func::IsRegexpMatchCaseSensitive,
@@ -6045,6 +6109,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         },
         "&&" => Scalar {
             params!(RangeAny, RangeAny) => BF::from(func::RangeOverlaps) => Bool, 3888;
+            params!(Inet, Inet) => BF::from(func::InetOverlap) => Bool, 3552;
         },
         "&<" => Scalar {
             params!(RangeAny, RangeAny) => BF::from(func::RangeOverleft) => Bool, 3895;
@@ -6074,6 +6139,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::Lt) => Bool, 2062;
             params!(TimestampTz, TimestampTz) => BF::from(func::Lt) => Bool, 1322;
             params!(Uuid, Uuid) => BF::from(func::Lt) => Bool, 2974;
+            params!(Inet, Inet) => BF::from(func::Lt) => Bool, 1203;
             params!(Interval, Interval) => BF::from(func::Lt) => Bool, 1332;
             params!(Bytes, Bytes) => BF::from(func::Lt) => Bool, 1957;
             params!(String, String) => BF::from(func::Lt) => Bool, 664;
@@ -6105,6 +6171,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::Lte) => Bool, 2063;
             params!(TimestampTz, TimestampTz) => BF::from(func::Lte) => Bool, 1323;
             params!(Uuid, Uuid) => BF::from(func::Lte) => Bool, 2976;
+            params!(Inet, Inet) => BF::from(func::Lte) => Bool, 1204;
             params!(Interval, Interval) => BF::from(func::Lte) => Bool, 1333;
             params!(Bytes, Bytes) => BF::from(func::Lte) => Bool, 1958;
             params!(String, String) => BF::from(func::Lte) => Bool, 665;
@@ -6136,6 +6203,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::Gt) => Bool, 2064;
             params!(TimestampTz, TimestampTz) => BF::from(func::Gt) => Bool, 1324;
             params!(Uuid, Uuid) => BF::from(func::Gt) => Bool, 2975;
+            params!(Inet, Inet) => BF::from(func::Gt) => Bool, 1205;
             params!(Interval, Interval) => BF::from(func::Gt) => Bool, 1334;
             params!(Bytes, Bytes) => BF::from(func::Gt) => Bool, 1959;
             params!(String, String) => BF::from(func::Gt) => Bool, 666;
@@ -6167,6 +6235,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::Gte) => Bool, 2065;
             params!(TimestampTz, TimestampTz) => BF::from(func::Gte) => Bool, 1325;
             params!(Uuid, Uuid) => BF::from(func::Gte) => Bool, 2977;
+            params!(Inet, Inet) => BF::from(func::Gte) => Bool, 1206;
             params!(Interval, Interval) => BF::from(func::Gte) => Bool, 1335;
             params!(Bytes, Bytes) => BF::from(func::Gte) => Bool, 1960;
             params!(String, String) => BF::from(func::Gte) => Bool, 667;
@@ -6208,6 +6277,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::Eq) => Bool, 2060;
             params!(TimestampTz, TimestampTz) => BF::from(func::Eq) => Bool, 1320;
             params!(Uuid, Uuid) => BF::from(func::Eq) => Bool, 2972;
+            params!(Inet, Inet) => BF::from(func::Eq) => Bool, 1201;
             params!(Interval, Interval) => BF::from(func::Eq) => Bool, 1330;
             params!(Bytes, Bytes) => BF::from(func::Eq) => Bool, 1955;
             params!(String, String) => BF::from(func::Eq) => Bool, 98;
@@ -6242,6 +6312,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Timestamp, Timestamp) => BF::from(func::NotEq) => Bool, 2061;
             params!(TimestampTz, TimestampTz) => BF::from(func::NotEq) => Bool, 1321;
             params!(Uuid, Uuid) => BF::from(func::NotEq) => Bool, 2973;
+            params!(Inet, Inet) => BF::from(func::NotEq) => Bool, 1202;
             params!(Interval, Interval) => BF::from(func::NotEq) => Bool, 1331;
             params!(Bytes, Bytes) => BF::from(func::NotEq) => Bool, 1956;
             params!(String, String) => BF::from(func::NotEq) => Bool, 531;

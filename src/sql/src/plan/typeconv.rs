@@ -773,6 +773,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
             (String, Jsonb) => Explicit: CastStringToJsonb(func::CastStringToJsonb),
             (String, Uuid) => Explicit: CastStringToUuid(func::CastStringToUuid),
+            (String, Inet) => Explicit: CastStringToInet(func::CastStringToInet),
+            (String, Cidr) => Explicit: CastStringToCidr(func::CastStringToCidr),
             (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();
@@ -1092,6 +1094,13 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             // UUID
             (Uuid, String) => Assignment: CastUuidToString(func::CastUuidToString),
 
+            // INET and CIDR. Text output of both goes through `text(inet)`, as
+            // in PostgreSQL, so the mask is always printed.
+            (Inet, String) => Assignment: CastInetToString(func::CastInetToString),
+            (Inet, Cidr) => Assignment: InetNetwork(func::InetNetwork),
+            (Cidr, String) => Assignment: CastInetToString(func::CastInetToString),
+            (Cidr, Inet) => Implicit: CastCidrToInet(func::CastCidrToInet),
+
             // Numeric
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let scale = to_type.unwrap_numeric_max_scale();
@@ -1305,7 +1314,15 @@ pub fn valid_cast_base_type_pairs() -> impl Iterator<Item = (SqlScalarBaseType, 
 /// that `plan_cast` rejects in contexts that disallow subqueries (e.g. a
 /// `RETURNING` clause or a `to_jsonb` element cast). We surface those as a
 /// planning error rather than panicking.
+///
+/// NOTE: `inet` uses its output function here, which omits a full-length mask,
+/// while the `inet -> text` cast always prints it. PostgreSQL's `concat`,
+/// `format` and `to_jsonb` use the output function. `abbrev(inet)` is that
+/// function.
 pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
+    if ecx.scalar_type(&expr) == SqlScalarType::Inet {
+        return Ok(expr.call_unary(UnaryFunc::InetAbbrev(func::InetAbbrev)));
+    }
     plan_cast(ecx, CastContext::Explicit, expr, &SqlScalarType::String)
 }
 
@@ -1411,7 +1428,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr,
         | MzTimestamp
         | Range { .. }
         | MzAclItem
-        | AclItem => to_string(ecx, expr)?
+        | AclItem
+        | Inet
+        | Cidr => to_string(ecx, expr)?
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
     })
 }

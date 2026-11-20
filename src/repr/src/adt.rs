@@ -21,6 +21,7 @@ pub mod array;
 pub mod char;
 pub mod date;
 pub mod datetime;
+pub mod inet;
 pub mod interval;
 pub mod jsonb;
 pub mod mz_acl_item;

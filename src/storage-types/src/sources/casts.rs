@@ -118,6 +118,8 @@ pub enum CastFunc {
         return_ty: SqlScalarType,
         cast_expr: Box<StorageScalarExpr>,
     },
+    CastStringToInet,
+    CastStringToCidr,
 }
 
 impl StorageScalarExpr {
@@ -239,6 +241,12 @@ impl CastFunc {
             )),
             CastFunc::CastStringToUuid => {
                 Ok(Datum::Uuid(strconv::parse_uuid(a).map_err(parse_err)?))
+            }
+            CastFunc::CastStringToInet => {
+                Ok(Datum::Inet(strconv::parse_inet(a).map_err(parse_err)?))
+            }
+            CastFunc::CastStringToCidr => {
+                Ok(Datum::Inet(strconv::parse_cidr(a).map_err(parse_err)?))
             }
             // TODO(jamii): it would be much more efficient to skip the
             // intermediate repr::jsonb::Jsonb.
@@ -1238,6 +1246,24 @@ mod tests {
                 CastFunc::CastStringToInterval,
                 UnaryFunc::CastStringToInterval(CastStringToInterval),
                 &["1 day", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_inet() {
+            use mz_expr::func::{CastStringToCidr, CastStringToInet};
+            let inputs = &["10.1.2.3/8", "::ffff:1.2.3.4", "10/8", "bad", ""];
+            assert_parity(
+                "Inet",
+                CastFunc::CastStringToInet,
+                UnaryFunc::CastStringToInet(CastStringToInet),
+                inputs,
+            );
+            assert_parity(
+                "Cidr",
+                CastFunc::CastStringToCidr,
+                UnaryFunc::CastStringToCidr(CastStringToCidr),
+                inputs,
             );
         }
 

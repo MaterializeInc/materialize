@@ -128,6 +128,7 @@ pub enum FixedSizeBytesStatsKind {
     PackedInterval,
     PackedNumeric,
     Uuid,
+    PackedInet,
 }
 
 impl RustType<proto_fixed_size_bytes_stats::Kind> for FixedSizeBytesStatsKind {
@@ -146,6 +147,9 @@ impl RustType<proto_fixed_size_bytes_stats::Kind> for FixedSizeBytesStatsKind {
                 proto_fixed_size_bytes_stats::Kind::PackedNumeric(())
             }
             FixedSizeBytesStatsKind::Uuid => proto_fixed_size_bytes_stats::Kind::Uuid(()),
+            FixedSizeBytesStatsKind::PackedInet => {
+                proto_fixed_size_bytes_stats::Kind::PackedInet(())
+            }
         }
     }
 
@@ -164,6 +168,9 @@ impl RustType<proto_fixed_size_bytes_stats::Kind> for FixedSizeBytesStatsKind {
                 FixedSizeBytesStatsKind::PackedNumeric
             }
             proto_fixed_size_bytes_stats::Kind::Uuid(_) => FixedSizeBytesStatsKind::Uuid,
+            proto_fixed_size_bytes_stats::Kind::PackedInet(_) => {
+                FixedSizeBytesStatsKind::PackedInet
+            }
         };
         Ok(kind)
     }
@@ -297,6 +304,7 @@ pub(crate) fn any_bytes_stats() -> impl Strategy<Value = BytesStats> {
         Just(FixedSizeBytesStatsKind::PackedInterval),
         Just(FixedSizeBytesStatsKind::PackedNumeric),
         Just(FixedSizeBytesStatsKind::Uuid),
+        Just(FixedSizeBytesStatsKind::PackedInet),
     ]);
 
     Union::new(vec![
