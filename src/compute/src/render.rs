@@ -109,7 +109,7 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -1641,9 +1641,10 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             }
         }
 
-        // Introspection updates are published once per second by default, so polling more
-        // often would not make the hydration status visible sooner.
-        const HYDRATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+        // Polling more often than introspection updates are published would not make the
+        // hydration status visible sooner. The lower bound keeps a zero interval from turning
+        // the poll into a busy loop.
+        let poll_interval = self.logging_interval.max(Duration::from_millis(1));
 
         let name = format!("LogOperatorHydration ({lir_id})");
         let scope = stream.scope();
@@ -1664,6 +1665,10 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
 
         builder.build(move |_capabilities| {
             let mut hydrated = false;
+            // When the pending poll activation is due. Timely does not deduplicate delayed
+            // activations, so requesting one on every data-driven scheduling would queue one
+            // per scheduling.
+            let mut next_poll = Instant::now();
 
             for &export_id in &export_ids {
                 logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
@@ -1696,7 +1701,14 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                         }));
                     }
                 } else {
-                    activator.activate_after(HYDRATION_POLL_INTERVAL);
+                    let now = Instant::now();
+                    if now >= next_poll {
+                        // NOTE: `next_poll` must not be later than the deadline timely computes
+                        // in `activate_after`, else the poll activation finds it in the future
+                        // and the polling stops. Taking `now` before the call ensures that.
+                        next_poll = now + poll_interval;
+                        activator.activate_after(poll_interval);
+                    }
                 }
             }
         });
