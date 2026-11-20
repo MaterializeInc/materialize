@@ -4201,6 +4201,8 @@ mod tests {
                         | SqlScalarType::VarChar { .. }
                         | SqlScalarType::Jsonb
                         | SqlScalarType::Uuid
+                        | SqlScalarType::Inet
+                        | SqlScalarType::Cidr
                         | SqlScalarType::Array(_)
                         | SqlScalarType::Record { .. }
                         | SqlScalarType::Oid

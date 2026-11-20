@@ -72,6 +72,10 @@ async fn test_try_cast_wraps_every_stage_of_every_cast() {
             .system_config_mut()
             .set("enable_try_cast", VarInput::Flat("on"))
             .expect("valid setting");
+        catalog
+            .system_config_mut()
+            .set("enable_network_types", VarInput::Flat("on"))
+            .expect("valid setting");
         // A record type can only be named in SQL through a user-defined
         // type, so create one to reach the record-to-record cast.
         let (id, gid) = catalog

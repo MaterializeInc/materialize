@@ -727,6 +727,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
         | AggregateFunc::MaxInterval
+        | AggregateFunc::MaxInet
         | AggregateFunc::MaxTime
         | AggregateFunc::MaxArray
         | AggregateFunc::MaxList
@@ -739,6 +740,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinUInt64
         | AggregateFunc::MinMzTimestamp
         | AggregateFunc::MinInterval
+        | AggregateFunc::MinInet
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
         | AggregateFunc::MinBool

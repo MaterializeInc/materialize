@@ -737,6 +737,10 @@ pub fn decode_row(
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
+            Type::INET | Type::CIDR => row.get::<_, Option<PgInet>>(i).map(|v| v.0),
+            Type::INET_ARRAY | Type::CIDR_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<PgInet>>>>(i)
+                .map(|v| v.to_string()),
             Type::BOOL_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<bool>>>>(i)
                 .map(|a| a.to_string()),
@@ -843,6 +847,32 @@ pub fn decode_row(
     }
     let raw_out = if out != raw_out { Some(raw_out) } else { None };
     Ok((out, raw_out))
+}
+
+/// An `inet` or `cidr` value in PostgreSQL's text form.
+struct PgInet(String);
+
+impl fmt::Display for PgInet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'a> FromSql<'a> for PgInet {
+    fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<PgInet, Box<dyn Error + Sync + Send>> {
+        let is_cidr = *ty == Type::CIDR;
+        let inet = mz_repr::adt::inet::Inet::decode_pg_binary(raw, is_cidr)?;
+        let text = if is_cidr {
+            inet.display(mz_repr::adt::inet::Inet::fmt_cidr).to_string()
+        } else {
+            inet.to_string()
+        };
+        Ok(PgInet(text))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::INET | Type::CIDR)
+    }
 }
 
 struct MzTimestamp(String);

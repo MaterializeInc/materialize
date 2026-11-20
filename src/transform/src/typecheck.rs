@@ -774,6 +774,8 @@ fn datum_difference_with_column_type(
                 (Datum::MzAclItem(_), _) => mismatch(datum, scalar_type),
                 (Datum::AclItem(_), ReprScalarType::AclItem) => Ok(()),
                 (Datum::AclItem(_), _) => mismatch(datum, scalar_type),
+                (Datum::Inet(_), ReprScalarType::Inet) => Ok(()),
+                (Datum::Inet(_), _) => mismatch(datum, scalar_type),
             }
         }
     }

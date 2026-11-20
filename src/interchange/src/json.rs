@@ -13,6 +13,7 @@ use std::fmt;
 use itertools::Itertools;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, SqlColumnType, SqlScalarType};
@@ -164,6 +165,10 @@ impl ToJson for TypedDatum<'_> {
             }
             SqlScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
             SqlScalarType::Uuid => json!(datum.unwrap_uuid()),
+            SqlScalarType::Inet => json!(datum.unwrap_inet().to_string()),
+            SqlScalarType::Cidr => {
+                json!(datum.unwrap_inet().display(Inet::fmt_cidr).to_string())
+            }
             ty @ (SqlScalarType::Array(..) | SqlScalarType::Int2Vector) => {
                 let array = datum.unwrap_array();
                 let dims = array.dims().into_iter().collect::<Vec<_>>();
@@ -272,6 +277,7 @@ fn build_row_schema_field_type(
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
         SqlScalarType::AclItem => json!("string"),
+        SqlScalarType::Inet | SqlScalarType::Cidr => json!("string"),
         SqlScalarType::Bool => json!("boolean"),
         SqlScalarType::PgLegacyChar => json!({
             "type": "fixed",

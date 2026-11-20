@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 use crate::adt::date::Date;
 use crate::adt::datetime::PackedNaiveTime;
+use crate::adt::inet::Inet;
 use crate::adt::interval::{Interval, PackedInterval};
 use crate::adt::jsonb::{KeyClass, KeyClassifier, NumberParser};
 use crate::adt::numeric::{Numeric, PackedNumeric};
@@ -86,6 +87,9 @@ pub fn fixed_stats_from_column(
             unreachable!("Numeric is not stored in a fixed size byte array")
         }
         FixedSizeBytesStatsKind::Uuid => Uuid::default().as_bytes().to_vec(),
+        FixedSizeBytesStatsKind::PackedInet => Inet::host(std::net::Ipv4Addr::UNSPECIFIED.into())
+            .encode_ordered()
+            .to_vec(),
     };
 
     BytesStats::FixedSize(FixedSizeBytesStats {
@@ -294,6 +298,19 @@ pub fn col_values<'a>(
             let lower = soft_expect_or_log(Uuid::from_slice(&stats.lower))?;
             let upper = soft_expect_or_log(Uuid::from_slice(&stats.upper))?;
             Some((Datum::Uuid(lower), Datum::Uuid(upper)))
+        }
+        (
+            SqlScalarType::Inet | SqlScalarType::Cidr,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedInet,
+                    ..
+                },
+            )),
+        ) => {
+            let lower = soft_expect_or_log(Inet::decode_ordered(&stats.lower))?;
+            let upper = soft_expect_or_log(Inet::decode_ordered(&stats.upper))?;
+            Some((Datum::Inet(lower), Datum::Inet(upper)))
         }
         // JSON stats are handled elsewhere.
         (SqlScalarType::Jsonb, ColumnStatKinds::Bytes(BytesStats::Json(_))) => None,

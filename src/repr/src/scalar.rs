@@ -40,6 +40,7 @@ use uuid::Uuid;
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
 use crate::adt::date::Date;
+use crate::adt::inet::Inet;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -147,6 +148,9 @@ pub enum Datum<'a> {
     /// A list of privileges granted to a user that uses [`Oid`]s for role references.
     /// This type is used primarily for compatibility with PostgreSQL.
     AclItem(AclItem),
+    /// An IPv4 or IPv6 address with a netmask, the representation of both
+    /// `inet` and `cidr`.
+    Inet(Inet),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -217,6 +221,7 @@ impl Debug for Datum<'_> {
             Datum::Range(x) => f.debug_tuple("Range").field(&redact(x)).finish(),
             Datum::MzAclItem(x) => f.debug_tuple("MzAclItem").field(&redact(x)).finish(),
             Datum::AclItem(x) => f.debug_tuple("AclItem").field(&redact(x)).finish(),
+            Datum::Inet(x) => f.debug_tuple("Inet").field(&redact(x)).finish(),
             Datum::Dummy => f.debug_tuple("Dummy").finish(),
             Datum::Null => f.debug_tuple("Null").finish(),
         }
@@ -581,6 +586,18 @@ impl TryFrom<Datum<'_>> for Option<crate::Timestamp> {
         match from {
             Datum::Null => Ok(None),
             Datum::MzTimestamp(n) => Ok(Some(n)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Inet {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Inet(i) => Ok(i),
             _ => Err(()),
         }
     }
@@ -1002,6 +1019,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the inet value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Inet`].
+    #[track_caller]
+    pub fn unwrap_inet(&self) -> Inet {
+        match self {
+            Datum::Inet(inet) => *inet,
+            _ => panic!("Datum::unwrap_inet called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified (representation) column type.
     ///
     /// See [`Datum<'a>::is_instance_of_sql`] for comparing `Datum`s to `SqlColumnType`s.
@@ -1122,6 +1152,8 @@ impl<'a> Datum<'a> {
                     (Datum::MzAclItem(_), _) => false,
                     (Datum::AclItem(_), ReprScalarType::AclItem) => true,
                     (Datum::AclItem(_), _) => false,
+                    (Datum::Inet(_), ReprScalarType::Inet) => true,
+                    (Datum::Inet(_), _) => false,
                 }
             }
         }
@@ -1260,6 +1292,8 @@ impl<'a> Datum<'a> {
                     (Datum::MzAclItem(_), _) => false,
                     (Datum::AclItem(_), SqlScalarType::AclItem) => true,
                     (Datum::AclItem(_), _) => false,
+                    (Datum::Inet(_), SqlScalarType::Inet | SqlScalarType::Cidr) => true,
+                    (Datum::Inet(_), _) => false,
                 }
             }
         }
@@ -1401,6 +1435,13 @@ impl<'a> From<chrono::Duration> for Datum<'a> {
     fn from(duration: chrono::Duration) -> Datum<'a> {
         let micros = duration.num_microseconds().unwrap_or(0);
         Datum::Interval(Interval::new(0, 0, micros))
+    }
+}
+
+impl<'a> From<Inet> for Datum<'a> {
+    #[inline]
+    fn from(other: Inet) -> Datum<'a> {
+        Datum::Inet(other)
     }
 }
 
@@ -1592,6 +1633,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Range(i) => write!(f, "{}", i),
             Datum::MzAclItem(mz_acl_item) => write!(f, "{mz_acl_item}"),
             Datum::AclItem(acl_item) => write!(f, "{acl_item}"),
+            Datum::Inet(inet) => write!(f, "{inet}"),
         }
     }
 }
@@ -1757,6 +1799,11 @@ pub enum SqlScalarType {
     MzAclItem,
     /// The type of [`Datum::AclItem`]
     AclItem,
+    /// The type of [`Datum::Inet`] for `inet` values.
+    Inet,
+    /// The type of [`Datum::Inet`] for `cidr` values, which have no bits set
+    /// right of the mask.
+    Cidr,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, SqlColumnType) {
@@ -1849,6 +1896,8 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                 })),
                 SqlScalarType::MzAclItem => MzAclItem(()),
                 SqlScalarType::AclItem => AclItem(()),
+                SqlScalarType::Inet => Inet(()),
+                SqlScalarType::Cidr => Cidr(()),
             }),
         }
     }
@@ -1935,6 +1984,8 @@ impl RustType<ProtoScalarType> for SqlScalarType {
             }),
             MzAclItem(()) => Ok(SqlScalarType::MzAclItem),
             AclItem(()) => Ok(SqlScalarType::AclItem),
+            Inet(()) => Ok(SqlScalarType::Inet),
+            Cidr(()) => Ok(SqlScalarType::Cidr),
         }
     }
 }
@@ -2394,6 +2445,7 @@ impl_datum_type_copy!(Interval, Interval);
 impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(Uuid, Uuid);
+impl_datum_type_copy!(Inet, Inet);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
@@ -4417,6 +4469,27 @@ impl SqlScalarType {
         });
         // aclitem has no binary encoding so we can't test it here.
         static ACLITEM: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
+        static INET: LazyLock<Row> = LazyLock::new(|| {
+            let datums: Vec<_> = [
+                "0.0.0.0/0",
+                "10.1.2.3/8",
+                "255.255.255.255",
+                "::/0",
+                "::ffff:1.2.3.4",
+                "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            ]
+            .into_iter()
+            .map(|s| Datum::Inet(crate::adt::inet::parse_inet(s).expect("valid inet")))
+            .collect();
+            Row::pack_slice(&datums)
+        });
+        static CIDR: LazyLock<Row> = LazyLock::new(|| {
+            let datums: Vec<_> = INET
+                .iter()
+                .map(|d| Datum::Inet(d.unwrap_inet().network()))
+                .collect();
+            Row::pack_slice(&datums)
+        });
 
         let iter: Box<dyn Iterator<Item = Datum<'static>>> = match self {
             SqlScalarType::Bool => Box::new((*BOOL).iter()),
@@ -4442,6 +4515,8 @@ impl SqlScalarType {
             SqlScalarType::VarChar { .. } => Box::new((*STRING).iter().chain((*CHAR).iter())),
             SqlScalarType::Jsonb => Box::new((*JSONB).iter()),
             SqlScalarType::Uuid => Box::new((*UUID).iter()),
+            SqlScalarType::Inet => Box::new((*INET).iter()),
+            SqlScalarType::Cidr => Box::new((*CIDR).iter()),
             SqlScalarType::Array(inner_type) => {
                 if matches!(inner_type.as_ref(), SqlScalarType::Array(_)) {
                     panic!("SqlScalarType::Array cannot have a nested Array");
@@ -4524,6 +4599,8 @@ impl SqlScalarType {
             SqlScalarType::Int2Vector,
             SqlScalarType::MzTimestamp,
             SqlScalarType::MzAclItem,
+            SqlScalarType::Inet,
+            SqlScalarType::Cidr,
             // TODO: Fill in some variants of these.
             /*
             SqlScalarType::AclItem,
@@ -4584,7 +4661,9 @@ impl SqlScalarType {
             | SqlScalarType::Int2Vector
             | SqlScalarType::MzTimestamp
             | SqlScalarType::Range { .. }
-            | SqlScalarType::MzAclItem { .. }) => Ok(t),
+            | SqlScalarType::MzAclItem { .. }
+            | SqlScalarType::Inet
+            | SqlScalarType::Cidr) => Ok(t),
 
             SqlScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
 
@@ -4643,6 +4722,8 @@ impl Arbitrary for SqlScalarType {
             Just(SqlScalarType::Uuid).boxed(),
             Just(SqlScalarType::AclItem).boxed(),
             Just(SqlScalarType::MzAclItem).boxed(),
+            Just(SqlScalarType::Inet).boxed(),
+            Just(SqlScalarType::Cidr).boxed(),
             Just(SqlScalarType::Oid).boxed(),
             Just(SqlScalarType::RegProc).boxed(),
             Just(SqlScalarType::RegType).boxed(),
@@ -4759,6 +4840,7 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Uuid).boxed(),
             Just(ReprScalarType::AclItem).boxed(),
             Just(ReprScalarType::MzAclItem).boxed(),
+            Just(ReprScalarType::Inet).boxed(),
             Just(ReprScalarType::Int2Vector).boxed(),
         ])
         // None of the leaf ReprScalarTypes types are really "simpler" than others
@@ -4876,6 +4958,7 @@ pub enum ReprScalarType {
     Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
+    Inet, // also includes SqlScalarType::Cidr
 }
 
 impl PartialEq for ReprScalarType {
@@ -4999,6 +5082,7 @@ impl std::fmt::Display for ReprScalarType {
             ReprScalarType::Range { element_type } => write!(f, "r_range({element_type})"),
             ReprScalarType::MzAclItem => write!(f, "r_mz_acl_item"),
             ReprScalarType::AclItem => write!(f, "r_acl_item"),
+            ReprScalarType::Inet => write!(f, "r_inet"),
         }
     }
 }
@@ -5041,6 +5125,7 @@ impl ReprScalarType {
             }
             (ReprScalarType::AclItem, ReprScalarType::AclItem) => Ok(ReprScalarType::AclItem),
             (ReprScalarType::MzAclItem, ReprScalarType::MzAclItem) => Ok(ReprScalarType::MzAclItem),
+            (ReprScalarType::Inet, ReprScalarType::Inet) => Ok(ReprScalarType::Inet),
             (ReprScalarType::Interval, ReprScalarType::Interval) => Ok(ReprScalarType::Interval),
             (ReprScalarType::Bytes, ReprScalarType::Bytes) => Ok(ReprScalarType::Bytes),
             (ReprScalarType::Jsonb, ReprScalarType::Jsonb) => Ok(ReprScalarType::Jsonb),
@@ -5189,6 +5274,7 @@ impl From<&SqlScalarType> for ReprScalarType {
             },
             SqlScalarType::MzAclItem => ReprScalarType::MzAclItem,
             SqlScalarType::AclItem => ReprScalarType::AclItem,
+            SqlScalarType::Inet | SqlScalarType::Cidr => ReprScalarType::Inet,
         }
     }
 }
@@ -5267,6 +5353,7 @@ impl SqlScalarType {
             },
             ReprScalarType::MzAclItem => SqlScalarType::MzAclItem,
             ReprScalarType::AclItem => SqlScalarType::AclItem,
+            ReprScalarType::Inet => SqlScalarType::Inet,
         }
     }
 }
@@ -5361,6 +5448,7 @@ pub enum PropDatum {
 
     AclItem(AclItem),
     MzAclItem(MzAclItem),
+    Inet(Inet),
 
     JsonNull,
     Uuid(Uuid),
@@ -5516,6 +5604,10 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
             .boxed(),
         SqlScalarType::AclItem => any::<AclItem>().prop_map(PropDatum::AclItem).boxed(),
         SqlScalarType::MzAclItem => any::<MzAclItem>().prop_map(PropDatum::MzAclItem).boxed(),
+        SqlScalarType::Inet => any::<Inet>().prop_map(PropDatum::Inet).boxed(),
+        SqlScalarType::Cidr => any::<Inet>()
+            .prop_map(|i| PropDatum::Inet(i.network()))
+            .boxed(),
         SqlScalarType::Range { element_type } => {
             let data_strat = (
                 arb_datum_for_scalar(*element_type.clone()),
@@ -5986,6 +6078,7 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
             }
             AclItem(i) => Datum::AclItem(*i),
             MzAclItem(i) => Datum::MzAclItem(*i),
+            Inet(i) => Datum::Inet(*i),
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,

@@ -17,6 +17,7 @@ mod date;
 mod datum;
 mod float32;
 mod float64;
+mod inet;
 mod int16;
 mod int2vector;
 mod int32;
@@ -53,6 +54,7 @@ pub use crate::scalar::func::impls::date::*;
 pub use crate::scalar::func::impls::datum::*;
 pub use crate::scalar::func::impls::float32::*;
 pub use crate::scalar::func::impls::float64::*;
+pub use crate::scalar::func::impls::inet::*;
 pub use crate::scalar::func::impls::int2vector::*;
 pub use crate::scalar::func::impls::int16::*;
 pub use crate::scalar::func::impls::int32::*;
@@ -129,6 +131,8 @@ pub(crate) fn text_preserves_uniqueness(ty: &SqlScalarType) -> bool {
         | SqlScalarType::Int2Vector
         | SqlScalarType::MzTimestamp
         | SqlScalarType::MzAclItem
-        | SqlScalarType::AclItem => true,
+        | SqlScalarType::AclItem
+        | SqlScalarType::Inet
+        | SqlScalarType::Cidr => true,
     }
 }

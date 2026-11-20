@@ -547,7 +547,21 @@ derive_unary!(
     KafkaMurmur2String,
     SeahashBytes,
     SeahashString,
-    Reverse
+    Reverse,
+    CastStringToInet,
+    CastStringToCidr,
+    CastInetToString,
+    CastCidrToInet,
+    InetNetwork,
+    InetHost,
+    InetAbbrev,
+    CidrAbbrev,
+    InetMasklen,
+    InetFamily,
+    InetBroadcast,
+    InetNetmask,
+    InetHostmask,
+    InetNot
 );
 
 impl<E> UnaryFunc<E> {

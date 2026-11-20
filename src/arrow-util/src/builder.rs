@@ -24,6 +24,7 @@ use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
 
@@ -416,6 +417,8 @@ where
         // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
         // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
         SqlScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
+        SqlScalarType::Inet => (DataType::Utf8, "inet"),
+        SqlScalarType::Cidr => (DataType::Utf8, "cidr"),
         // Parquet does have a JSON 'Logical Type' in parquet format 2.4+, but there is no arrow
         // JSON type, so for now we represent JSON as 'large' utf8-encoded strings.
         SqlScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
@@ -984,6 +987,12 @@ impl ArrowColumn {
             }
             (ColBuilder::LargeStringBuilder(builder), Datum::Uuid(val)) => {
                 builder.append_value(val.to_string())
+            }
+            // The builder does not know whether the column is `inet` or `cidr`,
+            // so it uses the `text(inet)` form, which always prints the mask and
+            // parses back as either type.
+            (ColBuilder::StringBuilder(builder), Datum::Inet(val)) => {
+                builder.append_value(val.display(Inet::fmt_cidr).to_string())
             }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {

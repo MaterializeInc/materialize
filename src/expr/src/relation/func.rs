@@ -24,6 +24,7 @@ use mz_ore::str::separated;
 use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
@@ -1950,6 +1951,7 @@ pub enum AggregateFunc {
     MaxTimestamp,
     MaxTimestampTz,
     MaxInterval,
+    MaxInet,
     MaxTime,
     MaxArray,
     MaxList,
@@ -1969,6 +1971,7 @@ pub enum AggregateFunc {
     MinTimestamp,
     MinTimestampTz,
     MinInterval,
+    MinInet,
     MinTime,
     MinArray,
     MinList,
@@ -2111,6 +2114,7 @@ impl AggregateFunc {
                 | MaxTimestamp
                 | MaxTimestampTz
                 | MaxInterval
+                | MaxInet
                 | MaxTime
                 | MaxArray
                 | MaxList
@@ -2130,6 +2134,7 @@ impl AggregateFunc {
                 | MinTimestamp
                 | MinTimestampTz
                 | MinInterval
+                | MinInet
                 | MinTime
                 | MinArray
                 | MinList
@@ -2205,6 +2210,7 @@ impl AggregateFunc {
                 max_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
             }
             AggregateFunc::MaxInterval => max_datum::<'a, I, Interval>(datums),
+            AggregateFunc::MaxInet => max_datum::<'a, I, Inet>(datums),
             AggregateFunc::MaxTime => max_datum::<'a, I, NaiveTime>(datums),
             AggregateFunc::MaxArray | AggregateFunc::MaxList => {
                 max_datum::<'a, I, Datum<'a>>(datums)
@@ -2231,6 +2237,7 @@ impl AggregateFunc {
                 min_datum::<'a, I, CheckedTimestamp<DateTime<Utc>>>(datums)
             }
             AggregateFunc::MinInterval => min_datum::<'a, I, Interval>(datums),
+            AggregateFunc::MinInet => min_datum::<'a, I, Inet>(datums),
             AggregateFunc::MinTime => min_datum::<'a, I, NaiveTime>(datums),
             AggregateFunc::MinArray | AggregateFunc::MinList => {
                 min_datum::<'a, I, Datum<'a>>(datums)
@@ -2454,6 +2461,7 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -2473,6 +2481,7 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList
@@ -2526,6 +2535,7 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -2545,6 +2555,7 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList
@@ -2808,6 +2819,7 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -2827,6 +2839,7 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList
@@ -2934,6 +2947,7 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -2953,6 +2967,7 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList
@@ -3295,6 +3310,7 @@ impl AggregateFunc {
             Self::MaxTimestamp => "max",
             Self::MaxTimestampTz => "max",
             Self::MaxInterval => "max",
+            Self::MaxInet => "max",
             Self::MaxTime => "max",
             Self::MaxArray => "max",
             Self::MaxList => "max",
@@ -3314,6 +3330,7 @@ impl AggregateFunc {
             Self::MinTimestamp => "min",
             Self::MinTimestampTz => "min",
             Self::MinInterval => "min",
+            Self::MinInet => "min",
             Self::MinTime => "min",
             Self::MinArray => "min",
             Self::MinList => "min",
