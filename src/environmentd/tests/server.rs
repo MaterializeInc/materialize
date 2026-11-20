@@ -6469,6 +6469,129 @@ fn test_mcp_developer_search_path_defense() {
     );
 }
 
+/// User schemas named like system schemas take precedence during name
+/// resolution: a database-local `information_schema`, and quoted spellings like
+/// `"MZ_CATALOG"` that the reserved-prefix check does not cover.
+/// `query_system_catalog` must read only system relations, whatever the query
+/// names.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_developer_schema_shadowing() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+    let mut super_user = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    super_user
+        .batch_execute(&format!("CREATE ROLE {user}"))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON DATABASE materialize TO {user}"
+        ))
+        .unwrap();
+    for (schema, views) in [
+        (
+            "information_schema",
+            &["info_leak", "mz_leak", "tables"][..],
+        ),
+        (r#""MZ_CATALOG""#, &["leak", "mz_tables"][..]),
+        (r#""INFORMATION_SCHEMA""#, &["tables"][..]),
+    ] {
+        super_user
+            .batch_execute(&format!("CREATE SCHEMA materialize.{schema}"))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.{schema} TO {user}"
+            ))
+            .unwrap();
+        for view in views {
+            super_user
+                .batch_execute(&format!(
+                    "CREATE VIEW materialize.{schema}.{view} AS \
+                     SELECT 'leaked_secret'::text AS name, 'leaked_secret'::text AS table_schema"
+                ))
+                .unwrap();
+        }
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON ALL TABLES IN SCHEMA materialize.{schema} TO {user}"
+            ))
+            .unwrap();
+    }
+
+    let query = |id: u64, sql: &str| {
+        let (status, body) = mcp_post(
+            &developer_url,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": "query_system_catalog", "arguments": {"sql_query": sql}}
+            }),
+        );
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            !body.to_string().contains("leaked_secret"),
+            "{sql} must not read a user schema, got: {body}"
+        );
+        body
+    };
+
+    for (id, sql) in [
+        (1, "SELECT * FROM information_schema.info_leak"),
+        (2, "SELECT * FROM materialize.information_schema.info_leak"),
+        (3, "SELECT * FROM mz_leak"),
+        (4, r#"SELECT * FROM "MZ_CATALOG".leak"#),
+        (5, r#"SELECT * FROM "INFORMATION_SCHEMA".tables"#),
+    ] {
+        let body = query(id, sql);
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("non-system tables"),
+            "{sql} should be rejected as a non-system table, got: {body}"
+        );
+    }
+
+    // Names of system relations read the system relation, even while a user
+    // schema could take the name.
+    for (id, sql, expected) in [
+        (
+            6,
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = 'mz_catalog' AND table_name = 'mz_tables'",
+            "mz_tables",
+        ),
+        (
+            7,
+            "SELECT mz_databases.name FROM mz_catalog.mz_databases \
+             WHERE mz_databases.name = 'materialize'",
+            "materialize",
+        ),
+        (
+            8,
+            "SELECT t.name FROM mz_objects t WHERE t.name = 'mz_views'",
+            "mz_views",
+        ),
+    ] {
+        let body = query(id, sql);
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            text.contains(expected),
+            "{sql} should read the system relation, got: {body}"
+        );
+    }
+}
+
 /// Pins that the developer MCP endpoint is an RBAC pass-through: the same
 /// statement run by the same role returns the same result via MCP or pgwire.
 #[mz_ore::test]
