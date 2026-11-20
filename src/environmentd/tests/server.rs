@@ -6469,11 +6469,9 @@ fn test_mcp_developer_search_path_defense() {
     );
 }
 
-/// User schemas named like system schemas take precedence during name
-/// resolution: a database-local `information_schema`, and quoted spellings like
-/// `"MZ_CATALOG"` that the reserved-prefix check does not cover.
-/// `query_system_catalog` must read only system relations, whatever the query
-/// names.
+/// A database-local schema takes precedence over a system schema of the same
+/// name, and the reserved-prefix check does not cover quoted spellings like
+/// `"MZ_CATALOG"`.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_mcp_developer_schema_shadowing() {
@@ -6526,6 +6524,16 @@ fn test_mcp_developer_schema_shadowing() {
             ))
             .unwrap();
     }
+    // Without the pinned search_path, an unqualified name left unbound because
+    // it matches a CTE would resolve to this view.
+    for stmt in [
+        "CREATE VIEW materialize.public.mz_cte_leak AS SELECT 'leaked_secret'::text AS name"
+            .to_string(),
+        format!("GRANT SELECT ON materialize.public.mz_cte_leak TO {user}"),
+        format!("ALTER ROLE {user} SET search_path TO public"),
+    ] {
+        super_user.batch_execute(&stmt).unwrap();
+    }
 
     let query = |id: u64, sql: &str| {
         let (status, body) = mcp_post(
@@ -6555,28 +6563,41 @@ fn test_mcp_developer_schema_shadowing() {
         let body = query(id, sql);
         let message = body["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            message.contains("non-system tables"),
-            "{sql} should be rejected as a non-system table, got: {body}"
+            message.starts_with("Query validation failed"),
+            "{sql} should fail validation, got: {body}"
         );
     }
+
+    // The outer `mz_cte_leak` is out of the CTE's scope.
+    let body = query(
+        6,
+        "SELECT * FROM (WITH mz_cte_leak AS (SELECT 1) SELECT * FROM mz_cte_leak) x, \
+         mz_cte_leak, mz_catalog.mz_databases",
+    );
+    assert!(body["error"].is_object(), "got: {body}");
 
     // Names of system relations read the system relation, even while a user
     // schema could take the name.
     for (id, sql, expected) in [
         (
-            6,
+            7,
+            "SELECT name FROM materialize.mz_catalog.mz_databases WHERE name = 'materialize'",
+            "materialize",
+        ),
+        (
+            8,
             "SELECT table_name FROM information_schema.tables \
              WHERE table_schema = 'mz_catalog' AND table_name = 'mz_tables'",
             "mz_tables",
         ),
         (
-            7,
+            9,
             "SELECT mz_databases.name FROM mz_catalog.mz_databases \
              WHERE mz_databases.name = 'materialize'",
             "materialize",
         ),
         (
-            8,
+            10,
             "SELECT t.name FROM mz_objects t WHERE t.name = 'mz_views'",
             "mz_views",
         ),
