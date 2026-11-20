@@ -38,6 +38,13 @@ use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
+/// Seeds the resource ID of a recreated Materialize resource.
+///
+/// Delete the old resource with foreground cascading deletion before
+/// recreating it with this annotation. The old resource then exists until the
+/// resources named after its ID are gone, and the operator refuses the ID for
+/// as long as it does. After a background delete, the new resource would apply
+/// over resources that are still being garbage collected.
 pub const LAST_KNOWN_RESOURCE_ID_ANNOTATION: &str = "materialize.cloud/last-known-resource-id";
 pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
 

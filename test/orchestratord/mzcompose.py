@@ -4131,8 +4131,10 @@ def workflow_recreate_with_last_known_status(
         ]
     )
 
-    # Delete the resource, and wait for everything named after its ID to be
-    # garbage collected, so that the new resource doesn't adopt leftovers.
+    # Delete the resource in the foreground, so that it only goes away once
+    # everything named after its ID has been garbage collected. A background
+    # delete removes the resource first, and a new resource with the same ID
+    # would then apply over the leftovers while they are being deleted.
     spawn.runv(
         [
             "kubectl",
@@ -4141,16 +4143,13 @@ def workflow_recreate_with_last_known_status(
             mz_name,
             "-n",
             namespace,
+            "--cascade=foreground",
             "--wait=true",
             "--timeout=300s",
         ]
     )
-
-    def check_gone() -> None:
-        remaining = resources_named_after(resource_id)
-        assert not remaining, f"Still exist: {remaining}"
-
-    retry(check_gone, 300)
+    remaining = resources_named_after(resource_id)
+    assert not remaining, f"Still exist after a foreground delete: {remaining}"
 
     # Recreate it on the same data, with what its old status held.
     definition["materialize"]["spec"]["environmentId"] = old["spec"]["environmentId"]
