@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,101 @@ from materialize import MZ_ROOT, spawn
 
 DRIVER_IMAGE = "antithesis-driver"
 STANDALONE_CONTAINER = "mz-antithesis-driver"
+LICENSE_KEY_FILE = Path.home() / ".config" / "materialize" / "antithesis-license-key"
+
+
+class Kind:
+    """One kind cluster, addressed through its kubectl context."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.context = f"kind-{name}"
+
+    def kubectl(
+        self, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["kubectl", "--context", self.context, *args],
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    def ensure(self) -> None:
+        if self.name not in spawn.capture(["kind", "get", "clusters"]).split():
+            spawn.runv(["kind", "create", "cluster", "--name", self.name])
+
+    def load(self, images: list[str]) -> None:
+        from materialize.xcompile import Arch
+
+        for image in images:
+            present = (
+                subprocess.run(
+                    ["docker", "image", "inspect", image], capture_output=True
+                ).returncode
+                == 0
+            )
+            if not present:
+                spawn.runv(["docker", "pull", image])
+            result = subprocess.run(
+                ["kind", "load", "docker-image", image, "--name", self.name],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                continue
+            if not re.search(r"content digest .*: not found", result.stderr):
+                raise subprocess.CalledProcessError(
+                    result.returncode, result.args, result.stdout, result.stderr
+                )
+            # Docker's containerd store can keep a multi-platform index without
+            # its other platforms' blobs. Export the host platform first.
+            with tempfile.TemporaryDirectory(
+                prefix="mz-antithesis-image-"
+            ) as directory:
+                archive = Path(directory) / "image.tar"
+                spawn.runv(
+                    [
+                        "docker",
+                        "image",
+                        "save",
+                        "--platform",
+                        f"linux/{Arch.host().go_str()}",
+                        "--output",
+                        str(archive),
+                        image,
+                    ]
+                )
+                spawn.runv(
+                    ["kind", "load", "image-archive", str(archive), "--name", self.name]
+                )
+
+    def apply(self, manifests: Path) -> None:
+        # Namespaces first: everything else is namespaced.
+        spawn.runv(
+            [
+                "kubectl",
+                "--context",
+                self.context,
+                "apply",
+                "-f",
+                str(manifests / "00-namespaces.yaml"),
+            ]
+        )
+        spawn.runv(
+            ["kubectl", "--context", self.context, "apply", "-f", str(manifests)]
+        )
+
+
+def license_key() -> str:
+    key = os.environ.get("MZ_CI_LICENSE_KEY")
+    if not key and LICENSE_KEY_FILE.exists():
+        key = LICENSE_KEY_FILE.read_text().strip()
+    if not key:
+        raise SystemExit(
+            f"set MZ_CI_LICENSE_KEY or write the key to {LICENSE_KEY_FILE}"
+        )
+    return key
 
 
 def would_fail(*jsonl: Path) -> list[str]:
@@ -146,13 +242,11 @@ def standalone(args: argparse.Namespace) -> int:
 
 
 def kind(args: argparse.Namespace) -> int:
-    from materialize.antithesis import local as harness
     from materialize.antithesis import render
     from materialize.mzbuild import Repository
     from materialize.xcompile import Arch
 
-    harness.CLUSTER = args.cluster_name
-    harness.CONTEXT = f"kind-{args.cluster_name}"
+    harness = Kind(args.cluster_name)
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
 
@@ -164,10 +258,8 @@ def kind(args: argparse.Namespace) -> int:
         name: f"docker.io/materialize/{name}:{args.release}"
         for name in ("environmentd", "clusterd", "orchestratord")
     }
-    harness.ensure_cluster()
-    harness.load_images(
-        [driver_image, *release.values(), *render.DEFAULT_IMAGES.values()]
-    )
+    harness.ensure()
+    harness.load([driver_image, *release.values(), *render.DEFAULT_IMAGES.values()])
     with tempfile.TemporaryDirectory(prefix="mz-antithesis-driver-") as directory:
         manifests = Path(directory) / "manifests"
         render.render(
@@ -176,8 +268,7 @@ def kind(args: argparse.Namespace) -> int:
             clusterd_image=release["clusterd"],
             orchestratord_image=release["orchestratord"],
             workload_image=driver_image,
-            license_key=harness.license_key(),
-            workload="driver",
+            license_key=license_key(),
         )
         # Local-loop settings, which the Antithesis config does not carry.
         pod = manifests / "30-driver.yaml"

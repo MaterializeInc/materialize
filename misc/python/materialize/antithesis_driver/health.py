@@ -128,9 +128,9 @@ def samples(kube: Any) -> list[crash_loops.Sample]:
                             else None
                         ),
                         exit_code=termination.exit_code if termination else None,
-                        finished_at=str(termination.finished_at)
-                        if termination
-                        else None,
+                        finished_at=(
+                            str(termination.finished_at) if termination else None
+                        ),
                         waiting_reason=waiting.reason if waiting else None,
                         deleting=pod.metadata.deletion_timestamp is not None,
                     )

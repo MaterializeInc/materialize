@@ -1,29 +1,30 @@
 # A state machine driver for the Antithesis harness
 
-- Associated: `test/antithesis/`, `misc/python/materialize/antithesis_driver/`
+- Associated: `test/antithesis/`, `misc/python/materialize/antithesis_driver/`,
+  `misc/python/materialize/antithesis/`
 
 ## The Problem
 
-The Antithesis harness in `test/antithesis/` is a Test Composer workload:
-about 60 short-lived test commands, generated into five templates, call a
+The Antithesis harness in `test/antithesis/` was a Test Composer workload:
+about 60 short-lived test commands, generated into five templates, called a
 Python library of about 44,000 lines (plus 20,000 lines of tests). Antithesis
-schedules the commands. Each command starts with no memory of the others, so
-the library keeps its models in SQLite journals in a shared state directory,
-and grows leases, resume logic, quiet-period ledgers, heartbeat audits, a
-local scheduler that emulates Test Composer, and telemetry of command costs.
+scheduled the commands. Each command started with no memory of the others, so
+the library kept its models in SQLite journals in a shared state directory,
+and grew leases, resume logic, quiet-period ledgers, heartbeat audits, a
+local scheduler that emulated Test Composer, and telemetry of command costs.
 The inventory behind this document puts about 2,100 to 2,400 lines of the
 rollout, restart and recovery code alone down to that, plus most of
 `state.py`, `quiet.py`, `ddl_hold.py`, `exit_audit.py`, `telemetry*.py` and
 `local_*.py`.
 
-Two of its conventions also weaken what a run reports:
+Two of its conventions also weakened what a run reported:
 
-- Every module imports `always_or_unreachable as always` (26 modules). A
-  safety check that a run never evaluates passes silently. The harness
-  compensates with `findings.py`, which classifies a run's exports.
-- Exploration milestones are guidance events from `observations.py`, about
+- Every module imported `always_or_unreachable as always` (26 modules). A
+  safety check that a run never evaluated passed silently. The harness
+  compensated with `findings.py`, which classified a run's exports.
+- Exploration milestones were guidance events from `observations.py`, about
   280 call sites, not SDK `sometimes`/`reachable` assertions. An unreached
-  milestone is never a property, so a run's property list does not show what
+  milestone was never a property, so a run's property list did not show what
   it failed to exercise. The SUT-side `mz_ore::antithesis_sometimes!` and
   `antithesis_reachable!` follow the same convention.
 
@@ -51,10 +52,10 @@ checks what must hold afterwards and ends the timeline.
   fail.
 - The driver keeps the messages of the legacy assertions it ports, so their
   properties keep their history.
-- The new workload reaches every property the legacy workload's recent runs
-  reached, and fails none they passed unless the failure is a product bug.
-  This is the plugin's criterion for converting a workload, and the condition
-  for deleting the legacy one.
+- Once its families are ported, the driver's runs reach every property the
+  legacy workload's recent runs reached, and fail none they passed unless the
+  failure is a product bug. This is the plugin's criterion for converting a
+  workload.
 
 ## Out of Scope
 
@@ -62,7 +63,6 @@ checks what must hold afterwards and ends the timeline.
   orchestratord configuration and upgrade-base images.
 - Changing what the `mz_ore::antithesis` macros report (see the open
   questions). New call sites of them are in scope.
-- Deleting the legacy workload. It stays until the parity criterion holds.
 
 ## Solution Proposal
 
@@ -100,7 +100,8 @@ checks what must hold afterwards and ends the timeline.
   transactions), `views.py` (24 maintained views of the existing
   `ivm_model.py`), `disrupt.py` (replica changes, pod deletions,
   rollouts), `health.py` (recovery checks).
-- `main.py`: startup. On Kubernetes it reuses the legacy `setup.py` steps.
+- `main.py`: startup: on Kubernetes the persist bucket, the Materialize CR and
+  its first generation, then the schema.
 - `local.py`: the local loop.
 
 Seven new `mz_ore::antithesis_reachable!` markers in the SUT mark rare
@@ -117,9 +118,18 @@ The internals research behind this document lists about thirty more
 candidates.
 
 The image is `test/antithesis/driver/` (mzbuild `antithesis-driver`), the pod
-is `test/antithesis/manifests/30-driver.yaml`, selected with `render
---workload driver`. CI publishes a second config image, `driver-config`,
-beside the legacy `config`.
+is `test/antithesis/manifests/30-driver.yaml`.
+
+### Removing the legacy workload
+
+The legacy workload is gone: its commands, image, templates, drivers, SQLite
+state, telemetry, findings classifier and local scheduler. Its pure models
+stay in `misc/python/materialize/antithesis/` with their tests, because the
+families still to port reuse them (`sink_oracle.py`, `upsert_recovery_model.py`,
+`spec_model.py`, `isolation.py`, `schema_model.py`, the retraction and
+session rebinding models, `halt_proof.py`, `exit_evidence.py`,
+`kube_watch.py`). The legacy implementation of each family, named by its
+`drivers/` path below, is at commit 93a74b6551, the base of this change.
 
 ### Ported families
 
@@ -142,9 +152,8 @@ much of the port is mechanical:
    StatefulSets, leader fencing, the SQL-serving version never going backwards.
    A background CR watch thread should fire phase-targeted patches, so a
    zero-delay patch still lands in a short Promoting window.
-2. Exit evidence (`halt_proof.py` and `exit_evidence.py` are pure).
-   `findings.py` consumes the `antithesis_exit_evidence` events, so keep
-   their schema if `findings.py` stays.
+2. Exit evidence (`halt_proof.py` and `exit_evidence.py` are pure): every
+   environmentd and clusterd exit explained by a designed halt.
 3. Postgres and Kafka sources, Kafka sinks (`sink_oracle.py` is pure), upsert
    recovery (`upsert_recovery_model.py` is pure). The inventory found that
    nothing checks source contents after faults stop: add it.
@@ -155,7 +164,6 @@ much of the port is mechanical:
    still lacks the legacy `AS OF` resume and peek comparisons.
 6. Session rebinding, COPY and cancel recovery, schema evolution, window and
    aggregate retractions, access control, object lifecycle, shard audit.
-   All their models are pure and import as they are.
 
 ## Minimal Viable Prototype
 
@@ -192,26 +200,23 @@ No Antithesis run has been launched for it yet.
   (`serializability.py`, `ivm_model.py`, `spec_model.py`, `sink_oracle.py`,
   ...) as they are, and keeps the harness in one language. The cost is the
   GIL: a model check holds every worker, so checks must stay cheap.
-- **Run the driver beside the legacy templates in one config.** Antithesis
-  picks one template per timeline, so it would split timelines between the
-  two, and two processes would race to report setup complete. Separate
-  configs keep each run's properties attributable.
+- **Keep the legacy workload until the driver reaches parity.** Both would
+  need maintaining, against one deployment whose RBAC, images and CI they
+  share, while the families move over one at a time. Parity is judged
+  against the legacy runs' recorded properties instead.
 
 ## Open questions
 
 - Should `mz_ore::antithesis_sometimes!` and `antithesis_reachable!` become
   real SDK assertions, as the driver's are, so unreached SUT branches show up
-  as properties? The legacy `findings.py` would need to treat them as
-  coverage.
-- Does triage of driver runs still need `findings.py`? With real `always`
-  assertions, a vacuous check fails on its own.
+  as properties?
 - Paced DDL needs about an hour of continuous quiet and a ban on other DDL.
   It fits the driver only as an exclusive mode that pauses the other rules,
   or as part of the eventually.
 - A rollout is promoted only after its clusters stayed caught up for
   `with_0dt_caught_up_check_stability_period`, ten minutes by default, which
-  neither workload lowers. Under faults few rollouts may get that far. Should
-  timelines draw a shorter period?
+  the harness does not lower. Under faults few rollouts may get that far.
+  Should timelines draw a shorter period?
 - The timing bounds (statement cancel after 60 s, the 45 minute budget of
   the eventually, the disruption cooldowns) are guesses until the first runs
   on the simulated core.

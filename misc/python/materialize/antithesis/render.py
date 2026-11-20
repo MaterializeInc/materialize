@@ -34,9 +34,6 @@ from materialize import MZ_ROOT
 MANIFESTS = MZ_ROOT / "test" / "antithesis" / "manifests"
 OPERATOR_CHART = MZ_ROOT / "misc" / "helm-charts" / "operator"
 ENVIRONMENT_NAME = "antithesis"
-# The manifest of each workload. A config deploys exactly one of them, since
-# each reports `setup_complete` on its own.
-WORKLOADS = {"legacy": "30-workload.yaml", "driver": "30-driver.yaml"}
 
 DEFAULT_IMAGES = {
     "POSTGRES_IMAGE": "docker.io/library/postgres:17.6",
@@ -54,32 +51,25 @@ INTROSPECTION_PARAMETERS = {
     "wallclock_lag_recording_interval": "5min",
 }
 
-# System parameters every timeline starts from. Per-timeline variation is the
-# workload's job (it rewrites the `system-params` ConfigMap); these are only
-# the values the harness itself depends on.
+# System parameters every timeline starts from: the values the harness itself
+# depends on.
 BASE_SYSTEM_PARAMETERS: dict[str, str] = {
     **INTROSPECTION_PARAMETERS,
     # One node: replicas of one cluster must be allowed to share it.
     "cluster_soften_replication_anti_affinity": "true",
     "allowed_cluster_replica_sizes": "'antithesis-1', 'antithesis-2', 'antithesis-4'",
     "max_connections": "1000",
-    # Lets the client-history driver run sessions at strong session
-    # serializable, the only isolation level with per-session guarantees.
+    # Lets the client history run sessions at strong session serializable, the
+    # only isolation level with per-session guarantees.
     "enable_session_timelines": "true",
-    # Real-time recency is off by default; the canary and session-mix drivers
-    # issue real-time-recency reads in every profile.
+    # Real-time recency is off by default. The source checks read with it.
     "allow_real_time_recency": "true",
     # A read-only generation reboots when it sees DDL it must react to. The
     # production check interval (5 min) and max wait (1 year) would make every
-    # rollout outlast a timeline, so both are scaled down here. These two are
-    # defaults: `configure` overrides them per timeline.
+    # rollout outlast a timeline, so both are scaled down here.
     "with_0dt_deployment_ddl_check_interval": "30s",
     "with_0dt_deployment_max_wait": "20min",
 }
-# Keys of `BASE_SYSTEM_PARAMETERS` a timeline's configuration may override.
-OVERRIDABLE_BASE_PARAMETERS = frozenset(
-    {"with_0dt_deployment_ddl_check_interval", "with_0dt_deployment_max_wait"}
-)
 
 
 def split_image(ref: str) -> tuple[str, str]:
@@ -111,18 +101,14 @@ def render(
     workload_image: str,
     license_key: str,
     upgrade_from: tuple[str, str] | None = None,
-    workload: str = "legacy",
 ) -> None:
     """Write the manifests.
 
-    `workload_image` is the image of the selected `workload`, a key of
-    `WORKLOADS`. `upgrade_from` is an (environmentd, clusterd) image pair at an
-    older release. When set, the environment starts on it and the workload
-    upgrades it to `environmentd_image`.
+    `workload_image` is the `antithesis-driver` image. `upgrade_from` is an
+    (environmentd, clusterd) image pair at an older release. When set, the
+    environment starts on it and the driver upgrades it to
+    `environmentd_image`.
     """
-    if workload not in WORKLOADS:
-        raise ValueError(f"unknown workload {workload!r}")
-    excluded = {f for name, f in WORKLOADS.items() if name != workload}
     check_image_pair(environmentd_image, clusterd_image)
     if upgrade_from is not None:
         check_image_pair(*upgrade_from)
@@ -151,8 +137,6 @@ def render(
         stale.unlink()
 
     for template in sorted(MANIFESTS.glob("*.yaml")):
-        if template.name in excluded:
-            continue
         text = string.Template(template.read_text()).substitute(values)
         if template.name == "operator-values.yaml":
             values_file = output.parent / "operator-values.rendered.yaml"
@@ -184,11 +168,10 @@ def main() -> int:
     parser.add_argument("--environmentd-image", required=True)
     parser.add_argument("--clusterd-image", required=True)
     parser.add_argument("--orchestratord-image", required=True)
-    parser.add_argument("--workload", choices=sorted(WORKLOADS), default="legacy")
     parser.add_argument(
         "--workload-image",
         required=True,
-        help="antithesis-workload for --workload legacy, antithesis-driver for driver",
+        help="the antithesis-driver image",
     )
     parser.add_argument(
         "--upgrade-from-environmentd-image",
@@ -218,7 +201,6 @@ def main() -> int:
             if args.upgrade_from_environmentd_image
             else None
         ),
-        workload=args.workload,
     )
     return 0
 

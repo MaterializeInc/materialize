@@ -7,15 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Workload library for testing Materialize under Antithesis.
+"""Support for testing Materialize under Antithesis.
 
-The modules here run inside the workload pod of `test/antithesis`, but they do
-not depend on the Antithesis runtime: outside Antithesis the SDK falls back to
-local randomness and no-op (or file-logged, via `ANTITHESIS_SDK_LOCAL_OUTPUT`)
-assertions, so the same drivers run under a local kind cluster.
-
-Assertions are called directly from `antithesis.assertions` with literal
-messages at each call site. The Antithesis cataloger only finds assertions in
-that form, and an assertion it has not cataloged cannot be reported as never
-reached.
+Rendering the Kubernetes manifests (`render`), building and publishing the
+images (`images`), classifying SQL errors (`sql`), and the pure models that
+the driver's checks judge results with. The driver itself is
+`materialize.antithesis_driver`. Nothing here asserts or depends on the
+Antithesis runtime.
 """

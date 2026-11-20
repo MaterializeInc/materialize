@@ -20,10 +20,12 @@ in Antithesis, and the local loop's caller bounds them locally.
 
 from __future__ import annotations
 
+import base64
 import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
@@ -33,6 +35,7 @@ from antithesis.lifecycle import (  # pyright: ignore[reportMissingModuleSource]
     setup_complete,
 )
 
+from materialize.antithesis.environment import Environment
 from materialize.antithesis_driver.client import Target, connect
 from materialize.antithesis_driver.context import Config, log
 
@@ -65,12 +68,76 @@ def retry(name: str, step: Callable[[], None]) -> None:
             time.sleep(2)
 
 
-def bring_up_kubernetes() -> str:
-    """Create the Materialize CR and wait for its first generation, as the
-    legacy workload's `setup` does. Returns the SQL host."""
+def ensure_blob_bucket(env: Environment) -> bool:
+    """Create the persist bucket named by the backend Secret, if missing.
+
+    MinIO starts with no buckets, and environmentd retries opening blob
+    storage forever rather than failing, so this must run before the CR.
+    Returns whether the bucket exists. S3 errors (MinIO still starting) are
+    reported as `False` so the caller retries.
+    """
+    import boto3
+    import botocore.exceptions
+    from kubernetes import client  # type: ignore
+
     from materialize import orchestratord
-    from materialize.antithesis import setup
-    from materialize.antithesis.environment import Environment
+
+    secret = client.CoreV1Api().read_namespaced_secret(
+        "materialize-backend",
+        env.endpoints.namespace,
+        _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+    )
+    assert secret.data is not None
+    url = urlparse(base64.b64decode(secret.data["persist_backend_url"]).decode())
+    query = parse_qs(url.query)
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=query["endpoint"][0],
+        region_name=query.get("region", ["us-east-1"])[0],
+        aws_access_key_id=unquote(url.username or ""),
+        aws_secret_access_key=unquote(url.password or ""),
+    )
+    bucket = url.hostname
+    assert bucket is not None
+    try:
+        try:
+            s3.head_bucket(Bucket=bucket)
+        except botocore.exceptions.ClientError:
+            s3.create_bucket(Bucket=bucket)
+            log(f"created persist bucket {bucket}")
+    except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
+        log(f"waiting for blob storage: {e}")
+        return False
+    return True
+
+
+def create_materialize(env: Environment) -> bool:
+    """Create the Materialize CR from the `materialize-cr` ConfigMap.
+
+    The CR is not in the manifests because orchestratord registers its CRD
+    at startup.
+    """
+    import yaml
+    from kubernetes import client  # type: ignore
+
+    from materialize import orchestratord
+
+    if env.materialize.get() is None:
+        configmap = client.CoreV1Api().read_namespaced_config_map(
+            "materialize-cr",
+            env.endpoints.namespace,
+            _request_timeout=orchestratord.K8S_TIMEOUT_SECONDS,  # pyright: ignore[reportCallIssue]
+        )
+        assert configmap.data is not None
+        env.materialize.create(yaml.safe_load(configmap.data["materialize.yaml"]))
+        log(f"created Materialize CR {env.endpoints.environment}")
+    return True
+
+
+def bring_up_kubernetes() -> str:
+    """Create the Materialize CR and wait for its first generation. Returns
+    the SQL host."""
+    from materialize import orchestratord
 
     env = Environment()
     forever = float("inf")
@@ -79,12 +146,10 @@ def bring_up_kubernetes() -> str:
         orchestratord.crd_established, forever, description="Materialize CRD"
     )
     orchestratord.wait_until(
-        lambda: setup.ensure_blob_bucket(env), forever, description="persist bucket"
+        lambda: ensure_blob_bucket(env), forever, description="persist bucket"
     )
     orchestratord.wait_until(
-        lambda: (setup.create_materialize(env), True)[1],
-        forever,
-        description="Materialize CR creation",
+        lambda: create_materialize(env), forever, description="Materialize CR creation"
     )
     log("waiting for the first generation to be applied")
     orchestratord.wait_until(

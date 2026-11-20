@@ -196,9 +196,7 @@ class Views:
                 self.writes[op] = (
                     "ok"
                     if outcome.ok
-                    else "rejected"
-                    if outcome.rejected
-                    else "unknown"
+                    else "rejected" if outcome.rejected else "unknown"
                 )
 
         return self.ctx.sessions.call(
@@ -624,8 +622,8 @@ class Subscriber:
             last is not None and last > since,
             "ivm: a SUBSCRIBE makes progress after faults stop",
             {
-                "since_last_progress_s": None
-                if last is None
-                else time.monotonic() - last
+                "since_last_progress_s": (
+                    None if last is None else time.monotonic() - last
+                )
             },
         )

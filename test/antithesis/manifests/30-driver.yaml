@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# The driver pod, the alternative to the workload pod in 30-workload.yaml
-# (`render --workload driver`). Its one process creates the Materialize CR,
+# The driver pod. Its one process creates the Materialize CR,
 # waits for the environment to serve SQL, emits `setup_complete`, and runs the
 # state machine once the `first_start_workload` command creates
 # /workload-active. Launch with `--fault-exclusions '^driver$$'`.

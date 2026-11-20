@@ -411,9 +411,11 @@ class History:
 
         settings = {
             "transaction_isolation": f"'{record.isolation}'",
-            "cluster": DERIVED_CLUSTER
-            if any(p.name == "index" for p in read_paths)
-            else PLAIN_CLUSTER,
+            "cluster": (
+                DERIVED_CLUSTER
+                if any(p.name == "index" for p in read_paths)
+                else PLAIN_CLUSTER
+            ),
         }
         return Op("history read", execute, complete, settings)
 

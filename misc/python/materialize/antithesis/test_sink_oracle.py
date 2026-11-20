@@ -205,22 +205,6 @@ def test_debezium_rejects_keys_that_disagree_with_row_images() -> None:
     assert o.debezium_key_mismatches([dbz(10, 1, None, item(1, 0, 5))], ["id"]) == []
 
 
-def test_stream_reports_debezium_key_corruption(monkeypatch) -> None:
-    pytest.importorskip("antithesis")
-    from materialize.antithesis.drivers import kafka_sinks
-
-    messages = [
-        dbz(10, 9, None, item(1, 0, 5)),
-        dbz(12, 9, item(1, 0, 5), item(1, 0, 6)),
-    ]
-    progress = [o.ProgressRecord(0, 13, 0)]
-    output = kafka_sinks.SinkOutput("sink", "debezium", messages, progress, progress)
-    assertions: list[bool] = []
-    monkeypatch.setattr(kafka_sinks, "always", lambda ok, *args: assertions.append(ok))
-    kafka_sinks._check_stream(output, {})
-    assert not all(assertions)
-
-
 def test_keyed_rows_flags_conflicts() -> None:
     rows = Counter({(1, 0, 5, "a"): 1, (1, 0, 6, "b"): 1, (2, 0, 1, "c"): 2})
     keyed, conflicts = o.keyed_rows(rows, 0)
@@ -294,17 +278,3 @@ def test_bag_diff() -> None:
     d = o.bag_diff([(1,), (1,), (2,)], [(1,), (3,)])
     assert d["missing_count"] == 2 and d["extra_count"] == 1
     assert d["missing"] == [[1], [2]] and d["extra"] == [[3]]
-
-
-def test_forbidden_sink_errors_match_the_product_text() -> None:
-    pytest.importorskip("antithesis")
-    from materialize import MZ_ROOT
-    from materialize.antithesis.drivers import kafka_sinks
-
-    sink = MZ_ROOT / "src" / "storage" / "src" / "sink"
-    source = sink.with_suffix(".rs").read_text() + (sink / "kafka.rs").read_text()
-    current = set(kafka_sinks.FORBIDDEN_SINK_ERRORS) - set(
-        kafka_sinks.LEGACY_SINK_ERRORS
-    )
-    stale = sorted(m for m in current if m not in source)
-    assert not stale, f"no sink can report these errors any more: {stale}"

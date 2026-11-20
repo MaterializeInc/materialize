@@ -63,9 +63,7 @@ class Endpoints:
             upstream_postgres_url=os.environ["MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL"],
             metadata_postgres_url=os.environ["MZ_ANTITHESIS_METADATA_POSTGRES_URL"],
             state_dir=Path(
-                os.environ.get(
-                    "MZ_ANTITHESIS_STATE_DIR", "/var/lib/antithesis-workload"
-                )
+                os.environ.get("MZ_ANTITHESIS_STATE_DIR", "/var/lib/antithesis-driver")
             ),
             environmentd_image=os.environ.get("MZ_ANTITHESIS_ENVIRONMENTD_IMAGE"),
             initial_environmentd_image=os.environ.get(

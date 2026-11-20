@@ -320,9 +320,9 @@ class Disruptions:
             request=request,
             strategy=strategy,
             started=time.monotonic(),
-            kill_phase=d.choice(KILL_PHASES)
-            if d.boolean(self.kill_probability)
-            else None,
+            kill_phase=(
+                d.choice(KILL_PHASES) if d.boolean(self.kill_probability) else None
+            ),
             kill_target=d.choice(("active", "candidate", "orchestratord")),
             grace=d.choice(GRACE_MENU),
             image=image,
