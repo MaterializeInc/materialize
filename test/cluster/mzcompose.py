@@ -9212,7 +9212,7 @@ def workflow_test_source_replica_losing_appends(c: Composition) -> None:
     with c.override(
         Clusterd(name="clusterd1", workers=1),
         slow_replica,
-        Testdrive(no_reset=True),
+        Testdrive(no_reset=True, default_timeout="60s"),
     ):
         c.down(destroy_volumes=True)
         c.up("materialized", "toxiproxy", Service("testdrive", idle=True))
@@ -9232,6 +9232,16 @@ def workflow_test_source_replica_losing_appends(c: Composition) -> None:
             }}
             """))
         c.up("clusterd1", "clusterd2")
+
+        # Without the alias both replicas are equally fast and the test passes vacuously.
+        def resolve(host: str) -> str:
+            return c.exec(
+                "clusterd2", "getent", "hosts", host, capture=True
+            ).stdout.split()[0]
+
+        assert resolve(METADATA_STORE) == resolve(
+            "toxiproxy"
+        ), f"clusterd2 does not reach {METADATA_STORE} through toxiproxy"
 
         c.sql(
             """
@@ -9267,6 +9277,14 @@ def workflow_test_source_replica_losing_appends(c: Composition) -> None:
               JOIN mz_objects o ON o.id = s.id
               JOIN mz_cluster_replicas r ON r.id = s.replica_id
               WHERE o.name = 'bids' AND s.offset_committed > 20
+            fast
+            slow
+
+            # A second, later threshold, so one append the slow replica happens to win cannot pass.
+            > SELECT r.name FROM mz_internal.mz_source_statistics_raw s
+              JOIN mz_objects o ON o.id = s.id
+              JOIN mz_cluster_replicas r ON r.id = s.replica_id
+              WHERE o.name = 'bids' AND s.offset_committed > 80
             fast
             slow
             """))
