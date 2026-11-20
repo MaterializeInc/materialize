@@ -82,20 +82,6 @@ pub(crate) static FRONTIER_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         value_column_name: "write_frontier",
         per_replica: false,
     },
-    PrometheusSqlQuery {
-        metric_name: "mz_replica_write_frontiers",
-        help: "The per-replica write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
-                    cluster_id AS instance_id,
-                    replica_id AS replica_id
-                FROM mz_catalog.mz_cluster_replica_frontiers
-                JOIN mz_cluster_replicas ON (id = replica_id)
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-        per_replica: false,
-    },
 ];
 
 pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
