@@ -40,14 +40,16 @@ Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 
-### Scalar function registry
+### Function registry
 
 `cargo test -p mz-catalog --test builtin_registry` snapshots every
-`UnaryFunc`, `BinaryFunc`, and `VariadicFunc` variant's properties and
-`#[sqlfunc]` body fingerprint into `src/catalog/tests/snapshots/`. It
-fails when a variant is added or removed, when a recorded property changes,
-and when a `#[sqlfunc]` declaration or body changes. It records nothing for
-the bodies of hand-written variants, so a change to one of those passes.
+`UnaryFunc`, `BinaryFunc`, `VariadicFunc`, `AggregateFunc`, and `TableFunc`
+variant's properties and `#[sqlfunc]` body fingerprint into
+`src/catalog/tests/snapshots/`. It fails when a variant is added or removed,
+when a recorded property changes, and when a `#[sqlfunc]` declaration or body
+changes. It records nothing for the bodies of hand-written variants, which
+include every `AggregateFunc` and `TableFunc` variant, so a change to one of
+those passes.
 Removals and property changes to a shipped `LIR_VERSION` require a bump
 **before** regenerating, because a rewrite at the old version silently
 overwrites that version's digest. See the mz-commit skill for the decision
