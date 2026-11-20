@@ -46,6 +46,7 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, BalancerSpec},
     console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
+    materialize::LAST_KNOWN_RESOURCE_ID_ANNOTATION,
     materialize::MaterializeRolloutStrategy,
     materialize::v1alpha1::{Materialize, MaterializeStatus},
 };
@@ -332,6 +333,48 @@ impl Context {
 
         Ok(())
     }
+
+    /// Checks that no other Materialize resource uses, or is about to use,
+    /// the resource ID that `mz` asks for in its
+    /// [`LAST_KNOWN_RESOURCE_ID_ANNOTATION`].
+    ///
+    /// Resources are named after the resource ID, so two Materialize
+    /// resources sharing one would manage, and tear down, each other's
+    /// resources.
+    async fn check_resource_id_conflicts(
+        &self,
+        client: &Client,
+        mz: &Materialize,
+        resource_id: &str,
+    ) -> Result<(), Error> {
+        let mz_api: Api<Materialize> = Api::all(client.clone());
+        let all_mz = mz_api.list(&ListParams::default()).await?;
+        for existing_mz in &all_mz.items {
+            if existing_mz.metadata.uid == mz.metadata.uid {
+                continue;
+            }
+            // A resource with no status yet takes its ID from its annotation,
+            // so two new resources asking for the same ID both conflict.
+            let existing_resource_id = match &existing_mz.status {
+                Some(status) => Some(status.resource_id.as_str()),
+                None => existing_mz
+                    .annotations()
+                    .get(LAST_KNOWN_RESOURCE_ID_ANNOTATION)
+                    .map(|id| id.as_str()),
+            };
+            if existing_resource_id == Some(resource_id) {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "Materialize resource {}/{} sets the {LAST_KNOWN_RESOURCE_ID_ANNOTATION} annotation to {resource_id}, which Materialize resource {}/{} already uses. Delete the old resource first, or remove the annotation to get a new resource ID.",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                    existing_mz.namespace(),
+                    existing_mz.name_unchecked(),
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -355,16 +398,30 @@ impl k8s_controller::Context for Context {
         let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
-        let status = mz.status();
         if mz.status.is_none() {
             let step = metadata.step("initialize_status");
-            self.update_status(metadata, &mz_api, mz, status, true)
+            // The initial status can be seeded from annotations. Report bad
+            // values here, since nothing reads the annotations again once the
+            // status exists.
+            let initial = mz.initial_status_annotations().map_err(|e| {
+                Error::Anyhow(anyhow::anyhow!(
+                    "cannot initialize the status of materialize resource {}/{}: {e}",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                ))
+            })?;
+            if let Some(resource_id) = &initial.resource_id {
+                self.check_resource_id_conflicts(&client, mz, resource_id)
+                    .await?;
+            }
+            self.update_status(metadata, &mz_api, mz, mz.status(), true)
                 .await?;
             step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
         }
+        let status = mz.status();
 
         let step = metadata.step("resolve_environment_id");
         let backend_secret = secret_api.get(&mz.spec.backend_secret_name).await?;

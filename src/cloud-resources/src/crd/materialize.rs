@@ -30,14 +30,64 @@ use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{ManagedResource, MaterializeCertSpec, is_valid_resource_id, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
+pub const LAST_KNOWN_RESOURCE_ID_ANNOTATION: &str = "materialize.cloud/last-known-resource-id";
 pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
+
+/// Values for a Materialize resource's initial status, taken from the old
+/// resource's status when a resource is recreated on existing data.
+///
+/// These are read from annotations only when the status is first created.
+/// Changing the annotations afterward has no effect.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InitialStatusAnnotations {
+    /// From [`LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION`]. Without it, the
+    /// environment would crash loop indefinitely, as its catalog durably
+    /// recorded a greater generation.
+    pub active_generation: Option<u64>,
+    /// From [`LAST_KNOWN_RESOURCE_ID_ANNOTATION`]. Without it, the resource
+    /// gets a new random ID, and so new names for everything named after it,
+    /// such as its services.
+    pub resource_id: Option<String>,
+}
+
+impl InitialStatusAnnotations {
+    pub fn parse(annotations: &BTreeMap<String, String>) -> Result<Self, anyhow::Error> {
+        let active_generation = annotations
+            .get(LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION)
+            .map(|generation| {
+                generation.parse().map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid {LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION} annotation {generation:?}: must be a non-negative integer"
+                    )
+                })
+            })
+            .transpose()?;
+        let resource_id = annotations
+            .get(LAST_KNOWN_RESOURCE_ID_ANNOTATION)
+            .map(|resource_id| {
+                if is_valid_resource_id(resource_id) {
+                    Ok(resource_id.clone())
+                } else {
+                    Err(anyhow::anyhow!(
+                        "invalid {LAST_KNOWN_RESOURCE_ID_ANNOTATION} annotation {resource_id:?}: must be the status.resourceId of a previous Materialize resource (10 lowercase letters or digits)"
+                    ))
+                }
+            })
+            .transpose()?;
+        Ok(Self {
+            active_generation,
+            resource_id,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum MaterializeRolloutStrategy {
@@ -781,23 +831,31 @@ pub mod v1alpha1 {
             }
         }
 
+        /// Parses the annotations that seed the initial status.
+        ///
+        /// Call this before creating the initial status, to report invalid
+        /// values, which [`Self::status`] ignores.
+        pub fn initial_status_annotations(
+            &self,
+        ) -> Result<InitialStatusAnnotations, anyhow::Error> {
+            InitialStatusAnnotations::parse(self.annotations())
+        }
+
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
 
-                status.resource_id = new_resource_id();
+                // If we're creating the initial status on a recreated
+                // Environment, restore what the old resource's status held.
+                let initial = self.initial_status_annotations().unwrap_or_else(|e| {
+                    warn!("ignoring initial status annotations: {e}");
+                    InitialStatusAnnotations::default()
+                });
 
-                // If we're creating the initial status on an un-soft-deleted
-                // Environment we need to ensure that the last active generation
-                // is restored, otherwise the env will crash loop indefinitely
-                // as its catalog would have durably recorded a greater generation
-                if let Some(last_active_generation) = self
-                    .annotations()
-                    .get(LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION)
-                {
-                    status.active_generation = last_active_generation
-                        .parse()
-                        .expect("valid int generation");
+                status.resource_id = initial.resource_id.unwrap_or_else(new_resource_id);
+
+                if let Some(active_generation) = initial.active_generation {
+                    status.active_generation = active_generation;
                 }
 
                 // Initialize the last completed rollout environmentd image ref to
@@ -2094,23 +2152,31 @@ pub mod v1 {
             }
         }
 
+        /// Parses the annotations that seed the initial status.
+        ///
+        /// Call this before creating the initial status, to report invalid
+        /// values, which [`Self::status`] ignores.
+        pub fn initial_status_annotations(
+            &self,
+        ) -> Result<InitialStatusAnnotations, anyhow::Error> {
+            InitialStatusAnnotations::parse(self.annotations())
+        }
+
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
 
-                status.resource_id = new_resource_id();
+                // If we're creating the initial status on a recreated
+                // Environment, restore what the old resource's status held.
+                let initial = self.initial_status_annotations().unwrap_or_else(|e| {
+                    warn!("ignoring initial status annotations: {e}");
+                    InitialStatusAnnotations::default()
+                });
 
-                // If we're creating the initial status on an un-soft-deleted
-                // Environment we need to ensure that the last active generation
-                // is restored, otherwise the env will crash loop indefinitely
-                // as its catalog would have durably recorded a greater generation
-                if let Some(last_active_generation) = self
-                    .annotations()
-                    .get(LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION)
-                {
-                    status.active_generation = last_active_generation
-                        .parse()
-                        .expect("valid int generation");
+                status.resource_id = initial.resource_id.unwrap_or_else(new_resource_id);
+
+                if let Some(active_generation) = initial.active_generation {
+                    status.active_generation = active_generation;
                 }
 
                 // Initialize the last completed rollout environmentd image ref to
@@ -2979,7 +3045,87 @@ mod tests {
     use semver::Version;
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
-    use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
+    use super::{
+        DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION,
+        LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, LAST_KNOWN_RESOURCE_ID_ANNOTATION,
+        RolloutRequestTimeout,
+    };
+
+    #[mz_ore::test]
+    fn initial_status_from_annotations() {
+        let mz = |annotations: &[(&str, &str)]| Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                annotations: Some(
+                    annotations
+                        .iter()
+                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        // Without the annotations, the resource ID is random and the
+        // generation starts at 0.
+        let status = mz(&[]).status();
+        assert!(crate::crd::is_valid_resource_id(&status.resource_id));
+        assert_eq!(status.active_generation, 0);
+
+        // Both annotations seed the initial status.
+        let restored = mz(&[
+            (LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, "3"),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "abcde01234"),
+        ]);
+        restored.initial_status_annotations().unwrap();
+        let status = restored.status();
+        assert_eq!(status.resource_id, "abcde01234");
+        assert_eq!(status.active_generation, 3);
+
+        // The v1 resource reads them the same way.
+        let status = super::v1::Materialize {
+            spec: Default::default(),
+            metadata: restored.metadata.clone(),
+            status: None,
+        }
+        .status();
+        assert_eq!(status.resource_id, "abcde01234");
+        assert_eq!(status.active_generation, 3);
+
+        // An existing status wins over the annotations.
+        let mut existing = restored.clone();
+        existing.status = Some(MaterializeStatus {
+            resource_id: "zzzzz99999".to_owned(),
+            active_generation: 7,
+            ..Default::default()
+        });
+        let status = existing.status();
+        assert_eq!(status.resource_id, "zzzzz99999");
+        assert_eq!(status.active_generation, 7);
+
+        // Invalid values are reported, and never panic or reach the status.
+        for (annotation, value) in [
+            (LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, "two"),
+            (LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, "-1"),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, ""),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "short"),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "ABCDE01234"),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "abcde-1234"),
+            (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "abcde012345"),
+        ] {
+            let invalid = mz(&[(annotation, value)]);
+            let err = invalid.initial_status_annotations().unwrap_err();
+            assert!(err.to_string().contains(annotation), "{err}");
+            let status = invalid.status();
+            assert!(crate::crd::is_valid_resource_id(&status.resource_id));
+            assert_ne!(status.resource_id, value);
+            assert_eq!(status.active_generation, 0);
+        }
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
