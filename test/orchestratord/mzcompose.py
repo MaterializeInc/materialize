@@ -37,6 +37,7 @@ from psycopg import sql as psycopg_sql
 from semver.version import Version
 
 from materialize import MZ_ROOT, buildkite, ci_util, spawn
+from materialize.docker import image_suffix
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -122,7 +123,26 @@ def get_version(tag: str | None = None) -> MzVersion:
 
 
 def get_image(image: str, tag: str | None) -> str:
-    return f"{image.rsplit(':', 1)[0]}:{get_tag(tag)}"
+    name = image.rsplit(":", 1)[0].removesuffix(image_suffix())
+    return f"{name}:{get_tag(tag)}"
+
+
+def load_images_into_kind(c: Composition) -> None:
+    """Load this build's images into the kind cluster."""
+    services = [
+        "orchestratord",
+        "environmentd",
+        "clusterd",
+        "console",
+        "balancerd",
+    ]
+    c.pull_images(*services)
+    images = [
+        get_image(c.compose["services"][service]["image"], None) for service in services
+    ]
+    for service, image in zip(services, images):
+        spawn.runv(["docker", "tag", c.compose["services"][service]["image"], image])
+    spawn.runv(["kind", "load", "docker-image", "--name", KIND_CLUSTER_NAME] + images)
 
 
 def get_upgrade_target(
@@ -2648,6 +2668,8 @@ def workflow_documentation_defaults(
             shutil.rmtree(dir)
         os.mkdir(dir)
         recreate_kind_cluster()
+        if image_suffix():
+            load_images_into_kind(c)
 
         helm_install_cert_manager()
 
@@ -5273,30 +5295,7 @@ def setup(c: Composition, args) -> dict[str, Any]:
         )
 
     if not args.tag:
-        services = [
-            "orchestratord",
-            "environmentd",
-            "clusterd",
-            "console",
-            "balancerd",
-        ]
-        c.pull_images(*services)
-        for service in services:
-            spawn.runv(
-                [
-                    "docker",
-                    "tag",
-                    c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service]["image"], None),
-                ]
-            )
-        spawn.runv(
-            ["kind", "load", "docker-image", "--name", cluster]
-            + [
-                get_image(c.compose["services"][service]["image"], None)
-                for service in services
-            ]
-        )
+        load_images_into_kind(c)
 
     definition: dict[str, Any] = {}
 

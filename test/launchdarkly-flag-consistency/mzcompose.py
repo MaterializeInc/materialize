@@ -65,6 +65,7 @@ from typing import Any
 import launchdarkly_api
 from launchdarkly_api.api import feature_flags_api
 
+from materialize.docker import mz_image
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -907,7 +908,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     #    still relies on. `MzVersion`'s string already carries the `v` prefix.
     try:
         previous_version = get_latest_published_version()
-        previous_image = f"materialize/materialized:{previous_version}"
+        previous_image = mz_image("materialized", previous_version)
         previous = collect_synced_parameters(
             c, image=previous_image, label=f"release {previous_version}"
         )

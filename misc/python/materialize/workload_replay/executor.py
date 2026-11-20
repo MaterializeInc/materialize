@@ -22,7 +22,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from materialize.docker import image_registry
+from materialize.docker import mz_image
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.test_result import (
@@ -398,7 +398,7 @@ def benchmark(
     tables = []
     # A fast baseline can also produce a false regression, so rerun both versions.
     for attempt in range(1, 3):
-        stats_old, old_version = run(f"{image_registry()}/materialized:{tag}")
+        stats_old, old_version = run(mz_image("materialized", tag))
         stats_new, new_version = run(None)
         print(f"-- Comparing {old_version} against {new_version}, attempt {attempt}")
         plot_docker_stats_compare(
