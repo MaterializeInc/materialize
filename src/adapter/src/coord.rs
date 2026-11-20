@@ -1100,6 +1100,7 @@ pub enum CreateMaterializedViewStage {
 #[derive(Debug)]
 pub struct CreateMaterializedViewOptimize {
     validity: PlanValidity,
+    planning_revision: u64,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
@@ -1114,6 +1115,7 @@ pub struct CreateMaterializedViewFinish {
     /// The ID of the durable pTVC backing this Materialized View.
     global_id: GlobalId,
     validity: PlanValidity,
+    planning_revision: u64,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,

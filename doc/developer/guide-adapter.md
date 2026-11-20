@@ -109,6 +109,12 @@ Optimization completion preserves the original planning revision through plan
 publication and commit. If asynchronous optimization is invalidated, release DDL
 admission before replanning so a queued statement can take its turn.
 
+MV allocation also retains purification's transaction-owned holds across backoff.
+For fixed REFRESH/AS OF births, structural invalidation returns a serialization
+error rather than repurifying the statement. Re-evaluating AT CREATION would
+silently choose a different snapshot. Metadata-only retries retain the chosen
+timestamp. Automatic births may replan, and EXPLAIN remains transient.
+
 Dequeuing serialized DDL reserves its existing guard before asynchronous catalog
 certification. Resume below transaction setup and lock acquisition, but recheck
 freshness and the live revision before name resolution. A wakeup is not an admission

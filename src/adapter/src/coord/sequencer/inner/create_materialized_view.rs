@@ -117,7 +117,7 @@ impl Staged for CreateMaterializedViewStage {
             phase, "CREATE MV stage started");
         let result = match self {
             CreateMaterializedViewStage::Optimize(stage) => {
-                coord.create_materialized_view_optimize(stage).await
+                coord.create_materialized_view_optimize(ctx, stage).await
             }
             CreateMaterializedViewStage::Finish(stage) => {
                 coord.create_materialized_view_finish(ctx, stage).await
@@ -511,6 +511,7 @@ impl Coordinator {
         Ok(CreateMaterializedViewStage::Optimize(
             CreateMaterializedViewOptimize {
                 validity,
+                planning_revision: self.catalog().transient_revision(),
                 plan,
                 resolved_ids,
                 explain_ctx,
@@ -521,13 +522,49 @@ impl Coordinator {
     #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
-        CreateMaterializedViewOptimize {
+        ctx: &ExecuteContext,
+        stage: CreateMaterializedViewOptimize,
+    ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        let mv = &stage.plan.materialized_view;
+        let fixed_birth = matches!(stage.explain_ctx, ExplainContext::None)
+            && (mv.refresh_schedule.is_some() || mv.as_of.is_some());
+        // Purification has already fixed a refresh timestamp. Replanning raw
+        // SQL could evaluate AT CREATION again at a different snapshot.
+        let invalidated = || {
+            if fixed_birth {
+                AdapterError::DDLTransactionRace
+            } else {
+                AdapterError::CatalogSnapshotChanged
+            }
+        };
+        if self.catalog().transient_revision() != stage.planning_revision {
+            return Err(invalidated());
+        }
+        let (item_id, global_id) = if matches!(stage.explain_ctx, ExplainContext::None) {
+            let ids = self.try_allocate_user_id().await?;
+            if self.catalog().transient_revision() != stage.planning_revision {
+                self.release_ddl_lock(ctx.session().conn_id());
+                return Err(invalidated());
+            }
+            let Some(ids) = ids else {
+                self.release_ddl_lock(ctx.session().conn_id());
+                let delay = self.read_protection_conflict_delay();
+                return Ok(StageResult::Await(Box::pin(async move {
+                    tokio::time::sleep(delay).await;
+                    Ok(Box::new(CreateMaterializedViewStage::Optimize(stage)))
+                })));
+            };
+            ids
+        } else {
+            self.allocate_transient_id()
+        };
+        let CreateMaterializedViewOptimize {
             validity,
+            planning_revision,
             plan,
             resolved_ids,
             explain_ctx,
-        }: CreateMaterializedViewOptimize,
-    ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        } = stage;
         let plan::CreateMaterializedViewPlan {
             name,
             materialized_view:
@@ -541,16 +578,10 @@ impl Coordinator {
             ..
         } = &plan;
 
-        // Collect optimizer parameters.
+        // Allocation may apply peer definitions. Snapshot only after revalidation.
         let compute_instance = self
             .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            self.allocate_user_id().await?
-        } else {
-            self.allocate_transient_id()
-        };
-
         let (_, view_id) = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -616,6 +647,7 @@ impl Coordinator {
                                     item_id,
                                     global_id,
                                     validity,
+                                    planning_revision,
                                     plan,
                                     resolved_ids,
                                     local_mir_plan,
@@ -655,6 +687,7 @@ impl Coordinator {
                         }
                     };
 
+                    fail::fail_point!("create_materialized_view_optimization_complete");
                     Ok(Box::new(stage))
                 })
             },
@@ -667,6 +700,19 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         mut stage: CreateMaterializedViewFinish,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        let automatic_birth = stage.plan.materialized_view.refresh_schedule.is_none()
+            && stage.plan.materialized_view.as_of.is_none();
+        let invalidated = || {
+            if automatic_birth {
+                AdapterError::CatalogSnapshotChanged
+            } else {
+                AdapterError::DDLTransactionRace
+            }
+        };
+        if self.catalog().transient_revision() != stage.planning_revision {
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(invalidated());
+        }
         // Validate the replacement target, if one is given.
         if let Some(target_id) = stage.plan.materialized_view.replacement_target {
             let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
@@ -684,7 +730,6 @@ impl Coordinator {
         }
 
         let mv = &stage.plan.materialized_view;
-        let automatic_birth = mv.refresh_schedule.is_none() && mv.as_of.is_none();
         let cluster_id = mv.cluster_id;
         if automatic_birth
             && stage
@@ -706,7 +751,7 @@ impl Coordinator {
             // Optimization runs off-thread. A changed access path requires
             // replanning, but advancing input permission does not.
             self.release_ddl_lock(ctx.session().conn_id());
-            return Err(AdapterError::CatalogSnapshotChanged);
+            return Err(invalidated());
         }
         let logical_inputs = self.materialized_view_logical_inputs(
             mv.query_ids
@@ -761,8 +806,14 @@ impl Coordinator {
             }
         };
 
+        // Protection acquisition can apply peer definitions as well.
+        if self.catalog().transient_revision() != stage.planning_revision {
+            self.release_ddl_lock(ctx.session().conn_id());
+            return Err(invalidated());
+        }
         let CreateMaterializedViewFinish {
             validity,
+            planning_revision,
             item_id,
             global_id,
             plan:
@@ -895,7 +946,6 @@ impl Coordinator {
         // selected imports through commit, not just its logical inputs.
         let physical_read_holds = if let Some((dataflow_as_of, initial_as_of, _)) = &birth {
             let client = self.query_client.clone().expect("serving query client");
-            let planning_revision = self.catalog().transient_revision();
             let (candidate, _) = loop {
                 match self
                     .catalog()
@@ -1084,7 +1134,7 @@ impl Coordinator {
             return Ok(StageResult::Immediate(Box::new(
                 CreateMaterializedViewStage::Commit(crate::coord::CreateMaterializedViewCommit {
                     validity,
-                    planning_revision: self.catalog().transient_revision(),
+                    planning_revision,
                     ops,
                     prepared: None,
                     raw_df_meta,

@@ -44,6 +44,7 @@ async fn test_catalog_completion() {
     let test_case = async {
         let server = test_util::TestHarness::default()
             .with_system_parameter_default("user_id_pool_batch_size".into(), "1".into())
+            .with_system_parameter_default("enable_refresh_every_mvs".into(), "true".into())
             .start()
             .await;
         let client = server.connect().await.unwrap();
@@ -411,6 +412,97 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
     )
     .await;
 
+    batch_execute(&admin, sql!("SET cluster = quickstart"))
+        .await
+        .unwrap();
+    complete_under_catalog_contention(
+        server,
+        &mut *peer,
+        CatalogConflict::IdAllocation,
+        "MV ID pool refill",
+        batch_execute(
+            &admin,
+            sql!("CREATE MATERIALIZED VIEW refill_mv AS SELECT sum(a) AS n FROM existing_table"),
+        ),
+    )
+    .await
+    .unwrap();
+    let sum: i64 = query_one(&admin, sql!("SELECT n FROM refill_mv"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(sum, 84);
+
+    batch_execute(&admin, sql!("CREATE TABLE refresh_input (a int)"))
+        .await
+        .unwrap();
+    batch_execute(&admin, sql!("INSERT INTO refresh_input VALUES (5)"))
+        .await
+        .unwrap();
+    let writer = server.connect().internal().await.unwrap();
+    complete_under_catalog_contention_with_probe(
+        &mut *peer, CatalogConflict::IdAllocation, "fixed-refresh MV ID pool refill",
+        batch_execute(&admin, sql!("CREATE MATERIALIZED VIEW refill_refresh_mv WITH (REFRESH AT CREATION) AS SELECT a FROM refresh_input")),
+        async {
+            batch_execute(&writer, sql!("UPDATE refresh_input SET a = 9"))
+                .await.unwrap();
+        },
+    ).await.unwrap();
+    let refreshed: i32 = query_one(&admin, sql!("SELECT a FROM refill_refresh_mv"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        refreshed, 5,
+        "fixed refresh must retain its pre-write snapshot across allocation backoff"
+    );
+    let current: i32 = query_one(&writer, sql!("SELECT a FROM refresh_input"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(current, 9);
+
+    batch_execute(
+        &admin,
+        sql!("CREATE TYPE mv_input_list AS LIST (ELEMENT TYPE = int)"),
+    )
+    .await
+    .unwrap();
+    let reservations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&reservations);
+    let hook = RemoveCatalogHook("user_id_pool_after_refill");
+    fail::cfg_callback(hook.0, move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+    let explanation = query_one(
+        &admin,
+        sql!("EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW explained_mv AS SELECT LIST[a]::mv_input_list AS xs FROM existing_table"),
+        &[],
+    ).await.unwrap();
+    drop(hook);
+    assert!(explanation.get::<_, String>(0).contains("existing_table"));
+    assert_eq!(
+        reservations.load(Ordering::SeqCst),
+        0,
+        "MV EXPLAIN must remain transient"
+    );
+    peer.sync_to_current_updates().await.unwrap();
+    assert!(
+        !peer
+            .snapshot()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|(key, value)| Item::from_key_value(key, value))
+            .any(|item| item.name == "explained_mv")
+    );
+    reject_stale_definition_after_refill(
+        &admin, &mut *peer, "mv_input_list", "stale_mv",
+        sql!("CREATE MATERIALIZED VIEW stale_mv AS SELECT LIST[a]::mv_input_list AS xs FROM existing_table"),
+    ).await;
+
     complete_under_catalog_contention(
         server,
         &mut *peer,
@@ -606,17 +698,42 @@ async fn check_catalog_contention(server: &test_util::TestServer) {
     assert_eq!(preserved.get::<_, String>(1), rule.get::<_, String>(1));
     for (hook, type_name, setup, creation, waiter) in [
         (
+            "create_materialized_view_optimization_complete",
+            "fixed_mv_revision_bump",
+            sql!("CREATE TYPE fixed_mv_revision_bump AS LIST (ELEMENT TYPE = int)"),
+            (
+                sql!(
+                    "CREATE MATERIALIZED VIEW fixed_admission_mv WITH (REFRESH AT CREATION) AS SELECT a FROM refresh_input"
+                ),
+                true,
+            ),
+            sql!("CREATE ROLE fixed_mv_admission_waiter"),
+        ),
+        (
+            "create_materialized_view_optimization_complete",
+            "mv_revision_bump",
+            sql!("CREATE TYPE mv_revision_bump AS LIST (ELEMENT TYPE = int)"),
+            (
+                sql!("CREATE MATERIALIZED VIEW admission_mv AS SELECT 19 AS n"),
+                false,
+            ),
+            sql!("CREATE ROLE mv_admission_waiter"),
+        ),
+        (
             "create_index_optimization_complete",
             "index_revision_bump",
             sql!("CREATE TYPE index_revision_bump AS LIST (ELEMENT TYPE = int)"),
-            sql!("CREATE INDEX admission_index ON existing_table (a)"),
+            (
+                sql!("CREATE INDEX admission_index ON existing_table (a)"),
+                false,
+            ),
             sql!("CREATE ROLE index_admission_waiter"),
         ),
         (
             "create_view_optimization_complete",
             "view_revision_bump",
             sql!("CREATE TYPE view_revision_bump AS LIST (ELEMENT TYPE = int)"),
-            sql!("CREATE VIEW admission_view AS SELECT 17 AS n"),
+            (sql!("CREATE VIEW admission_view AS SELECT 17 AS n"), false),
             sql!("CREATE ROLE view_admission_waiter"),
         ),
     ] {
@@ -727,10 +844,20 @@ async fn yield_after_invalidated_optimization(
     optimization_hook: &'static str,
     type_name: &str,
     setup: Sql,
-    creation: Sql,
+    creation: (Sql, bool),
     waiter: Sql,
 ) {
-    let creator = server.connect().await.unwrap();
+    let (creation, fixed_birth) = creation;
+    let creator = if fixed_birth {
+        server.connect().internal().await.unwrap()
+    } else {
+        server.connect().await.unwrap()
+    };
+    if fixed_birth {
+        batch_execute(&creator, sql!("SET cluster = quickstart"))
+            .await
+            .unwrap();
+    }
     let waiter_client = server.connect().await.unwrap();
     let observer = server.connect().await.unwrap();
     batch_execute(&creator, setup).await.unwrap();
@@ -762,6 +889,9 @@ async fn yield_after_invalidated_optimization(
     })
     .unwrap();
     let release = ReleaseCandidate(resume_tx);
+    let allocation_hook = RemoveCatalogHook("user_id_pool_before_allocate");
+    let replans = Arc::new(AtomicUsize::new(0));
+    let replan_attempts = Arc::clone(&replans);
     let control = async move {
         parked_rx
             .await
@@ -783,9 +913,9 @@ async fn yield_after_invalidated_optimization(
         .unwrap();
         // Check before allocation can conflict and release admission itself.
         // Otherwise allocator backoff could mask a missing Finish release.
-        let allocation_hook = RemoveCatalogHook("user_id_pool_before_allocate");
         let replanned = Mutex::new(Some(replanned_tx));
-        fail::cfg_callback(allocation_hook.0, move || {
+        fail::cfg_callback("user_id_pool_before_allocate", move || {
+            replan_attempts.fetch_add(1, Ordering::SeqCst);
             let pending = replanned.lock().unwrap().take();
             if let Some(replanned) = pending {
                 let _ = replanned.send(observed.load(Ordering::SeqCst) > 0);
@@ -809,13 +939,14 @@ async fn yield_after_invalidated_optimization(
             assert!(current.try_get_entry(&type_id).is_none());
             assert_ne!(current.transient_revision(), revision);
             drop(release);
-            assert!(
-                replanned_rx
-                    .await
-                    .expect("creator did not restart allocation"),
-                "{optimization_hook}: invalidated optimization bypassed queued DDL",
-            );
-            drop(allocation_hook);
+            if !fixed_birth {
+                assert!(
+                    replanned_rx
+                        .await
+                        .expect("creator did not restart allocation"),
+                    "{optimization_hook}: invalidated optimization bypassed queued DDL",
+                );
+            }
             drop(admission_hook);
         };
         // Admission, rather than acknowledgement ordering, is the contract.
@@ -823,7 +954,28 @@ async fn yield_after_invalidated_optimization(
         let ((), result) = tokio::join!(exercise, batch_execute(&waiter_client, waiter));
         result
     };
-    tokio::try_join!(control, batch_execute(&creator, creation)).unwrap();
+    let creation = async {
+        let result = batch_execute(&creator, creation).await;
+        if fixed_birth {
+            let error = result.expect_err("fixed refresh must not repurify after invalidation");
+            let mz_postgres_util::PostgresError::Postgres(error) = error else {
+                panic!("expected SQL serialization failure, got {error:?}");
+            };
+            assert_eq!(error.as_db_error().unwrap().code().code(), "40001");
+            Ok(())
+        } else {
+            result
+        }
+    };
+    tokio::try_join!(control, creation).unwrap();
+    if fixed_birth {
+        assert_eq!(
+            replans.load(Ordering::SeqCst),
+            0,
+            "fixed refresh must not restart allocation"
+        );
+    }
+    drop(allocation_hook);
     drop(hook);
 }
 
@@ -886,6 +1038,19 @@ async fn complete_under_catalog_contention<T, E: std::fmt::Debug>(
     name: &str,
     operation: impl std::future::Future<Output = Result<T, E>>,
 ) -> Result<T, E> {
+    complete_under_catalog_contention_with_probe(peer, conflict, name, operation, async {
+        server.inner.adapter_client().get_system_vars().await;
+    })
+    .await
+}
+
+async fn complete_under_catalog_contention_with_probe<T, E: std::fmt::Debug>(
+    peer: &mut dyn DurableCatalogState,
+    conflict: CatalogConflict,
+    name: &str,
+    operation: impl std::future::Future<Output = Result<T, E>>,
+    probe: impl std::future::Future<Output = ()>,
+) -> Result<T, E> {
     let (candidate_tx, mut candidates) = tokio::sync::mpsc::unbounded_channel();
     let hook = RemoveCatalogHook(conflict.failpoint());
     fail::cfg_callback(hook.0, move || {
@@ -929,11 +1094,7 @@ async fn complete_under_catalog_contention<T, E: std::fmt::Debug>(
         }
         assert!(futures::poll!(&mut operation).is_pending());
 
-        let responsive = tokio::time::timeout(
-            Duration::from_secs(5),
-            server.inner.adapter_client().get_system_vars(),
-        )
-        .await;
+        let responsive = tokio::time::timeout(Duration::from_secs(5), probe).await;
         drop(hook);
         let result = tokio::time::timeout(Duration::from_secs(30), operation)
             .await

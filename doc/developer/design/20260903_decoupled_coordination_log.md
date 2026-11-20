@@ -7,47 +7,41 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-Login, network-policy, TYPE, VIEW and INDEX writes now yield during peer
-contention while retaining preparation in their existing owners. INDEX preserves
-its original planning revision through allocation and publication. INDEX and VIEW
-release admission before replanning invalidated optimization, allowing queued DDL
-its turn. Targeted controls, restored-code checks, independent review, scoped lint
-and formatting passed. EXPLAIN retains each statement's existing allocation and
-transaction behavior. Evidence: `startup-retry-verification.md`,
-`network-policy-verification.md`, `type-verification.md`, `view-verification.md`
-and `index-verification.md`.
+Staged SQL allocation/commit repairs now cover TYPE, VIEW, INDEX and MV
+allocation, alongside login, policy and declaration owners. MV allocation yields
+without losing fixed-refresh protection. Structural invalidation rejects a fixed
+birth instead of repurifying AT CREATION. Independent review, targeted controls,
+restored-code checks, lint and formatting passed. Evidence:
+`mv-refill-verification.md` and the preceding owner verification reports.
 
-**Next action:** convert CREATE MATERIALIZED VIEW's inline pool refill through
-its existing Optimize stage. Preserve original planning revision, transient
-EXPLAIN and fixed-refresh holds across allocation backoff. See
-`index-mv-refill-owner-audit.md`. Fixed-birth final commit and native plan
-publication remain separate pending work. Testing failpoints are approved.
+**Next action:** implement the approved replica metadata-only reconstruction
+boundary. Preserve definitions, SQL types/dependencies, authority and selected
+plans while avoiding ordinary builtin-view MIR optimization. Exact storage and
+execution schemas remain required. Bring back any need for new durable metadata
+or a broader boundary. See `replica-metadata-boundary-proposal.md`.
 
-Run final-head native acceptance and the compatible version-pair walkthrough after
-the retry work, not after each small change.
+The M3 scheduling cut is approved. Do not resume statement-by-statement retry
+conversions. `remaining-inline-owner-inventory.md` records deferred runtime and
+startup limitations. This does not defer native-only removal or final acceptance.
+Run final-head native lifecycle/progress and the compatible-version walkthrough
+after the remaining native work, not after each small change.
 
-The replica catalog-open attribution is complete. Bring the proposed metadata-only
-replica boundary back for approval before implementation. Do not change Persist,
-publication cadence, readiness intervals or resource limits.
+M2, the 60s publication default and existing resource limits remain closed.
 
 ## Live gaps and constraints
 
 - Scratch access and clock synchronization are repaired. The replacement worker
-  has the current targeted fixture. Native binaries predate the INDEX repair and
+  has the current targeted fixture. Native binaries predate the staged SQL repairs and
   need rebuilding for final acceptance. Completed runtimes stopped
   and caps were restored. Keep builds off the editing VM and preserve existing caps.
 - Repository-wide formatting fails on an unchanged tracing macro in
   `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
   checks pass. See `plan-introspection-red-green.md`.
-- Plan publication still contains an unprotected-environment alternative and a
-  coordinator await. `plan-publication-native-audit.md` identifies three native
-  SQL callers and the removable fallback. Preserve unprotected diagnostic catalogs
-  and low-level storage tests. Publication continuations must retain fixed MV
-  holds and revalidate metric-sink preparation. Rewrite publication is a separate
-  scope decision. None of these audit recommendations is implemented.
-- SQL owners with separate completion effects remain in the conditional-write
-  retry survey. No finite overall login retry limit or strict/fail-open
-  authentication policy change is approved.
+- Native item-plan admission still has an unprotected optional-cache fallback.
+  Remove that execution alternative without removing diagnostic catalogs or
+  low-level storage APIs. `plan-publication-native-audit.md` identifies the boundary.
+  Moving publication waits and further retry owners are deferred by the approved
+  cut. No finite overall login retry limit or authentication-policy change is approved.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
   failure after a fixed 5s wait. Its exact rerun passed without changes, but the
   cause remains unresolved. Include the refresh-scheduled MV case in final
@@ -80,8 +74,9 @@ at 7.986s versus 12.736s. Shutdown and promotion-only relaunch repairs remove fi
 waits. Fresh startup remains 54.326s versus pinned upstream's 30.271s. These are
 single observations with topology/readiness qualifications, not final acceptance.
 Cold profiling attributes 70.88 replica CPU-seconds to ordinary builtin-view
-optimization. No metadata-only replica implementation is approved. See
-`startup-readiness-comparison.md` and `catalog-function-costs.md`.
+optimization, with zero cold ordinary-view cache hits out of 844 decisions.
+The metadata boundary is approved but not implemented or measured after change.
+See `replica-metadata-boundary-proposal.md` for phase times and schema constraints.
 The broader launcher suite still has background panics in its image-replacement
 fixture, so it is not clean coverage of that behavior.
 
@@ -115,7 +110,7 @@ the user slice. Extend this owned worker within existing caps when needed.
 Local evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Native worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, base `6a209637` plus the verified
-TYPE, VIEW and INDEX overlays. `index-verified-source-remote.json` and earlier
+TYPE, VIEW, INDEX and MV overlays. `mv-refill-restored-source-v1.json` and earlier
 source receipts identify tested code. Trust them rather than the displayed Git revision.
 The previous worker's build cache and baseline worktree expired. The baseline
 remains pinned at `d9a2c5dc402fd9fa359607305669d05f27215cc4` and needs reconstruction
@@ -147,8 +142,6 @@ Essential pointers:
 - `startup-readiness-comparison.md` links prior native before/after evidence and
   the upstream comparison. Prior native timing binaries were removed, manifests
   retained. Those timings predate cache pruning and MV admission cleanup.
-- Scratch `controller-followups/{dependency-refresh-repro,startup-base-debug}/`
-  contains private binaries and manifests for the completed witnesses.
 - `cold-catalog-profile-evidence/` and its archive contain completed CPU capture,
   raw samples, PID mappings and throttling. The comparison report records profiler
   limitations and the failed initial capture.

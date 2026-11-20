@@ -371,8 +371,18 @@ impl Coordinator {
                 }
             }
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
-                // Commit Ready messages only come from backoff that released admission.
-                if matches!(stage, super::CreateMaterializedViewStage::Commit(_)) {
+                // Allocation/commit backoff releases admission. Fixed-birth
+                // protection waits and transient EXPLAIN retain their own paths.
+                if matches!(
+                    &stage,
+                    super::CreateMaterializedViewStage::Commit(_)
+                        | super::CreateMaterializedViewStage::Optimize(
+                            super::CreateMaterializedViewOptimize {
+                                explain_ctx: super::ExplainContext::None,
+                                ..
+                            }
+                        )
+                ) {
                     self.defer_catalog_retry(
                         ctx,
                         super::PlanStatement::CreateMaterializedView {
