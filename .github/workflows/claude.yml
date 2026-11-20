@@ -35,8 +35,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read # Checks out the PR branch and reads PR context.
-      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
+      issues: write # Posts Claude's reply on issues and PR timelines.
+      pull-requests: write # Posts Claude's reply on PRs and reads PR context.
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
@@ -54,6 +54,8 @@ jobs:
         uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          additional_permissions: |
-            actions: read
-          claude_args: '--allowed-tools "Bash(gh pr:*)" Edit Read Glob Grep'
+          # Claude reads PR content written by anyone, including forks. Without
+          # this the action uses the Claude App token, which can push branches
+          # and merge PRs. The job token cannot write repository contents.
+          github_token: ${{ github.token }}
+          claude_args: '--allowed-tools "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" Edit Read Glob Grep'
