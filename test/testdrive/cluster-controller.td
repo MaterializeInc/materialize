@@ -1052,6 +1052,16 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 > SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
 0
 
+# SQL-564: scheduling an accepted configuration must not reauthorize its size.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=2'
+
+! CREATE CLUSTER cc_disallowed SIZE 'scale=1,workers=1'
+contains:unknown cluster replica size scale=1,workers=1
+
+! ALTER CLUSTER cc_sched SET (SIZE = 'scale=2,workers=2')
+contains:unknown cluster replica size scale=2,workers=2
+
 # Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh window
 # (it must rehydrate ahead of each refresh), so the controller brings up exactly one
 # replica at the cluster size. The replication factor still reads 0 (it is the
@@ -1091,6 +1101,9 @@ drop retired true
 
 > DROP TABLE sched_t
 > DROP CLUSTER cc_sched
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET allowed_cluster_replica_sizes
 
 # A config-shape ALTER on a scheduled cluster takes the direct path: no
 # reconfiguration record is written (so no lifecycle transition is audited),
@@ -1382,6 +1395,14 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 
 > CREATE CLUSTER cc_burst_e2e (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
 
+# The retained hydration size remains realizable after the allow-list shrinks,
+# but a new policy using it must still be rejected by DDL authorization.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1', 'scale=1,workers=2'
+
+! CREATE CLUSTER cc_burst_disallowed (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+contains:unknown cluster replica size scale=2,workers=2
+
 > CREATE TABLE cc_burst_e2e_t (id int)
 
 > INSERT INTO cc_burst_e2e_t VALUES (1)
@@ -1416,6 +1437,15 @@ started scale=2,workers=2
 ! ALTER CLUSTER cc_burst_e2e SET (MANAGED = false)
 contains:cannot convert cluster to unmanaged while a hydration burst is in progress
 
+# An allowed resize must progress without waiting for the retained burst to
+# retire. The sleeping view keeps all three replicas unhydrated.
+> ALTER CLUSTER cc_burst_e2e SET (SIZE = 'scale=1,workers=2')
+
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_burst_e2e'
+scale=1,workers=1
+scale=1,workers=2
+scale=2,workers=2
+
 # RESET tears the burst down: the record clears with a finished event, the
 # burst replica is retired, and the relation row disappears with the policy.
 > ALTER CLUSTER cc_burst_e2e RESET (AUTO SCALING STRATEGY)
@@ -1432,6 +1462,9 @@ no-longer-warranted
 > DROP CLUSTER cc_burst_e2e CASCADE
 
 > DROP TABLE cc_burst_e2e_t
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET allowed_cluster_replica_sizes
 
 # NOTE: The next section covers a singleton source riding a hydration burst,
 # which requires the two-cluster replica topology: on a unified cluster the
@@ -1587,14 +1620,43 @@ ALTER SYSTEM RESET enable_unified_cluster
 
 # ----- Direct-path invariants on scheduled clusters -----
 
-# Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
-# rather than failing replication-factor validation, and the controller then
-# normalizes the factor to 0.
+# An empty cluster introduces a size when converted, even if ON REFRESH leaves
+# it without replicas until a refresh window opens.
+> CREATE CLUSTER cc_empty_conv REPLICAS ()
 > CREATE CLUSTER cc_conv (REPLICAS (r1 (SIZE 'scale=1,workers=1')))
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'notasize')
+contains:unknown cluster replica size notasize
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'free')
+contains:unknown cluster replica size free
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=2'
+
+! ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH)
+contains:unknown cluster replica size scale=1,workers=1
+
+> SELECT managed FROM mz_clusters WHERE name = 'cc_empty_conv'
+false
+
+> ALTER CLUSTER cc_empty_conv SET (MANAGED, SIZE = 'scale=1,workers=2', SCHEDULE = ON REFRESH)
+
+> SELECT managed, size FROM mz_clusters WHERE name = 'cc_empty_conv'
+true scale=1,workers=2
+
+> DROP CLUSTER cc_empty_conv
+
+# Converting a nonempty unmanaged cluster to ON REFRESH adopts its replica
+# and its accepted size, even after the allow-list shrinks. The controller
+# normalizes the replication factor to 0.
 > ALTER CLUSTER cc_conv SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
-0
+> SELECT size, replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_conv'
+scale=1,workers=1 0
 > DROP CLUSTER cc_conv
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET allowed_cluster_replica_sizes
 
 # An availability-zone change on a scheduled cluster is validated like on every
 # other path, not written unchecked into the realized config.

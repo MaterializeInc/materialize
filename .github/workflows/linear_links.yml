@@ -9,25 +9,28 @@
 
 # Rewrite bare Linear issue references (e.g. SS-319) in PR descriptions into
 # Markdown links to https://linear.app/materializeinc/issue/<ref>.
+#
+# A `pull_request` run gets a read-only token on PRs from forks. A PR event
+# runs linear_links_trigger.yml instead, and its completion runs this workflow
+# from the default branch with a write token.
 
 name: Linear Issue Links
 
 on:
-  # NOTE: pull_request_target grants a write token to PRs from forks. That is
-  # safe here because this workflow never checks out or executes PR code, it
-  # only rewrites the PR description.
-  pull_request_target:
-    types: [opened, edited]
+  workflow_run:
+    workflows: [Linear Issue Links trigger]
+    types: [completed]
 
 permissions: {}
 
 concurrency:
-  group: linear-links-${{ github.event.pull_request.number }}
+  group: linear-links-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   linkify:
     name: linkify
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write # Rewrites the PR description.
@@ -35,7 +38,29 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const body = context.payload.pull_request.body;
+            const run = context.payload.workflow_run;
+            if (!run.head_repository) {
+              core.info('The head repository no longer exists.');
+              return;
+            }
+            // `workflow_run.pull_requests` is empty for PRs from forks.
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${run.head_repository.owner.login}:${run.head_branch}`,
+            });
+            // A push before this run moves the PR's head, so fall back to the
+            // branch's only open PR.
+            const open = pulls.filter(p => p.state === 'open');
+            const pr = pulls.find(p => p.head.sha === run.head_sha)
+              ?? (open.length === 1 ? open[0] : undefined);
+            if (!pr) {
+              core.info('No open pull request matches this run.');
+              return;
+            }
+
+            const body = pr.body;
             if (!body) {
               return;
             }
@@ -64,7 +89,7 @@ jobs:
               await github.rest.pulls.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: context.payload.pull_request.number,
+                pull_number: pr.number,
                 body: linked,
               });
             }

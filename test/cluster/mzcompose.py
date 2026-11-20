@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from typing import Any, Literal
 
 import psycopg
 import requests
@@ -105,11 +106,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
         # and slow-seqno-hold are slow, run in separate CI step
         # concurrent-connections is too flaky
-        # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
             "test-concurrent-connections",
-            "test-memory-limiter",
         ):
             return
 
@@ -2857,6 +2856,64 @@ class Metrics:
         return values[0]
 
 
+def workflow_test_pool_file_backend(c: Composition) -> None:
+    """
+    Test that a replica with a scratch directory runs the buffer pool on the
+    file store. A store that fails to open falls back to swap without failing
+    any query, so only the backend metrics show it.
+    """
+
+    with c.override(Clusterd(name="clusterd1", workers=1)):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET enable_compute_correction_v2_spill = true;
+            ALTER SYSTEM SET enable_column_paged_batcher_file_extents = true;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("""
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+            CREATE TABLE t (a int);
+            INSERT INTO t SELECT generate_series(1, 10);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            SELECT * FROM mv;
+            """)
+
+        # The replica installs the pool when it applies the configuration,
+        # which can trail the first query.
+        backends: dict[str, float] = {}
+        metrics = Metrics("")
+        for _ in range(30):
+            metrics = Metrics(
+                c.exec(
+                    "clusterd1", "curl", "localhost:6878/metrics", capture=True
+                ).stdout
+            )
+            backends = metrics.with_name("mz_column_pool_backend{")
+            if any(v == 1 for v in backends.values()):
+                break
+            time.sleep(1)
+
+        active = [k for k, v in backends.items() if v == 1]
+        assert len(active) == 1, f"no single active pool backend: {backends}"
+        assert 'backend="file_' in active[0], f"pool runs on {active[0]}"
+        fallback = metrics.get_value("mz_column_pool_backend_fallback")
+        assert fallback == 0, f"file store fell back to swap: {fallback}"
+        capacity = metrics.get_value("mz_column_pool_extent_file_capacity_bytes")
+        assert capacity > 0, f"file store has no capacity: {capacity}"
+
+
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
@@ -4839,14 +4896,14 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     exactly once.
 
     A bare scan of a table with no usable index becomes a `standard` slow-path
-    peek (`ExecuteSlowPathPeek`) registered with the coordinator; a constant
+    peek (`ExecuteSlowPathPeek`) registered in the peek registry; a constant
     query like `SELECT 1` (exercised by `workflow_test_drop_cluster_during_peeks`)
     is handled inline and never registered. When a concurrent `DROP CLUSTER`
-    makes the peek fail, the frontend owns the error end of statement logging
-    and the coordinator must defuse its own guard instead of emitting
-    `Aborted`. Two ends for one statement historically panicked and aborted
-    environmentd; today the duplicate is dropped at the sink with the warning
-    we assert on below.
+    makes the peek fail, its lifecycle owns the end of statement logging,
+    whether the registry's invalidation or the failed issue gets there first.
+    Two ends for one statement historically panicked and aborted environmentd;
+    today a duplicate is dropped at the sink with the warning we assert on
+    below.
 
     The fast-path variant of this race has a sub-millisecond window that brute
     force can't hit;
@@ -4960,24 +5017,28 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
 def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     c: Composition,
 ) -> None:
-    """Deterministically exercise the *fast-path* variant of the registered-peek
-    teardown race (slow-path variant:
-    `workflow_test_drop_cluster_during_registered_peeks`).
+    """DROP between frontend registration and issue must retire exactly once."""
+    registered_fast_peek_during_ddl(c, "drop-cluster")
 
-    A `PeekExisting` fast-path peek registers with the coordinator and only
-    *then* issues `client.peek()`; registration hands ownership of
-    end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
-    that window, the teardown retires the pending peek and logs its end,
-    `client.peek()` fails, and the frontend's `UnregisterFrontendPeek` must be
-    a no-op. Historically the frontend ended the statement itself here, and
-    the double end panicked and aborted environmentd.
 
-    The window is a sub-millisecond cross-thread gap, so we make it
-    deterministic with the `peek_after_register_before_issue` failpoint: pause
-    a peek right after it registers, drop its cluster while it's parked, then
-    resume so `client.peek()` fails. Assert that environmentd survives and
-    that no duplicate end was logged.
-    """
+def workflow_test_cancel_during_registered_peeks_fast_path(c: Composition) -> None:
+    """Cancellation before issue must prevent a later successful peek."""
+    registered_fast_peek_during_ddl(c, "cancel")
+
+
+def workflow_test_apply_replacement_during_registered_peeks_fast_path(
+    c: Composition,
+) -> None:
+    """Replacing a materialized view keeps its old collection readable, so a
+    registered peek on it must still return its rows."""
+    registered_fast_peek_during_ddl(c, "apply-replacement")
+
+
+def registered_fast_peek_during_ddl(
+    c: Composition, action: Literal["drop-cluster", "cancel", "apply-replacement"]
+) -> None:
+    """Parks a fast-path peek between registration and issue, runs `action`,
+    and resumes the peek. Only `apply-replacement` lets the peek succeed."""
 
     failpoint = "peek_after_register_before_issue"
 
@@ -4997,26 +5058,32 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         # The index makes `SELECT * FROM t` on `victim` a `PeekExisting` fast path
         # (without it the bare scan would be a `standard` slow-path dataflow).
         c.sql("CREATE INDEX victim_idx IN CLUSTER victim ON t (a)")
+        c.sql("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t")
+        c.sql("CREATE INDEX victim_mv_idx IN CLUSTER victim ON mv (a)")
+        relation = "mv" if action == "apply-replacement" else "t"
 
         peeker_ready = Event()
         failpoint_armed = Event()
         peek_outcome: list[str] = []
+        peeker_pid: list[int] = []
 
         def peeker() -> None:
             try:
                 with c.sql_cursor() as cur:
                     cur.execute("SET auto_route_catalog_queries = false")
                     cur.execute("SET cluster = victim")
+                    cur.execute("SELECT pg_backend_pid()")
+                    pid_row = cur.fetchone()
+                    assert pid_row is not None
+                    peeker_pid.append(pid_row[0])
                     # We connect and configure *before* the failpoint is armed so
                     # that connection-setup peeks aren't caught by it.
                     peeker_ready.set()
                     failpoint_armed.wait()
-                    # `PeekExisting` fast path: this registers with the
-                    # coordinator and then parks at the failpoint before issuing
-                    # `client.peek()`. It fails once `victim` is dropped.
-                    cur.execute("SELECT * FROM t")
-                    cur.fetchall()
-                    peek_outcome.append("ok")
+                    # The local registration is visible to teardown, but the
+                    # compute instance has not received a peek yet.
+                    cur.execute(f"SELECT * FROM {relation}".encode())
+                    peek_outcome.append(f"ok: {len(cur.fetchall())} rows")
             except Exception as e:
                 peek_outcome.append(f"error: {e}")
 
@@ -5029,28 +5096,38 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         with c.sql_cursor() as control:
             assert peeker_ready.wait(timeout=30), "peeker failed to connect"
             # Arm: every fast-path peek now parks right after registering.
-            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=pause'")
             failpoint_armed.set()
             # Give the peeker time to issue its SELECT and park. It stays parked
-            # until we turn the failpoint off, so this only has to outlast plan +
-            # `RegisterFrontendPeek`, not race a narrow window.
+            # until we turn the failpoint off, so this only has to outlast
+            # planning and registration, not race a narrow window.
             time.sleep(5)
-            # Drop the cluster while the peek is parked: the coordinator retires
-            # the pending peek and logs its end of execution.
-            control.execute("DROP CLUSTER victim CASCADE")
-            # Resume the peek: `client.peek()` now fails (cluster gone) and the
-            # frontend asks the coordinator to retire the already-retired peek,
-            # which must be a no-op.
-            control.execute(f"SET failpoints = '{failpoint}=off'")
+            if action == "drop-cluster":
+                control.execute("DROP CLUSTER victim CASCADE")
+            elif action == "cancel":
+                control.execute("SELECT pg_cancel_backend(%s)", (peeker_pid[0],))
+                assert control.fetchone() == (True,)
+            else:
+                control.execute(
+                    "CREATE REPLACEMENT MATERIALIZED VIEW mv_r FOR mv AS SELECT a FROM t"
+                )
+                control.execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT mv_r")
+            # Retirement must prevent issue, and later cleanup must be a no-op.
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=off'")
 
         peek_thread.join(timeout=30)
 
-        # The parked peek must actually have failed on the dropped cluster;
-        # otherwise the race didn't happen and the test is silently vacuous.
         assert peek_outcome, "peeker thread did not finish"
-        assert peek_outcome[0].startswith(
-            "error"
-        ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
+        if action == "apply-replacement":
+            assert (
+                peek_outcome[0] == "ok: 10 rows"
+            ), f"expected the peek to survive the replacement, got: {peek_outcome[0]}"
+        else:
+            # The parked peek must actually have failed on teardown;
+            # otherwise the race didn't happen and the test is silently vacuous.
+            assert peek_outcome[0].startswith(
+                "error"
+            ), f"expected the peek to fail on teardown, got: {peek_outcome[0]}"
 
         # A panic on the coordinator thread aborts the entire environmentd
         # process (src/ore/src/panic.rs); with no restart policy the container
@@ -5135,7 +5212,7 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         with c.sql_cursor() as control:
             assert subscriber_ready.wait(timeout=30), "subscriber failed to connect"
             # Arm: every subscribe now parks right after sequencing.
-            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=pause'")
             failpoint_armed.set()
             # Give the subscriber time to sequence its SUBSCRIBE and park. It
             # stays parked until we turn the failpoint off, so this only has to
@@ -5147,7 +5224,7 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
             # Resume the subscribe: shipping its dataflow now fails on the
             # missing index collection, which must surface as an error on the
             # subscribing session, not a coordinator panic.
-            control.execute(f"SET failpoints = '{failpoint}=off'")
+            control.execute(f"SET unsafe_failpoints = '{failpoint}=off'")
 
         subscribe_thread.join(timeout=30)
 
@@ -5217,8 +5294,8 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     # would never get to append. The window has to outlast a peek, one subscribe
     # dataflow installation, and the UPDATE's own wait for the oracle.
     failpoint = "group_commit_before_apply_write"
-    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
-    disarm = f"SET failpoints = '{failpoint}=off'"
+    arm = f"SET unsafe_failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET unsafe_failpoints = '{failpoint}=off'"
 
     def occ_writes() -> tuple[int, int]:
         """Session read-then-writes sequenced through OCC, and how many of their
@@ -5491,7 +5568,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
             for statement, failpoints in cases:
                 for failpoint in failpoints:
                     cur.execute(
-                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                        f"SET unsafe_failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
                     )
                     try:
                         cur.execute(statement.encode())
@@ -5506,7 +5583,9 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
                             f"{statement!r} succeeded with {failpoint} set to panic"
                         )
                     finally:
-                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+                        cur.execute(
+                            f"SET unsafe_failpoints = '{failpoint}=off'".encode()
+                        )
             # The statements failed on their own; the process they ran in did not.
             cur.execute("SELECT count(*) FROM t")
             assert cur.fetchall() == [(1,)]
@@ -6745,7 +6824,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
         ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
         ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
         ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
-        SET failpoints = 'cluster_controller_hold_readiness=return';
+        SET unsafe_failpoints = 'cluster_controller_hold_readiness=return';
         """,
         user="mz_system",
         port=6877,
@@ -6812,7 +6891,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
               AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
             """)
         c.sql(
-            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            "SET unsafe_failpoints = 'cluster_controller_hold_readiness=off'",
             user="mz_system",
             port=6877,
         )
@@ -6840,7 +6919,7 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
     finally:
         c.exec("materialized", "kill", "-CONT", pid)
         c.sql(
-            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            "SET unsafe_failpoints = 'cluster_controller_hold_readiness=off'",
             user="mz_system",
             port=6877,
         )
@@ -7554,6 +7633,86 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         c.kill("clusterd1")
 
 
+def workflow_test_memory_limiter_swap_size(c: Composition) -> None:
+    """
+    Test that the memory limiter enforces the heap limit the controller derives
+    from a swap-enabled replica size. test-memory-limiter passes `--heap-limit`
+    to an unorchestrated clusterd instead, skipping that derivation.
+    """
+
+    def swap_size(limit: str) -> dict[str, Any]:
+        # The heap limit is `memory_limit + disk_limit`, so twice `limit`.
+        return {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": limit,
+            "disk_limit": limit,
+            "swap_enabled": True,
+        }
+
+    with c.override(
+        Materialized(
+            cluster_replica_size={
+                **cluster_replica_size_map(),
+                # Measured peak RSS: ~280 MB for an idle replica, ~1.26 GB for
+                # one hydrating the cross join below.
+                "swap,large": swap_size("2 GiB"),
+                # NOTE: ci_annotate_errors.py recognizes this replica's expected
+                # limiter exit by its 640 MiB heap limit.
+                "swap,small": swap_size("320 MiB"),
+            },
+            additional_system_parameter_defaults={
+                # Check often enough to catch the hydration peak.
+                "memory_limiter_interval": "100ms",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+
+        c.sql("""
+            CREATE CLUSTER large SIZE 'swap,large';
+            CREATE CLUSTER small SIZE 'swap,small';
+            CREATE TABLE t (i int, x text);
+            INSERT INTO t
+                SELECT generate_series, repeat('a', 100) FROM generate_series(1, 1000);
+            SET CLUSTER = large; SELECT * FROM t;
+            SET CLUSTER = small; SELECT * FROM t;
+            """)
+
+        def limiter_exits(cluster: str) -> int:
+            cluster_id = c.sql_query(
+                f"SELECT id FROM mz_clusters WHERE name = '{cluster}'"
+            )[0][0]
+            logs = c.invoke("logs", "materialized", capture=True, silent=True).stdout
+            return len(
+                re.findall(
+                    rf"cluster-{cluster_id}-replica-.*memory utilization exceeded configured limits",
+                    logs,
+                )
+            )
+
+        c.sql("""
+            CREATE MATERIALIZED VIEW mv_large IN CLUSTER large AS
+                SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+            """)
+        c.testdrive("> SELECT count(*) FROM mv_large\n1000000")
+        assert limiter_exits("large") == 0
+        assert limiter_exits("small") == 0, "idle replica exceeded its heap limit"
+
+        c.sql("""
+            CREATE MATERIALIZED VIEW mv_small IN CLUSTER small AS
+                SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
+            """)
+        for _ in range(60):
+            if limiter_exits("small") > 0:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("memory limiter did not terminate the small replica")
+
+
 def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     """
     Test that in a paused cluster the read frontiers of indexes keep
@@ -7628,6 +7787,84 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         SELECT a + 1 FROM t;
         SELECT a FROM mv;
         """)
+
+
+def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
+    """
+    Test that reconnecting to a cluster's only replica does not advance the
+    read frontier of an index on that cluster past its write frontier.
+
+    While the controller reconnects, its replica map is briefly empty. Treating
+    that as a cluster without replicas forwards the index's read hold, and a
+    replica that still renders the index at its old as-of then halts with
+    "cannot serve requested as_of" once the index's input compacts.
+    """
+
+    query = """
+        SELECT f.read_frontier, f.write_frontier
+        FROM mz_internal.mz_frontiers f
+        JOIN mz_indexes i ON i.id = f.object_id
+        WHERE i.name = 'idx'
+        """
+
+    def reconnects() -> int:
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        return logs.count("starting replica task")
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+    try:
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+            CREATE INDEX idx ON t (a);
+            SELECT a FROM t;
+            """)
+
+        # A paused replica stops reporting frontiers, so the index's write
+        # frontier stays put. The controller times out the connection after
+        # `grpc_client_http2_keep_alive_timeout` and reconnects, which must
+        # leave the index's read frontier behind its write frontier.
+        connects_before = reconnects()
+        c.pause("clusterd1")
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                read, write = (int(f) for f in c.sql_query(query)[0])
+                assert read <= write, (
+                    f"read frontier of idx advanced to {read}, past its write"
+                    f" frontier {write}, while its replica was reconnecting"
+                )
+                time.sleep(1)
+            assert (
+                reconnects() > connects_before
+            ), "the controller did not reconnect to the paused replica"
+        finally:
+            c.unpause("clusterd1")
+
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT a FROM t;
+            """)
+    finally:
+        # Later workflows in the same shard reuse the volumes and create their
+        # own `t`.
+        c.down(destroy_volumes=True)
 
 
 def workflow_test_swap_heap_limiting(c: Composition) -> None:
@@ -7838,8 +8075,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
     # writes every size to `mz_cluster_replica_size_internal`, including
     # disabled ones, so `disk` for the existing `noswap_nonzero` cluster and
     # its replica should still resolve to `true`. The public
-    # `mz_cluster_replica_sizes` table drops the disabled row, which the
-    # final assertion checks.
+    # `mz_cluster_replica_sizes` table lists the disabled row as disabled,
+    # which the final assertion checks.
     c.kill("materialized")
     sizes_with_disabled = dict(sizes)
     sizes_with_disabled["noswap,nonzero"] = {
@@ -7871,8 +8108,8 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 noswap_zero    false
                 noswap_nonzero true
 
-                > SELECT 'noswap,nonzero' IN (SELECT size FROM mz_cluster_replica_sizes)
-                false
+                > SELECT disabled FROM mz_cluster_replica_sizes WHERE size = 'noswap,nonzero'
+                true
                 """))
 
 

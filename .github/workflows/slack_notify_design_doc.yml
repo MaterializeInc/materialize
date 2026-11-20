@@ -26,63 +26,81 @@
 #   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
 #     to ready-to-review.
 #   * The PR adds an '.md' document under 'doc/developer/design/'.
+#
+# A `pull_request` run gets no secrets on PRs from forks. A PR event runs
+# slack_notify_design_doc_trigger.yml instead, and its completion runs this
+# workflow from the default branch with secrets.
 
 name: Slack Design Doc Notifications
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - reopened
-      - ready_for_review
-    paths:
-      - "doc/developer/design/*.md"
+  workflow_run:
+    workflows: [Slack Design Doc Notifications trigger]
+    types: [completed]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   notify:
     name: "Notify about new design docs"
+    # The trigger run is skipped for draft PRs.
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
+    permissions:
+      pull-requests: read # Looks up the PR of the trigger run and its files.
     steps:
-      - name: "Path filter"
-        id: filter
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+      - name: "Find new design docs"
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          filters: |
-            new-design:
-              - added: "doc/developer/design/*.md"
+          script: |
+            const run = context.payload.workflow_run;
+            if (!run.head_repository) {
+              core.info('The head repository no longer exists.');
+              return;
+            }
+            // `workflow_run.pull_requests` is empty for PRs from forks.
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${run.head_repository.owner.login}:${run.head_branch}`,
+            });
+            // A push before this run moves the PR's head, so fall back to the
+            // branch's only open PR.
+            const open = pulls.filter(p => p.state === 'open');
+            const pr = pulls.find(p => p.head.sha === run.head_sha)
+              ?? (open.length === 1 ? open[0] : undefined);
+            if (!pr || pr.draft) {
+              core.info('No ready-to-review pull request matches this run.');
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const addsDesignDoc = files.some(
+              f => f.status === 'added' && /^doc\/developer\/design\/[^/]+\.md$/.test(f.filename),
+            );
+            if (!addsDesignDoc) {
+              return;
+            }
+
+            const section = text => ({ type: 'section', text: { type: 'mrkdwn', text } });
+            core.setOutput('payload', JSON.stringify({
+              blocks: [
+                section('A new design doc is ready for review!'),
+                section(`• *PR:* <${pr.html_url}|${pr.title}>`),
+                section(`• *Author:* <${pr.user.html_url}|${pr.user.login}>`),
+              ],
+            }));
       - name: "Push to Slack"
-        if: steps.filter.outputs.new-design == 'true'
-        uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
+        if: steps.pr.outputs.payload
+        uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a # v1.1.0
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: rnd-design-docs
-          custom_payload: |
-            {
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "A new design doc is ready for review!"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "• *Author:* <${{ github.event.pull_request.user.html_url }}|${{ github.event.pull_request.user.login }}>"
-                  }
-                }
-              ]
-            }
+          custom_payload: ${{ steps.pr.outputs.payload }}

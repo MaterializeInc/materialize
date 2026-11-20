@@ -161,6 +161,7 @@ export const trackSignUpInHubspotStateAtom = atom<
 
 export const trackSignUpInHubspotActions = {
   signUpComplete: (payload: ISignUpCompletePayload) => {
+    if (!payload.email) return;
     const store = getStore();
 
     store.set(trackSignUpInHubspotStateAtom, {

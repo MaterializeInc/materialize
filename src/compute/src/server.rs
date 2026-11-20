@@ -60,6 +60,8 @@ pub struct ComputeInstanceContext {
     pub scratch_directory: Option<PathBuf>,
     /// Whether to set core affinity for Timely workers.
     pub worker_core_affinity: bool,
+    /// Whether the replica can swap.
+    pub swap_available: bool,
     /// Context required to connect to an external sink from compute,
     /// like the `CopyToS3OneshotSink` compute sink.
     pub connection_context: ConnectionContext,
@@ -278,10 +280,6 @@ async fn serve_inner(
     config: Config,
     timely_config: TimelyConfig,
 ) -> Result<(Vec<Thread>, impl Fn() -> ComputeServerClient + use<>), Error> {
-    mz_timely_util::column_pager::metrics::register(
-        &config.metrics_registry,
-        mz_timely_util::column_pager::tiered_policy(),
-    );
     mz_timely_util::pool_config::metrics::register(&config.metrics_registry);
     mz_cluster::client::register_exert_policy_metrics(&config.metrics_registry);
 

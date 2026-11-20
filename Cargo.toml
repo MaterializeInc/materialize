@@ -14,6 +14,7 @@ members = [
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
+    "src/bench-util",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
@@ -147,6 +148,7 @@ default-members = [
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
+    "src/bench-util",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
@@ -292,7 +294,7 @@ arrow = { version = "58.4.1", default-features = false }
 arrow-ipc = "58.4.1"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
-async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
+async-compression = { version = "0.4.27", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-config = { version = "1.12.0", default-features = false, features = ["sso"] }
@@ -311,7 +313,7 @@ aws-smithy-types = { version = "1.8.1", features = ["byte-stream-poll-next"] }
 aws-types = "1.6.0"
 axum = { version = "0.8.9", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+axum-server = { version = "0.9.0", features = ["tls-rustls"] }
 azure_core = { version = "1.1.0", default-features = false, features = ["hmac_rust", "reqwest", "tokio"] }
 azure_identity = { version = "1.0.0", default-features = false, features = ["tokio"] }
 azure_storage_blob = { version = "1.1.0", default-features = false, features = ["tokio"] }
@@ -337,8 +339,9 @@ compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
 core_affinity = "0.8.3"
+crc32c = "0.6.8"
 crc32fast = "1.5.0"
-criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.2", features = ["async_tokio", "csv_output", "html_reports"] }
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
 crossterm = { version = "0.29.0", default-features = false }
@@ -365,7 +368,6 @@ encoding = "0.2.0"
 enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-fallible-iterator = "0.2.0"
 fancy-regex = "0.20.0"
 flate2 = "1.1.9"
 frontegg = { version = "0.9.0", default-features = false }
@@ -414,13 +416,17 @@ jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
 junit-report = "0.9.1"
 k8s-controller = "0.15.0"
 k8s-openapi = { version = "0.29.0", features = ["schemars", "v1_34"] }
-kube = { version = "5.0.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
+# Held back: kube-runtime 5.1 requires parking_lot 0.13, while other
+# dependencies still require parking_lot 0.12.
+kube = { version = "=5.0.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
 # Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
 # would enable the transport crate's `hyper-rustls` dependency, which it
 # hardcodes to the `ring` provider.
 # `mz_dyncfg_launchdarkly::https_transport` injects an aws-lc-rs connector.
 launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
 launchdarkly-sdk-transport = { version = "0.1.4", default-features = false, features = ["hyper"] }
+# Held back: 0.7 replaces the file-backed mappings with anonymous memory, a
+# behavior change we decided not to adopt (#35507).
 lgalloc = "0.6.0"
 libc = "0.2.186"
 lru = "0.19.0"
@@ -430,8 +436,7 @@ mappings = "0.7.2"
 md-5 = "0.11.0"
 mime = "0.3.16"
 murmur2 = "0.1.0"
-mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "minimal", "rustls-tls", "tls12", "tracing"] }
-mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["aws-lc-rs", "binlog", "chrono", "minimal", "rustls-tls", "tls12", "tracing"] }
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
@@ -506,7 +511,7 @@ rustls = "0.23.46"
 rustls-native-certs = "0.8.3"
 rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
-rusqlite = { version = "0.41.0", features = ["bundled"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
@@ -534,7 +539,7 @@ similar-asserts = "2.0"
 smallvec = "1.15.1"
 snap = "1.1.1"
 socket2 = "0.6.3"
-sqlparser = "0.63.0"
+sqlparser = "0.64.0"
 ssh-key = "0.6.7"
 stacker = "0.1.24"
 static_assertions = "1.1"
@@ -543,7 +548,7 @@ subtle = "2.6.1"
 supports-color = "3.0.2"
 syn = { version = "3.0.5", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
-sysinfo = "0.39.6"
+sysinfo = "0.40.0"
 tabled = "0.22.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
@@ -571,7 +576,7 @@ tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit",
 tower-http = { version = "0.7.1", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
 tower-sessions = "0.15.0"
-tower-sessions-memory-store = "0.14.0"
+tower-sessions-memory-store = "0.15.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
@@ -582,7 +587,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 # graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
 # 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
 # hashing stack.
-tungstenite = "0.30.0"
+tungstenite = "0.29.0"
 turmoil = "0.7.2"
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"
@@ -669,12 +674,12 @@ debug-assertions = true
 # version of Materialize.
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes. To bump
@@ -697,11 +702,6 @@ mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev =
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
 tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
-
-# Allows us to use bzip2-sys rather than the rust reimpl.
-# All changes should go to the `mz_changes` branch.
-# Once https://github.com/Nullus157/async-compression/pull/364 lands we can remove this.
-async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_v0.10.x` branch.

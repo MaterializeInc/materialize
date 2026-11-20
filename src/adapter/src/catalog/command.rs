@@ -14,6 +14,19 @@
 //! output we might have sent to the client (aka. the "promise"), so commit can
 //! "assert" on that output when re-checking catalog commands against the
 //! current catalog.
+//!
+//! Pending external work abandons the candidate. A continuation rebuilds the
+//! prefix before consuming its indexed response, so successful preparation and
+//! preparation errors are accepted only when their inputs still match.
+//!
+//! External mutations are not catalog operations. CREATE CONNECTION retains its allocated
+//! ID, generated keys, and successful secret-write completion across retries. ROTATE KEYS
+//! uses a pinned publication command instead of retrying its external mutation. Catalog
+//! rollback cannot undo either secret writes or changes in external services.
+
+pub(crate) mod connection;
+pub(crate) mod source;
+pub(crate) mod source_statement;
 
 use std::sync::Arc;
 
@@ -23,9 +36,267 @@ use mz_sql::plan::{Params, Plan, PlanNotice};
 use mz_sql::session::metadata::SessionMetadata;
 use tokio::sync::mpsc;
 
-use crate::catalog::{CatalogState, Op};
+use crate::catalog::command::source_statement::{
+    SourceCommand, SourceCompilation, SourceResolution,
+};
+use crate::catalog::{CatalogState, CommandExecutionError, CommandResponse, CommandWork, Op};
 use crate::session::SessionMeta;
 use crate::{AdapterError, AdapterNotice};
+
+#[derive(Clone, Debug)]
+pub enum CatalogCommand {
+    Rename(Arc<RenameCommand>),
+    CatalogResult(Arc<CatalogResultCommand>),
+    Description(Arc<DescriptionCommand>),
+    AlterConnection(Arc<connection::ConnectionStatement>),
+    CreateConnection(Arc<connection::ConnectionStatement>),
+    Source(Arc<source_statement::SourceCommand>),
+}
+
+impl CatalogCommand {
+    /// Resolves a command against the candidate catalog, or requests external work.
+    ///
+    /// The response must belong to this command's index in the replayed batch.
+    pub(super) fn compile(
+        &mut self,
+        state: &CatalogState,
+        index: usize,
+        response: Option<CommandResponse>,
+    ) -> Result<CommandExecution<'_>, CommandExecutionError> {
+        match self {
+            Self::Rename(command) => Ok(CommandExecution::raw(command.execute(state)?)),
+            Self::Description(command) => {
+                command.execute(state)?;
+                Ok(CommandExecution::raw(Vec::new()))
+            }
+            Self::CatalogResult(command) => {
+                command.execute(state)?;
+                Ok(CommandExecution::raw(Vec::new()))
+            }
+            Self::CreateConnection(command) => {
+                use connection::CreateConnectionResolution;
+                let command = Arc::make_mut(command);
+                let (preparation, secret) = match response {
+                    Some(CommandResponse::Connection(response)) => (Some(response), None),
+                    Some(CommandResponse::ConnectionSecret(response)) => (None, Some(response)),
+                    Some(CommandResponse::Source(_)) => {
+                        unreachable!("response belongs to its command")
+                    }
+                    None => (None, None),
+                };
+                let compiled = match command.resolve_create(state, preparation, secret)? {
+                    CreateConnectionResolution::Ensure(request) => {
+                        return Err(CommandExecutionError::Pending {
+                            index,
+                            work: CommandWork::ConnectionSecret(request),
+                        });
+                    }
+                    CreateConnectionResolution::Prepare(request) => {
+                        return Err(CommandExecutionError::Pending {
+                            index,
+                            work: CommandWork::Connection(request),
+                        });
+                    }
+                    CreateConnectionResolution::Ready(compiled) => compiled,
+                };
+                let (id, global_id) = command.create_id();
+                let name = compiled.plan.name;
+                let ops = vec![Op::CreateItem {
+                    id,
+                    name: name.clone(),
+                    item: mz_catalog::memory::objects::CatalogItem::Connection(
+                        mz_catalog::memory::objects::Connection {
+                            create_sql: compiled.plan.connection.create_sql,
+                            global_id,
+                            details: compiled.plan.connection.details,
+                            resolved_ids: compiled.resolved_ids,
+                        },
+                    ),
+                    owner_id: command.owner_id(),
+                }];
+                // Resource checks precede IF NOT EXISTS collision handling.
+                state.validate_resource_limits(&ops, command.connection_id())?;
+                command.applied(compiled.notices);
+                command.set_skipped_name(None);
+                let outcome = if compiled.plan.if_not_exists {
+                    Some(ExecutionOutcome::CreateConnection {
+                        command,
+                        id,
+                        name: name.item,
+                    })
+                } else {
+                    None
+                };
+                Ok(CommandExecution { ops, outcome })
+            }
+            Self::AlterConnection(command) => {
+                use connection::ConnectionResolution;
+                let command = Arc::make_mut(command);
+                let response = match response {
+                    Some(CommandResponse::Connection(response)) => Some(response),
+                    Some(CommandResponse::Source(_) | CommandResponse::ConnectionSecret(_)) => {
+                        unreachable!("response belongs to its command")
+                    }
+                    None => None,
+                };
+                let compiled = match command.resolve_alter(state, response)? {
+                    ConnectionResolution::Prepare(request) => {
+                        return Err(CommandExecutionError::Pending {
+                            index,
+                            work: CommandWork::Connection(request),
+                        });
+                    }
+                    ConnectionResolution::Ready(compiled) => compiled,
+                };
+                let ops = match compiled.connection {
+                    Some((id, connection, _)) => {
+                        use mz_storage_types::AlterCompatible;
+                        let entry = state.get_entry(&id);
+                        let current = entry.connection().map_err(AdapterError::from)?;
+                        current
+                            .details
+                            .to_connection()
+                            .alter_compatible(
+                                current.global_id,
+                                &connection.details.to_connection(),
+                            )
+                            .map_err(mz_storage_types::controller::StorageError::from)
+                            .map_err(AdapterError::from)?;
+                        vec![Op::UpdateItem {
+                            id,
+                            name: entry.name().clone(),
+                            to_item: mz_catalog::memory::objects::CatalogItem::Connection(
+                                connection,
+                            ),
+                        }]
+                    }
+                    None => Vec::new(),
+                };
+                command.applied(compiled.notices);
+                Ok(CommandExecution::raw(ops))
+            }
+            Self::Source(command) => {
+                let command = Arc::make_mut(command);
+                let resolution = match response {
+                    Some(CommandResponse::Source(response)) => {
+                        command.statement.finish(state, response)?
+                    }
+                    Some(CommandResponse::Connection(_) | CommandResponse::ConnectionSecret(_)) => {
+                        unreachable!("response belongs to its command")
+                    }
+                    None => command.statement.resolve(state)?,
+                };
+                match resolution {
+                    SourceResolution::Prepare(request) => Err(CommandExecutionError::Pending {
+                        index,
+                        work: CommandWork::Prepare(request),
+                    }),
+                    SourceResolution::Allocate(keys) => Err(CommandExecutionError::Pending {
+                        index,
+                        work: CommandWork::Allocate(keys),
+                    }),
+                    SourceResolution::Ready(mut compiled) => Ok(CommandExecution {
+                        ops: std::mem::take(&mut compiled.ops),
+                        outcome: Some(ExecutionOutcome::Source(command, compiled)),
+                    }),
+                }
+            }
+        }
+    }
+
+    /// The planning notices recorded during preparation.
+    pub(crate) fn notices(&self) -> &[PlanNotice] {
+        match self {
+            Self::Rename(command) => command.notices(),
+            Self::CatalogResult(command) => &command.notices,
+            Self::Description(_) => &[],
+            Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
+            Self::Source(command) => command.notices(),
+        }
+    }
+}
+
+/// Catalog writes and the outcome validation required before publishing them.
+///
+/// Run any collision probe in an isolated transaction before taking the writes.
+/// For executions that are not skipped, apply the writes in order and call
+/// `finish` before executing the next command.
+pub(super) struct CommandExecution<'a> {
+    ops: Vec<Op>,
+    outcome: Option<ExecutionOutcome<'a>>,
+}
+
+enum ExecutionOutcome<'a> {
+    Source(&'a mut SourceCommand, Box<SourceCompilation>),
+    CreateConnection {
+        command: &'a mut connection::ConnectionStatement,
+        id: mz_repr::CatalogItemId,
+        name: String,
+    },
+}
+
+impl CommandExecution<'_> {
+    pub(super) fn raw(ops: Vec<Op>) -> Self {
+        Self { ops, outcome: None }
+    }
+
+    pub(super) fn collision_probe_ops(&self) -> Option<&[Op]> {
+        match &self.outcome {
+            Some(ExecutionOutcome::Source(command, compiled)) => command
+                .needs_collision_probe(compiled)
+                .then_some(self.ops.as_slice()),
+            Some(ExecutionOutcome::CreateConnection { .. }) => Some(self.ops.as_slice()),
+            None => None,
+        }
+    }
+
+    /// Validates a requested collision probe, consuming skipped executions.
+    pub(super) fn finish_probe(
+        mut self,
+        result: Result<(), AdapterError>,
+    ) -> Result<Option<Self>, AdapterError> {
+        let skipped = match self.outcome.as_mut().expect("collision probe requested") {
+            ExecutionOutcome::Source(command, compiled) => {
+                let (_, outcome) = compiled.classify_result(result)?;
+                command.check_outcome(outcome)?;
+                command.skipped_name().is_some()
+            }
+            ExecutionOutcome::CreateConnection { command, id, name } => match result {
+                Ok(()) => false,
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind:
+                        mz_catalog::memory::error::ErrorKind::Sql(
+                            mz_sql::catalog::CatalogError::ItemAlreadyExists(attempted_id, _),
+                        ),
+                })) if attempted_id == *id => {
+                    command.set_skipped_name(Some(name.clone()));
+                    true
+                }
+                Err(error) => return Err(error),
+            },
+        };
+        if skipped { Ok(None) } else { Ok(Some(self)) }
+    }
+
+    pub(super) fn take_ops(&mut self) -> Vec<Op> {
+        std::mem::take(&mut self.ops)
+    }
+
+    /// Checks the observed outcome and propagates the result unless that outcome changed.
+    pub(super) fn finish<T>(self, result: Result<T, AdapterError>) -> Result<T, AdapterError> {
+        if let Some(ExecutionOutcome::Source(command, compiled)) = self.outcome {
+            match &result {
+                Ok(_) => command.check_outcome(compiled.created())?,
+                Err(error) => {
+                    if let Some(outcome) = compiled.skipped(error) {
+                        command.check_outcome(outcome)?;
+                    }
+                }
+            }
+        }
+        result
+    }
+}
 
 /// A rename or swap command.
 #[derive(Debug)]
@@ -122,11 +393,6 @@ pub struct CatalogResultCommand {
 }
 
 impl CatalogResultCommand {
-    /// The planning notices recorded during preparation.
-    pub(crate) fn notices(&self) -> &[PlanNotice] {
-        &self.notices
-    }
-
     /// Whether this statement supports retaining its catalog result for replay.
     pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
         use mz_sql::ast::ShowStatement;
@@ -372,4 +638,32 @@ fn rename_ops(plan: &Plan) -> (Vec<Op>, ObjectType) {
         ),
         _ => unreachable!("rename/swap planning must produce a rename or no-op plan"),
     }
+}
+
+pub(crate) fn plan_subsource(
+    catalog: &crate::catalog::ConnCatalog<'_>,
+    pcx: &mz_sql::plan::PlanContext,
+    params: &Params,
+    statement: mz_sql::ast::CreateSubsourceStatement<mz_sql::names::Aug>,
+    item_id: mz_repr::CatalogItemId,
+    global_id: mz_repr::GlobalId,
+) -> Result<mz_sql::plan::CreateSourcePlanBundle, AdapterError> {
+    let resolved_ids = mz_sql::names::visit_dependencies(catalog, &statement);
+    let (plan, _sql_impl_ids) = mz_sql::plan::plan(
+        Some(pcx),
+        catalog,
+        Statement::CreateSubsource(statement),
+        params,
+        &resolved_ids,
+    )?;
+    let Plan::CreateSource(plan) = plan else {
+        unreachable!("subsource planning produces a source plan");
+    };
+    Ok(mz_sql::plan::CreateSourcePlanBundle {
+        item_id,
+        global_id,
+        plan,
+        resolved_ids,
+        available_source_references: None,
+    })
 }

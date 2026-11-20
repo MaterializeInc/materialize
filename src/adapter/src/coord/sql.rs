@@ -21,8 +21,8 @@ use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
+use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
-use crate::coord::{Coordinator, Message};
 use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
@@ -229,9 +229,10 @@ impl Coordinator {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
-        // and `AdapterClient::end_transaction` protect against this by each executing their parts
-        // of this function. Thus, if this function changes, ensure that the changes are propogated
-        // to either of those components.
+        // and `SessionClient::end_transaction` protect against this by each executing their parts
+        // of this function. Keep session cleanup in sync with those paths and frontend transaction
+        // completion. New coordinator resources also require transferring completion ownership
+        // through `Session::require_coordinator_completion`.
         let retire_notify = self.clear_connection(session.conn_id()).await;
         (session.clear_transaction(), retire_notify)
     }
@@ -258,17 +259,14 @@ impl Coordinator {
             drop(txn_reads);
         }
 
-        if let Some(_guard) = self
+        if let Some(guard) = self
             .active_conns
             .get_mut(conn_id)
             .expect("must exist for active session")
             .deferred_lock
             .take()
         {
-            // If there are waiting deferred statements, process one.
-            if !self.serialized_ddl.is_empty() {
-                let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
-            }
+            self.release_ddl_lock(guard);
         }
 
         retire_notify

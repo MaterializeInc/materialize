@@ -10,7 +10,7 @@
 use mz_alloc_default as _;
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use mz_bench_util::{Criterion, criterion_group, criterion_main};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;

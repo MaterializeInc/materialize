@@ -11,6 +11,18 @@
 #
 # lint-versions - Check pinned tool and library versions
 
+rust_version=$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' Cargo.toml)
+if ! grep -Fq "\"rust\": \"$rust_version\"" .github/renovate.json5; then
+  echo "Set constraints.rust in .github/renovate.json5 to $rust_version to match Cargo.toml"
+  exit 1
+fi
+
+patched=$(sed -n '/^\[patch\.crates-io\]$/,/^\[/s/^\([A-Za-z0-9_-]*\) = .*/"\1"/p' Cargo.toml | paste -sd, - | sed 's/,/, /g')
+if ! grep -Fq "\"matchPackageNames\": [$patched]," .github/renovate.json5; then
+  echo "Set the patched-crates rule in .github/renovate.json5 to \"matchPackageNames\": [$patched] to match [patch.crates-io] in Cargo.toml"
+  exit 1
+fi
+
 grep "rust-version = " Cargo.toml | grep -q "1\.98\.1" || \
 { echo "Please validate new Rust versions for compilation time performance regressions or ask Team Testing to do so. Afterwards change the tested version in bin/lint-versions"; exit 1; }
 

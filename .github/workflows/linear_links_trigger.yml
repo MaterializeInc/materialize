@@ -1,0 +1,25 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Starts linear_links.yml for a pull request.
+
+name: Linear Issue Links trigger
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+permissions: {}
+
+jobs:
+  request:
+    name: request-linear-links
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "linear_links.yml rewrites this pull request's description once this run completes."

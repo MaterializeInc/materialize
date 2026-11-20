@@ -102,6 +102,16 @@ steps:
         branches: "main"
         sanitizer: skip
 
+      - id: lint-codeowners
+        timeout_in_minutes: 10
+        label: Validate CODEOWNERS
+        command: bin/ci-builder run stable ci/test/lint-codeowners.sh
+        depends_on: []
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        branches: "main"
+        sanitizer: skip
+
       - id: unused-deps
         label: Unused dependencies
         command: bin/ci-builder run stable bin/unused-deps
@@ -302,6 +312,8 @@ steps:
         depends_on: []
         timeout_in_minutes: 240
         parallelism: 9
+        env:
+          CI_BUILDER_PERF_EVENTS: 1
         inputs:
           - Cargo.lock
           - Cargo.toml

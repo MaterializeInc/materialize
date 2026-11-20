@@ -481,7 +481,13 @@ pub(crate) fn render<'scope>(
                 let main_slot = &connection.publication_details.slot;
 
                 tracing::info!(%id, "ensuring replication slot {main_slot} exists");
-                super::ensure_replication_slot(&client, main_slot, slot_creation_timeout).await?;
+                super::ensure_replication_slot(
+                    &client,
+                    main_slot,
+                    connection.failover,
+                    slot_creation_timeout,
+                )
+                .await?;
                 Some(client)
             } else {
                 None

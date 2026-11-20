@@ -439,15 +439,24 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
+/// Creates the replication slot `slot` unless it exists, with `FAILOVER` if `failover` is set.
 async fn ensure_replication_slot(
     client: &Client,
     slot: &str,
+    failover: bool,
     timeout: Duration,
 ) -> Result<(), TransientError> {
-    let query = sql!(
-        "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT",
-        Sql::ident(slot)
-    );
+    let query = if failover {
+        sql!(
+            "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" (SNAPSHOT 'nothing', FAILOVER)",
+            Sql::ident(slot)
+        )
+    } else {
+        sql!(
+            "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT",
+            Sql::ident(slot)
+        )
+    };
     match create_replication_slot(client, slot, query, timeout).await {
         Ok(_) => Ok(()),
         Err(TransientError::ReplicationSlotAlreadyExists) => {

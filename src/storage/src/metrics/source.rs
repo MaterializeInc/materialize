@@ -16,8 +16,8 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec, MetricTag,
-    MetricVisibility, MetricsRegistry, UIntGaugeVec,
+    DeregisterOnDropCounter, DeregisterOnDropGauge, DeregisterOnDropVec, IntCounter, MetricTag,
+    MetricVisibility, MetricsRegistry, raw,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -34,22 +34,22 @@ pub mod sql_server;
 #[derive(Clone, Debug)]
 pub(crate) struct GeneralSourceMetricDefs {
     // Source metrics
-    pub(crate) resume_upper: IntGaugeVec,
-    pub(crate) commit_upper_ready_times: UIntGaugeVec,
-    pub(crate) commit_upper_accepted_times: UIntGaugeVec,
+    pub(crate) resume_upper: DeregisterOnDropVec<raw::IntGaugeVec>,
+    pub(crate) commit_upper_ready_times: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) commit_upper_accepted_times: DeregisterOnDropVec<raw::UIntGaugeVec>,
 
     // OffsetCommitMetrics
-    pub(crate) offset_commit_failures: IntCounterVec,
+    pub(crate) offset_commit_failures: DeregisterOnDropVec<raw::IntCounterVec>,
 
     // `persist_sink` metrics
     /// A timestamp gauge representing forward progress
     /// in the data shard.
-    pub(crate) progress: IntGaugeVec,
-    pub(crate) row_inserts: IntCounterVec,
-    pub(crate) row_retractions: IntCounterVec,
-    pub(crate) error_inserts: IntCounterVec,
-    pub(crate) error_retractions: IntCounterVec,
-    pub(crate) persist_sink_processed_batches: IntCounterVec,
+    pub(crate) progress: DeregisterOnDropVec<raw::IntGaugeVec>,
+    pub(crate) row_inserts: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) row_retractions: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) error_inserts: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) error_retractions: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) persist_sink_processed_batches: DeregisterOnDropVec<raw::IntCounterVec>,
 }
 
 impl GeneralSourceMetricDefs {
@@ -118,11 +118,11 @@ impl GeneralSourceMetricDefs {
 /// General metrics about sources that are not specific to the source type
 pub(crate) struct SourceMetrics {
     /// The resume_upper for a source.
-    pub(crate) resume_upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub(crate) resume_upper: DeregisterOnDropGauge<AtomicI64>,
     /// The number of ready remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_ready_times: DeregisterOnDropGauge<AtomicU64>,
     /// The number of accepted remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_accepted_times: DeregisterOnDropGauge<AtomicU64>,
 }
 
 impl SourceMetrics {
@@ -135,25 +135,25 @@ impl SourceMetrics {
         SourceMetrics {
             resume_upper: defs
                 .resume_upper
-                .get_delete_on_drop_metric(vec![source_id.to_string()]),
+                .get_deregister_on_drop_metric(vec![source_id.to_string()]),
             commit_upper_ready_times: defs
                 .commit_upper_ready_times
-                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_deregister_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_accepted_times: defs
                 .commit_upper_accepted_times
-                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_deregister_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }
 }
 
 /// Source-specific metrics used by the `persist_sink`
 pub(crate) struct SourcePersistSinkMetrics {
-    pub(crate) progress: DeleteOnDropGauge<AtomicI64, Vec<String>>,
-    pub(crate) row_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) row_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) error_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) error_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) processed_batches: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) progress: DeregisterOnDropGauge<AtomicI64>,
+    pub(crate) row_inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) row_retractions: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) error_inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) error_retractions: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) processed_batches: DeregisterOnDropCounter<AtomicU64>,
 }
 
 impl SourcePersistSinkMetrics {
@@ -167,34 +167,34 @@ impl SourcePersistSinkMetrics {
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
-            progress: defs.progress.get_delete_on_drop_metric(vec![
+            progress: defs.progress.get_deregister_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_inserts: defs.row_inserts.get_delete_on_drop_metric(vec![
+            row_inserts: defs.row_inserts.get_deregister_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_retractions: defs.row_retractions.get_delete_on_drop_metric(vec![
+            row_retractions: defs.row_retractions.get_deregister_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_inserts: defs.error_inserts.get_delete_on_drop_metric(vec![
+            error_inserts: defs.error_inserts.get_deregister_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_retractions: defs.error_retractions.get_delete_on_drop_metric(vec![
+            error_retractions: defs.error_retractions.get_deregister_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
             processed_batches: defs
                 .persist_sink_processed_batches
-                .get_delete_on_drop_metric(vec![
+                .get_deregister_on_drop_metric(vec![
                     parent_source_id.to_string(),
                     shard,
                     worker_id.to_string(),
@@ -206,7 +206,7 @@ impl SourcePersistSinkMetrics {
 /// Metrics about committing offsets.
 pub(crate) struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    pub(crate) offset_commit_failures: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) offset_commit_failures: DeregisterOnDropCounter<AtomicU64>,
 }
 
 impl OffsetCommitMetrics {
@@ -215,7 +215,7 @@ impl OffsetCommitMetrics {
         OffsetCommitMetrics {
             offset_commit_failures: defs
                 .offset_commit_failures
-                .get_delete_on_drop_metric(vec![source_id.to_string()]),
+                .get_deregister_on_drop_metric(vec![source_id.to_string()]),
         }
     }
 }

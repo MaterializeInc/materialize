@@ -144,7 +144,8 @@ class BuildDataStorage(BaseDataStorage):
         sql_statements.append(f"""
             UPDATE build_job
             SET is_latest_retry = FALSE
-            WHERE build_step_id = {as_sanitized_literal(step_id)}
+            WHERE build_id = {as_sanitized_literal(build_id)}
+            AND build_step_id = {as_sanitized_literal(step_id)}
             AND (shard_index = {shard_index} OR shard_index IS NULL)
             AND build_job_id <> {as_sanitized_literal(job_id)}
             ;

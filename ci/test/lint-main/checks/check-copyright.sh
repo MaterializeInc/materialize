@@ -23,7 +23,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
     -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
-    -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
+    -e '(^|/)\.github/CODEOWNERS$' \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)(Cargo|askama|config)\.toml$' \

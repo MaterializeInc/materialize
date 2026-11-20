@@ -39,6 +39,7 @@ use mz_ore::tracing::{
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::resource::Resource;
+#[allow(deprecated)]
 use sentry_tracing::EventFilter;
 
 /// Command line arguments for application tracing.
@@ -341,6 +342,7 @@ impl TracingCliArgs {
 /// The Sentry layer otherwise attaches recent info events as breadcrumbs to unrelated errors.
 pub const NO_SENTRY_TARGET: &str = "mz_no_sentry";
 
+#[allow(deprecated)]
 pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
     // special cases
     if meta.target() == "librdkafka" || meta.target() == NO_SENTRY_TARGET {

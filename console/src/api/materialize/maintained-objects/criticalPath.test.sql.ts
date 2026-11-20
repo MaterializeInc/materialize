@@ -9,12 +9,17 @@
 
 import {
   executeSqlHttp,
+  explainOnCatalogServer,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
 import { SEARCH_PATH } from "../executeSql";
-import { buildCriticalPathLiveQuery, CriticalPathRow } from "./criticalPath";
+import {
+  buildCriticalPathAtTimeQuery,
+  buildCriticalPathLiveQuery,
+  CriticalPathRow,
+} from "./criticalPath";
 
 /** Creates the test catalog tables that the query reads from. */
 const seedCatalogSql = (testSchema: string) => `
@@ -408,5 +413,30 @@ describe("buildCriticalPathLiveQuery", () => {
       clusterName: "ingest",
       isIngestion: false,
     });
+  });
+});
+
+describe("critical path plan", () => {
+  it("reads lag history by object id in live mode", async () => {
+    const plan = await explainOnCatalogServer(
+      buildCriticalPathLiveQuery("u1", 60, TEST_BUCKET_MS),
+    );
+    expect(plan).toContain(
+      "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join, lookup)",
+    );
+  });
+
+  it("reads lag history by object id at a selected time", async () => {
+    const plan = await explainOnCatalogServer(
+      buildCriticalPathAtTimeQuery(
+        "u1",
+        new Date("2026-01-01T00:00:00Z"),
+        TEST_BUCKET_MS,
+        60,
+      ),
+    );
+    expect(plan).toContain(
+      "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join)",
+    );
   });
 });

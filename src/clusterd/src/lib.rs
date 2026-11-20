@@ -138,6 +138,10 @@ struct Args {
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
 
+    /// The replica runs without swap.
+    #[clap(long)]
+    no_swap: bool,
+
     /// Memory limit (bytes) of the cluster replica, if known.
     ///
     /// The limit is expected to be enforced by the orchestrator. The clusterd process only uses it
@@ -444,11 +448,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             ComputeInstanceContext {
                 scratch_directory: args.scratch_directory.clone(),
                 worker_core_affinity: args.worker_core_affinity,
+                swap_available: !args.no_swap,
                 connection_context: connection_context.clone(),
             },
             SYSTEM_TIME.clone(),
             connection_context,
-            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+            StorageInstanceContext::new(
+                args.scratch_directory,
+                args.announce_memory_limit,
+                !args.no_swap,
+            ),
         )
         .await?;
 
@@ -499,7 +508,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        StorageInstanceContext::new(
+            args.scratch_directory.clone(),
+            args.announce_memory_limit,
+            !args.no_swap,
+        ),
     )
     .await?;
     info!(
@@ -530,6 +543,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
+            swap_available: !args.no_swap,
             connection_context,
         },
     )

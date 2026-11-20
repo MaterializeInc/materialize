@@ -239,7 +239,7 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
-        dataflow.try_map_source_operators(MfpPlan::create_from)
+        dataflow.try_map_source_operators(|mfp| MfpPlan::create_from(mfp).map(mfp_plan_mir_to_lir))
     }
 
     /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`

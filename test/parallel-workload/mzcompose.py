@@ -48,7 +48,11 @@ from materialize.parallel_workload.catalog_transactions import (
     late_binding,
     rename_noop,
     schema_swap,
+    source_ddl,
+    source_drop_conflicts,
+    source_late_binding,
     source_noop,
+    source_noop_conflict,
 )
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
@@ -56,6 +60,10 @@ from materialize.parallel_workload.settings import (
     COCKROACH_SCENARIOS,
     Complexity,
     Scenario,
+)
+from materialize.parallel_workload.staged_catalog import (
+    PREPARATION_LOG_FILTER,
+    purification_connection_change,
 )
 
 SERVICES = [
@@ -204,7 +212,14 @@ def workflow_catalog_transactions(
         "swap",
         "hammer",
     ]
-    cases = rename_cases
+    cases = [
+        *rename_cases,
+        "source",
+        "source-binding",
+        "source-noop",
+        "source-drop",
+        "source-preparation",
+    ]
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=25)
     parser.add_argument("--seed", type=int, default=0)
@@ -228,7 +243,8 @@ def workflow_catalog_transactions(
             Materialized(
                 image=args.materialized_image,
                 additional_system_parameter_defaults={
-                    "enable_alter_table_add_column": "true"
+                    "log_filter": PREPARATION_LOG_FILTER,
+                    "enable_alter_table_add_column": "true",
                 },
             )
         ),
@@ -244,6 +260,14 @@ def workflow_catalog_transactions(
                             independent_ddl(c, before_commit, same_schema)
                 elif case == "hammer":
                     hammer(c, args.workers, args.rounds)
+                elif case == "source":
+                    source_ddl(c)
+                elif case == "source-binding":
+                    for interference in ("replacement", "rename_away"):
+                        for before_commit in (False, True):
+                            source_late_binding(c, interference, before_commit)
+                elif case == "source-noop":
+                    source_noop_conflict(c)
                 elif case == "rename-noop":
                     rename_noop(c)
                 elif case == "source-noop-boundary":
@@ -256,6 +280,11 @@ def workflow_catalog_transactions(
                     description_outcome(c)
                 elif case == "swap":
                     schema_swap(c)
+                elif case == "source-drop":
+                    source_drop_conflicts(c)
+                elif case == "source-preparation":
+                    c.up("postgres")
+                    purification_connection_change(c)
                 else:
                     for steps in (0, 8):
                         late_binding(c, case, args.seed, steps)

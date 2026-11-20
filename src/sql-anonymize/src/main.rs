@@ -60,10 +60,10 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    ConnectionRulePattern, CreateIndexStatement, CsrSeedAvro, Ident, KafkaBroker,
-    KafkaSinkConfigOption, KafkaSinkConfigOptionName, Raw, RawClusterName, RawDataType,
-    RawItemName, RawNetworkPolicyName, Schema, SelectItem, SetVariableStatement, SetVariableTo,
-    SetVariableValue, SourceIncludeMetadata, Statement, TableAlias, TableConstraint,
+    ClusterOption, ClusterOptionName, ConnectionRulePattern, CreateIndexStatement, CsrSeedAvro,
+    Ident, KafkaBroker, KafkaSinkConfigOption, KafkaSinkConfigOptionName, Raw, RawClusterName,
+    RawDataType, RawItemName, RawNetworkPolicyName, Schema, SelectItem, SetVariableStatement,
+    SetVariableTo, SetVariableValue, SourceIncludeMetadata, Statement, TableAlias, TableConstraint,
     UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
     WithOptionValue,
 };
@@ -680,6 +680,20 @@ impl<'ast> VisitMut<'ast, Raw> for Anonymizer<'_> {
         }
     }
 
+    // `SHOW CREATE CLUSTER` renders the attached query policy as a string, in a
+    // statement whose literals are otherwise preserved.
+    fn visit_cluster_option_mut(&mut self, node: &'ast mut ClusterOption<Raw>) {
+        if let (ClusterOptionName::QueryPolicy, Some(WithOptionValue::Value(Value::String(name)))) =
+            (&node.name, &mut node.value)
+        {
+            if self.rename {
+                *name = self.rename_object_string(name);
+            }
+            return;
+        }
+        visit_mut::visit_cluster_option_mut(self, node);
+    }
+
     fn visit_network_policy_name_mut(&mut self, node: &'ast mut RawNetworkPolicyName) {
         if let RawNetworkPolicyName::Unresolved(ident) = node {
             self.rename_ident(ident);
@@ -704,6 +718,7 @@ impl<'ast> VisitMut<'ast, Raw> for Anonymizer<'_> {
         match node {
             UnresolvedObjectName::Cluster(i)
             | UnresolvedObjectName::Role(i)
+            | UnresolvedObjectName::QueryPolicy(i)
             | UnresolvedObjectName::NetworkPolicy(i) => self.rename_ident(i),
             UnresolvedObjectName::Database(n) => self.rename_ident(&mut n.0),
             UnresolvedObjectName::Schema(n) => self.rename_idents(&mut n.0),
@@ -860,6 +875,20 @@ impl<'ast> Visit<'ast, Raw> for GlobalNameCollector<'_> {
         }
     }
 
+    fn visit_cluster_option(&mut self, node: &'ast ClusterOption<Raw>) {
+        if let (ClusterOptionName::QueryPolicy, Some(WithOptionValue::Value(Value::String(name)))) =
+            (&node.name, &node.value)
+        {
+            self.add_str(name);
+            return;
+        }
+        visit::visit_cluster_option(self, node);
+    }
+
+    fn visit_nested_statement(&mut self, node: &'ast Statement<Raw>) {
+        self.visit_statement(node);
+    }
+
     // `DROP`/`ALTER`/`COMMENT`/`GRANT` targets are `UnresolvedObjectName`, whose
     // default descent sends cluster/role/network-policy names to `visit_ident`
     // (which we deliberately do not override). Handle every variant here so
@@ -869,6 +898,7 @@ impl<'ast> Visit<'ast, Raw> for GlobalNameCollector<'_> {
         match node {
             UnresolvedObjectName::Cluster(i)
             | UnresolvedObjectName::Role(i)
+            | UnresolvedObjectName::QueryPolicy(i)
             | UnresolvedObjectName::NetworkPolicy(i) => self.add(i),
             UnresolvedObjectName::Database(n) => self.add(&n.0),
             UnresolvedObjectName::Schema(n) => self.add_idents(&n.0),
@@ -1609,6 +1639,21 @@ mod tests {
             "window_view",
             "serve_cluster",
         ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing {expected}: {names:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn collect_descends_into_nested_statements() {
+        let names = collect(&[
+            "DECLARE c CURSOR FOR ALTER CLUSTER quickstart SET (QUERY POLICY = 'cursor_policy')",
+            "PREPARE p AS SELECT * FROM prepared_view",
+        ]);
+        for expected in ["cursor_policy", "prepared_view"] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "missing {expected}: {names:?}"

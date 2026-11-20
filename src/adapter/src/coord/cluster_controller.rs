@@ -828,7 +828,10 @@ impl Coordinator {
             }
         }
         if !drops.is_empty() {
-            mutations.push(Op::DropObjects(drops));
+            mutations.push(Op::DropObjects {
+                objects: drops,
+                cascade: false,
+            });
         }
         Some(mutations)
     }
@@ -985,14 +988,12 @@ impl Coordinator {
         } else {
             Some(&shape.availability_zones.0)
         };
-        let location = self.catalog().concretize_replica_location(
-            location,
-            &self
-                .catalog()
-                .get_role_allowed_cluster_sizes(&Some(owner_id)),
-            azs,
-            false,
-        )?;
+        // DDL authorizes sizes before committing the configuration. Reconcile
+        // must still realize it if the owner's size allow-list later shrinks or
+        // the size is disabled since.
+        let location = self
+            .catalog()
+            .concretize_replica_location(location, &vec![], azs, true)?;
 
         let config = mz_controller::clusters::ReplicaConfig {
             location,

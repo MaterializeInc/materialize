@@ -191,7 +191,7 @@ describe("store/environments", () => {
     it("should return blocked if the environment returns an organization blocked response", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
+          return new Promise<Response>((resolve) => {
             return resolve(
               HttpResponse.json(
                 {
@@ -215,7 +215,7 @@ describe("store/environments", () => {
     it("should return blocked if the environment returns a network policy blocked response", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
+          return new Promise<Response>((resolve) => {
             return resolve(
               HttpResponse.json(
                 {
@@ -398,6 +398,28 @@ describe("store/environments", () => {
       expect(euWest).toEqual({
         state: "unknown",
         errors: [expect.objectContaining({ message: "Get region failed" })],
+      });
+    });
+
+    it("reports enabled regions without connection details as unknown", async () => {
+      server.use(
+        buildEnabledRegionReponse({
+          sqlAddress: undefined,
+          httpAddress: undefined,
+        }),
+      );
+      const store = getStore();
+      renderHook(() => usePollEnvironmentHealth({ intervalMs: 5000 }), {
+        wrapper: Wrapper,
+      });
+      let environments: EnvironmentsWithHealth | undefined;
+      await waitFor(() => {
+        environments = store.get(environmentsWithHealth);
+        expect(environments).toBeTruthy();
+      });
+      expect(environments?.get("aws/us-east-1")).toEqual({
+        state: "unknown",
+        errors: [{ message: "Region has no connection details" }],
       });
     });
 

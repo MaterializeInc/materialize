@@ -89,8 +89,6 @@ skip = [
     { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # tokio-tungstenite still pulls 0.29.
-    { name = "tungstenite", version = "0.29.0" },
     # duckdb pins comfy-table to 7.1 for its MSRV, which still pulls 0.28.
     { name = "crossterm", version = "0.28.1" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
@@ -286,6 +284,12 @@ wrappers = [
     "pulldown-cmark",
 ]
 
+# bzip2 decodes untrusted user files, e.g. in `COPY FROM`. Use bzip2's default
+# libbz2-rs-sys backend, a Rust port, instead of the C libbz2 that `bzip2-sys`
+# builds.
+[[bans.deny]]
+name = "bzip2-sys"
+
 # We shouldn't manually vendor `protoc`, instead rely on it through `mz-build-tools`.
 [[bans.deny]]
 name = "protobuf-src"
@@ -305,6 +309,12 @@ ignore = [
     "RUSTSEC-2024-0436",
     # Bincode is unmaintained, the team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
     "RUSTSEC-2025-0141",
+    # chrono is unmaintained with no patched release. Arrow and postgres-types
+    # still depend on it.
+    "RUSTSEC-2026-0543",
+    # humantime is unmaintained with no patched release. console-subscriber
+    # still depends on it.
+    "RUSTSEC-2026-0542",
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
@@ -338,6 +348,7 @@ allow = [
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "bzip2-1.0.6",
     "ICU",
     "ISC",
     "MIT",

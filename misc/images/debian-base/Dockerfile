@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # The CA bundle comes from this pinned image, so certificate updates arrive
-# only through Dependabot's digest bumps of it. Only the bundle is copied, since
+# only through Renovate's digest bumps of it. Only the bundle is copied, since
 # the `ca-certificates` package depends on the `openssl` CLI.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
 
 FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 

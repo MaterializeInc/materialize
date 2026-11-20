@@ -1,22 +1,6 @@
 # Materialize
 
-## Skills
-
-Canonical agent skills in `.agents/skills/`. `.claude/skills` is compat symlink
-for Claude Code. Check `mz-*` skill before tasks — encodes project conventions,
-saves time.
-
-Use the `mz-test` skill before running ANY tests, even mid-task — the canonical
-commands aren't the obvious ones (e.g. `bin/sqllogictest --optimized`, not
-`cargo build --bin sqllogictest`).
-
-Use the `mz-run` skill before building, running, formatting, or linting. `bin/fmt` and `bin/lint` are the canonical entry points, NOT `cargo fmt`, `rustfmt`, or a bare `cargo clippy`. `bin/environmentd`, not `cargo build --bin environmentd`.
-
-Use the `mz-commit` skill before `git commit`, `git push`, or `gh pr create`.
-
-Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or when handed a Buildkite URL.
-
-## Code navigation
+## Repository layout
 
 `console/` is the web Console. It was moved in from the standalone
 `MaterializeInc/console` repository, which is now archived and stale.
@@ -45,33 +29,33 @@ authors to squash on merge or to keep every intermediate commit green.
   static snapshot. When you feel tempted to reduce scope or take a shortcut,
   flag it to the user and workshop an alternative together rather than silently
   downgrading the design.
-* When making code changes, run cheap checkers/linters and formatters before
-  reporting success and/or committing changes. For Rust, these would be
-  `bin/fmt` and `cargo check`.
+* Before reporting success on a code change, run the cheap formatters and
+  checkers. For Rust, these are `bin/fmt` and `cargo check`. Before committing,
+  run the pre-commit checklist in the `mz-commit` skill.
 * When debugging CI or lint failures, start by reproducing the exact failing
   command locally and reading its output. Do not run generic checks (clippy,
   fmt, grep) in a shotgun approach.
-* We value simplicity and clear abstractions. We especially care about
-  designing the interfaces or boundaries between components well. This includes
-  components, traits, interfaces, modules, and crates.
+* We value simplicity and clear abstractions. Simplicity means fewer concepts
+  and moving parts, not less capability. Take the most care over the boundaries
+  between components: the interfaces that traits, modules, and crates expose.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
   design docs, all of it. Restructure with full stops and commas instead. The
   same goes for semicolons, though one is fine where splitting would mangle the
   sentence.
-* Our guidance applies both when writing new code or designs, or when we notice
-  deviations in code or architecture that we are working on. At the same time,
-  we want to keep our changes minimal so it's good to call out deviations and
-  then we can decide together what to do about it.
+* Apply this guidance to the code and designs you write. When existing code
+  you are working on deviates from it, do not fix it in passing. Keep the
+  change minimal, call out the deviation, and let the user decide what to do
+  about it.
 * Never put a side effect inside `debug_assert!` (or `debug_assert_eq!`, etc.).
   The macro body compiles out whenever debug-assertions are off, which includes
-  `[profile.optimized]` (what `bin/environmentd` and mzcompose use) and
-  `[profile.release]`. Only `[profile.ci]` turns them on. A side effect written
-  there, for example `debug_assert!(map.insert(k, v).is_none())`, runs under
-  `cargo test` but silently vanishes in optimized and release builds, leaving
-  the logic it powered inert and profiler-blind. Bind the effect to a `let`
-  outside the assert, then assert on the bound value. Clippy's
-  `debug_assert_with_mut_call` catches `&mut self` receivers but not `&self` or
-  free-function side effects.
+  `[profile.optimized]` (what `bin/environmentd --optimized` and mzcompose use)
+  and `[profile.release]`. Only the dev profile and `[profile.ci]` turn them on.
+  A side effect written there, for example
+  `debug_assert!(map.insert(k, v).is_none())`, runs under `cargo test` but
+  silently vanishes in optimized and release builds, leaving the logic it
+  powered inert and profiler-blind. Bind the effect to a `let` outside the
+  assert, then assert on the bound value. Clippy's `debug_assert_with_mut_call`
+  catches `&mut self` receivers but not `&self` or free-function side effects.
 * Never write vendor, customer, or account names into durable or user-facing
   surfaces: committed code, comments, column comments, docs, specs, commit
   messages, PR bodies, or test fixtures. Anything persisted to disk gets shared,
@@ -90,8 +74,6 @@ authors to squash on merge or to keep every intermediate commit green.
   default it chose.
 
 ## Code comments
-
-Specifics for code comments and documentation:
 
 Spend comments on the non-obvious: concurrency and async hazards (races,
 lease/handle expiry, values that must not be held across an await point),
@@ -113,7 +95,7 @@ Every fact gets exactly one owning comment: the decision point for reasoning,
 the mechanism for mechanism docs, the public setter or constant for config
 semantics. Everywhere else either points at the owner or says nothing. The
 tell is the same clause appearing near-verbatim in a module doc, a struct doc,
-and an inline comment; when that happens, pick the owner and cut the rest. In
+and an inline comment. When that happens, pick the owner and cut the rest. In
 particular: don't restate a callee's documented contract at its call sites,
 don't narrate in one function's doc what a sibling's doc already owns, and
 don't duplicate an assert message in a comment on the same line.
@@ -123,7 +105,7 @@ distinct decision or invariant, not re-argue one documented elsewhere or
 enumerate the item's callers or fields. Skip speculative comments about what
 a future implementation could do (one `TODO` at the owning seam is enough),
 and skip comments explaining an absence when the surrounding docs already
-imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
+imply it. No ASCII section-divider banners (`// ----- helpers -----`). Item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").

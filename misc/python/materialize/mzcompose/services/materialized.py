@@ -112,6 +112,7 @@ class Materialized(Service):
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
         force_migrations: str | None = None,
+        force_catalog_migration: bool = False,
         publish: bool | None = None,
         stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
@@ -274,6 +275,9 @@ class Materialized(Service):
             ]
             if not unsafe_mode:
                 command += ["--unsafe-mode"]
+
+        if force_catalog_migration and image is None:
+            command += ["--unsafe-force-catalog-migration"]
 
         self.default_storage_size = (
             "scale=1,workers=1"

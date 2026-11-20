@@ -8,19 +8,20 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::BytesMut;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_controller_types::ClusterId;
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::timestamp::TimestampLike;
-use mz_repr::{Datum, GlobalId, Row, RowIterator, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowIterator, RowPacker, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{AstInfo, Statement};
 use mz_sql::plan::Params;
@@ -240,6 +241,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedMaterializedView
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedNetworkPolicy
+            | ExecuteResponse::CreatedQueryPolicy
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::DeclaredCursor
             | ExecuteResponse::Deleted(_)
@@ -369,8 +371,7 @@ pub struct PreparedStatementEvent {
     pub session_id: Uuid,
 }
 
-/// Throttling state for statement logging, shared across multiple frontend tasks (and currently
-/// also shared with the old peek sequencing).
+/// Throttling state for statement logging, shared across frontend tasks and the coordinator.
 #[derive(Debug)]
 pub struct ThrottlingState {
     /// Inner state protected by a mutex for rate-limiting, because the two inner fields have to be
@@ -467,6 +468,8 @@ impl ThrottlingState {
 /// of the Coordinator's main task.
 #[derive(Debug, Clone)]
 pub struct StatementLoggingFrontend {
+    /// The log that statements executed by the session task are recorded in.
+    pub log: Arc<StatementLog>,
     /// Shared throttling state for rate-limiting statement logging.
     pub throttling_state: Arc<ThrottlingState>,
     /// Reproducible RNG for statement sampling (only used in tests).
@@ -566,8 +569,7 @@ impl StatementLoggingFrontend {
     ///
     /// This must only be called once we are committed to logging the prepared statement, i.e.
     /// after the sampling and throttling checks in [`Self::begin_statement_execution`] have
-    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged` used by the old peek
-    /// sequencing.
+    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged`.
     fn record_prepared_statement_as_logged(
         &self,
         uuid: Uuid,
@@ -582,7 +584,8 @@ impl StatementLoggingFrontend {
     }
 
     /// Begin statement execution logging from the frontend. (Corresponds to
-    /// `Coordinator::begin_statement_execution`, which is used by the old peek sequencing.)
+    /// `Coordinator::begin_statement_execution`, which logs the statements the coordinator
+    /// sequences.)
     ///
     /// This encapsulates all the statement logging setup:
     /// - Retrieves system config values
@@ -590,11 +593,8 @@ impl StatementLoggingFrontend {
     /// - Creates statement logging records
     /// - Attends to metrics.
     ///
-    /// Returns None if the statement should not be logged (due to sampling or throttling), or the
-    /// info required to proceed with statement logging.
-    /// The `Row` is the pre-packed row for `mz_statement_execution_history`.
-    /// The `Option<PreparedStatementEvent>` is None when we have already logged the prepared
-    /// statement before, and this is just a subsequent execution.
+    /// Returns `None` if the statement is not logged (due to sampling or throttling). Otherwise
+    /// the execution has begun in the log, and the caller owes it an end.
     pub fn begin_statement_execution(
         &self,
         session: &mut Session,
@@ -602,12 +602,7 @@ impl StatementLoggingFrontend {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         system_config: &SystemVars,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
-    ) -> Option<(
-        StatementLoggingId,
-        StatementBeganExecutionRecord,
-        Row,
-        Option<PreparedStatementEvent>,
-    )> {
+    ) -> Option<StatementLoggingId> {
         // Skip logging for internal users unless explicitly enabled
         let enable_internal_statement_logging = system_config.enable_internal_statement_logging();
         if session.user().is_internal() && !enable_internal_statement_logging {
@@ -744,12 +739,9 @@ impl StatementLoggingFrontend {
             self.throttling_state.reset_throttled_count();
         }
 
-        Some((
-            StatementLoggingId(execution_uuid),
-            began_execution,
-            mseh_update,
-            prepared_statement_event,
-        ))
+        self.log
+            .begin_execution(began_execution, prepared_statement_event);
+        Some(StatementLoggingId(execution_uuid))
     }
 }
 
@@ -869,42 +861,374 @@ pub(crate) fn create_began_execution_record(
     }
 }
 
-/// Represents a single statement logging event that can be sent from the frontend
-/// peek sequencing to the Coordinator via an mpsc channel.
-#[derive(Debug, Clone)]
-pub enum FrontendStatementLoggingEvent {
-    /// Statement execution began, possibly with an associated prepared statement
-    /// if this is the first time the prepared statement is being logged
-    BeganExecution {
+/// Statement log updates that await the next write to the statement log collections.
+#[derive(Debug, Default)]
+pub(crate) struct PendingStatementLog {
+    /// `mz_statement_execution_history`
+    pub(crate) statement_executions: Vec<(Row, Diff)>,
+    /// `mz_prepared_statement_history`
+    pub(crate) prepared_statements: Vec<(Row, Diff)>,
+    /// `mz_sql_text`
+    pub(crate) sql_texts: Vec<(Row, Diff)>,
+    /// `mz_session_history`
+    pub(crate) sessions: Vec<(Row, Diff)>,
+    /// `mz_statement_lifecycle_history`
+    pub(crate) statement_lifecycle_events: Vec<(Row, Diff)>,
+}
+
+/// An execution that has begun and not ended.
+///
+/// Its `mz_statement_execution_history` row is packed when the log is drained.
+/// An execution that begins and ends between two drains is therefore written
+/// once, as its final row.
+#[derive(Debug)]
+struct BegunExecution {
+    record: StatementBeganExecutionRecord,
+    /// The row that was last drained for this execution, which is retracted
+    /// when a newer one replaces it.
+    drained: Option<Row>,
+    /// Whether `record` has changed since `drained` was packed from it.
+    dirty: bool,
+}
+
+#[derive(Debug, Default)]
+struct StatementLogState {
+    /// Executions that have begun and not ended.
+    executions_begun: BTreeMap<Uuid, BegunExecution>,
+    /// Sessions that have started and are not yet in `mz_session_history`.
+    /// A session is logged with the first prepared statement logged for it.
+    unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
+    pending: PendingStatementLog,
+}
+
+/// The statement log between the statements that are recorded in it and the
+/// collections it is periodically written to.
+///
+/// The coordinator and the session tasks record into it directly. A session
+/// task that executes a statement itself therefore logs it without sending the
+/// coordinator a message.
+///
+/// The lock is taken several times per logged statement by every session task,
+/// so no method holds it across more than a few map and vector operations on
+/// the hot path. Rows are packed outside it where the data allows.
+#[derive(Debug)]
+pub struct StatementLog {
+    state: Mutex<StatementLogState>,
+    lifecycle_logging_enabled: ConfigValHandle<bool>,
+}
+
+impl StatementLog {
+    /// `dyncfgs` must share its values with the catalog's system configuration.
+    pub(crate) fn new(dyncfgs: &ConfigSet) -> Self {
+        Self {
+            state: Mutex::new(StatementLogState::default()),
+            lifecycle_logging_enabled:
+                mz_adapter_types::dyncfgs::ENABLE_STATEMENT_LIFECYCLE_LOGGING.handle(dyncfgs),
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, StatementLogState> {
+        self.state.lock().expect("statement log lock poisoned")
+    }
+
+    /// Records that the execution described by `record` began.
+    ///
+    /// `prepared_statement` is set if this is the first logged execution of
+    /// its prepared statement, which is then logged too, together with its
+    /// session if that is not logged yet.
+    pub(crate) fn begin_execution(
+        &self,
         record: StatementBeganExecutionRecord,
-        /// `mz_statement_execution_history`
-        mseh_update: Row,
         prepared_statement: Option<PreparedStatementEvent>,
-    },
-    /// Statement execution ended
-    EndedExecution(StatementEndedExecutionRecord),
-    /// Set the cluster for a statement execution
-    SetCluster {
+    ) {
+        let lifecycle_update = self.pack_lifecycle_event(
+            StatementLoggingId(record.id),
+            &StatementLifecycleEvent::ExecutionBegan,
+            record.began_at,
+        );
+
+        let mut state = self.state();
+        state
+            .pending
+            .statement_lifecycle_events
+            .extend(lifecycle_update);
+        state.executions_begun.insert(
+            record.id,
+            BegunExecution {
+                record,
+                drained: None,
+                dirty: true,
+            },
+        );
+
+        if let Some(PreparedStatementEvent {
+            prepared_statement,
+            sql_text,
+            session_id,
+        }) = prepared_statement
+        {
+            state
+                .pending
+                .prepared_statements
+                .push((prepared_statement, Diff::ONE));
+            state.pending.sql_texts.push((sql_text, Diff::ONE));
+            if let Some(session) = state.unlogged_sessions.remove(&session_id) {
+                let update = pack_session_history_update(&session);
+                state.pending.sessions.push((update, Diff::ONE));
+            }
+        }
+    }
+
+    /// Sets the cluster that an execution runs on.
+    ///
+    /// Panics if the execution has ended.
+    pub(crate) fn set_execution_cluster(
+        &self,
         id: StatementLoggingId,
         cluster_id: ClusterId,
         cluster_name: String,
-    },
-    /// Set the execution timestamp for a statement
-    SetTimestamp {
-        id: StatementLoggingId,
-        timestamp: Timestamp,
-    },
-    /// Set the transient index ID for a statement
-    SetTransientIndex {
+    ) {
+        let found = self.mutate_execution(id, |record| {
+            record.cluster_id = Some(cluster_id);
+            record.cluster_name = Some(cluster_name);
+        });
+        assert!(found, "cluster set after execution ended");
+    }
+
+    /// Sets the timestamp that an execution reads or writes at.
+    ///
+    /// A duplicate end can race the asynchronous group-commit update, so an
+    /// ended execution is skipped and not treated as corruption.
+    pub(crate) fn set_execution_timestamp(&self, id: StatementLoggingId, timestamp: Timestamp) {
+        let found = self.mutate_execution(id, |record| {
+            record.execution_timestamp = Some(u64::from(timestamp));
+        });
+        if !found {
+            tracing::warn!(
+                statement_uuid = %id.0,
+                "execution already ended, skipping execution timestamp update",
+            );
+        }
+    }
+
+    /// Sets the transient index that an execution reads from.
+    ///
+    /// Panics if the execution has ended.
+    pub(crate) fn set_execution_transient_index(
+        &self,
         id: StatementLoggingId,
         transient_index_id: GlobalId,
-    },
-    /// Record a statement lifecycle event
-    Lifecycle {
+    ) {
+        let found = self.mutate_execution(id, |record| {
+            record.transient_index_id = Some(transient_index_id);
+        });
+        assert!(found, "transient index set after execution ended");
+    }
+
+    /// Applies `f` to the record of an execution that has begun. Returns
+    /// whether the execution was found, which it is not once it has ended.
+    fn mutate_execution<F>(&self, StatementLoggingId(id): StatementLoggingId, f: F) -> bool
+    where
+        F: FnOnce(&mut StatementBeganExecutionRecord),
+    {
+        let mut state = self.state();
+        let Some(execution) = state.executions_begun.get_mut(&id) else {
+            return false;
+        };
+        f(&mut execution.record);
+        execution.dirty = true;
+        true
+    }
+
+    /// Records the end of an execution whose beginning was logged. Ends are
+    /// idempotent: the first end wins and later ends for the same execution
+    /// are ignored.
+    pub(crate) fn end_execution(
+        &self,
         id: StatementLoggingId,
-        event: StatementLifecycleEvent,
+        reason: StatementEndedExecutionReason,
+        ended_at: EpochMillis,
+    ) {
+        let execution = self.state().executions_begun.remove(&id.0);
+        let Some(BegunExecution {
+            record: began_record,
+            drained,
+            dirty: _,
+        }) = execution
+        else {
+            // The statement was already ended; the first end wins.
+            //
+            // A missing entry can only mean a duplicate end, never an end that
+            // overtook its begin: a StatementLoggingId only exists once
+            // `begin_execution` has returned.
+            //
+            // Duplicate ends are legitimate, if rare. Ownership of a
+            // subscribe's end is handed from the frontend to the coordinator
+            // while the subscribe is dispatched, and async cancellation can
+            // strike mid-handoff: if a client disconnect drops the frontend
+            // future after the coordinator created its guard but before the
+            // frontend defused its own, both sides own the end and both emit
+            // one. A peek's end stays with its lifecycle and has one owner.
+            tracing::warn!(
+                statement_uuid = %id.0,
+                ?reason,
+                "duplicate end of statement execution, keeping the first end",
+            );
+            return;
+        };
+        let ended_record = StatementEndedExecutionRecord {
+            id: id.0,
+            reason,
+            ended_at,
+        };
+        let update = pack_full_statement_execution_update(&began_record, &ended_record);
+        let lifecycle_update =
+            self.pack_lifecycle_event(id, &StatementLifecycleEvent::ExecutionFinished, ended_at);
+
+        let mut state = self.state();
+        let executions = &mut state.pending.statement_executions;
+        executions.extend(drained.map(|row| (row, Diff::MINUS_ONE)));
+        executions.push((update, Diff::ONE));
+        state
+            .pending
+            .statement_lifecycle_events
+            .extend(lifecycle_update);
+    }
+
+    /// Records a lifecycle event of an execution, if lifecycle logging is on.
+    pub(crate) fn record_lifecycle_event(
+        &self,
+        id: StatementLoggingId,
+        event: &StatementLifecycleEvent,
         when: EpochMillis,
-    },
+    ) {
+        if let Some(update) = self.pack_lifecycle_event(id, event, when) {
+            self.state().pending.statement_lifecycle_events.push(update);
+        }
+    }
+
+    fn pack_lifecycle_event(
+        &self,
+        StatementLoggingId(id): StatementLoggingId,
+        event: &StatementLifecycleEvent,
+        when: EpochMillis,
+    ) -> Option<(Row, Diff)> {
+        if !self.lifecycle_logging_enabled.get() {
+            return None;
+        }
+        let row = Row::pack_slice(&[
+            Datum::Uuid(id),
+            Datum::String(event.as_str()),
+            Datum::TimestampTz(to_datetime(when).try_into().expect("must fit")),
+        ]);
+        Some((row, Diff::ONE))
+    }
+
+    pub(crate) fn begin_session(&self, event: SessionHistoryEvent) {
+        self.state().unlogged_sessions.insert(event.id, event);
+    }
+
+    pub(crate) fn end_session(&self, id: Uuid) {
+        self.state().unlogged_sessions.remove(&id);
+    }
+
+    /// Returns the `mz_session_history` row of a session that is not logged
+    /// yet, without marking it as logged.
+    pub(crate) fn unlogged_session_update(&self, id: Uuid) -> Option<Row> {
+        self.state()
+            .unlogged_sessions
+            .get(&id)
+            .map(pack_session_history_update)
+    }
+
+    /// Takes the updates recorded since the last call.
+    pub(crate) fn drain(&self) -> PendingStatementLog {
+        let mut state = self.state();
+        let StatementLogState {
+            executions_begun,
+            pending,
+            ..
+        } = &mut *state;
+        // NOTE: This packs under the lock, once per execution that is in
+        // flight and has changed, which is bounded by the number of
+        // concurrently executing statements.
+        for execution in executions_begun.values_mut().filter(|e| e.dirty) {
+            let update = pack_statement_began_execution_update(&execution.record);
+            let retraction = execution.drained.replace(update.clone());
+            let executions = &mut pending.statement_executions;
+            executions.extend(retraction.map(|row| (row, Diff::MINUS_ONE)));
+            executions.push((update, Diff::ONE));
+            execution.dirty = false;
+        }
+        std::mem::take(pending)
+    }
+}
+
+fn pack_full_statement_execution_update(
+    began_record: &StatementBeganExecutionRecord,
+    ended_record: &StatementEndedExecutionRecord,
+) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    pack_statement_execution_inner(began_record, &mut packer);
+    let (status, error_message, result_size, rows_returned, execution_strategy) =
+        match &ended_record.reason {
+            StatementEndedExecutionReason::Success {
+                result_size,
+                rows_returned,
+                execution_strategy,
+            } => (
+                "success",
+                None,
+                result_size.map(|rs| i64::try_from(rs).expect("must fit")),
+                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                execution_strategy.map(|es| es.name()),
+            ),
+            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
+            StatementEndedExecutionReason::Errored { error } => {
+                // Backstop for SQL-435: `CREATE SECRET`/`ALTER SECRET` errors
+                // can embed secret material (the rejected statement text, or a
+                // value-bearing eval error). The per-site fixes redact the known
+                // cases, but we never persist an unredacted error for these
+                // kinds, regardless of which error variant fired. The client
+                // still receives the real error over pgwire.
+                let error = if began_record.kind.is_some_and(|kind| kind.is_secret()) {
+                    "<error redacted for secret statement>"
+                } else {
+                    error.as_str()
+                };
+                ("error", Some(error), None, None, None)
+            }
+            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
+        };
+    packer.extend([
+        Datum::TimestampTz(
+            to_datetime(ended_record.ended_at)
+                .try_into()
+                .expect("Sane system time"),
+        ),
+        status.into(),
+        error_message.into(),
+        result_size.into(),
+        rows_returned.into(),
+        execution_strategy.into(),
+    ]);
+    row
+}
+
+fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
+    let SessionHistoryEvent {
+        id,
+        connected_at,
+        application_name,
+        authenticated_user,
+    } = event;
+    Row::pack_slice(&[
+        Datum::Uuid(*id),
+        Datum::TimestampTz(to_datetime(*connected_at).try_into().expect("must fit")),
+        Datum::String(&*application_name),
+        Datum::String(&*authenticated_user),
+    ])
 }
 
 pub(crate) fn pack_statement_execution_inner(
@@ -1075,10 +1399,72 @@ impl WatchSetCreation {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, Row, SqlScalarType};
+    use differential_dataflow::consolidation::consolidate;
+    use mz_dyncfg::ConfigSet;
+    use mz_ore::now::to_datetime;
+    use mz_repr::{Datum, Diff, Row, SqlScalarType, Timestamp};
     use mz_sql::plan::Params;
+    use uuid::Uuid;
 
-    use super::serialize_params;
+    use super::{
+        StatementBeganExecutionRecord, StatementEndedExecutionReason, StatementLog,
+        StatementLoggingId, serialize_params,
+    };
+
+    #[mz_ore::test]
+    fn execution_changing_across_drains_leaves_one_final_row() {
+        let dyncfgs = ConfigSet::default()
+            .add(&mz_adapter_types::dyncfgs::ENABLE_STATEMENT_LIFECYCLE_LOGGING);
+        let log = StatementLog::new(&dyncfgs);
+        let id = Uuid::from_u128(1);
+        let record = StatementBeganExecutionRecord {
+            id,
+            prepared_statement_id: Uuid::from_u128(2),
+            sample_rate: 1.0,
+            params: vec![],
+            began_at: 1,
+            cluster_id: None,
+            cluster_name: None,
+            database_name: "materialize".into(),
+            search_path: vec![],
+            application_name: "test".into(),
+            transaction_isolation: "strict serializable".into(),
+            execution_timestamp: None,
+            transaction_id: 1,
+            transient_index_id: None,
+            mz_version: "test".into(),
+            kind: None,
+        };
+        let id = StatementLoggingId(id);
+        let mut written = vec![];
+
+        log.begin_execution(record, None);
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "in-flight execution is visible");
+        let in_flight = written[0].clone();
+
+        // An unchanged execution is not written again.
+        assert!(log.drain().statement_executions.is_empty());
+
+        log.set_execution_timestamp(id, Timestamp::from(7));
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "changed row replaces the drained one");
+        assert_ne!(written[0], in_flight);
+
+        log.end_execution(id, StatementEndedExecutionReason::Canceled, 2);
+        written.extend(log.drain().statement_executions);
+        consolidate(&mut written);
+        assert_eq!(written.len(), 1, "final row replaces the drained one");
+        let (row, diff) = &written[0];
+        assert_eq!(*diff, Diff::ONE);
+        let finished_at = Datum::TimestampTz(to_datetime(2).try_into().expect("must fit"));
+        assert!(row.iter().any(|datum| datum == Datum::String("canceled")));
+        assert!(row.iter().any(|datum| datum == finished_at));
+
+        assert!(log.drain().statement_executions.is_empty());
+    }
 
     /// A `"char"` param whose byte is `>= 0x80` used to panic
     /// `String::from_utf8` on the statement-logging path. It should now

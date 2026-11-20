@@ -27,27 +27,27 @@ use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use rand::{RngExt, SeedableRng, rngs};
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::AdapterNotice;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
-    AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
-    CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
+    ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator, Message, PurifiedStatementReady,
+    WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
+use crate::{AdapterError, AdapterNotice};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -87,22 +87,25 @@ impl Coordinator {
                     self.message_controller(m).boxed_local().await
                 }
             }
+            Message::SourceStatementReady {
+                pending,
+                response,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_source_statement_ready(pending, Some(response))
+                    .boxed_local()
+                    .await;
+            }
+            Message::DdlCommandsReady { pending, otel_ctx } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_ddl_commit(pending).boxed_local().await;
+            }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
                     .boxed_local()
                     .await
             }
-            Message::CreateConnectionValidationReady(ready) => {
-                self.message_create_connection_validation_ready(ready)
-                    .boxed_local()
-                    .await
-            }
-            Message::AlterConnectionValidationReady(ready) => {
-                self.message_alter_connection_validation_ready(ready)
-                    .boxed_local()
-                    .await
-            }
-            Message::DeferredPlanReady { conn_id } => self.sequence_deferred_plan(conn_id).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -127,6 +130,7 @@ impl Coordinator {
                 // The committer applied `write_ts` to the oracle, so the read ts is at least
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
+                self.retire_local_reads_linearized_by(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
                 for result in internal_results {
                     result.send(crate::coord::appends::WriteResult::Success {
@@ -220,17 +224,11 @@ impl Coordinator {
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
-            Message::SubscribeStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
-            }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
             Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
-            }
-            Message::ExplainTimestampStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::SecretStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
@@ -710,8 +708,10 @@ impl Coordinator {
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
-                self.handle_peek_notification(uuid, response, otel_ctx);
+            ControllerResponse::PeekNotification(uuid, _, _) => {
+                // The adapter issues every peek with a lifecycle, which
+                // receives the notification in place of the coordinator.
+                soft_panic_or_log!("unexpected notification for peek {uuid}");
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
@@ -846,60 +846,24 @@ impl Coordinator {
         };
 
         let plan = match purified_statement {
-            PurifiedStatement::PurifiedCreateSource {
-                create_progress_subsource_stmt,
-                create_source_stmt,
-                subsources,
-                available_source_references,
-            } => self
-                .plan_purified_create_source(
-                    &ctx,
-                    params,
-                    create_progress_subsource_stmt,
-                    create_source_stmt,
-                    subsources,
-                    available_source_references,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                source_name,
-                options,
-                subsources,
-            } => self
-                .plan_purified_alter_source_add_subsource(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    options,
-                    subsources,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
-                source_name,
-                available_source_references,
-            } => self
-                .plan_purified_alter_source_refresh_references(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    available_source_references,
-                )
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
+            PurifiedStatement::PurifiedCreateSource { .. }
+            | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. }
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. } => {
+                let msg = "source preparation must execute as a catalog command";
+                soft_panic_or_log!("{msg}");
+                Err(AdapterError::Internal(msg.into()))
+            }
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)
-            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
+            | PurifiedStatement::PurifiedCreateSink(..)) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
                     }
-                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
-                        Statement::CreateTableFromSource(stmt)
-                    }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
+                    | PurifiedStatement::PurifiedCreateTableFromSource { .. }
                     | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
                     | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
@@ -922,92 +886,6 @@ impl Coordinator {
             }
             Err(e) => ctx.retire(Err(e)),
         }
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_create_connection_validation_ready(
-        &mut self,
-        CreateConnectionValidationReady {
-            mut ctx,
-            result,
-            connection_id,
-            connection_gid,
-            mut plan_validity,
-            otel_ctx,
-            resolved_ids,
-        }: CreateConnectionValidationReady,
-    ) {
-        otel_ctx.attach_as_parent();
-
-        // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in.
-        //
-        // WARNING: If we support `ALTER SECRET`, we'll need to also check
-        // for connectors that were altered while we were purifying.
-        if let Err(e) = plan_validity.check(self.catalog()) {
-            if self.secrets_controller.delete(connection_id).await.is_ok() {
-                self.caching_secrets_reader.invalidate(connection_id);
-            }
-            return ctx.retire(Err(e));
-        }
-
-        let plan = match result {
-            Ok(ok) => ok,
-            Err(e) => {
-                if self.secrets_controller.delete(connection_id).await.is_ok() {
-                    self.caching_secrets_reader.invalidate(connection_id);
-                }
-                return ctx.retire(Err(e));
-            }
-        };
-
-        let result = self
-            .sequence_create_connection_stage_finish(
-                &mut ctx,
-                connection_id,
-                connection_gid,
-                plan,
-                resolved_ids,
-            )
-            .await;
-        ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_alter_connection_validation_ready(
-        &mut self,
-        AlterConnectionValidationReady {
-            mut ctx,
-            result,
-            connection_id,
-            connection_gid: _,
-            mut plan_validity,
-            otel_ctx,
-            resolved_ids: _,
-        }: AlterConnectionValidationReady,
-    ) {
-        otel_ctx.attach_as_parent();
-
-        // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in.
-        //
-        // WARNING: If we support `ALTER SECRET`, we'll need to also check
-        // for connectors that were altered while we were purifying.
-        if let Err(e) = plan_validity.check(self.catalog()) {
-            return ctx.retire(Err(e));
-        }
-
-        let conn = match result {
-            Ok(ok) => ok,
-            Err(e) => {
-                return ctx.retire(Err(e));
-            }
-        };
-
-        let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
-            .await;
-        ctx.retire(result);
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1135,6 +1013,23 @@ impl Coordinator {
                 };
                 notifier(notice);
             }
+        }
+    }
+
+    /// Retires pending local-timeline reads at or below `applied_ts`.
+    fn retire_local_reads_linearized_by(&mut self, applied_ts: Timestamp) {
+        if self.pending_linearize_read_txns.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let (ready_txns, pending_txns) = std::mem::take(&mut self.pending_linearize_read_txns)
+            .into_iter()
+            .partition::<BTreeMap<_, _>, _>(|(_conn_id, read_txn)| {
+                read_txn.linearized_by(&Timeline::EpochMilliseconds, &applied_ts)
+            });
+        self.pending_linearize_read_txns = pending_txns;
+        for ready_txn in ready_txns.into_values() {
+            ready_txn.finish_with_metrics(&self.metrics, now);
         }
     }
 

@@ -77,7 +77,7 @@ class IcebergSinkUpsert(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (l_k, l_v)
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
 
                 > SELECT * FROM iceberg_sink_source_view;
                 D2 A 1000
@@ -110,7 +110,7 @@ class IcebergSinkUpsert(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (l_k, l_v)
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
 
                 > SELECT * FROM iceberg_sink_source_view;
                 I2 B 1000
@@ -138,7 +138,7 @@ class IcebergSinkUpsert(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (l_k, l_v)
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
 
                 > SELECT * FROM iceberg_sink_source_view;
                 I2 B 1000

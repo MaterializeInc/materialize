@@ -41,12 +41,12 @@ members = [
 
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "fcca71c8a6ee351eda7b6dfcd607055fa9a6d302" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "0a2c9f9ec9f323dc7dd6553782bc3f18d9d6bb00" }
 
 # Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
 # `mz_changes` branch carries current IANA data only, no code changes.
@@ -67,11 +67,6 @@ mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev =
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
 tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
-
-# Allows us to use bzip2-sys rather than the rust reimpl.
-# All changes should go to the `mz_changes` branch.
-# Once https://github.com/Nullus157/async-compression/pull/364 lands we can remove this.
-async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_v0.10.x` branch.

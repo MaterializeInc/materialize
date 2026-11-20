@@ -228,7 +228,56 @@ pub(super) async fn get_cluster_config(
             }
         }
 
-        Ok(Some(ClusterConfig::Unmanaged { replicas, grants }))
+        let query_policy = get_cluster_query_policy(client, name).await?;
+        Ok(Some(ClusterConfig::Unmanaged {
+            replicas,
+            grants,
+            query_policy,
+        }))
+    }
+}
+
+/// Read the attached policy, or none on servers without query policies.
+async fn get_cluster_query_policy(
+    client: &Client,
+    name: &str,
+) -> Result<Option<String>, ConnectionError> {
+    let exists = client
+        .query_one(
+            "SELECT EXISTS (
+            SELECT 1 FROM mz_catalog.mz_objects o
+            JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+            WHERE s.name = 'mz_internal' AND o.name = 'mz_query_policy_attachments'
+        )",
+            &[],
+        )
+        .await?;
+    if !exists.get::<_, bool>(0) {
+        return Ok(None);
+    }
+
+    let rows = client
+        .query(
+            "SELECT p.name
+         FROM mz_internal.mz_query_policy_attachments a
+         JOIN mz_catalog.mz_clusters c ON c.id = a.object_id
+         LEFT JOIN mz_internal.mz_query_policies p ON p.id = a.policy_id
+         WHERE a.object_type = 'cluster' AND c.name = $1",
+            &[&name],
+        )
+        .await?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => row.get::<_, Option<String>>(0).map(Some).ok_or_else(|| {
+            ConnectionError::Message(format!(
+                "Cannot resolve query policy for cluster '{}'",
+                name
+            ))
+        }),
+        _ => Err(ConnectionError::Message(format!(
+            "Multiple query policies for cluster '{}'",
+            name
+        ))),
     }
 }
 

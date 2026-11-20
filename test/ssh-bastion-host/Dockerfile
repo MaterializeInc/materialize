@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 # Mirrored so it's available on DockerHub when quay.io is down
-FROM quay.io/panubo/sshd:1.10.0
+FROM quay.io/panubo/sshd:1.10.0@sha256:6d54f749fe1817628528ad75a88ab368bb6b9b5a7ad0fe08e299560606a20672

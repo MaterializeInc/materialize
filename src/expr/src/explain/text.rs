@@ -25,7 +25,7 @@ use mz_repr::explain::{
 use mz_repr::{Datum, Diff, GlobalId, Row, StableRow, UNKNOWN_COLUMN_NAME};
 use mz_sql_parser::ast::Ident;
 
-use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, SourceOperators};
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
     LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizableExpr, RowSetFinishing,
@@ -90,9 +90,10 @@ where
     }
 }
 
-impl<'a, T: 'a> DisplayText for ExplainMultiPlan<'a, T>
+impl<'a, T: 'a, O> DisplayText for ExplainMultiPlan<'a, T, O>
 where
     T: DisplayText<PlanRenderingContext<'a, T>> + Ord,
+    O: SourceOperators,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
@@ -155,7 +156,7 @@ where
                     if let Some(cols) = cols.as_mut() {
                         let anonymous = std::iter::repeat(String::new());
                         cols.extend(
-                            anonymous.take(src.op.as_ref().map_or(0, |op| op.expressions.len())),
+                            anonymous.take(src.op.as_ref().map_or(0, |op| op.appended_columns())),
                         )
                     };
                     // Render source with humanized expressions.

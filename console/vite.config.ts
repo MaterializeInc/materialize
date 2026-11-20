@@ -91,6 +91,12 @@ function buildDefinitions() {
   };
 }
 
+// vite-plugin-svgr 4.5 transforms with oxc whenever Vite exports
+// `transformWithOxc`, which Vite 8 does, and passes `esbuildOptions` to it.
+// oxc ignores `loader` and defaults `lang` to "jsx", which cannot parse the
+// TypeScript that `svgrTemplate` emits.
+const svgrTransformOptions = { loader: "tsx", lang: "tsx" } as const;
+
 const plugins = [
   wasm(),
   createHtmlPlugin({
@@ -103,9 +109,7 @@ const plugins = [
       typescript: true,
       template: svgrTemplate,
     },
-    esbuildOptions: {
-      loader: "tsx",
-    },
+    esbuildOptions: svgrTransformOptions,
     // A minimatch pattern, or array of patterns, which specifies the files in the build the plugin should include.
     include: "**/*.svg?react",
   }),

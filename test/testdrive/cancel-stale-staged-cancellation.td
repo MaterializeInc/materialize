@@ -10,9 +10,9 @@
 # A cancellation that arrives while no statement is running must not cancel
 # the next statement on that connection. Regression test for SQL-275: within
 # an explicit transaction, the per-connection cancel watch of a finished
-# staged statement (e.g. EXPLAIN TIMESTAMP) lingered until transaction end,
-# so a late cancellation was misattributed to the transaction's next
-# statement.
+# staged statement (here EXPLAIN CREATE MATERIALIZED VIEW) lingered until
+# transaction end, so a late cancellation was misattributed to the
+# transaction's next statement.
 
 > CREATE TABLE cancel_stale_t (a int)
 
@@ -31,13 +31,13 @@ $ postgres-execute connection=main
 BEGIN;
 
 $ postgres-execute connection=main
-EXPLAIN TIMESTAMP FOR SELECT * FROM cancel_stale_t;
+EXPLAIN CREATE MATERIALIZED VIEW cancel_stale_mv AS SELECT * FROM cancel_stale_t;
 
 $ postgres-execute connection=canceler
 SELECT pg_cancel_backend(CAST(${main-pid} AS int4));
 
 $ postgres-execute connection=main
-EXPLAIN TIMESTAMP FOR SELECT * FROM cancel_stale_t;
+EXPLAIN CREATE MATERIALIZED VIEW cancel_stale_mv AS SELECT * FROM cancel_stale_t;
 
 $ postgres-execute connection=main
 COMMIT;

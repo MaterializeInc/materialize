@@ -443,7 +443,7 @@ impl SessionVars {
         use definitions::*;
 
         let vars = [
-            &FAILPOINTS,
+            &UNSAFE_FAILPOINTS,
             &SERVER_VERSION,
             &SERVER_VERSION_NUM,
             &SQL_SAFE_UPDATES,
@@ -1234,6 +1234,7 @@ impl SystemVars {
             &MAX_SECRETS,
             &MAX_ROLES,
             &MAX_NETWORK_POLICIES,
+            &MAX_QUERY_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
@@ -1790,6 +1791,11 @@ impl SystemVars {
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_network_policies(&self) -> u32 {
         *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
+    /// Returns the value of the `max_query_policies` configuration parameter.
+    pub fn max_query_policies(&self) -> u32 {
+        *self.expect_value(&MAX_QUERY_POLICIES)
     }
 
     /// Returns the value of the `max_network_policies` configuration parameter.
@@ -2529,6 +2535,12 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
 /// Returns whether the named variable is an HTTP server related config var.
 pub fn is_http_config_var(name: &str) -> bool {
     name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
+}
+
+/// Whether `name` is a system parameter that sessions copy at connect time.
+pub fn is_session_default(name: &str) -> bool {
+    SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
+        || name.eq_ignore_ascii_case(STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE.name())
 }
 
 /// Set of [`SystemVar`]s that can also get set at a per-Session level.

@@ -56,8 +56,7 @@ use crate::error::AdapterError;
 use crate::optimize::LirDataflowDescription;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
-    StatementLoggingFrontend,
+    StatementEndedExecutionReason, StatementExecutionStrategy, StatementLoggingFrontend,
 };
 use crate::statement_logging::{StatementLoggingId, WatchSetCreation};
 use crate::util::Transmittable;
@@ -279,13 +278,13 @@ pub enum Command {
     },
 
     ExecuteSlowPathPeek {
+        peek: crate::peek_client::PeekHandle,
         dataflow_plan: Box<PeekDataflowPlan>,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         intermediate_result_type: SqlRelationType,
-        source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
@@ -353,33 +352,11 @@ pub enum Command {
         tx: oneshot::Sender<Option<(ConnectionId, RoleId)>>,
     },
 
-    /// Register a pending peek initiated by frontend sequencing. This is needed for:
-    /// - statement logging
-    /// - query cancellation
-    RegisterFrontendPeek {
-        uuid: Uuid,
+    /// Installs dependency watches for a sampled frontend peek.
+    InstallPeekWatchSets {
         conn_id: ConnectionId,
-        cluster_id: mz_controller_types::ClusterId,
-        depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
-        /// If statement logging is enabled, contains all info needed for installing watch sets
-        /// and logging the statement execution.
-        watch_set: Option<WatchSetCreation>,
+        watch_set: WatchSetCreation,
         tx: oneshot::Sender<Result<(), AdapterError>>,
-    },
-
-    /// Unregister and retire a pending peek that was registered but then
-    /// failed to issue, ending its statement-logging execution with the given
-    /// reason.
-    ///
-    /// Registration handed ownership of end-of-execution logging to the
-    /// coordinator, so the frontend must not log the end itself. If a
-    /// concurrent teardown (e.g. a `DROP CLUSTER`) already retired the peek
-    /// and logged its end, this is a no-op.
-    UnregisterFrontendPeek {
-        uuid: Uuid,
-        reason: StatementEndedExecutionReason,
-        tx: oneshot::Sender<()>,
     },
 
     /// Generate a timestamp explanation, or fail with `ConcurrentDependencyDrop`
@@ -393,10 +370,6 @@ pub enum Command {
         determination: TimestampDetermination,
         tx: oneshot::Sender<Result<TimestampExplanation, AdapterError>>,
     },
-
-    /// Statement logging event from frontend peek sequencing.
-    /// No response channel needed - this is fire-and-forget.
-    FrontendStatementLogging(FrontendStatementLoggingEvent),
 
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
@@ -503,10 +476,8 @@ impl Command {
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::LookupConnection { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
+            | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
@@ -548,10 +519,8 @@ impl Command {
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::LookupConnection { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
+            | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
             | Command::RegisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
@@ -575,6 +544,9 @@ pub struct SuperuserAttribute(pub Option<bool>);
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
+    pub(crate) connection_peeks: Arc<crate::peek_registry::ConnectionPeeks>,
+    /// Cancellation notifications for session-owned completion waits.
+    pub frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
     /// RoleId for the user.
     pub role_id: RoleId,
     /// The role's superuser attribute in the Catalog.
@@ -726,6 +698,8 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The requested network policy was created.
     CreatedNetworkPolicy,
+    /// The requested query policy was created.
+    CreatedQueryPolicy,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -897,6 +871,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedQueryPolicy => Ok(ExecuteResponse::CreatedQueryPolicy),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -961,6 +936,7 @@ impl ExecuteResponse {
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
+            CreatedQueryPolicy => Some("CREATE QUERY POLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -1026,6 +1002,7 @@ impl ExecuteResponse {
             | AlterSink
             | AlterTableAddColumn
             | AlterMaterializedViewApplyReplacement
+            | AlterQueryPolicy
             | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
@@ -1055,6 +1032,7 @@ impl ExecuteResponse {
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
             CreateNetworkPolicy => &[CreatedNetworkPolicy],
+            CreateQueryPolicy => &[CreatedQueryPolicy],
             Declare => &[DeclaredCursor],
             DiscardTemp => &[DiscardedTemp],
             DiscardAll => &[DiscardedAll],

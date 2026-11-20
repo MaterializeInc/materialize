@@ -1633,3 +1633,42 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+# Filter pushdown for a materialized view with a temporal filter. CI runs with
+# soft assertions on, which turns the option off by default, so it is spelled
+# out here to cover what users see outside CI.
+
+statement ok
+CREATE TABLE events (
+  content text,
+  insert_ts timestamp,
+  delete_ts timestamp,
+  severity int
+)
+
+statement ok
+CREATE MATERIALIZED VIEW temporal_mv AS
+SELECT content
+FROM events
+WHERE mz_now() >= insert_ts
+  AND mz_now() < delete_ts
+  AND severity > 3
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH (humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW temporal_mv
+----
+materialize.public.temporal_mv:
+  Get::Collection materialize.public.events
+    raw=true
+
+Source materialize.public.events
+  project=(#0)
+  filter=((#3{severity} > 3))
+  temporal filter=timestamp_to_mz_timestamp(#1{insert_ts}) <= mz_now() < timestamp_to_mz_timestamp(#2{delete_ts})
+  pushdown=((#3{severity} > 3))
+  pushdown temporal filter=timestamp_to_mz_timestamp(#1{insert_ts}) <= mz_now() < timestamp_to_mz_timestamp(#2{delete_ts})
+
+Target cluster: quickstart
+
+EOF

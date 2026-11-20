@@ -19,7 +19,6 @@ use std::fmt;
 
 use aws_lc_rs::hmac as aws_hmac;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, KeyInit, Mac};
 use itertools::Itertools;
 use md5::Md5;
@@ -306,16 +305,15 @@ fn array_fill<'a>(
         return Err(EvalError::ArrayFillWrongArraySubscripts);
     }
 
-    let fill_count: usize = dimensions
-        .iter()
-        .cloned()
-        .map(Some)
-        .reduce(|a, b| match (a, b) {
-            (Some(a), Some(b)) => a.checked_mul(b),
-            _ => None,
-        })
-        .flatten()
-        .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?;
+    // An empty dimension array describes an empty array, not a single element.
+    let fill_count: usize = if dimensions.is_empty() {
+        0
+    } else {
+        dimensions
+            .iter()
+            .try_fold(1usize, |a, b| a.checked_mul(*b))
+            .ok_or(EvalError::MaxArraySizeExceeded(MAX_SIZE))?
+    };
 
     if matches!(
         mz_repr::datum_size(&fill).checked_mul(fill_count),
@@ -337,11 +335,11 @@ fn array_fill<'a>(
         return Err(EvalError::TempStorageBudgetExceeded);
     }
 
+    // Per PostgreSQL, an array without elements is zero-dimensional, whatever the requested
+    // dimensions and lower bounds. A one-dimensional array of length zero compares unequal to
+    // `'{}'` and nests into `{{},{}}` under `ARRAY[...]`.
     let array_dimensions = if fill_count == 0 {
-        vec![ArrayDimension {
-            lower_bound: 1,
-            length: 0,
-        }]
+        vec![]
     } else {
         dimensions
             .into_iter()
@@ -768,11 +766,16 @@ impl LazyVariadicFunc for Greatest {
         temp_storage: &'a RowArena,
         exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
-        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-        Ok(datums
-            .filter(|d| Ok(!d.is_null()))
-            .max()?
-            .unwrap_or(Datum::Null))
+        let mut greatest = None;
+        for e in exprs {
+            let d = e.eval(datums, temp_storage)?;
+            // NOTE: The later argument wins a tie. Datums that compare equal can
+            // still differ, e.g. float8 `-0` and `0`.
+            if !d.is_null() && greatest.is_none_or(|g| d >= g) {
+                greatest = Some(d);
+            }
+        }
+        Ok(greatest.unwrap_or(Datum::Null))
     }
 
     fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
@@ -912,11 +915,15 @@ impl LazyVariadicFunc for Least {
         temp_storage: &'a RowArena,
         exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
-        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-        Ok(datums
-            .filter(|d| Ok(!d.is_null()))
-            .min()?
-            .unwrap_or(Datum::Null))
+        let mut least = None;
+        for e in exprs {
+            let d = e.eval(datums, temp_storage)?;
+            // NOTE: The later argument wins a tie, see `Greatest::eval`.
+            if !d.is_null() && least.is_none_or(|l| d <= l) {
+                least = Some(d);
+            }
+        }
+        Ok(least.unwrap_or(Datum::Null))
     }
 
     fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {

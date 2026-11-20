@@ -121,7 +121,7 @@ SERVICES = [
 # `DateStyle` does not matter.
 SESSION_VARIABLES = {
     # SessionVars::new pure-session variables.
-    "failpoints",
+    "unsafe_failpoints",
     "server_version",
     "server_version_num",
     "sql_safe_updates",
@@ -207,6 +207,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_topology_spread_ignore_non_singular_scale
     cluster_topology_spread_max_skew
     cluster_topology_spread_soft
+    column_paged_batcher_file_release_bytes
+    column_paged_batcher_file_release_interval
     column_paged_batcher_spill_worker_fraction
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
@@ -249,6 +251,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
+    enable_column_paged_batcher_file_extents
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
     enable_compute_index_peek_offload
@@ -260,7 +263,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_eq_classes_withholding_errors
     enable_extended_protocol_implicit_transaction
     enable_fixed_correlated_cte_lowering
-    enable_frontend_subscribes
     enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop
@@ -271,6 +273,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
+    enable_postgres_source_failover
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -520,12 +523,9 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
     "cluster_topology_spread_min_domains",
-    "column_paged_batcher_budget_fraction",
-    "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
-    "enable_upsert_paged_spill",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",
@@ -537,6 +537,10 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "persist_validate_part_bounds_on_write",
     "storage_enforce_external_addresses",
     "timely_zero_copy_limit",
+    # Production serves the compiled-in default through a build-version rule,
+    # while the fallthrough this check compares against keeps the old value for
+    # builds that predate the default.
+    "column_paged_batcher_budget_fraction",
     # TODO: triage. These features default *on* in the compiled-in default but
     # production cloud still serves them *off* (or vice versa). Either production
     # LaunchDarkly is stale and should be flipped, or
@@ -547,7 +551,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
     "enable_new_outer_join_lowering",
-    "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
 }
@@ -577,7 +580,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
-    enable_upsert_chunked_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

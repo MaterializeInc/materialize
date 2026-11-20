@@ -772,6 +772,13 @@ SHOW PRIVILEGES ON CLUSTERS FOR mike
 Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: Some(Object(Cluster)), role: Some(Ident("mike")) }, from: None, filter: None }))
 
 parse-statement
+SHOW PRIVILEGES ON QUERY POLICIES FOR joe
+----
+SHOW PRIVILEGES ON QUERY POLICIES FOR joe
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: Some(Object(QueryPolicy)), role: Some(Ident("joe")) }, from: None, filter: None }))
+
+parse-statement
 SHOW PRIVILEGES ON SYSTEM
 ----
 SHOW PRIVILEGES ON SYSTEM

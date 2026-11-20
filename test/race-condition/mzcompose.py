@@ -1063,29 +1063,12 @@ class Scenario:
         self.c = c
         self.rng = rng
         self.num_objects = num_objects
-        # Set to True when a transient error was detected and the catalog
-        # may now be in an inconsistent state (e.g. a BEGIN/COMMIT transaction
-        # rolled back after testdrive's retry logic masked the COMMIT failure).
-        # The outer workflow loop must do a full reset before the next run.
-        self.needs_reset = False
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         raise NotImplementedError
 
     def print(self) -> None:
-        print(self._impl(1))
-
-    # Errors that are transient and safe to ignore in race-condition testing.
-    # When one of these is encountered the catalog is likely in an
-    # inconsistent state, so the scenario signals for a full reset.
-    ignorable_errors: list[str] = [
-        # TODO: https://linear.app/materializeinc/issue/DB-117
-        "another session modified the catalog while this DDL transaction was open",
-        # Downstream effect: a prior catalog-conflict rolled back a
-        # BEGIN/COMMIT transaction, so the object never existed by the time
-        # destroy() tried to drop it.
-        "unknown catalog item",
-    ]
+        print(self._repetition(0))
 
     def run_fragment(self, text: str, tries: int = 1) -> None:
         if not text:
@@ -1095,26 +1078,23 @@ class Scenario:
                 self.c.testdrive(text, quiet=True)
                 return
             except Exception as e:
-                # FailedTestExecutionError's str() is just a summary ("At least
-                # one test failed"); the actual testdrive error text lives in
-                # e.errors[].{message,details}. Check all of them.
-                haystack = str(e)
-                for err in getattr(e, "errors", []) or []:
-                    haystack += f"\n{getattr(err, 'message', '')}\n{getattr(err, 'details', '')}"
-                if any(msg in haystack for msg in self.ignorable_errors):
-                    print(
-                        f"Transient error detected, will reset state before next scenario: {e}"
-                    )
-                    self.needs_reset = True
-                    return
                 print(e)
                 if i == tries - 1:
                     print("Failed to run fragment, giving up")
                     raise
                 print(f"Failed to run fragment, retrying ({i+1}/{tries})")
 
-    def run(self, num_executions: int) -> None:
-        self.run_fragment(self._impl(num_executions))
+    def run(self, num_executions: int, end_time: float) -> int:
+        """Run up to `num_executions` repetitions, stopping once `end_time` has
+        passed, and return how many ran."""
+        for i in range(num_executions):
+            if time.time() >= end_time:
+                return i
+            # One testdrive invocation per repetition, so that the deadline can
+            # stop a scenario midway. Slow seeds were observed at ~70s per
+            # repetition, so 50 repetitions overran a 60 minute CI step.
+            self.run_fragment(self._repetition(i))
+        return num_executions
 
 
 class Concurrent(Scenario):
@@ -1132,8 +1112,10 @@ class Concurrent(Scenario):
     def print(self) -> None:
         pass  # TODO: print
 
-    def run(self, num_executions: int) -> None:
+    def run(self, num_executions: int, end_time: float) -> int:
         for i in range(num_executions):
+            if time.time() >= end_time:
+                return i
             # Clean up old state
             self.c.down(destroy_volumes=True)
             self.c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
@@ -1165,6 +1147,7 @@ class Concurrent(Scenario):
                 thread.join()
 
             self.run_fragment(self.objs[0].destroy())
+        return num_executions
 
 
 class Subsequent(Scenario):
@@ -1179,18 +1162,17 @@ class Subsequent(Scenario):
             self.objs.append(rng.choice(objects)(f"o_{i}", self.objs[0], rng))
             self.manipulators.append(self.rng.randrange(100))
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         result = ""
-        for i in range(num_executions):
-            if i == 0:
-                for obj in self.objs:
-                    result += obj.prepare() + "\n"
-            result += self.objs[0].create() + "\n"
-            for obj, manipulator in zip(self.objs[1:], self.manipulators):
-                result += obj.create() + "\n"
-                result += obj.manipulate(manipulator) + "\n"
-                result += obj.destroy() + "\n"
-            result += self.objs[0].destroy() + "\n"
+        if i == 0:
+            for obj in self.objs:
+                result += obj.prepare() + "\n"
+        result += self.objs[0].create() + "\n"
+        for obj, manipulator in zip(self.objs[1:], self.manipulators):
+            result += obj.create() + "\n"
+            result += obj.manipulate(manipulator) + "\n"
+            result += obj.destroy() + "\n"
+        result += self.objs[0].destroy() + "\n"
         return result
 
 
@@ -1210,27 +1192,22 @@ class SubsequentChain(Scenario):
             )
             self.manipulators.append(self.rng.randrange(100))
 
-    def _impl(self, num_executions: int) -> str:
+    def _repetition(self, i: int) -> str:
         result = ""
-        for i in range(num_executions):
-            if i == 0:
-                for obj in self.objs:
-                    result += obj.prepare() + "\n"
+        if i == 0:
             for obj in self.objs:
-                result += obj.create() + "\n"
-            for obj, manipulator in zip(self.objs[1:], self.manipulators):
-                result += obj.manipulate(manipulator) + "\n"
-            for obj in reversed(self.objs):
-                result += obj.destroy() + "\n"
+                result += obj.prepare() + "\n"
+        for obj in self.objs:
+            result += obj.create() + "\n"
+        for obj, manipulator in zip(self.objs[1:], self.manipulators):
+            result += obj.manipulate(manipulator) + "\n"
+        for obj in reversed(self.objs):
+            result += obj.destroy() + "\n"
         return result
 
 
 def setup(c: Composition) -> None:
-    """Bring services up and configure Materialize for the test.
-
-    Called at startup and again after a reset (down + up), so the operations
-    here must be safe to run against a fresh volume-destroyed environment.
-    """
+    """Bring services up and configure Materialize for the test."""
     c.up(
         *SERVICE_NAMES,
         Service("testdrive", idle=True),
@@ -1310,20 +1287,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     setup(c)
 
     seed = args.seed
-    # Longest observed scenario runtime so far; used to decide whether a new
-    # scenario can safely start within the remaining budget. The whole scenario
-    # runs as a single testdrive invocation and cannot be interrupted mid-flight,
-    # so starting one without enough budget would overrun the CI wall-clock.
-    max_scenario_duration = 0.0
-
     while time.time() < end_time:
-        remaining = end_time - time.time()
-        if max_scenario_duration > 0 and remaining < max_scenario_duration:
-            print(
-                f"--- Remaining budget {remaining:.0f}s < longest observed scenario {max_scenario_duration:.0f}s, stopping early"
-            )
-            break
-
         rng = random.Random(seed)
 
         if args.scenario == "subsequent":
@@ -1338,18 +1302,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"--- Scenario to run (--seed={seed})")
         scenario.print()
 
-        print(f"--- Running scenario {args.repetitions} times")
+        print(f"--- Running scenario up to {args.repetitions} times")
         start = time.time()
-        scenario.run(args.repetitions)
-        duration = time.time() - start
-        max_scenario_duration = max(max_scenario_duration, duration)
-        print(f"--- Scenario finished in {duration:.0f}s")
-
-        if scenario.needs_reset:
-            print("--- Resetting state after transient error")
-            c.down(destroy_volumes=True)
-            toxiproxy_start(c, args.jitter)
-            setup(c)
+        repetitions = scenario.run(args.repetitions, end_time)
+        print(
+            f"--- Scenario ran {repetitions}/{args.repetitions} times in {time.time() - start:.0f}s"
+        )
 
         seed = rng.randrange(1000000)
 
@@ -1490,10 +1448,10 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
             ) WITH (VALIDATE = false);
             """))
 
-    # `SET failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
+    # `SET unsafe_failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
     # which writes to the process-global registry -- the pause applies to any
     # session that later hits the named failpoint.
-    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=pause'")
+    c.sql(f"SET unsafe_failpoints = '{ROTATE_KEYS_FAILPOINT}=pause'")
 
     rotate_err: Exception | None = None
 
@@ -1523,7 +1481,7 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
     # Release ROTATE. It will resume into `catalog_transact`, where
     # `PlanValidity::check` should detect that ssh_conn's `create_sql` hash
     # changed and return ConcurrentDependencyMutation.
-    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=off'")
+    c.sql(f"SET unsafe_failpoints = '{ROTATE_KEYS_FAILPOINT}=off'")
 
     t_rotate.join()
 

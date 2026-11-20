@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from kubernetes.client import V1ObjectMeta, V1RoleBinding, V1RoleRef, V1Subject
+from kubernetes.client import RbacV1Subject, V1ObjectMeta, V1RoleBinding, V1RoleRef
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_role_binding import K8sRoleBinding
@@ -20,7 +20,7 @@ class AdminRoleBinding(K8sRoleBinding):
         role_ref = V1RoleRef(
             api_group="rbac.authorization.k8s.io", kind="ClusterRole", name="admin"
         )
-        subjects = [V1Subject(kind="ServiceAccount", name="default")]
+        subjects = [RbacV1Subject(kind="ServiceAccount", name="default")]
         self.role_binding = V1RoleBinding(
             api_version="rbac.authorization.k8s.io/v1",
             kind="RoleBinding",

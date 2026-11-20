@@ -264,8 +264,6 @@ pub enum AdapterError {
     SingleStatementTransaction,
     /// The transaction can only execute simple DDL.
     DDLOnlyTransaction,
-    /// Another session modified the Catalog while this transaction was open.
-    DDLTransactionRace,
     /// Final execution would change an outcome already reported to the client.
     DDLTransactionOutcomeChanged,
     /// A conditional cluster-config write failed its precondition: the cluster's
@@ -315,6 +313,8 @@ pub enum AdapterError {
     UserSessionsDisallowed,
     /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
+    /// An enforced query policy rejected the optimized execution plan.
+    QueryPolicyRejected(crate::query_policy::QueryPolicyViolation),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
@@ -729,6 +729,7 @@ impl AdapterError {
                 Some("Your organization has been blocked. Please contact support.".to_string())
             }
             AdapterError::NetworkPolicyDenied(reason) => Some(format!("{reason}.")),
+            AdapterError::QueryPolicyRejected(violation) => Some(violation.detail()),
             AdapterError::ReplacementSchemaMismatch(diff) => {
                 let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
                     let pos = idx + 1;
@@ -828,6 +829,7 @@ impl AdapterError {
                  deployment."
                     .to_string(),
             ),
+            AdapterError::QueryPolicyRejected(violation) => Some(violation.hint().into()),
             AdapterError::SubscribeFellBehind { .. } => Some(
                 "The client is not reading results fast enough. Use a client that reads output \
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
@@ -929,10 +931,6 @@ impl AdapterError {
                  mz_internal.mz_cluster_reconfigurations for the retained outcome."
                     .into(),
             ),
-            AdapterError::DDLTransactionRace => Some(
-                "Currently, DDL transactions fail when any other DDL happens concurrently, \
-                 even on unrelated schemas/clusters.".into()
-            ),
             AdapterError::DDLTransactionOutcomeChanged => Some(
                 "Retry the transaction to execute its statements against the current catalog.".into()
             ),
@@ -973,6 +971,9 @@ impl AdapterError {
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(e) => match &e.kind {
+                mz_catalog::memory::error::ErrorKind::Sql(
+                    mz_sql::catalog::CatalogError::QueryPolicyInUse(_),
+                ) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
                 mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
                     VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
                     VarError::FixedValueParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -1108,9 +1109,7 @@ impl AdapterError {
             AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::DDLTransactionRace | AdapterError::DDLTransactionOutcomeChanged => {
-                SqlState::T_R_SERIALIZATION_FAILURE
-            }
+            AdapterError::DDLTransactionOutcomeChanged => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
@@ -1133,6 +1132,7 @@ impl AdapterError {
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
             AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
             AdapterError::NetworkPolicyDenied(_) => SqlState::from_code("MZ011"),
+            AdapterError::QueryPolicyRejected(_) => SqlState::INSUFFICIENT_RESOURCES,
             // In read-only mode all transactions are implicitly read-only
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -1544,9 +1544,6 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
-            AdapterError::DDLTransactionRace => f.write_str(
-                "another session modified the catalog while this DDL transaction was open",
-            ),
             AdapterError::DDLTransactionOutcomeChanged => f.write_str(
                 "a statement in this transaction would produce a different result at commit",
             ),
@@ -1617,6 +1614,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
             AdapterError::NetworkPolicyDenied(_) => write!(f, "session denied"),
+            AdapterError::QueryPolicyRejected(violation) => {
+                write!(f, "query rejected: {}", violation.reason())
+            }
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")

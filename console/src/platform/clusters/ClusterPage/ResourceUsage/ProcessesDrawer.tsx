@@ -66,17 +66,18 @@ import {
   summarizeProcesses,
 } from "./processReadingsModel";
 import {
-  ChartHeader,
+  ChartFrame,
   ChartHeaderProps,
   HoverOverlay,
   Layout,
   LegendSwatch,
-  PercentAxis,
   PercentScale,
-  TimeAxis,
+  ResourcePercentAxis,
+  ResourceTimeAxis,
+  TimeGridLines,
   TimeScale,
 } from "./ResourceUsageCharts";
-import { CHART_MARGIN, percentScale } from "./resourceUsageStyles";
+import { percentChart, RESOURCE_CHART_MARGIN } from "./resourceUsageStyles";
 import { useReplicaProcessSamples } from "./useReplicaProcessSamples";
 
 // The per-process history is raw per-minute samples, so the drawer reads at
@@ -85,7 +86,6 @@ const MAX_WINDOW_MINUTES = 24 * 60;
 // The theme's chart palette has five strong colors. Past five processes, only
 // the ones that stand out get a color; the rest stay grey but named.
 const MAX_COLORED_PROCESSES = 5;
-const PLOT_HEIGHT_PX = 150;
 // The most processes the tooltip lists before summarizing the rest.
 const TOOLTIP_PROCESS_LIMIT = 6;
 
@@ -449,7 +449,6 @@ const ProcessesPanel = ({
       <Box ref={parentRef} width="100%" minWidth={0}>
         {width > 0 && (
           <ProcessLineCharts
-            replicaName={replica.name}
             width={width}
             startMs={view.startMs}
             endMs={view.endMs}
@@ -477,7 +476,6 @@ const ProcessesPanel = ({
 };
 
 const ProcessLineCharts = ({
-  replicaName,
   width,
   startMs,
   endMs,
@@ -487,7 +485,6 @@ const ProcessLineCharts = ({
   highlightedId,
   memoryLimit,
 }: {
-  replicaName: string;
   width: number;
   startMs: number;
   endMs: number;
@@ -511,7 +508,7 @@ const ProcessLineCharts = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startMs, endMs, width],
@@ -552,7 +549,7 @@ const ProcessLineCharts = ({
       return color
         ? [
             {
-              label: `${replicaName} · process ${id}`,
+              label: id,
               color,
               variant: "line" as const,
             },
@@ -562,7 +559,7 @@ const ProcessLineCharts = ({
     ...(processIds.some((id) => !colorById.has(id))
       ? [
           {
-            label: "Other processes",
+            label: "other",
             color: colors.foreground.tertiary,
             variant: "line" as const,
           },
@@ -572,23 +569,24 @@ const ProcessLineCharts = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={5} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         <ProcessLineChart
           {...chartProps}
           metric="cpu"
           title="CPU by Process"
           description="% of each process's CPU allocation"
           legend={legend}
+          legendLabel="Processes"
         />
-        <VStack spacing={0} alignItems="stretch">
-          <ProcessLineChart
-            {...chartProps}
-            metric="memory"
-            title="Memory by Process"
-            description={`% of each process's ${memoryLimit}`}
-          />
-          <TimeAxis width={width} xScale={xScale} />
-        </VStack>
+        <ResourceTimeAxis width={width} xScale={xScale} />
+        <ProcessLineChart
+          {...chartProps}
+          metric="memory"
+          title="Memory by Process"
+          description={`% of each process's ${memoryLimit}`}
+        />
+        <ResourceTimeAxis width={width} xScale={xScale} />
       </VStack>
       {hoveredBucket &&
         tooltipData &&
@@ -699,7 +697,7 @@ const ProcessLines = React.memo(
 
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         {order.map((processLine) =>
           draw(processLine, {
             color:
@@ -746,6 +744,7 @@ const ProcessLineChart = ({
   title,
   description,
   legend,
+  legendLabel,
   hoverTimeMs,
   onHover,
   onLeave,
@@ -760,6 +759,7 @@ const ProcessLineChart = ({
   title: string;
   description: string;
   legend?: ChartHeaderProps["legend"];
+  legendLabel?: string;
   hoverTimeMs: number | undefined;
   onHover: (
     hover: { timeMs: number; metric: ProcessMetric },
@@ -767,15 +767,6 @@ const ProcessLineChart = ({
   ) => void;
   onLeave: () => void;
 }) => {
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: CHART_MARGIN.top + PLOT_HEIGHT_PX + CHART_MARGIN.bottom,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const lines = React.useMemo(
     () =>
       processIds.map((processId) => ({
@@ -791,15 +782,19 @@ const ProcessLineChart = ({
     () => max(lines, ({ points }) => max(points, ({ value }) => value)) ?? 0,
     [lines],
   );
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader title={title} description={description} legend={legend} />
-      <svg {...layout.svgProps} role="img" aria-label={title}>
+    <ChartFrame
+      title={title}
+      description={description}
+      legend={legend}
+      legendLabel={legendLabel}
+    >
+      <svg {...layout.svgProps} display="block" role="img" aria-label={title}>
         <ProcessLines
           layout={layout}
           xScale={xScale}
@@ -822,7 +817,7 @@ const ProcessLineChart = ({
           onPointerLeave={onLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 

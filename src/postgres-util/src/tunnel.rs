@@ -12,6 +12,8 @@ use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
+use aws_types::SdkConfig;
+use mz_aws_util::rds::rds_auth_token;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task::{self, AbortOnDropHandle};
@@ -90,20 +92,30 @@ pub struct Config {
     tunnel: TunnelConfig,
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
+    /// If set, authenticate with an AWS IAM authentication token generated
+    /// from this configuration, in place of a password.
+    aws_config: Option<SdkConfig>,
 }
 
 impl Config {
+    /// Creates a new configuration.
+    ///
+    /// If `aws_config` is `Some`, each connection authenticates to Amazon RDS
+    /// or Aurora with a freshly generated AWS IAM authentication token, and
+    /// any password set on `inner` is ignored.
     pub fn new(
         inner: tokio_postgres::Config,
         tunnel: TunnelConfig,
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
+        aws_config: Option<SdkConfig>,
     ) -> Result<Self, PostgresError> {
         let config = Self {
             inner,
             tunnel,
             in_task,
             ssh_timeout_config,
+            aws_config,
         };
 
         // Early validate that the configuration contains only a single TCP
@@ -190,6 +202,19 @@ impl Config {
     {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
+
+        if let Some(aws_config) = &self.aws_config {
+            // Sign the token for the address of the database itself, not for
+            // any tunnel in front of it. A token is valid for 15 minutes and
+            // is only checked when a connection opens, so generate a new one
+            // for every connection.
+            let (host, port) = self.address()?;
+            let Some(user) = self.inner.get_user() else {
+                bail_generic!("AWS IAM authentication requires a user");
+            };
+            let token = rds_auth_token(host, port, user, aws_config).await?;
+            postgres_config.password(token);
+        }
 
         let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
             mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),

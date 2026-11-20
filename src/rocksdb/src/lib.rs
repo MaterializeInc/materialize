@@ -24,7 +24,7 @@ use std::time::Instant;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::{DeleteOnDropCounter, DeleteOnDropHistogram};
+use mz_ore::metrics::{DeleteOnDropHistogram, DeregisterOnDropCounter};
 use mz_ore::retry::{Retry, RetryResult};
 use prometheus::core::AtomicU64;
 use rocksdb::merge_operator::MergeOperandsIter;
@@ -211,17 +211,17 @@ pub struct RocksDBSharedMetrics {
 /// so the user can choose the labels.
 pub struct RocksDBInstanceMetrics {
     /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_get_size: DeregisterOnDropCounter<AtomicU64>,
     /// Size of multi_get non-empty results.
-    pub multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_get_result_count: DeregisterOnDropCounter<AtomicU64>,
     /// Total size of bytes returned in the result
-    pub multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_get_result_bytes: DeregisterOnDropCounter<AtomicU64>,
     /// The number of calls to rocksdb multi_get
-    pub multi_get_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_get_count: DeregisterOnDropCounter<AtomicU64>,
     /// The number of calls to rocksdb multi_put
-    pub multi_put_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_put_count: DeregisterOnDropCounter<AtomicU64>,
     /// Size of write batches.
-    pub multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub multi_put_size: DeregisterOnDropCounter<AtomicU64>,
 }
 
 /// The result type for `multi_get`.

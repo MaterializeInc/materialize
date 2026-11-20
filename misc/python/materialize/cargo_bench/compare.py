@@ -13,8 +13,9 @@ Reads the JSON files criterion writes under its output directory. Criterion
 itself never fails a run on a regression, so the verdict logic lives here.
 """
 
+import csv
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -32,14 +33,14 @@ class Verdict(Enum):
 class BenchResult:
     """Outcome for one criterion benchmark id.
 
-    Means are in nanoseconds. Change fields are relative to the ancestor mean,
-    so 0.1 is a 10% slowdown. They are `None` when there is no ancestor
-    measurement to compare against.
+    Means are in the report's unit for `id`. Change fields are relative to
+    the ancestor mean, so 0.1 is a 10% slowdown. They are `None` when there is
+    no ancestor measurement to compare against.
     """
 
     id: str
-    current_mean_ns: float
-    ancestor_mean_ns: float | None
+    current_mean: float
+    ancestor_mean: float | None
     change_mean: float | None
     change_lower: float | None
     change_upper: float | None
@@ -53,6 +54,7 @@ class BenchResult:
 class CompareReport:
     results: list[BenchResult]
     warnings: list[str]
+    units: dict[str, str] = field(default_factory=dict)
 
     @property
     def has_regressions(self) -> bool:
@@ -81,16 +83,26 @@ def _load(path: Path) -> Any:
         return json.load(f)
 
 
+def measurement_unit(result_dir: Path) -> str:
+    """Return the unit criterion recorded in `result_dir`'s `raw.csv`, or `ns` without one."""
+    raw = result_dir / "raw.csv"
+    if not raw.exists():
+        return "ns"
+    with raw.open() as f:
+        return next(csv.DictReader(f))["unit"]
+
+
 def compare(criterion_dir: Path, threshold: float) -> CompareReport:
     """Compare every benchmark under `criterion_dir` against its `ancestor` baseline.
 
     A benchmark is a regression when the lower bound of criterion's 95%
     confidence interval on the relative mean change exceeds `threshold`, and
     an improvement when the upper bound is below `-threshold`. A benchmark
-    with no ancestor baseline is reported as new.
+    with no ancestor baseline, or one in another unit, is reported as new.
     """
     results: list[BenchResult] = []
     warnings: list[str] = []
+    units: dict[str, str] = {}
 
     # Criterion copies benchmark.json into every saved baseline directory,
     # not just "new/", so the guard on new_dir.name below is what identifies
@@ -103,13 +115,19 @@ def compare(criterion_dir: Path, threshold: float) -> CompareReport:
         bench_dir = new_dir.parent
         full_id = _load(benchmark_json)["full_id"]
         current_mean = _load(new_dir / "estimates.json")["mean"]["point_estimate"]
+        units[full_id] = measurement_unit(new_dir)
+        ancestor_unit = measurement_unit(bench_dir / "ancestor")
 
         ancestor_estimates = bench_dir / "ancestor" / "estimates.json"
         change_estimates = bench_dir / "change" / "estimates.json"
         # A change file is only meaningful when the ancestor baseline it was
         # computed against is present. A stale change file from an earlier
         # run must not produce a verdict.
-        if not ancestor_estimates.exists():
+        if ancestor_estimates.exists() and ancestor_unit != units[full_id]:
+            warnings.append(
+                f"{full_id}: ancestor measured {ancestor_unit}, current {units[full_id]}, treating as new"
+            )
+        if not ancestor_estimates.exists() or ancestor_unit != units[full_id]:
             results.append(
                 BenchResult(full_id, current_mean, None, None, None, None, Verdict.NEW)
             )
@@ -147,7 +165,7 @@ def compare(criterion_dir: Path, threshold: float) -> CompareReport:
             )
         )
 
-    return CompareReport(_sorted(results), warnings)
+    return CompareReport(_sorted(results), warnings, units)
 
 
 def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
@@ -182,7 +200,7 @@ def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
             else Verdict.UNCONFIRMED
         )
         results.append(replace(r, verdict=verdict, rerun_change=again.change_mean))
-    return CompareReport(_sorted(results), warnings)
+    return CompareReport(_sorted(results), warnings, first.units)
 
 
 def format_duration(ns: float) -> str:
@@ -191,6 +209,16 @@ def format_duration(ns: float) -> str:
         if ns >= scale:
             return f"{ns / scale:.2f} {unit}"
     return f"{ns:.2f} ns"
+
+
+def format_value(value: float, unit: str) -> str:
+    """Format a mean in `unit`, as a duration for `ns` and with an SI prefix otherwise."""
+    if unit == "ns":
+        return format_duration(value)
+    for prefix, scale in (("G", 1e9), ("M", 1e6), ("k", 1e3)):
+        if value >= scale:
+            return f"{value / scale:.2f} {prefix} {unit}"
+    return f"{value:.2f} {unit}"
 
 
 def _pct(value: float) -> str:
@@ -204,10 +232,9 @@ def render_markdown(report: CompareReport) -> str:
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report.results:
+        unit = report.units.get(r.id, "ns")
         ancestor = (
-            format_duration(r.ancestor_mean_ns)
-            if r.ancestor_mean_ns is not None
-            else ""
+            format_value(r.ancestor_mean, unit) if r.ancestor_mean is not None else ""
         )
         change = _pct(r.change_mean) if r.change_mean is not None else ""
         ci = (
@@ -220,6 +247,6 @@ def render_markdown(report: CompareReport) -> str:
         if r.verdict == Verdict.REGRESSION:
             verdict = f"**{verdict}**"
         lines.append(
-            f"| {r.id} | {ancestor} | {format_duration(r.current_mean_ns)} | {change} | {ci} | {rerun} | {verdict} |"
+            f"| {r.id} | {ancestor} | {format_value(r.current_mean, unit)} | {change} | {ci} | {rerun} | {verdict} |"
         )
     return "\n".join(lines)

@@ -249,7 +249,9 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
                 text=True,
             )
             return result.stdout.strip()
-        except subprocess.CalledProcessError:
+        # Without git on PATH this raises FileNotFoundError. `deploy_promote`
+        # calls this after its swap commits, so raising would stop it halfway.
+        except (subprocess.CalledProcessError, OSError):
             return None
 
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
@@ -318,9 +320,8 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
 
         return columns
 
-    # SQLSTATE raised by Materialize when a DDL transaction is aborted because
-    # another session modified the catalog concurrently. See
-    # `AdapterError::DDLTransactionRace` in `src/adapter/src/error.rs`.
+    # Serialization failures include DDL commits that would change an outcome
+    # already reported to the client (AdapterError::DDLTransactionOutcomeChanged).
     _DDL_CONFLICT_SQLSTATE = "40001"
 
     @available

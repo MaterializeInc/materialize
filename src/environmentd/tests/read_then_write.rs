@@ -942,7 +942,7 @@ fn test_concurrent_mixed_dml_conserves_writes() {
 /// `REFRESH AT <far future>` materialized view) parks in
 /// `ensure_read_linearized`'s sleep loop. `statement_timeout` has to end that
 /// park, which it does because
-/// `SessionClient::try_frontend_read_then_write_with_cancel` bounds the
+/// `SessionClient::try_read_then_write_with_cancel` bounds the
 /// *entire* operation, not just the OCC loop.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
@@ -1027,7 +1027,7 @@ fn test_far_future_refresh_mv_respects_statement_timeout() {
                 "INSERT...SELECT from a far-future REFRESH AT MV did not return \
                  within 45s despite statement_timeout = '3s'; the central \
                  statement_timeout enforcement in \
-                 try_frontend_read_then_write_with_cancel did not fire ({recv_err})."
+                 try_read_then_write_with_cancel did not fire ({recv_err})."
             );
         }
     }
@@ -1040,7 +1040,7 @@ fn test_far_future_refresh_mv_respects_statement_timeout() {
 /// the OCC loop.
 ///
 /// The victim must still honor its own `statement_timeout`, which it does
-/// because `try_frontend_read_then_write_with_cancel`'s `select!` bounds the
+/// because `try_read_then_write_with_cancel`'s `select!` bounds the
 /// *whole* operation, permit-acquisition wait included.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
@@ -1523,7 +1523,7 @@ fn test_write_racing_alter_table_add_column() {
 // show up. A single pass could pass by luck.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_frontend_occ_write_visible_to_linearizable_read() {
+fn test_occ_write_visible_to_linearizable_read() {
     const ITERATIONS: i32 = 50;
 
     let server = test_util::TestHarness::default().start_blocking();

@@ -150,6 +150,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     },
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",
+                    force_catalog_migration=True,
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
                     sanity_restart=False,
                 ),

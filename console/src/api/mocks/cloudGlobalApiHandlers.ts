@@ -10,34 +10,32 @@
 import { http, HttpResponse } from "msw";
 
 import {
+  AvailableRegion,
+  AvailableRegions,
   CreditBlock,
   DailyCostBreakdown,
   Invoice,
   Organization,
-  Region,
-  Regions,
 } from "~/api/cloudGlobalApi";
 
 export const buildCloudRegionsReponse = (
   options: {
-    regions?: Region[];
+    regions?: AvailableRegion[];
     status?: number;
   } = {},
 ) =>
   http.get("*/api/cloud-regions", () => {
-    const response: Regions = {
+    const response: AvailableRegions = {
       data: options.regions ?? [
         {
           id: "aws/eu-west-1",
           name: "eu-west-1",
           cloudProvider: "aws",
-          url: "https://api.eu-west-1.aws.test.cloud.materialize.com",
         },
         {
           id: "aws/us-east-1",
           name: "us-east-1",
           cloudProvider: "aws",
-          url: "https://api.us-east-1.aws.test.cloud.materialize.com",
         },
       ],
     };

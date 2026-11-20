@@ -103,7 +103,7 @@ macro_rules! objects {
                         fn from(value: StateUpdateKind) -> Self {
                             let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
-                            // exactly, see database-issues#7179.
+                            // exactly, see SQL-895.
                             StateUpdateKindJson::from_serde(&kind)
                         }
                     }
@@ -126,7 +126,7 @@ macro_rules! objects {
                     impl From<StateUpdateKind> for StateUpdateKindJson {
                         fn from(value: StateUpdateKind) -> Self {
                             // TODO: This requires that the json->proto->json roundtrips
-                            // exactly, see database-issues#7179.
+                            // exactly, see SQL-895.
                             StateUpdateKindJson::from_serde(&value)
                         }
                     }
@@ -243,7 +243,7 @@ macro_rules! objects {
 objects!(
     [v74, v75, v76, v77, v78],
     [
-        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92, v93, v94
+        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92, v93, v94, v95, v96
     ]
 );
 
@@ -277,6 +277,8 @@ mod v90_to_v91;
 mod v91_to_v92;
 mod v92_to_v93;
 mod v93_to_v94;
+mod v94_to_v95;
+mod v95_to_v96;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -320,6 +322,7 @@ impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V
 pub(crate) async fn upgrade(
     persist_handle: &mut UnopenedPersistCatalogState,
     mut commit_ts: Timestamp,
+    force_migration: bool,
 ) -> Result<Timestamp, CatalogError> {
     soft_assert_ne_or_log!(
         persist_handle.upper,
@@ -336,6 +339,10 @@ pub(crate) async fn upgrade(
     // Run migrations until we're up-to-date.
     while version < CATALOG_VERSION {
         (version, commit_ts) = run_upgrade(persist_handle, version, commit_ts).await?;
+    }
+    if force_migration {
+        tracing::info!(version, "running forced Catalog upgrade");
+        commit_ts = apply_migration(persist_handle, Vec::new(), commit_ts).await?;
     }
 
     Ok(commit_ts)
@@ -526,6 +533,24 @@ async fn run_upgrade(
             )
             .await
         }
+        94 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v94_to_v95::upgrade,
+            )
+            .await
+        }
+        95 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v95_to_v96::upgrade,
+            )
+            .await
+        }
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
         FUTURE_VERSION.. => Err(incompatible),
@@ -539,7 +564,7 @@ async fn run_upgrade(
 async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson>(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     current_version: u64,
-    mut commit_ts: Timestamp,
+    commit_ts: Timestamp,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
 ) -> Result<(u64, Timestamp), CatalogError> {
     tracing::info!(current_version, "running versioned Catalog upgrade");
@@ -579,24 +604,33 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     updates.push(version_insertion);
 
     // 4. Apply migration to catalog.
-    if matches!(unopened_catalog_state.mode, Mode::Writable) {
-        commit_ts = unopened_catalog_state
-            .compare_and_append(updates, commit_ts)
-            .await
-            .map_err(|e| e.unwrap_fence_error())?;
-    } else {
-        let ts = commit_ts;
-        let updates = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
-        commit_ts = commit_ts.step_forward();
-        unopened_catalog_state.apply_updates_and_consolidate(updates)?;
-    }
+    let commit_ts = apply_migration(unopened_catalog_state, updates, commit_ts).await?;
 
     // 5. Consolidate snapshot to remove old versions.
     unopened_catalog_state.consolidate();
 
     Ok((next_version, commit_ts))
+}
+
+/// Applies one migration's `updates` at `commit_ts` and returns the new upper.
+async fn apply_migration(
+    unopened_catalog_state: &mut UnopenedPersistCatalogState,
+    updates: Vec<(StateUpdateKindJson, Diff)>,
+    commit_ts: Timestamp,
+) -> Result<Timestamp, CatalogError> {
+    if matches!(unopened_catalog_state.mode, Mode::Writable) {
+        Ok(unopened_catalog_state
+            .compare_and_append(updates, commit_ts)
+            .await
+            .map_err(|e| e.unwrap_fence_error())?)
+    } else {
+        let ts = commit_ts;
+        let updates = updates
+            .into_iter()
+            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+        unopened_catalog_state.apply_updates_and_consolidate(updates)?;
+        Ok(commit_ts.step_forward())
+    }
 }
 
 /// Generates a [`proto::StateUpdateKind`] to update the user version.

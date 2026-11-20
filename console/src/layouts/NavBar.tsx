@@ -46,6 +46,7 @@ import {
   CloudNavMenu,
   ConnectMenuItem,
   SelfManagedNavMenu,
+  SupportNavItem,
 } from "./NavBar/NavMenu";
 import { NAVBAR_Z_INDEX } from "./zIndex";
 
@@ -266,6 +267,7 @@ export const NavBar = ({ isCollapsed, accountOnly }: NavBarProps) => {
           gap={{ base: "4", lg: "0" }}
           py={{ base: 0, lg: 2 }}
         >
+          {!isMobile && <SupportNavItem isCollapsed={isCollapsed} />}
           {!isMobile && (
             <AppConfigSwitch
               cloudConfigElement={({ runtimeConfig }) =>

@@ -101,6 +101,8 @@ impl Debug for StableTrace<'_> {
             item_columns,
             index_columns,
             network_policies,
+            cluster_replica_sizes,
+            query_policies,
             roles,
             role_auth,
             schemas,
@@ -149,6 +151,8 @@ impl Debug for StableTrace<'_> {
             .field("item_columns", item_columns)
             .field("index_columns", index_columns)
             .field("network_policies", network_policies)
+            .field("cluster_replica_sizes", cluster_replica_sizes)
+            .field("query_policies", query_policies)
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("schemas", schemas)

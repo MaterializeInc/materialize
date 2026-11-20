@@ -79,6 +79,7 @@ pub struct Config {
     /// the Service endpoints. `/api/livez` keeps it in, for load balancers that
     /// read `/api/readyz` in their own health check instead.
     pub balancerd_readiness_probe_path: String,
+    pub balancerd_termination_grace_period_seconds: i64,
 }
 
 pub struct Context {
@@ -444,6 +445,9 @@ impl Context {
                         ..Default::default()
                     }),
                     scheduler_name: self.config.scheduler_name.clone(),
+                    termination_grace_period_seconds: Some(
+                        self.config.balancerd_termination_grace_period_seconds,
+                    ),
                     volumes: Some(volumes),
                     // `None` rather than `Some(true)` when disabled, so the
                     // pod spec is unchanged from before user namespace support.
@@ -759,6 +763,7 @@ mod tests {
             balancerd_http_port: 6876,
             balancerd_internal_http_port: 6878,
             balancerd_readiness_probe_path: "/api/readyz".to_owned(),
+            balancerd_termination_grace_period_seconds: 600,
         })
     }
 

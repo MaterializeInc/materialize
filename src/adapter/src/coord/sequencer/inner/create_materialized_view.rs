@@ -71,7 +71,9 @@ impl Staged for CreateMaterializedViewStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateMaterializedViewStage::Optimize(stage) => {
-                coord.create_materialized_view_optimize(stage).await
+                coord
+                    .create_materialized_view_optimize(ctx.session().conn_id().clone(), stage)
+                    .await
             }
             CreateMaterializedViewStage::Finish(stage) => {
                 coord.create_materialized_view_finish(ctx, stage).await
@@ -420,6 +422,7 @@ impl Coordinator {
     #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
         CreateMaterializedViewOptimize {
             validity,
             plan,
@@ -553,6 +556,11 @@ impl Coordinator {
                         }
                     };
 
+                    tracing::debug!(
+                        target: "mz_adapter::catalog_preparation",
+                        %conn_id, kind = "materialized_view", "catalog preparation complete"
+                    );
+                    fail::fail_point!("catalog_materialized_view_ready");
                     Ok(Box::new(stage))
                 })
             },
@@ -677,12 +685,13 @@ impl Coordinator {
         let local_mir_for_cache = local_mir_plan.expr();
 
         let ops = vec![
-            catalog::Op::DropObjects(
-                drop_ids
+            catalog::Op::DropObjects {
+                objects: drop_ids
                     .into_iter()
                     .map(catalog::DropObjectInfo::Item)
                     .collect(),
-            ),
+                cascade: false,
+            },
             catalog::Op::CreateItem {
                 id: item_id,
                 name: name.clone(),
@@ -1054,13 +1063,9 @@ impl Coordinator {
             as_of,
             mz_now,
             read_holds,
-            plan.source_imports.into_iter().filter_map(|(id, import)| {
-                import
-                    .desc
-                    .arguments
-                    .operators
-                    .map(|plan| (id, plan.into_map_filter_project()))
-            }),
+            plan.source_imports
+                .into_iter()
+                .filter_map(|(id, import)| import.desc.arguments.operators.map(|plan| (id, plan))),
         )
         .await
     }

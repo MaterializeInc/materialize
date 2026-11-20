@@ -45,7 +45,7 @@ use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpr
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
-    NetworkPolicy, Role, RoleAuth, Schema,
+    NetworkPolicy, QueryPolicy, Role, RoleAuth, Schema,
 };
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -61,6 +61,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, SqlScalarType,
@@ -95,6 +96,9 @@ use uuid::Uuid;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
+#[cfg(test)]
+pub(crate) use crate::catalog::state::LocalExpressionCache;
+pub(crate) use crate::catalog::transact::{CommandExecutionError, CommandResponse, CommandWork};
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -109,6 +113,7 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 mod builtin_table_updates;
 pub(crate) mod command;
 pub(crate) mod consistency;
+mod limits;
 mod migrate;
 
 mod apply;
@@ -824,6 +829,31 @@ impl Catalog {
         Ok(id)
     }
 
+    /// Records a fresh shard for the storage collection `id`, as the storage
+    /// controller does for collections a test catalog creates without one.
+    #[cfg(test)]
+    pub async fn register_collection_shard(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<mz_persist_types::ShardId, Error> {
+        use mz_storage_client::controller::StorageTxn;
+
+        let shard_id = mz_persist_types::ShardId::new();
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+        txn.insert_collection_metadata([(id, shard_id)].into())
+            .expect("a fresh shard for an unregistered collection");
+        let updates = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await?;
+        drop(storage);
+        let (_builtin_updates, _catalog_updates) = self
+            .state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
+        Ok(shard_id)
+    }
+
     /// Get the next system item ID without allocating it.
     pub async fn get_next_system_item_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -1229,11 +1259,10 @@ impl Catalog {
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {
+        // Disabled sizes are included; `ensure_valid_replica_size` decides
+        // whether those are allowed.
         if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
-            self.cluster_replica_sizes()
-                .enabled_allocations()
-                .map(|a| a.0.to_owned())
-                .collect::<Vec<_>>()
+            self.cluster_replica_sizes().0.keys().cloned().collect()
         } else {
             self.system_config().allowed_cluster_replica_sizes()
         }
@@ -1265,7 +1294,7 @@ impl Catalog {
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
-        &self.state.cluster_replica_sizes
+        self.state.cluster_replica_sizes()
     }
 
     /// Returns the privileges of an object by its ID.
@@ -1285,6 +1314,7 @@ impl Catalog {
                 ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
                 ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
                 ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(*id).privileges()),
+                ObjectId::QueryPolicy(id) => Some(&self.state.get_query_policy(id).privileges),
             },
             SystemObjectId::System => Some(&self.state.system_privileges),
         }
@@ -1337,37 +1367,31 @@ impl Catalog {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.state.entry_by_id.values()
+        self.state.entries()
     }
 
     pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_connection() && entry.id().is_user())
+        self.state.user_connections()
     }
 
     pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_table() && entry.id().is_user())
+        self.state.user_tables()
     }
 
     pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_source() && entry.id().is_user())
+        self.state.user_sources()
     }
 
     pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_sink() && entry.id().is_user())
+        self.state.user_sinks()
     }
 
     pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+        self.state.user_materialized_views()
     }
 
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_secret() && entry.id().is_user())
+        self.state.user_secrets()
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
@@ -1378,8 +1402,12 @@ impl Catalog {
         self.state.try_get_network_policy_by_name(name)
     }
 
+    pub fn get_query_policy(&self, id: QueryPolicyId) -> &QueryPolicy {
+        self.state.get_query_policy(&id)
+    }
+
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.state.clusters_by_id.values()
+        self.state.clusters()
     }
 
     pub fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1391,7 +1419,7 @@ impl Catalog {
     }
 
     pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
-        self.clusters().filter(|cluster| cluster.id.is_user())
+        self.state.user_clusters()
     }
 
     pub fn get_cluster_replica(
@@ -1411,27 +1439,23 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters()
-            .flat_map(|cluster| cluster.user_replicas())
+        self.state.user_cluster_replicas()
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
-        self.state.database_by_id.values()
+        self.state.databases()
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state
-            .roles_by_id
-            .values()
-            .filter(|role| role.is_user())
+        self.state.user_roles()
     }
 
     pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
-        self.state
-            .network_policies_by_id
-            .iter()
-            .filter(|(id, _)| id.is_user())
-            .map(|(_, policy)| policy)
+        self.state.user_network_policies()
+    }
+
+    pub fn user_query_policies(&self) -> impl Iterator<Item = &QueryPolicy> {
+        self.state.user_query_policies()
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1553,6 +1577,15 @@ impl Catalog {
             }
             ObjectId::NetworkPolicy(network_policy_id) => {
                 self.ensure_not_reserved_network_policy(network_policy_id)
+            }
+            ObjectId::QueryPolicy(id) => {
+                if id.is_builtin() {
+                    Err(Error::new(ErrorKind::ReservedQueryPolicyName(
+                        self.state.get_query_policy(id).name.clone(),
+                    )))
+                } else {
+                    Ok(())
+                }
             }
         }
     }
@@ -1738,6 +1771,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+        CommentObjectId::QueryPolicy(_) => ObjectType::QueryPolicy,
     }
 }
 
@@ -1769,6 +1803,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql::catalog::ObjectType::QueryPolicy => ObjectType::QueryPolicy,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -2151,6 +2186,28 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn resolve_query_policy(
+        &self,
+        name: &str,
+    ) -> Result<&dyn mz_sql::catalog::CatalogQueryPolicy, SqlCatalogError> {
+        Ok(self
+            .state
+            .try_get_query_policy_by_name(name)
+            .ok_or_else(|| SqlCatalogError::UnknownQueryPolicy(name.into()))?)
+    }
+
+    fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn mz_sql::catalog::CatalogQueryPolicy {
+        self.state.get_query_policy(id)
+    }
+
+    fn get_query_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogQueryPolicy> {
+        self.state
+            .query_policies_by_id
+            .values()
+            .map(|policy| -> &dyn mz_sql::catalog::CatalogQueryPolicy { policy })
+            .collect()
+    }
+
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
@@ -2408,6 +2465,9 @@ impl SessionCatalog for ConnCatalog<'_> {
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
                 Some(self.get_network_policy(id).privileges())
             }
+            SystemObjectId::Object(ObjectId::QueryPolicy(id)) => {
+                Some(&self.state.get_query_policy(id).privileges)
+            }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }
@@ -2524,6 +2584,9 @@ impl SessionCatalog for ConnCatalog<'_> {
 }
 
 #[cfg(test)]
+mod source_preparation_tests;
+
+#[cfg(test)]
 mod try_cast_tests;
 
 #[cfg(test)]
@@ -2533,7 +2596,11 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{
+        CatalogItem, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+        ReconfigurationStatus, ReconfigurationTarget,
+    };
+    use mz_controller::clusters::ReplicaLogging;
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2561,8 +2628,9 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::{
-        CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig, PlanContext, QueryContext,
-        QueryLifetime, Scope, StatementContext,
+        AutoScalingStrategy, CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig,
+        OnHydration, OnTimeoutAction, PlanContext, QueryContext, QueryLifetime, Scope,
+        StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
@@ -2694,6 +2762,131 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_cluster_replica_size_sync() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let mut bootstrap_args = test_bootstrap_args();
+        // Builtin cluster replicas use the default size.
+        let in_use = bootstrap_args.default_cluster_replica_size.clone();
+        let unused = "scale=1,workers=2".to_string();
+        let changed = "scale=1,workers=4".to_string();
+        let cluster_only = "scale=1,workers=8".to_string();
+        let hydration = "scale=1,workers=16".to_string();
+        let timed_out_target = "scale=1,workers=32".to_string();
+
+        let mut catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        assert_eq!(
+            catalog.cluster_replica_sizes().0,
+            bootstrap_args.cluster_replica_size_map.0
+        );
+        // A managed cluster with no replicas still depends on its size and
+        // hydration size, but not on a settled reconfiguration's target.
+        let commit_ts = catalog.current_upper().await;
+        let cluster_id = catalog
+            .allocate_user_cluster_id(commit_ts)
+            .await
+            .expect("allocate cluster id");
+        let config = ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: cluster_only.clone(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 0,
+                optimizer_feature_overrides: Default::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: Some(AutoScalingStrategy {
+                    on_hydration: Some(OnHydration {
+                        hydration_size: hydration.clone(),
+                        linger_duration: None,
+                    }),
+                }),
+                reconfiguration: Some(ReconfigurationState {
+                    target: ReconfigurationTarget {
+                        size: timed_out_target.clone(),
+                        replication_factor: 1,
+                        availability_zones: Vec::new(),
+                        logging: ReplicaLogging {
+                            log_logging: false,
+                            interval: None,
+                        },
+                        arrangement_compression: false,
+                    },
+                    deadline: Timestamp::MIN,
+                    on_timeout: OnTimeoutAction::Rollback,
+                    status: ReconfigurationStatus::TimedOut,
+                }),
+                burst: None,
+            }),
+            workload_class: None,
+            query_policy: None,
+        };
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateCluster {
+                    id: cluster_id,
+                    name: "no_replicas".into(),
+                    introspection_sources: Vec::new(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                    config,
+                }],
+            )
+            .await
+            .expect("create cluster");
+        catalog.expire().await;
+
+        let config_sizes = &mut bootstrap_args.cluster_replica_size_map.0;
+        config_sizes.remove(&in_use);
+        config_sizes.remove(&unused);
+        config_sizes.remove(&cluster_only);
+        config_sizes.remove(&hydration);
+        config_sizes.remove(&timed_out_target);
+        config_sizes
+            .get_mut(&changed)
+            .expect("test size")
+            .cpu_exclusive = true;
+        let catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open debug catalog");
+        let sizes = &catalog.cluster_replica_sizes().0;
+        assert!(sizes[&in_use].disabled);
+        assert!(sizes[&cluster_only].disabled);
+        assert!(sizes[&hydration].disabled);
+        assert!(!sizes.contains_key(&unused));
+        assert!(!sizes.contains_key(&timed_out_target));
+        assert_eq!(
+            sizes[&changed],
+            bootstrap_args.cluster_replica_size_map.0[&changed]
+        );
+        let durable_sizes = catalog.cluster_replica_sizes().clone();
+        catalog.expire().await;
+
+        // A read-only open with a different size config uses the durable sizes.
+        bootstrap_args
+            .cluster_replica_size_map
+            .0
+            .insert(unused.clone(), durable_sizes.0[&changed].clone());
+        let catalog =
+            Catalog::open_debug_read_only_catalog(persist_client, organization_id, &bootstrap_args)
+                .await
+                .expect("unable to open read-only debug catalog");
+        assert_eq!(catalog.cluster_replica_sizes().0, durable_sizes.0);
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]

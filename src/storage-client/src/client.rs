@@ -560,7 +560,7 @@ where
     /// with the provided [`WriteHandle`].
     pub fn new(handle: &WriteHandle<K, V, Timestamp, D>) -> Self {
         let initial_ts = Timestamp::MIN;
-        let builder = handle.builder(Antichain::from_elem(initial_ts));
+        let builder = handle.rewritable_builder(Antichain::from_elem(initial_ts));
         TimestamplessUpdateBuilder {
             builder,
             initial_ts,

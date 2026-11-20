@@ -34,6 +34,8 @@ pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Pg,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
+    /// Whether to create the replication slot with `FAILOVER`.
+    pub failover: bool,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
@@ -45,6 +47,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
             connection,
             publication,
             publication_details,
+            failover,
         } = self;
 
         PostgresSourceConnection {
@@ -52,6 +55,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
             connection: r.resolve_connection(connection).unwrap_pg(),
             publication,
             publication_details,
+            failover,
         }
     }
 }
@@ -142,6 +146,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
             connection,
             publication,
             publication_details,
+            failover,
         } = self;
 
         let compatibility_checks = [
@@ -157,6 +162,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
                     .is_ok(),
                 "publication_details",
             ),
+            (failover == &other.failover, "failover"),
         ];
 
         for (compatible, field) in compatibility_checks {

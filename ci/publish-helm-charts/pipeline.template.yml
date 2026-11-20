@@ -11,6 +11,7 @@
 # automatically. Inputs for other steps need to be manually listed in the
 # `inputs` key.
 dag: true
+priority: 80
 steps:
   - id: helm-charts-publish
     label: Publish Helm Charts

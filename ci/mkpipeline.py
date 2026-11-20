@@ -410,9 +410,10 @@ so it is executed.""",
                 lto,
                 keep_steps,
             )
+    add_annotate_errors_plugin(pipeline)
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
-    prioritize_pipeline(pipeline, args.priority)
+    prioritize_pipeline(pipeline, args.priority, args.pipeline)
     # Before `switch_jobs_to_aws`, so that steps on the default queue are
     # switched too.
     set_default_agents_queue(pipeline)
@@ -477,25 +478,26 @@ class PipelineStep:
         return inputs
 
 
-def prioritize_pipeline(pipeline: Any, priority: int) -> None:
+def prioritize_pipeline(pipeline: Any, priority: int, pipeline_name: str) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
-    build_author = os.getenv("BUILDKITE_BUILD_AUTHOR")
     # use the base priority of the entire pipeline
     priority += pipeline.get("priority", 0)
 
     # Release results are time sensitive
     if tag.startswith("v"):
         priority += 10
+        if pipeline_name == "nightly":
+            priority += 10
 
     # main branch is less time sensitive than results on PRs
     if branch == "main":
         priority -= 50
 
-    # Dependabot is less urgent than manual PRs
-    if build_author == "Dependabot":
+    # Dependency updates are less urgent than manual PRs.
+    if branch and branch.startswith("renovate/"):
         priority -= 40
 
     for step in steps(pipeline):
@@ -512,6 +514,15 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
             if agent == "hetzner-aarch64-16cpu-32gb":
                 agent_priority = 2
         step["priority"] = step.get("priority", 0) + priority + agent_priority
+
+
+def add_annotate_errors_plugin(pipeline: Any) -> None:
+    """Annotate failed commands, like the mzcompose and cloudtest plugins do."""
+    for step in steps(pipeline):
+        if "command" in step:
+            step.setdefault("plugins", []).append(
+                {"./ci/plugins/annotate-errors": None}
+            )
 
 
 def truncate_skip_length(pipeline: Any) -> None:
@@ -631,7 +642,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
 
-    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "1")
+    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0")
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
     stuck.update(

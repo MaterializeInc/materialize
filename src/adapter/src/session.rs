@@ -16,7 +16,6 @@ use std::collections::btree_map::Entry;
 use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -52,21 +51,22 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::AdapterNotice;
+use crate::ExecutionTime;
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::ExplainContext;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::notice::ExecutionTimeKind;
 use crate::statement_logging::PreparedStatementLoggingInfo;
-use crate::{AdapterNotice, ExecuteContext, ExecutionTime};
 use mz_catalog::durable::Snapshot;
 
-const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
+pub(crate) const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
 /// A session holds per-connection state.
 #[derive(Derivative)]
@@ -404,6 +404,7 @@ impl Session {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
+                    completion_owner: TransactionCompletionOwner::Coordinator,
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
                     pending_ddl_inspections: Vec::new(),
@@ -438,6 +439,7 @@ impl Session {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
+                completion_owner: TransactionCompletionOwner::Session,
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
                 pending_ddl_inspections: Vec::new(),
@@ -473,6 +475,49 @@ impl Session {
         self.pcx = None;
         self.state_revision += 1;
         mem::take(&mut self.transaction)
+    }
+
+    /// Transfers transaction completion to the coordinator. Call before handing it any
+    /// transaction-scoped state, including on paths that can fail after installing resources.
+    pub(crate) fn require_coordinator_completion(&mut self) {
+        if let Some(txn) = self.transaction.inner_mut() {
+            txn.completion_owner = TransactionCompletionOwner::Coordinator;
+        }
+    }
+
+    /// Returns the obligations for a session-owned read-only completion.
+    pub(crate) fn read_only_completion(
+        &self,
+        mut action: EndTransactionAction,
+    ) -> Option<ReadOnlyCompletion> {
+        let txn = self.transaction.inner()?;
+        if txn.completion_owner != TransactionCompletionOwner::Session {
+            return None;
+        }
+        let timestamp = match &txn.ops {
+            TransactionOps::None => None,
+            TransactionOps::Peeks {
+                determination,
+                requires_linearization,
+                ..
+            } => matches!(requires_linearization, RequireLinearization::Required)
+                .then(|| determination.timestamp_context.clone()),
+            TransactionOps::Writes(_)
+            | TransactionOps::Subscribe
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => return None,
+        };
+        if matches!(self.transaction, TransactionStatus::Failed(_)) {
+            action = EndTransactionAction::Rollback;
+        }
+        Some(ReadOnlyCompletion {
+            action,
+            timestamp: if action == EndTransactionAction::Commit {
+                timestamp
+            } else {
+                None
+            },
+        })
     }
 
     /// Marks the current transaction as failed.
@@ -521,7 +566,7 @@ impl Session {
             .inner_mut()
             .expect("active transaction");
         match &mut txn.ops {
-            TransactionOps::DDL { ops, .. } => ops.push(inspection.into_op()),
+            TransactionOps::DDL { commands, .. } => commands.push(inspection.into_command()),
             _ => txn.pending_ddl_inspections.push(inspection),
         }
     }
@@ -676,6 +721,7 @@ impl Session {
                 id: _,
                 pending_ddl_inspections: _,
                 contains_explain: _,
+                completion_owner: _,
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -698,6 +744,7 @@ impl Session {
                 id: _,
                 pending_ddl_inspections: _,
                 contains_explain: _,
+                completion_owner: _,
             })
         )
     }
@@ -1447,14 +1494,14 @@ impl TransactionStatus {
                             return Err(AdapterError::ReadOnlyTransaction);
                         }
                         match &mut add_ops {
-                            TransactionOps::DDL { ops, .. } => {
+                            TransactionOps::DDL { commands, .. } => {
                                 // Pre-DDL inspections belong before every mutation, without
                                 // restricting the transaction until it actually enters DDL mode.
-                                ops.splice(
+                                commands.splice(
                                     0..0,
                                     pending_ddl_inspections
                                         .drain(..)
-                                        .map(DdlInspection::into_op),
+                                        .map(DdlInspection::into_command),
                                 );
                             }
                             TransactionOps::None => {}
@@ -1551,32 +1598,20 @@ impl TransactionStatus {
                         return Err(AdapterError::SingleStatementTransaction);
                     }
                     TransactionOps::DDL {
-                        ops: og_ops,
-                        revision: og_revision,
-                        revision_fenced: og_revision_fenced,
-                        state: og_state,
-                        side_effects,
-                        snapshot: og_snapshot,
+                        commands,
+                        state,
+                        snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
-                            ops: new_ops,
-                            revision: new_revision,
-                            revision_fenced: new_revision_fenced,
-                            side_effects: mut net_new_side_effects,
+                            commands: new_commands,
                             state: new_state,
                             snapshot: new_snapshot,
                         } => {
-                            if *og_revision != new_revision {
-                                return Err(AdapterError::DDLTransactionRace);
+                            if !new_commands.is_empty() {
+                                commands.extend(new_commands);
+                                *state = new_state;
+                                *snapshot = new_snapshot;
                             }
-                            *og_revision_fenced |= new_revision_fenced;
-                            // The old og_ops are overwritten, not extended.
-                            if !new_ops.is_empty() {
-                                *og_ops = new_ops;
-                                *og_state = new_state;
-                                *og_snapshot = new_snapshot;
-                            }
-                            side_effects.append(&mut net_new_side_effects);
                         }
                         _ => return Err(AdapterError::DDLOnlyTransaction),
                     },
@@ -1612,10 +1647,14 @@ enum DdlInspection {
 }
 
 impl DdlInspection {
-    fn into_op(self) -> crate::catalog::Op {
+    fn into_command(self) -> crate::catalog::command::CatalogCommand {
         match self {
-            Self::CatalogResult(command) => crate::catalog::Op::CatalogResult(command),
-            Self::Description(command) => crate::catalog::Op::Description(command),
+            Self::CatalogResult(command) => {
+                crate::catalog::command::CatalogCommand::CatalogResult(command)
+            }
+            Self::Description(command) => {
+                crate::catalog::command::CatalogCommand::Description(command)
+            }
         }
     }
 }
@@ -1623,6 +1662,7 @@ impl DdlInspection {
 /// State data for transactions.
 #[derive(Debug)]
 pub struct Transaction {
+    completion_owner: TransactionCompletionOwner,
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
@@ -1637,6 +1677,18 @@ pub struct Transaction {
     pub id: TransactionId,
     /// Access mode (read only, read write).
     access: Option<TransactionAccessMode>,
+}
+
+#[derive(Debug, PartialEq)]
+enum TransactionCompletionOwner {
+    Session,
+    Coordinator,
+}
+
+/// Obligations that can be satisfied without transferring the session to the coordinator.
+pub(crate) struct ReadOnlyCompletion {
+    pub action: EndTransactionAction,
+    pub timestamp: Option<TimestampContext>,
 }
 
 impl Transaction {
@@ -1757,32 +1809,12 @@ pub enum TransactionOps {
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
     DDL {
-        /// Catalog operations that have already run, and must run before each subsequent op.
-        ops: Vec<crate::catalog::Op>,
-        /// In-memory state that reflects the previously applied ops.
+        /// Commands in statement order, retaining outcomes already exposed to the client.
+        commands: Vec<crate::catalog::command::CatalogCommand>,
+        /// Speculative state after the last accepted command.
         state: CatalogState,
-        /// A list of side effects that should be executed if this DDL transaction commits.
-        #[derivative(Debug = "ignore")]
-        side_effects: Vec<
-            Box<
-                dyn for<'a> FnOnce(
-                        &'a mut Coordinator,
-                        Option<&'a mut ExecuteContext>,
-                    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-                    + Send
-                    + Sync,
-            >,
-        >,
-        /// Transient revision of the `Catalog` when this transaction started.
-        revision: u64,
-        /// A statement without commit-time replay has executed. Even a no-op
-        /// exposes an outcome that requires the original catalog revision.
-        revision_fenced: bool,
-        /// Snapshot of the durable transaction state after the last dry run.
-        /// Used to initialize the next dry run's transaction so it starts
-        /// in sync with the accumulated `state`. `None` for the first
-        /// statement in the transaction (before any dry run).
-        snapshot: Option<Snapshot>,
+        /// Durable baseline corresponding to `state`.
+        snapshot: Snapshot,
     },
 }
 
@@ -1830,14 +1862,133 @@ impl From<&ExplainContext> for RequireLinearization {
             ExplainContext::None | ExplainContext::PlanInsightsNotice(_) => {
                 RequireLinearization::Required
             }
-            _ => RequireLinearization::NotRequired,
+            ExplainContext::Plan(_) | ExplainContext::Pushdown | ExplainContext::Timestamp => {
+                RequireLinearization::NotRequired
+            }
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_sql::session::vars::{SystemVars, VarInput};
+    use timely::progress::Antichain;
+
+    fn read_session() -> Session {
+        let mut session = Session::dummy();
+        session.start_transaction_single_stmt(Utc::now());
+        session
+            .add_transaction_ops(TransactionOps::Peeks {
+                determination: TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp {
+                        timeline: Timeline::EpochMilliseconds,
+                        chosen_ts: 10.into(),
+                        oracle_ts: Some(10.into()),
+                    },
+                    since: Antichain::from_elem(0.into()),
+                    upper: Antichain::new(),
+                    largest_not_in_advance_of_upper: Timestamp::MAX,
+                    oracle_read_ts: Some(10.into()),
+                    session_oracle_read_ts: None,
+                    real_time_recency_ts: None,
+                    constraints: Default::default(),
+                },
+                cluster_id: ClusterId::User(1),
+                requires_linearization: RequireLinearization::Required,
+            })
+            .expect("read transaction");
+        session
+    }
+
+    #[mz_ore::test]
+    fn read_completion_tracks_ownership_not_just_ops() {
+        let mut session = read_session();
+        let completion = session
+            .read_only_completion(EndTransactionAction::Commit)
+            .expect("local read");
+        assert_eq!(completion.action, EndTransactionAction::Commit);
+        assert!(completion.timestamp.is_some());
+        session.require_coordinator_completion();
+        assert!(
+            session
+                .read_only_completion(EndTransactionAction::Commit)
+                .is_none()
+        );
+        let _ = session.clear_transaction();
+        session.start_transaction_single_stmt(Utc::now());
+        assert!(
+            session
+                .read_only_completion(EndTransactionAction::Commit)
+                .is_some()
+        );
+    }
+
+    #[mz_ore::test]
+    fn completion_skips_timestamp_for_failed_and_rolled_back_reads() {
+        let session = read_session();
+        let rollback = session
+            .read_only_completion(EndTransactionAction::Rollback)
+            .expect("local read");
+        assert!(rollback.timestamp.is_none());
+        let session = session.fail_transaction();
+        let failed = session
+            .read_only_completion(EndTransactionAction::Commit)
+            .expect("failed local read");
+        assert_eq!(failed.action, EndTransactionAction::Rollback);
+        assert!(failed.timestamp.is_none());
+    }
+
+    #[mz_ore::test]
+    fn completion_rejects_resource_bearing_transactions() {
+        for ops in [
+            TransactionOps::Subscribe,
+            TransactionOps::Writes(Vec::new()),
+        ] {
+            let mut session = Session::dummy();
+            session.start_transaction_single_stmt(Utc::now());
+            session.add_transaction_ops(ops).expect("first operation");
+            assert!(
+                session
+                    .read_only_completion(EndTransactionAction::Commit)
+                    .is_none()
+            );
+            assert!(
+                session
+                    .fail_transaction()
+                    .read_only_completion(EndTransactionAction::Rollback)
+                    .is_none()
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn read_completion_preserves_transactional_parameter_changes() {
+        for action in [EndTransactionAction::Commit, EndTransactionAction::Rollback] {
+            let mut session = read_session();
+            session
+                .vars_mut()
+                .set_default("application_name", VarInput::Flat("session"))
+                .expect("default");
+            session
+                .vars_mut()
+                .set(
+                    &SystemVars::new(),
+                    "application_name",
+                    VarInput::Flat("local"),
+                    true,
+                )
+                .expect("local setting");
+            let completion = session.read_only_completion(action).expect("local read");
+            let _ = session.clear_transaction();
+            let params = session.vars_mut().end_transaction(completion.action);
+            assert_eq!(
+                params.get("application_name").map(String::as_str),
+                Some("session")
+            );
+            assert_eq!(session.vars().application_name(), "session");
+            assert!(matches!(session.transaction(), TransactionStatus::Default));
+        }
+    }
 
     #[mz_ore::test]
     fn ddl_inspections_are_released_when_ddl_becomes_impossible() {

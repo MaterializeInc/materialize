@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes. mzbuild only rebuilds when this directory changes,
 # so an unpinned tag kept serving whatever Node it resolved to at the last edit.
-FROM node:26-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
+FROM node:26-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 
 COPY package.json /tmp/playwright-package.json
 RUN playwright_version=$(node -p 'require("/tmp/playwright-package.json").devDependencies["@playwright/test"]') \

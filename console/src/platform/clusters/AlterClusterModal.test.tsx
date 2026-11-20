@@ -111,7 +111,7 @@ const serveAutoScaling = async ({
   const sent: string[][] = [];
   const alterKey = hashKey(clusterQueryKeys.alter());
   server.use(
-    http.post("*/api/sql", async ({ request }) => {
+    http.post<never, ExtendedRequest>("*/api/sql", async ({ request }) => {
       const key = new URL(request.url).searchParams.get("query_key");
       if (key === autoScalingKey) {
         await delay(readDelayMs);

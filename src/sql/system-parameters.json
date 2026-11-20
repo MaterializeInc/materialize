@@ -229,8 +229,8 @@
     {
       "name": "column_paged_batcher_budget_fraction",
       "typeName": "double-precision floating-point number",
-      "default": "0.05",
-      "description": "Budget fraction for chunk spilling: the buffer pool multiplies it against physical RAM and the column pager's tiered policy against the announced memory limit. Total pool budget = max(ram * fraction, 128 MiB).",
+      "default": "0.2",
+      "description": "Budget fraction for chunk spilling: the buffer pool multiplies it against physical RAM. Total pool budget = max(ram * fraction, 128 MiB).",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -245,10 +245,19 @@
       "dyncfg": true
     },
     {
-      "name": "column_paged_batcher_lz4",
-      "typeName": "boolean",
-      "default": "off",
-      "description": "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when `enable_column_paged_batcher_spill = true`.",
+      "name": "column_paged_batcher_file_release_bytes",
+      "typeName": "unsigned integer",
+      "default": "134217728",
+      "description": "Bytes of free file store slots the buffer pool releases per extent class and interval. Zero disables the release.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_file_release_interval",
+      "typeName": "duration",
+      "default": "1 s",
+      "description": "Interval at which the buffer pool releases free file store slots to the filesystem. Zero disables the release.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -265,17 +274,8 @@
     {
       "name": "column_paged_batcher_spill_worker_fraction",
       "typeName": "double-precision floating-point number",
-      "default": "0.125",
-      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded up; 0 evicts inline on the caller.",
-      "scope": "replica",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
-      "name": "column_paged_batcher_swap_pageout",
-      "typeName": "boolean",
-      "default": "off",
-      "description": "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
+      "default": "0.5",
+      "description": "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's timely workers, rounded down to a power of two and at least 1; 0 evicts inline on the caller.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -303,6 +303,15 @@
       "typeName": "unsigned integer",
       "default": "2097152",
       "description": "The byte size of the staging area in the correction V2 buffer, heap bytes of the staged updates included, which sets how much it accumulates before minting a chain (the name predates that meaning; chunk bodies themselves are fixed at the columnar ship size).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_correction_v2_compress_min_depth",
+      "typeName": "unsigned integer",
+      "default": "1",
+      "description": "The youngest MV sink correction chunk generation whose spilled bodies are lz4-compressed in the buffer pool; younger generations store uncompressed. 0 compresses every spilled body.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -869,6 +878,15 @@
       "dyncfg": true
     },
     {
+      "name": "enable_column_paged_batcher_file_extents",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Use the scratch directory as the buffer pool's extent store when one exists. Read once at pool installation.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "enable_column_paged_batcher_spill",
       "typeName": "boolean",
       "default": "off",
@@ -1148,13 +1166,13 @@
       "dyncfg": false
     },
     {
-      "name": "enable_frontend_subscribes",
+      "name": "enable_frontend_transaction_completion",
       "typeName": "boolean",
       "default": "on",
-      "description": "Enable sending subscribes down the new frontend-peek path.",
+      "description": "Whether Complete session-owned read-only transactions without a coordinator round trip. is allowed (Materialize).",
       "scope": "environment",
       "userVisible": false,
-      "dyncfg": true
+      "dyncfg": false
     },
     {
       "name": "enable_hydration_burst",
@@ -1391,15 +1409,6 @@
       "dyncfg": true
     },
     {
-      "name": "enable_mcp_protocol_2026_07_28",
-      "typeName": "boolean",
-      "default": "on",
-      "description": "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
-      "scope": "environment",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "enable_mcp_unified",
       "typeName": "boolean",
       "default": "off",
@@ -1544,6 +1553,15 @@
       "dyncfg": false
     },
     {
+      "name": "enable_postgres_source_failover",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether the FAILOVER option for PostgreSQL sources is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_primary_key_not_enforced",
       "typeName": "boolean",
       "default": "off",
@@ -1569,6 +1587,24 @@
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true
+    },
+    {
+      "name": "enable_query_policies",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Enable creating and managing query policies and their attachments. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_query_policy_enforcement",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether Enable checking attached query policies during query admission. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
     },
     {
       "name": "enable_raise_statement",
@@ -1778,19 +1814,10 @@
       "dyncfg": false
     },
     {
-      "name": "enable_upsert_chunked_stash",
-      "typeName": "boolean",
-      "default": "off",
-      "description": "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when enable_upsert_v2 is true.",
-      "scope": "replica",
-      "userVisible": false,
-      "dyncfg": true
-    },
-    {
       "name": "enable_upsert_paged_spill",
       "typeName": "boolean",
-      "default": "off",
-      "description": "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash flavor) or the column pager (paged stash flavor).",
+      "default": "on",
+      "description": "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool.",
       "scope": "replica",
       "userVisible": false,
       "dyncfg": true
@@ -1798,7 +1825,7 @@
     {
       "name": "enable_upsert_v2",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Whether to use the v2 upsert operator.",
       "scope": "environment",
       "userVisible": false,
@@ -2314,6 +2341,15 @@
       "typeName": "unsigned integer",
       "default": "1000",
       "description": "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_query_policies",
+      "typeName": "unsigned integer",
+      "default": "25",
+      "description": "The maximum number of query policies in the region.",
       "scope": "environment",
       "userVisible": true,
       "dyncfg": false
@@ -2859,8 +2895,8 @@
     {
       "name": "persist_blob_http_pool",
       "typeName": "string",
-      "default": "off",
-      "description": "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+      "default": "gcs",
+      "description": "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'gcs'.",
       "scope": "environment",
       "userVisible": false,
       "dyncfg": true

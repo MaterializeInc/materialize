@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS builder
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS builder
 
 WORKDIR /app
 
@@ -38,9 +38,9 @@ ENV NODE_OPTIONS='--max_old_space_size=4096'
 # Build the app
 RUN yarn build
 
-# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# Pinned by rolling tag + multi-arch index digest so Renovate refreshes the
 # digest for security fixes.
-FROM nginxinc/nginx-unprivileged:alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+FROM nginx/nginx-unprivileged:alpine@sha256:60214a103e6f38e953ff957f34b1f2e97a9db801ab2df3821da955d0fe6cadd6
 
 # Add labels
 LABEL maintainer="support@materialize.com" \

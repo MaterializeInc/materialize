@@ -36,6 +36,7 @@ import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "~/platform/clusters/constants";
 import { REPLICA_HYDRATION_HISTORY_MIN_VERSION } from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
+import { useIsEmulator } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { assert, pluralize } from "~/util";
 import {
@@ -52,26 +53,33 @@ import {
 } from "../ResourceUsage/resourceUsageModel";
 import { useStatusStyles } from "../ResourceUsage/resourceUsageStyles";
 import { useSelectedReplica } from "../useSelectedReplica";
-import { InfoTip } from "./hydrationComponents";
-import { HydrationDetail } from "./HydrationDetail";
+import { InfoTip, InfoTipProps } from "./hydrationComponents";
+import { HydrationDetail, ObjectWaterfall } from "./HydrationDetail";
 import {
-  HydrationHistoryChart,
-  HydrationHistoryLegend,
-} from "./HydrationHistoryChart";
-import { HydrationReplica } from "./hydrationModel";
+  HydrationReplica,
+  runningEpisodeSoFar,
+  transformObjectHydrationSpans,
+} from "./hydrationModel";
 import { HydrationTable } from "./HydrationTable";
 import {
+  findSelectedRow,
+  findUnrecordedHydrations,
   HYDRATION_HELP,
+  HydrationRow,
   HydrationVerdict,
   hydrationVerdict,
   ReplicaNow,
   ROW_KIND_NAMES,
+  rowEndTime,
   rowKind,
   rowTime,
   summarizeReplicasNow,
   toHydrationRows,
 } from "./hydrationView";
-import { useClusterHydrationData } from "./useClusterHydrationData";
+import {
+  useClusterHydrationData,
+  useUnrecordedHydrations,
+} from "./useClusterHydrationData";
 import { useLiveObjectHydrations } from "./useLiveHydration";
 
 // Status history, which unfinished hydrations come from, is kept 30 days.
@@ -85,10 +93,13 @@ const MAX_LIVE_OBJECTS = 8;
 const SectionCard = ({
   title,
   subtitle,
+  subtitleHelp,
   children,
 }: {
   title: string;
   subtitle?: string;
+  /** Explains the subtitle, from an info tip beside it. */
+  subtitleHelp?: InfoTipProps;
   children: React.ReactNode;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -107,9 +118,12 @@ const SectionCard = ({
             {title}
           </Text>
           {subtitle && (
-            <Text textStyle="text-small" color={colors.foreground.secondary}>
-              {subtitle}
-            </Text>
+            <HStack spacing={1}>
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                {subtitle}
+              </Text>
+              {subtitleHelp && <InfoTip {...subtitleHelp} />}
+            </HStack>
           )}
         </VStack>
         {children}
@@ -151,12 +165,13 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     useSelectedReplica(cluster);
   const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
     localStorageKey: "mz-cluster-hydration-time-period",
-    defaultValue: "10080",
+    defaultValue: "1440",
     timePeriodOptions: HYDRATION_TIME_PERIODS,
   });
   const data = useClusterHydrationData({ cluster, timePeriodMinutes });
+  const isEmulator = useIsEmulator();
   const colorById = useReplicaColors(cluster.id, data.replicas);
-  const [selectedRowId, setSelectedRowId] = React.useState<string>();
+  const [pickedRow, setPickedRow] = React.useState<HydrationRow>();
 
   // A retired replica can be selected while its history is in the window.
   // Narrowing keeps every replica of the selected name, such as the ones a
@@ -193,20 +208,12 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
       })),
   ];
   // Held across renders, which come every second while a replica hydrates, so
-  // the table's and chart's memos keyed on them hold too.
-  const { replicaIds, hydrations, unfinished, rows } = React.useMemo(() => {
+  // the table's memos keyed on them hold too.
+  const { hydrations, unfinished } = React.useMemo(() => {
     const ids = new Set(replicas.map(({ id }) => id));
-    const shownHydrations = data.hydrations.filter(({ replicaId }) =>
-      ids.has(replicaId),
-    );
-    const shownUnfinished = data.unfinished.filter(({ replicaId }) =>
-      ids.has(replicaId),
-    );
     return {
-      replicaIds: replicas.map(({ id }) => id),
-      hydrations: shownHydrations,
-      unfinished: shownUnfinished,
-      rows: toHydrationRows(shownHydrations, shownUnfinished),
+      hydrations: data.hydrations.filter(({ replicaId }) => ids.has(replicaId)),
+      unfinished: data.unfinished.filter(({ replicaId }) => ids.has(replicaId)),
     };
   }, [replicas, data.hydrations, data.unfinished]);
   const nowMs = Date.now();
@@ -237,30 +244,41 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
     ? undefined
     : hydrationVerdict(replicasNow, nowMs);
   const nameById = new Map(data.replicas.map(({ id, name }) => [id, name]));
-  const lastFinished = greatest(hydrations, ({ finishedAt }) =>
-    finishedAt.getTime(),
+  const candidates =
+    isHistoryReady && data.hasHistory === true && !data.isProgressLoading
+      ? findUnrecordedHydrations({
+          replicasNow,
+          hydrations,
+          restarts: data.restarts,
+          createdObjects: data.createdObjects,
+          startMs: data.startMs,
+        })
+      : [];
+  const unrecorded = useUnrecordedHydrations({
+    clusterId: cluster.id,
+    clusterName: cluster.name,
+    candidates,
+    hydrations,
+    bootTimes: data.bootTimes,
+    clusterObjectCount: data.objectCount,
+  });
+  const rows = React.useMemo(
+    () => toHydrationRows(hydrations, unrecorded, unfinished),
+    [hydrations, unrecorded, unfinished],
   );
-  const explicitRow = rows.find(({ id }) => id === selectedRowId);
-  const selectedRow =
-    explicitRow ?? rows.find(({ id }) => id === lastFinished?.id) ?? rows[0];
-  const isLastFinishedShown =
-    !explicitRow && lastFinished !== undefined && selectedRow !== undefined;
-  // A replica's boot comes from its status, so its start waits for it too.
-  const inProgress = replicasNow.flatMap(({ replica, isWorking, startedAt }) =>
-    isWorking && startedAt && !data.isProgressLoading
-      ? [
-          {
-            replicaId: replica.id,
-            startedAt,
-            elapsedMs: nowMs - startedAt.getTime(),
-          },
-        ]
-      : [],
-  );
+  // Rows are ordered by when each began, and a long hydration can end after a
+  // later one.
+  const lastRow = greatest(rows, (row) => rowEndTime(row).getTime());
+  const selectedRow = findSelectedRow(rows, pickedRow) ?? lastRow;
+  const isLastShown = selectedRow === lastRow;
   const nameOf = (replicaId: string) => nameById.get(replicaId) ?? replicaId;
+  // A replica's boot comes from its status, so its start waits for it too.
+  const isTicking =
+    !data.isProgressLoading &&
+    notHydrated.some(({ isWorking, startedAt }) => isWorking && startedAt);
   useInterval(
     () => setTickMs(Date.now()),
-    inProgress.length > 0 ? millisecondsInSecond : null,
+    isTicking ? millisecondsInSecond : null,
   );
 
   return (
@@ -279,6 +297,14 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
             options={HYDRATION_TIME_PERIODS}
           />
         </HStack>
+        {isEmulator && (
+          <Alert
+            role="note"
+            variant="info"
+            label="This is the Materialize Emulator."
+            message="Its clusters share one container and aren't held to their sizes, so resource figures here can read above 100%."
+          />
+        )}
         {data.objectCount === 0 && cluster.replicas.length > 0 && (
           <Text textStyle="text-base" color={colors.foreground.secondary}>
             This cluster has no indexes or materialized views, so it has nothing
@@ -325,48 +351,14 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
           <LoadingContainer />
         ) : (
           <>
-            <SectionCard title="Hydration History">
-              <HydrationHistoryLegend
-                replicas={replicas}
-                colorById={colorById}
-                hasInProgress={inProgress.length > 0}
-              />
-              {rows.length === 0 && inProgress.length === 0 ? (
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
-                >
-                  No hydrations in this period.
-                </Text>
-              ) : (
-                <HydrationHistoryChart
-                  rows={rows}
-                  inProgress={inProgress}
-                  replicaIds={replicaIds}
-                  colorById={colorById}
-                  nameById={nameById}
-                  startMs={data.startMs}
-                  endMs={nowMs}
-                  selectedId={selectedRow?.id}
-                  onSelect={setSelectedRowId}
-                />
-              )}
-            </SectionCard>
             {selectedRow && (
               <SectionCard
-                title={
-                  isLastFinishedShown
-                    ? "Last Successful Hydration"
-                    : `${ROW_KIND_NAMES[rowKind(selectedRow)].title} on ${nameOf(selectedRow.replicaId)}`
-                }
-                subtitle={
-                  isLastFinishedShown
-                    ? `${ROW_KIND_NAMES[rowKind(selectedRow)].label} on ${nameOf(selectedRow.replicaId)}, ${formatDate(rowTime(selectedRow), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`
-                    : formatDate(
-                        rowTime(selectedRow),
-                        FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-                      )
-                }
+                title={isLastShown ? "Last Hydration" : "Selected Hydration"}
+                subtitle={`${ROW_KIND_NAMES[rowKind(selectedRow)].label} on ${nameOf(selectedRow.replicaId)}, ${formatDate(rowTime(selectedRow), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}`}
+                subtitleHelp={{
+                  subject: ROW_KIND_NAMES[rowKind(selectedRow)].label,
+                  label: HYDRATION_HELP[rowKind(selectedRow)],
+                }}
               >
                 <HydrationDetail
                   clusterId={cluster.id}
@@ -384,10 +376,9 @@ const ClusterHydrationContent = ({ cluster }: { cluster: Cluster }) => {
                 rows={rows}
                 colorById={colorById}
                 nameById={nameById}
-                heapLimitById={data.heapLimitBytesById}
                 allocationById={data.allocationById}
                 selectedId={selectedRow?.id}
-                onSelect={setSelectedRowId}
+                onSelect={setPickedRow}
               />
             </SectionCard>
           </>
@@ -456,8 +447,15 @@ const ReplicasNow = ({
   return (
     <VStack as="ul" spacing={4} alignItems="stretch" listStyleType="none">
       {replicasNow.map((replicaNow) => {
-        const { replica, state, progress, isWorking, startedAt, lastFull } =
-          replicaNow;
+        const {
+          replica,
+          state,
+          progress,
+          isWorking,
+          hasReported,
+          startedAt,
+          lastFull,
+        } = replicaNow;
         const { label, color } = stateStyles[state];
         const help = stateHelp[state];
         const share =
@@ -551,12 +549,15 @@ const ReplicasNow = ({
                     background={color}
                   />
                 </Box>
-                <LiveObjects
-                  clusterName={clusterName}
-                  replicaId={replica.id}
-                  replicaName={replica.name}
-                  nowMs={nowMs}
-                />
+                {/* It runs a dataflow on the replica, so it waits for the replica to report. */}
+                {hasReported && (
+                  <LiveObjects
+                    clusterName={clusterName}
+                    replicaId={replica.id}
+                    replicaName={replica.name}
+                    nowMs={nowMs}
+                  />
+                )}
               </>
             )}
           </VStack>
@@ -566,7 +567,10 @@ const ReplicasNow = ({
   );
 };
 
-/** The objects a hydrating replica is working on, read from the replica. */
+/**
+ * The objects a hydrating replica is working on, and the ones it has hydrated
+ * so far, read from the replica.
+ */
 const LiveObjects = ({
   clusterName,
   replicaId,
@@ -587,35 +591,61 @@ const LiveObjects = ({
   // The progress above already says how far the replica has got.
   if (isError || !snapshotComplete) return null;
   const working = objects.filter(({ state }) => state === "working");
-  if (working.length === 0) return null;
+  const soFar = runningEpisodeSoFar(objects);
+  const namesByGlobalId = new Map(
+    objects.map(({ globalId, name }) => [globalId, name]),
+  );
   return (
-    <VStack
-      as="ul"
-      aria-label={`Objects ${replicaName} is hydrating`}
-      listStyleType="none"
-      spacing={1}
-      alignItems="start"
-    >
-      {working.slice(0, MAX_LIVE_OBJECTS).map((object) => (
-        <Text as="li" key={object.globalId} textStyle="text-small">
-          Working on{" "}
-          <Text as="span" fontFamily="mono">
-            {object.name}
-          </Text>
-          {object.startedAt &&
-            ` for ${formatDurationExact(nowMs - object.startedAt.getTime())}`}
-        </Text>
-      ))}
-      {working.length > MAX_LIVE_OBJECTS && (
-        <Text
-          as="li"
-          textStyle="text-small"
-          color={colors.foreground.secondary}
+    <>
+      {working.length > 0 && (
+        <VStack
+          as="ul"
+          aria-label={`Objects ${replicaName} is hydrating`}
+          listStyleType="none"
+          spacing={1}
+          alignItems="start"
         >
-          and {working.length - MAX_LIVE_OBJECTS} more working
-        </Text>
+          {working.slice(0, MAX_LIVE_OBJECTS).map((object) => (
+            <Text as="li" key={object.globalId} textStyle="text-small">
+              Working on{" "}
+              <Text as="span" fontFamily="mono">
+                {object.name}
+              </Text>
+              {object.startedAt &&
+                ` for ${formatDurationExact(nowMs - object.startedAt.getTime())}`}
+            </Text>
+          ))}
+          {working.length > MAX_LIVE_OBJECTS && (
+            <Text
+              as="li"
+              textStyle="text-small"
+              color={colors.foreground.secondary}
+            >
+              and {working.length - MAX_LIVE_OBJECTS} more working
+            </Text>
+          )}
+        </VStack>
       )}
-    </VStack>
+      {soFar && (
+        <Box
+          role="group"
+          aria-label={`Objects ${replicaName} has hydrated so far`}
+          width="100%"
+        >
+          <ObjectWaterfall
+            key={soFar.startedAt.getTime()}
+            spans={transformObjectHydrationSpans(
+              soFar.objects,
+              soFar.startedAt,
+            ).map((span) => ({
+              ...span,
+              name: namesByGlobalId.get(span.globalId) ?? span.globalId,
+            }))}
+            durationMs={soFar.finishedAt.getTime() - soFar.startedAt.getTime()}
+          />
+        </Box>
+      )}
+    </>
   );
 };
 

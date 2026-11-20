@@ -19,6 +19,7 @@ class Prometheus(Service):
         super().__init__(
             name=name,
             config={
+                # renovate: datasource=docker depName=prom/prometheus versioning=docker
                 "image": "prom/prometheus:v3.11.3",
                 "ports": ["9090"],
                 "volumes": [

@@ -184,13 +184,21 @@ impl EquivalencePropagation {
         match expr {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 if let Ok(rows) = rows {
+                    // Expressions with an unbounded call must not be evaluated, so they take no
+                    // part below. The other members of a class are still all equal, so checking
+                    // only them keeps more rows, never fewer.
+                    let classes: Vec<Vec<_>> = outer_equivalences
+                        .classes
+                        .iter()
+                        .map(|class| class.iter().filter(|e| !e.contains_unbounded()).collect())
+                        .collect();
                     let mut datum_vec = mz_repr::DatumVec::new();
                     // Delete any rows that violate the equivalences.
                     // Do not delete rows that produce errors, as they are semantically important.
                     rows.retain(|(row, _count)| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(row);
-                        outer_equivalences.classes.iter().all(|class| {
+                        classes.iter().all(|class| {
                             // Any subset of `Ok` results must equate, or we can drop the row.
                             let mut oks = class
                                 .iter()

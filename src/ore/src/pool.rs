@@ -24,9 +24,10 @@
 //! ([`ChunkHandle::read_into`]): a resident slot is copied and an evicted
 //! extent decompressed straight into the caller's buffer, all under the
 //! chunk's state lock, so no reference into pool memory escapes the pool and
-//! a read leaves residency untouched. The backing is the swap-backed extent
-//! store of the design's Layer 1: a slot in a pool-owned anonymous-memory
-//! extent arena holding the chunk's lz4-compressed bytes.
+//! a read leaves residency untouched. The backing is the extent store of the
+//! design's Layer 1: a slot in a pool-owned anonymous-memory extent arena
+//! holding the chunk's lz4-compressed bytes, later paged to swap or demoted
+//! to file per the pool's [`ExtentBackend`].
 //!
 //! Memory descends a ladder of tiers, each with its own ceiling and each
 //! cheaper to vacate than the one above:
@@ -38,7 +39,9 @@
 //! * **Compressed-resident extents** (reads decompress, no device) — bounded
 //!   by the headroom the RSS target leaves above the first two; crossing it
 //!   pushes the oldest extents to the swap device with `MADV_PAGEOUT`.
-//! * **The swap device** — overflow; reads fault and decompress.
+//! * **The swap device** (overflow). Reads fault and decompress. A pool
+//!   built over [`ExtentBackend::File`] demotes extents to files in a
+//!   scratch directory instead, and reads them back with `pread`.
 //!
 //! Residency is a state, not a type. It descends through eviction and
 //! ascends through exactly one transition: an admitting read
@@ -58,15 +61,21 @@
 //! FIFOs banded by the caller-supplied generational depth ([`ChunkHints`]).
 
 mod extent;
+mod file;
 mod region;
+#[cfg(test)]
+mod testing;
 
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use crate::cast::CastFrom;
-use crate::pool::extent::{ExtentArena, Scratch, SwapExtent};
+use crate::pool::extent::{Extent, ExtentArena, Scratch};
+pub use crate::pool::file::READ_LATENCY_BUCKETS;
+use crate::pool::file::{FileStore, IoMode, WriteError};
 use crate::pool::region::{Region, SIZE_CLASSES};
 
 /// Virtual reservation per size class. Purely virtual: physical memory
@@ -80,17 +89,20 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
 const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
+/// Bytes per word of a chunk body. Chunk lengths are in `u64` words.
+const WORD_BYTES: usize = std::mem::size_of::<u64>();
+
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
 /// residency state machine, cancellation, and the ledger. It invokes the
 /// codec on opaque bytes at the extent boundary, `encode` when backing a
 /// chunk (on a spill thread, or inline under overload) and `decode` when
-/// reading an evicted one, under the chunk's state lock. The pool itself
-/// has no opinion on the stored form: framing, compression, and validation
-/// all belong to the codec.
+/// reading an evicted one, possibly under the chunk's state lock. The pool
+/// itself has no opinion on the stored form: framing, compression, and
+/// validation all belong to the codec.
 ///
 /// Implementations must be pure transforms: no locking, no calls back into
-/// the pool (the state lock is held at `decode` sites), and no panic on
+/// the pool (the state lock may be held at `decode` sites), and no panic on
 /// bytes their own `encode` produced. `decode` must exactly invert
 /// `encode`, and `encode`'s output must never exceed
 /// [`max_stored_len`]`(body.len())`, the bound the extent store's size
@@ -106,12 +118,18 @@ pub trait ExtentCodec: std::fmt::Debug + Send + Sync {
     /// original body's length, and implementations must panic on a length
     /// mismatch rather than truncate or pad.
     fn decode(&self, stored: &[u8], body: &mut [u8]);
+
+    /// Whether the stored form is the body itself, for splitting the pool's
+    /// write-bytes counters by codec.
+    fn is_identity(&self) -> bool {
+        false
+    }
 }
 
 /// The identity [`ExtentCodec`]: the stored form is the body. Encode and
 /// decode are copies, and range reads copy the range directly, so a chunk
 /// stored under this codec pays no compression work in either direction
-/// while remaining fully budgeted and swap-backed like any other extent.
+/// while remaining fully budgeted and backed like any other extent.
 #[derive(Debug)]
 pub struct IdentityCodec;
 
@@ -128,6 +146,75 @@ impl ExtentCodec for IdentityCodec {
         assert_eq!(stored.len(), body.len(), "identity stored form is the body");
         body.copy_from_slice(stored);
     }
+
+    fn is_identity(&self) -> bool {
+        true
+    }
+}
+
+/// The extent store a pool is built over, fixed for the pool's lifetime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtentBackend {
+    /// Compressed extents in the arena, paged to the swap device.
+    Swap,
+    /// Compressed extents in the arena, demoted to files under `dir`.
+    File {
+        /// A directory on a disk-backed filesystem. The files have no name
+        /// and vanish with the process.
+        dir: PathBuf,
+        /// Capacity of the files in bytes. `None` derives it from the
+        /// volume's free space.
+        capacity_bytes: Option<u64>,
+    },
+}
+
+/// The store a pool actually runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    /// The swap device.
+    Swap,
+    /// Files with `O_DIRECT` I/O.
+    FileDirect,
+    /// Files with page-cache I/O, written back and dropped after each write.
+    FileBuffered,
+}
+
+/// The extent store behind a [`PoolInner`].
+#[derive(Debug)]
+enum ExtentStore {
+    Swap,
+    File(Arc<FileStore>),
+}
+
+/// A chunk body the pool holds in its owner's in-memory form, serializing it
+/// only when it has to leave that form: on eviction, on backing, and on a
+/// copy-out read. Under budget a typed chunk therefore costs the pool its
+/// bookkeeping and nothing else, and [`ChunkHandle::take_typed`] hands the
+/// body back without a copy.
+///
+/// The body is immutable once inserted. Spill threads serialize and drop it
+/// under the chunk's state lock, so it must be `Send`.
+pub trait TypedBody: std::any::Any + Send + std::fmt::Debug {
+    /// The serialized length in `u64` words. Must not change while the pool
+    /// holds the body.
+    fn words(&self) -> usize;
+
+    /// Writes the serialized form into `dst`, which is exactly
+    /// [`TypedBody::words`] long, overwriting all of it.
+    fn serialize_into(&self, dst: &mut [u64]);
+
+    /// The body as [`std::any::Any`], for the owner to downcast a borrow.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// The body as [`std::any::Any`], for the owner to downcast a take.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
+}
+
+/// The serialized form of a typed body, in a fresh buffer.
+fn serialize_typed(body: &dyn TypedBody) -> Vec<u64> {
+    let mut words = vec![0; body.words()];
+    body.serialize_into(&mut words);
+    words
 }
 
 /// The largest stored form [`ExtentCodec::encode`] may produce for a
@@ -185,9 +272,9 @@ enum Residency {
     /// [`Residency::BackedResident`]; a free observed at dequeue cancels the
     /// write instead.
     WriteInFlight,
-    /// Extent copy only; the chunk holds no slot. The extent itself may
-    /// still be RAM-resident (the compressed tier) or paged out to the swap
-    /// device. Reads decompress the extent straight into the caller's
+    /// Extent copy only. The chunk holds no slot. The extent itself may be
+    /// in the arena (the compressed tier), on the swap device, or on file.
+    /// Reads decompress the extent straight into the caller's
     /// buffer and leave the chunk evicted, except that an admitting read
     /// may lift it back to [`Residency::BackedResident`].
     Evicted,
@@ -270,8 +357,9 @@ pub struct PoolStats {
     /// until the retry budget ran out) and heap-fallback extents. The
     /// compressed tier settles above its capacity by this amount.
     pub extent_unreclaimable_bytes: u64,
-    /// Extents pushed to the swap device by RSS-target enforcement, with
-    /// the whole range observed nonresident afterwards.
+    /// Extents pushed out of RAM by RSS-target enforcement: to the swap
+    /// device with the whole range observed nonresident afterwards, or
+    /// demoted to file.
     pub extent_pageouts: u64,
     /// Pageout passes whose observation found some of the extent's pages
     /// still mapped: `MADV_PAGEOUT` may decline pages and still succeed, so
@@ -284,6 +372,49 @@ pub struct PoolStats {
     /// class had no free slot. Heap-backed extents stay readable but are
     /// never paged out, so their compressed bytes hold RAM until freed.
     pub extent_arena_fallbacks: u64,
+    /// Extents freed while resident in a reclaimable arena slot, so the
+    /// free needed no swap or file I/O. In swap mode this includes extents
+    /// paged out and then read back before the free, since the read made
+    /// them resident again.
+    pub extent_demotions_elided: u64,
+    /// Slot bytes of live extents demoted to file. The file fields stay zero
+    /// on a swap-backed pool.
+    pub extent_file_bytes: u64,
+    /// Bytes the file store holds on the filesystem: slots in use plus free
+    /// slots whose blocks were not punched.
+    pub extent_file_allocated_bytes: u64,
+    /// The file store's effective capacity in bytes.
+    pub extent_file_capacity_bytes: u64,
+    /// Demotion writes that reached the device without error, including
+    /// those whose chunk was freed before the demotion committed. The other
+    /// write counters count the same writes.
+    pub extent_file_writes: u64,
+    /// The subset of `extent_file_writes` run by inline enforcement passes
+    /// rather than spill threads.
+    pub extent_file_writes_inline: u64,
+    /// Bytes transferred by the `extent_file_writes` of identity-coded
+    /// extents, page-rounded by the store.
+    pub extent_file_write_bytes_identity: u64,
+    /// As `extent_file_write_bytes_identity`, for all other codecs.
+    pub extent_file_write_bytes_compressed: u64,
+    /// Reads of demoted extents.
+    pub extent_file_reads: u64,
+    /// Page-rounded bytes transferred by `extent_file_reads`.
+    pub extent_file_read_bytes: u64,
+    /// The subset of `extent_file_reads` of extents already read since their
+    /// demotion.
+    pub extent_file_repeat_reads: u64,
+    /// Demotion passes that left an extent in RAM because the store was
+    /// full or had writes disabled.
+    pub extent_file_full: u64,
+    /// Store I/O errors, after which demotion writes are disabled.
+    pub extent_file_write_errors: u64,
+    /// Bytes of file slots returned to the filesystem.
+    pub extent_file_holes_punched_bytes: u64,
+    /// Read latency histogram of `extent_file_reads`. Bucket 0 counts reads
+    /// under 32 µs, bucket `i` in `1..12` reads in `[16 µs << i, 32 µs << i)`,
+    /// and bucket 12 reads of 65.536 ms and more.
+    pub extent_file_read_latency: [u64; READ_LATENCY_BUCKETS],
 }
 
 #[derive(Debug, Default)]
@@ -311,10 +442,18 @@ struct Counters {
     extent_unreclaimable_bytes: AtomicU64,
     extent_pageouts: AtomicU64,
     extent_pageout_incomplete: AtomicU64,
+    extent_demotions_elided: AtomicU64,
+    extent_file_bytes: AtomicU64,
+    extent_file_writes_inline: AtomicU64,
+    extent_file_write_bytes_identity: AtomicU64,
+    extent_file_write_bytes_compressed: AtomicU64,
+    extent_file_repeat_reads: AtomicU64,
+    extent_file_full: AtomicU64,
 }
 
-/// A buffer pool over swap-backed extents. Cheap to clone; all clones share
-/// one budget and one backing store.
+/// A buffer pool over compressed extents, backed by swap or by files per its
+/// [`ExtentBackend`]. Cheap to clone. All clones share one budget and one
+/// backing store.
 #[derive(Debug, Clone)]
 pub struct Pool(Arc<PoolInner>);
 
@@ -323,17 +462,27 @@ pub struct Pool(Arc<PoolInner>);
 /// so it lives until the last handle and spill thread release it.
 ///
 /// Lock order: a chunk's `state` mutex may be held while taking any of the
-/// leaf locks — the eviction `queue`, the `extent_queue`, the spill queue,
-/// and the region slot allocators — but never the reverse. The enforcement
-/// and backing scans additionally drop the queue guard before trying a
-/// chunk's state lock (and only ever `try_lock` it), so no path holds a
-/// queue lock while waiting on chunk state. The admitting read's victim
-/// steal is the one place a chunk's state lock is held while probing
-/// another chunk's, and the victim is only ever `try_lock`ed, so two
-/// admitters stealing toward each other skip instead of deadlocking. Reads
-/// copy out under the chunk's state lock — the same lock eviction takes —
-/// so there is no reader-side count and no reader the evictor must account
-/// for.
+/// leaf locks (the eviction `queue`, the `extent_queue`, the spill queue,
+/// the region slot allocators, and the file store's per-class slot
+/// allocators, which `alloc`, `free`, and hole punching take) but never the
+/// reverse. The enforcement and backing scans additionally drop the queue
+/// guard before trying a chunk's state lock, so no path holds a queue lock
+/// while waiting on chunk state. Scans only ever `try_lock` a chunk they
+/// pop, with one exception: a demotion re-locks its victim with a blocking
+/// `lock` to commit after the unlocked write. That wait holds no other
+/// chunk or queue lock. From budget enforcement it holds the `enforcing`
+/// single-flight mutex, which is only ever `try_lock`ed, so no thread waits
+/// on it. Hence `enforce_compressed_cap` must never run while its caller holds
+/// any chunk's state lock: two such callers demoting each other's chunks
+/// would deadlock on the re-lock. The admitting read's victim steal is the
+/// one place a chunk's state lock is held while probing another chunk's,
+/// and the victim is only ever `try_lock`ed, so two admitters stealing
+/// toward each other skip instead of deadlocking.
+///
+/// Reads copy out under the chunk's state lock, the same lock eviction
+/// takes, so there is no reader-side count and no reader the evictor must
+/// account for. The exception is a plain read of an extent demoted to file,
+/// which copies out after the unlock, sound per `Home::File` in `extent.rs`.
 #[derive(Debug)]
 struct PoolInner {
     /// Resident-bytes target, enforced against evictable bytes (resident
@@ -350,9 +499,33 @@ struct PoolInner {
     rss_target_bytes: AtomicU64,
     /// One region per entry of [`SIZE_CLASSES`], same order.
     regions: Vec<Region>,
-    /// The arena backing extents. Shared with every live [`SwapExtent`],
+    /// The arena backing extents. Shared with every live [`Extent`],
     /// whose drop returns its slot.
     extent_arena: Arc<ExtentArena>,
+    /// Where RSS-target enforcement sends arena extents: the swap device,
+    /// or a file store that demoted extents keep alive.
+    store: ExtentStore,
+    /// File mode: set when a demotion pass found the store unable to take
+    /// any extent it probed, cleared by a committed demotion or a freed file
+    /// slot, or by enqueueing an extent whose class the store can place. While
+    /// set, inline callers run no demotion pass, and each spill thread runs
+    /// one at most every [`SPILL_PARK_TIMEOUT`].
+    ///
+    /// NOTE: setting and clearing race. A pass can set the hint after a
+    /// concurrent free cleared it, and demotion then stays deferred until the
+    /// next free, commit, or enqueue of a placeable extent, or the next spill
+    /// thread retry.
+    full_hint: AtomicBool,
+    /// File mode: entries whose extent class the store refused, set aside so
+    /// that passes stop revisiting them. A pass returns a class's entries to
+    /// the front of `extent_queue` once the store can place that class.
+    parked_extents: Mutex<ParkedExtents>,
+    /// `class_bit` of every class with parked entries, so a pass skips the
+    /// parked lock when nothing is parked.
+    parked_classes: AtomicU64,
+    /// File mode: the schedule on which spill threads release warm file
+    /// store slots. See [`Pool::set_file_release`].
+    file_release: Mutex<FileRelease>,
     /// Second-chance FIFOs of eviction candidates, one per depth band; a
     /// chunk joins the band of its [`ChunkHints`] depth at insert and again
     /// on re-admission. Entries for freed chunks go stale in place and are
@@ -370,7 +543,7 @@ struct PoolInner {
     /// extent pages out, is dropped, or its chunk dies; visits drop them,
     /// and [`PoolInner::prune_extent_queue`] compacts dead-chunk entries
     /// that under-cap operation never visits.
-    extent_queue: Mutex<VecDeque<Weak<ChunkMeta>>>,
+    extent_queue: Mutex<VecDeque<ExtentEntry>>,
     /// Number of live size-classed chunks (whatever their residency), which
     /// is the number of non-stale queue entries across all bands;
     /// [`PoolInner::prune_queues`] compacts the queues against it.
@@ -415,19 +588,55 @@ struct Spill {
     threads: AtomicU64,
     /// Queued plus currently-processing entries; `quiesce` waits on zero.
     in_flight: AtomicU64,
-    /// Test-only lifecycle: production spill threads are immortal (the pool
-    /// is a process singleton), but Miri rejects a test binary exiting with
-    /// live threads, so tests stop and join them.
-    #[cfg(test)]
+    /// Lifecycle: production spill threads are immortal (the pool is a
+    /// process singleton) and never set `stop`, but Miri rejects a test
+    /// binary exiting with live threads, so tests stop and join them.
     stop: std::sync::atomic::AtomicBool,
-    #[cfg(test)]
     handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+/// The schedule of the file store's warm-slot release.
+#[derive(Debug)]
+struct FileRelease {
+    interval: std::time::Duration,
+    /// Bytes each class releases per interval.
+    bytes_per_class: u64,
+    /// When the next release is due. `None` when an interval too long for
+    /// `Instant` put it out of reach.
+    due: Option<std::time::Instant>,
+    /// When the next capacity refresh is due, on its own cadence so that
+    /// disabling the release does not freeze the capacity.
+    refresh_due: std::time::Instant,
 }
 
 /// Beyond this many queued or in-flight spill entries, eviction degrades to
 /// inline on the caller: bounded memory overshoot under burst beats an
 /// unbounded queue of still-resident chunks.
-const SPILL_IN_FLIGHT_MAX: usize = 64;
+pub const SPILL_IN_FLIGHT_MAX: usize = 64;
+
+/// The most extent bytes one file-mode pass demotes: a spill thread's pass
+/// while the eviction queue is empty, and an inline pass while spill threads
+/// exist. With queued evictions a spill thread's pass demotes one extent, so
+/// the thread alternates one eviction with one demotion.
+///
+/// Demotions are device writes. On a device slower than the rate at which
+/// evictions fill the compressed tier, an unbounded spill-thread pass never
+/// gets the tier back to its capacity, the eviction queue stays full, and
+/// every eviction runs inline on the threads that trip the budget. An inline
+/// pass runs on the caller's thread, often a timely worker, and an unbounded
+/// one after a lowered RSS target writes the whole overage before the worker
+/// returns. The bound is at least the largest size class, so an inline
+/// caller still demotes the extent its own eviction added. 16 MiB is about
+/// 35 ms of writes at the 475 MB/s an 8 vCPU instance-store NVMe sustained.
+const DEMOTION_PASS_BYTES: u64 = 16 << 20;
+
+/// How often a spill thread re-derives the file store's capacity from the
+/// volume's free space.
+const FILE_CAPACITY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long an idle spill thread parks, and how often a spill thread retries
+/// demotion while the file store's full hint is set.
+const SPILL_PARK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// What a spill thread does with a chunk once compressed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -437,6 +646,77 @@ enum SpillKind {
     /// Eager write-behind: keep the slot, leaving the chunk
     /// `BackedResident`.
     Back,
+}
+
+/// Which kind of caller runs a [`PoolInner::enforce_compressed_cap`] pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// A spill thread, between jobs.
+    Background,
+    /// Any other thread: a worker over the backstop threshold, a budget
+    /// change, or a pool without spill threads.
+    Inline,
+}
+
+/// The tier size at which callers with spill threads present enforce the
+/// compressed cap inline, and where an inline file-mode pass stops.
+fn backstop_threshold(cap: u64) -> u64 {
+    cap.saturating_mul(2)
+}
+
+/// The outcome of one [`PoolInner::demote`], as it bears on the pass.
+enum Demotion {
+    /// The extent moved to file.
+    Committed,
+    /// The entry was stale, or the chunk died mid-write.
+    Skipped,
+    /// The store cannot place the extent's class, carried in the variant, but
+    /// can place another class. The entry was parked.
+    Refused(usize),
+    /// The store can place no class or has writes disabled. The entry went to
+    /// the front of the queue, and the pass must end.
+    Stopped,
+    /// The write failed, which disabled the store's writes. The entry went to
+    /// the front of the queue, and the pass must end.
+    WriteFailed,
+}
+
+/// `extent_queue` entries set aside per extent class. See
+/// `PoolInner::parked_extents`.
+#[derive(Debug, Default)]
+struct ParkedExtents {
+    /// Indexed by file store class, each oldest first.
+    classes: Vec<VecDeque<ExtentEntry>>,
+    /// Entries across all classes.
+    len: usize,
+}
+
+/// An `extent_queue` entry.
+#[derive(Debug)]
+struct ExtentEntry {
+    chunk: Weak<ChunkMeta>,
+    /// The extent's `alloc_size` at enqueue. The file store is opened with
+    /// the arena's class ladder, so in file mode this names the extent's
+    /// file class without taking the chunk lock.
+    alloc_size: usize,
+}
+
+impl ExtentEntry {
+    fn new(meta: &Arc<ChunkMeta>, alloc_size: usize) -> ExtentEntry {
+        ExtentEntry {
+            chunk: Arc::downgrade(meta),
+            alloc_size,
+        }
+    }
+}
+
+/// The bit of `class` in a pass's refused-class mask, or 0 for a class the
+/// mask cannot represent, which the pass then probes on every visit.
+fn class_bit(class: usize) -> u64 {
+    u32::try_from(class)
+        .ok()
+        .and_then(|class| 1u64.checked_shl(class))
+        .unwrap_or(0)
 }
 
 #[derive(Debug)]
@@ -473,9 +753,14 @@ struct ChunkState {
     /// Reads copy the slot out under the state lock; no pointer into the
     /// slot outlives the lock under which it was formed.
     slot: Option<u32>,
+    /// The resident body of a chunk inserted by [`Pool::insert_typed`], in
+    /// place of a slot. A resident chunk holds at most one of `slot` and
+    /// `typed`; eviction drops whichever it holds.
+    typed: Option<Box<dyn TypedBody>>,
     /// The backing copy; present exactly in the `BackedResident` and
-    /// `Evicted` states.
-    extent: Option<SwapExtent>,
+    /// `Evicted` states, and in a freed chunk whose extent a demoter still
+    /// owns.
+    extent: Option<Extent>,
     /// The payload of an `Oversize` chunk.
     oversize: Option<Vec<u64>>,
 }
@@ -503,6 +788,7 @@ impl ChunkMeta {
                 touched: false,
                 freed: false,
                 slot,
+                typed: None,
                 extent: None,
                 oversize,
             }),
@@ -510,7 +796,7 @@ impl ChunkMeta {
     }
 
     fn len_bytes(&self) -> usize {
-        self.len * std::mem::size_of::<u64>()
+        self.len * WORD_BYTES
     }
 
     /// Locks the chunk's state.
@@ -528,46 +814,70 @@ pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
 }
 
-// Test hook fired inside `PoolInner::enforce_budget`, between a pass's final
-// counter read and the release of the `enforcing` guard. A test arms it on the
-// thread whose pass it wants to freeze, to interleave a concurrent over-budget
-// insert. One-shot: the hook is taken before it runs, so a re-enforcing pass
-// does not re-arm.
-#[cfg(test)]
-thread_local! {
-    static ENFORCE_BUDGET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn run_enforce_budget_hook() {
-    let hook = ENFORCE_BUDGET_HOOK.with(|cell| cell.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
 impl Pool {
-    /// Creates a pool, reserving one virtual region per size class. The
-    /// pool starts with an unlimited budget — nothing is evicted until
-    /// [`Pool::set_budget`] tunes it.
+    /// Creates a pool over swap-backed extents, reserving one virtual
+    /// region per size class. The pool starts with an unlimited budget, so
+    /// nothing is evicted until [`Pool::set_budget`] tunes it.
     pub fn new() -> std::io::Result<Pool> {
-        Pool::with_class_capacity(CLASS_CAPACITY_BYTES)
+        Pool::with_backend(ExtentBackend::Swap)
     }
 
-    /// As [`Pool::new`], with a caller-chosen virtual reservation per size
-    /// class. Small reservations let tests exercise slot exhaustion.
-    fn with_class_capacity(class_capacity_bytes: usize) -> std::io::Result<Pool> {
+    /// As [`Pool::new`], over `backend`. A file backend that cannot open
+    /// returns the error, and the caller decides whether to fall back.
+    pub fn with_backend(backend: ExtentBackend) -> std::io::Result<Pool> {
+        Pool::with_backend_and_class_capacity(backend, CLASS_CAPACITY_BYTES)
+    }
+
+    /// The store the pool runs on.
+    pub fn backend_kind(&self) -> BackendKind {
+        match &self.0.store {
+            ExtentStore::Swap => BackendKind::Swap,
+            ExtentStore::File(store) => match store.io_mode() {
+                IoMode::Direct => BackendKind::FileDirect,
+                IoMode::Buffered => BackendKind::FileBuffered,
+            },
+        }
+    }
+
+    /// As [`Pool::with_backend`], with a caller-chosen virtual reservation
+    /// per size class.
+    fn with_backend_and_class_capacity(
+        backend: ExtentBackend,
+        class_capacity_bytes: usize,
+    ) -> std::io::Result<Pool> {
+        let extent_arena = Arc::new(ExtentArena::new(class_capacity_bytes)?);
+        // Demotion moves an arena extent to the file slot of the same class
+        // index, so the store must use the arena's ladder.
+        let store = match backend {
+            ExtentBackend::Swap => ExtentStore::Swap,
+            ExtentBackend::File {
+                dir,
+                capacity_bytes,
+            } => ExtentStore::File(Arc::new(FileStore::open(
+                &dir,
+                capacity_bytes,
+                extent_arena.classes(),
+            )?)),
+        };
         let regions = SIZE_CLASSES
             .iter()
             .map(|&class_size| Region::new(class_size, class_capacity_bytes))
             .collect::<std::io::Result<Vec<_>>>()?;
-        let extent_arena = Arc::new(ExtentArena::new(class_capacity_bytes)?);
         Ok(Pool(Arc::new(PoolInner {
             budget_bytes: AtomicU64::new(u64::MAX),
             rss_target_bytes: AtomicU64::new(0),
             regions,
             extent_arena,
+            store,
+            full_hint: AtomicBool::new(false),
+            parked_extents: Mutex::new(ParkedExtents::default()),
+            parked_classes: AtomicU64::new(0),
+            file_release: Mutex::new(FileRelease {
+                interval: std::time::Duration::ZERO,
+                bytes_per_class: 0,
+                due: Some(std::time::Instant::now()),
+                refresh_due: std::time::Instant::now(),
+            }),
             queues: std::array::from_fn(|_| Mutex::new(VecDeque::new())),
             extent_queue: Mutex::new(VecDeque::new()),
             live_chunks: AtomicU64::new(0),
@@ -608,7 +918,7 @@ impl Pool {
     ) -> ChunkHandle {
         let inner = &self.0;
         inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
-        let len_bytes = len * std::mem::size_of::<u64>();
+        let len_bytes = len * WORD_BYTES;
         if len == 0 {
             fill(&mut []);
             let meta = ChunkMeta::new(
@@ -709,6 +1019,53 @@ impl Pool {
         ChunkHandle { meta }
     }
 
+    /// Inserts a chunk in its owner's in-memory form (see [`TypedBody`]),
+    /// charged against the budget at its serialized length. Admission
+    /// follows [`Pool::insert_with`]: a chunk the budget denies even after
+    /// enforcement is serialized and compressed on the calling thread, and a
+    /// body with no size class to evict into is serialized onto the heap.
+    pub fn insert_typed(
+        &self,
+        body: Box<dyn TypedBody>,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+    ) -> ChunkHandle {
+        let len = body.words();
+        let len_bytes = len * WORD_BYTES;
+        let class = region::size_class_for(len_bytes).filter(|_| len > 0);
+        let inner = &self.0;
+        if class.is_none() {
+            return self.insert_with(len, hints, codec, |dst| body.serialize_into(dst));
+        }
+        if !inner.reserve_insert(len_bytes) {
+            inner.enforce_budget();
+            if !inner.reserve_insert(len_bytes) {
+                inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+                return self
+                    .insert_extent(len, class, hints, codec, |dst| body.serialize_into(dst));
+            }
+        }
+        inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+        let meta = ChunkMeta::new(
+            inner,
+            len,
+            class,
+            hints.depth,
+            codec,
+            Residency::UnbackedResident,
+            None,
+            None,
+        );
+        meta.state().typed = Some(body);
+        let meta = Arc::new(meta);
+        inner.live_chunks.fetch_add(1, Ordering::Relaxed);
+        inner
+            .queue(band(meta.depth))
+            .push_back(Arc::downgrade(&meta));
+        inner.enforce_budget();
+        ChunkHandle { meta }
+    }
+
     /// Inserts a chunk directly as a compressed extent, with no resident slot.
     ///
     /// The fallback when the budget denies an insertion even after
@@ -735,7 +1092,7 @@ impl Pool {
         words.fill(u64::from_ne_bytes([0xDE; 8]));
         fill(&mut words);
         let inner = &self.0;
-        let extent = SwapExtent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
+        let extent = Extent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
         drop(words);
         let meta = Arc::new(ChunkMeta::new(
             inner,
@@ -763,7 +1120,30 @@ impl Pool {
     /// Snapshot of the pool's counters.
     pub fn stats(&self) -> PoolStats {
         let c = &self.0.counters;
+        let (file, file_capacity) = match &self.0.store {
+            ExtentStore::Swap => (file::FileStoreStats::default(), 0),
+            ExtentStore::File(store) => (store.stats(), store.capacity_bytes()),
+        };
         PoolStats {
+            extent_demotions_elided: c.extent_demotions_elided.load(Ordering::Relaxed),
+            extent_file_bytes: c.extent_file_bytes.load(Ordering::Relaxed),
+            extent_file_allocated_bytes: file.allocated_bytes,
+            extent_file_capacity_bytes: file_capacity,
+            extent_file_writes: file.writes,
+            extent_file_writes_inline: c.extent_file_writes_inline.load(Ordering::Relaxed),
+            extent_file_write_bytes_identity: c
+                .extent_file_write_bytes_identity
+                .load(Ordering::Relaxed),
+            extent_file_write_bytes_compressed: c
+                .extent_file_write_bytes_compressed
+                .load(Ordering::Relaxed),
+            extent_file_reads: file.reads,
+            extent_file_read_bytes: file.read_bytes,
+            extent_file_repeat_reads: c.extent_file_repeat_reads.load(Ordering::Relaxed),
+            extent_file_full: c.extent_file_full.load(Ordering::Relaxed),
+            extent_file_write_errors: file.write_errors,
+            extent_file_holes_punched_bytes: file.holes_punched_bytes,
+            extent_file_read_latency: file.read_latency_buckets,
             inserts: c.inserts.load(Ordering::Relaxed),
             direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
             frees: c.frees.load(Ordering::Relaxed),
@@ -819,15 +1199,12 @@ impl Pool {
                         .name(format!("pool-spill-{i}"))
                         .spawn(move || inner.spill_worker())
                         .expect("spawn pool spill thread");
-                    #[cfg(test)]
                     self.0
                         .spill
                         .handles
                         .lock()
                         .expect("spill handles poisoned")
                         .push(handle);
-                    #[cfg(not(test))]
-                    drop(handle);
                 }
             }
         }
@@ -846,77 +1223,24 @@ impl Pool {
         }
     }
 
-    /// Test hook: performs one eager-backing step on the calling thread.
-    /// Returns whether progress was made.
-    #[cfg(test)]
-    fn back_step(&self) -> bool {
-        self.0.back_one()
-    }
-
-    /// Test hook: waits until the spill queue is empty and no entry is being
-    /// processed, so tests observe deterministic post-eviction states.
-    #[cfg(test)]
-    fn quiesce_spill(&self) {
-        while self.0.spill.in_flight.load(Ordering::Relaxed) > 0 {
-            std::thread::yield_now();
-        }
-    }
-
-    /// Test hook: stops and joins the spill threads, so a test binary exits
-    /// with none alive (which Miri requires). Stopped threads process no
-    /// further queued work; call [`Pool::quiesce_spill`] first when the test
-    /// depends on the queue draining.
-    #[cfg(test)]
-    fn join_spill_threads(&self) {
-        self.0.spill.stop.store(true, Ordering::Relaxed);
-        self.0.spill.cv.notify_all();
-        let handles =
-            std::mem::take(&mut *self.0.spill.handles.lock().expect("spill handles poisoned"));
-        for handle in handles {
-            handle.join().expect("spill thread panicked");
-        }
-    }
-
-    /// Test hook: enables spill scheduling without spawning threads, so tests
-    /// drive the queue deterministically via [`Pool::spill_step`].
-    #[cfg(test)]
-    fn enable_spill_without_threads(&self) {
-        self.0.spill.enabled.store(true, Ordering::Relaxed);
-    }
-
-    /// Test hook: processes one queued spill entry on the calling thread.
-    /// Returns whether an entry was processed.
-    #[cfg(test)]
-    fn spill_step(&self) -> bool {
-        let popped = self.0.spill_queue().pop_front();
-        let Some(meta) = popped else {
-            return false;
-        };
-        self.0.spill_process(&meta, SpillKind::Evict);
-        self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
-        true
-    }
-
-    /// Test hook: runs one compressed-cap enforcement pass on the calling
-    /// thread.
-    #[cfg(test)]
-    fn enforce_compressed(&self) {
-        self.0.enforce_compressed_cap();
-    }
-
-    /// Test hook: evicts cold chunks until resident bytes fall to the budget
-    /// or every queued chunk has been visited once. Enforcement runs
-    /// automatically on every insert and budget shrink.
-    #[cfg(test)]
-    fn enforce_budget(&self) {
-        self.0.enforce_budget();
-    }
-
-    /// Test hook: runs one compressed-cap enforcement pass inline on the
-    /// calling thread, where the fake residency observation applies.
-    #[cfg(test)]
-    fn enforce_rss_target(&self) {
-        self.0.enforce_compressed_cap();
+    /// Retunes the file store's warm-slot release: every `interval`, a spill
+    /// thread punches up to `bytes_per_class` of each extent class's free
+    /// slots that still hold blocks, so the store's disk usage follows its
+    /// live extents. A zero interval or zero bytes disables the release. No
+    /// effect on a swap-backed pool or one without spill threads.
+    ///
+    /// The store's capacity follows the volume's free space independently of
+    /// the release, re-derived by the spill threads every second. Without
+    /// spill threads it changes only when the store hits `ENOSPC`.
+    pub fn set_file_release(&self, interval: std::time::Duration, bytes_per_class: u64) {
+        let mut release = self.0.file_release();
+        release.interval = interval;
+        release.bytes_per_class = bytes_per_class;
+        // A shortened interval takes effect now rather than after the
+        // current one. Taking the minimum keeps the per-tick reapplication
+        // of an unchanged config from postponing the release.
+        let next = std::time::Instant::now().checked_add(interval);
+        release.due = release.due.into_iter().chain(next).min();
     }
 
     /// Retunes the resident-bytes budget in place and enforces it. Live
@@ -939,54 +1263,30 @@ impl Pool {
     /// plus compressed-resident extents. The compressed tier's capacity is
     /// the gap above the budget and warm cap; zero (the default) collapses
     /// the tier, paging extents out as soon as they are written. A shrink
-    /// takes effect by paging out the oldest extents on this call.
+    /// starts paging out the oldest extents on this call.
     pub fn set_rss_target(&self, target_bytes: usize) {
         let new = u64::cast_from(target_bytes);
         let prev = self.0.rss_target_bytes.swap(new, Ordering::Relaxed);
         if new < prev {
-            self.0.enforce_compressed_cap();
+            self.0.enforce_compressed_cap(Pass::Inline);
+            // An inline file-mode pass stops at the backstop threshold or
+            // after `DEMOTION_PASS_BYTES`, and the spill threads demote the
+            // rest.
+            self.0.spill.cv.notify_all();
         }
     }
 
-    /// Test-only: the number of entries across the second-chance queues,
-    /// live and stale.
-    #[cfg(test)]
-    fn queue_len(&self) -> usize {
-        (0..DEPTH_BANDS).map(|band| self.0.queue(band).len()).sum()
+    /// The capacity of the compressed tier in bytes: the RSS target less the
+    /// budget, the insert slack in use, and the warm-slot cap.
+    pub fn compressed_cap(&self) -> u64 {
+        self.0.compressed_cap()
     }
 
-    /// Test-only: the number of resident-extent queue entries, live and
-    /// stale.
-    #[cfg(test)]
-    fn extent_queue_len(&self) -> usize {
-        self.0.extent_queue().len()
-    }
-
-    /// Test hook: explicitly evicts one chunk. No-op if the chunk is already
-    /// evicted, in flight, empty, or oversize. With spill threads enabled the
-    /// compression is handed off and completes asynchronously (observable via
-    /// [`Residency::WriteInFlight`]); without them it runs inline.
-    #[cfg(test)]
-    fn evict(&self, handle: &ChunkHandle) {
-        let meta = &handle.meta;
-        let mut state = meta.state();
-        if !meta.pool.spill_handoff(meta, &mut state) {
-            meta.pool.evict_locked(meta, &mut state);
-        }
-        drop(state);
-        meta.pool.enforce_or_defer_compressed_cap();
-    }
-
-    /// Test hook: overwrites every free slot's bytes with `0xDE`. The free
-    /// list keeps a freed slot's old bytes on platforms where
-    /// `MADV_DONTNEED` retains contents (macOS); poisoning lets tests prove
-    /// that reads of evicted chunks decompress from the extent rather than
-    /// passing stale slot memory through.
-    #[cfg(test)]
-    fn poison_free_slots(&self) {
-        for region in &self.0.regions {
-            region.poison_free_slots();
-        }
+    /// Whether the compressed tier is above [`Pool::compressed_cap`], counted
+    /// as the backend's enforcement counts it. False once enforcement and
+    /// the spill threads have caught up.
+    pub fn compressed_tier_above_cap(&self) -> bool {
+        self.0.compressed_tier_above(self.0.compressed_cap())
     }
 }
 
@@ -997,8 +1297,13 @@ impl PoolInner {
     }
 
     /// Locks the resident-extent queue.
-    fn extent_queue(&self) -> MutexGuard<'_, VecDeque<Weak<ChunkMeta>>> {
+    fn extent_queue(&self) -> MutexGuard<'_, VecDeque<ExtentEntry>> {
         self.extent_queue.lock().expect("extent queue poisoned")
+    }
+
+    /// Locks the parked resident-extent entries.
+    fn parked_extents(&self) -> MutexGuard<'_, ParkedExtents> {
+        self.parked_extents.lock().expect("parked extents poisoned")
     }
 
     /// Locks the spill hand-off queue.
@@ -1032,7 +1337,7 @@ impl PoolInner {
     /// Records a freshly written extent under the chunk's state lock: the
     /// compressed-bytes counter, the compressed-tier accounting, and the
     /// state's extent field.
-    fn commit_extent(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState, extent: SwapExtent) {
+    fn commit_extent(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState, extent: Extent) {
         self.counters
             .extent_bytes_written
             .fetch_add(u64::cast_from(extent.comp_len()), Ordering::Relaxed);
@@ -1098,7 +1403,7 @@ impl PoolInner {
         loop {
             self.enforce_budget_inner();
             #[cfg(test)]
-            run_enforce_budget_hook();
+            testing::run_enforce_budget_hook();
             // A caller turned away since this pass's counter reads may have
             // left bytes unenforced; re-run rather than drop them. The Acquire
             // pairs with the turned-away Release so the re-read sees the bump,
@@ -1136,15 +1441,23 @@ impl PoolInner {
         // page release. The youngest band is reached only when the deeper
         // bands cannot satisfy the budget, keeping young data's
         // die-before-write chance longest.
+        //
+        // The pass evicts at most the overage it saw on entry. Inserts that
+        // land during the pass are left to the pass their own enforcement
+        // request reruns (see `enforce_pending`), so one call does not chase
+        // every other thread's inserts.
+        let mut quota = self
+            .evictable_bytes()
+            .saturating_sub(self.budget_bytes.load(Ordering::Relaxed));
         for band in (0..DEPTH_BANDS).rev() {
-            if self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
+            if quota == 0 || self.evictable_bytes() <= self.budget_bytes.load(Ordering::Relaxed) {
                 return;
             }
-            self.enforce_budget_band(band);
+            self.enforce_budget_band(band, &mut quota);
         }
     }
 
-    fn enforce_budget_band(&self, band: usize) {
+    fn enforce_budget_band(&self, band: usize, quota: &mut u64) {
         // The queue holds resident chunks only (entries for evicted chunks
         // are dropped on visit and never re-added), so a full pass is
         // proportional to the resident set. Visit each queued chunk at most
@@ -1153,7 +1466,10 @@ impl PoolInner {
         // guaranteed to evict every chunk it saw. The bound keeps contended
         // and in-flight entries from spinning this loop forever.
         let mut remaining = self.queue(band).len().saturating_mul(2);
-        while remaining > 0 && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed) {
+        while remaining > 0
+            && *quota > 0
+            && self.evictable_bytes() > self.budget_bytes.load(Ordering::Relaxed)
+        {
             remaining -= 1;
             let popped = self.queue(band).pop_front();
             let Some(weak) = popped else {
@@ -1162,6 +1478,7 @@ impl PoolInner {
             let Some(meta) = weak.upgrade() else {
                 continue;
             };
+            let mut inline = false;
             let requeue = {
                 // `try_lock`: a chunk mid-eviction or mid-read holds its
                 // lock for milliseconds; skipping it beats convoying every
@@ -1179,42 +1496,67 @@ impl PoolInner {
                     // the resident set rather than accumulating every chunk
                     // ever evicted.
                     false
+                } else if state.residency == Residency::WriteInFlight {
+                    // Already handed off, by this pass or an earlier one,
+                    // and charged then. Charging it again would end the pass
+                    // before it reaches the overage it saw.
+                    true
                 } else if state.touched {
                     state.touched = false;
                     true
                 } else if self.spill_handoff(&meta, &mut state) {
+                    *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
                     // Stays queued while in flight; once the spill commits to
                     // `Evicted`, the next visit drops the entry.
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
-                    state.residency != Residency::Evicted
+                    let evicted = state.residency == Residency::Evicted;
+                    if evicted {
+                        *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
+                        inline = true;
+                    }
+                    !evicted
                 }
             };
             if requeue {
                 self.queue(band).push_back(weak);
             }
+            // An inline eviction grows the compressed tier by one extent. A
+            // single pass can evict a whole budget's worth when other threads
+            // keep inserting, so the tier is trimmed between evictions, not
+            // after the pass. Enforcement takes chunk locks itself, so this
+            // runs after the victim's lock is released.
+            if inline {
+                self.enforce_or_defer_compressed_cap();
+            }
         }
     }
 
     fn evict_locked(&self, meta: &Arc<ChunkMeta>, state: &mut ChunkState) {
-        let Some(slot) = state.slot else {
-            return;
-        };
-        if state.freed {
+        if state.freed || (state.slot.is_none() && state.typed.is_none()) {
             return;
         }
         match state.residency {
             Residency::UnbackedResident => {
-                // SAFETY: the slot belongs to this live chunk and the state
-                // lock is held, so nothing else touches the slot while this
-                // borrow is live (reads copy out under the same lock).
-                let data = unsafe { self.slot_data(meta, slot) };
                 // Inline eviction runs on whichever thread tripped the
                 // budget, so the compression scratch must not stay parked
                 // on it.
-                let extent =
-                    SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink);
+                let extent = match (state.slot, state.typed.as_deref()) {
+                    (Some(slot), _) => {
+                        // SAFETY: the slot belongs to this live chunk and the
+                        // state lock is held, so nothing else touches the
+                        // slot while this borrow is live (reads copy out
+                        // under the same lock).
+                        let data = unsafe { self.slot_data(meta, slot) };
+                        Extent::write(&self.extent_arena, data, meta.codec, Scratch::Shrink)
+                    }
+                    (None, Some(body)) => {
+                        let data = serialize_typed(body);
+                        Extent::write(&self.extent_arena, &data, meta.codec, Scratch::Shrink)
+                    }
+                    (None, None) => unreachable!("checked above"),
+                };
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
@@ -1229,7 +1571,7 @@ impl PoolInner {
         }
         // `release_slot`'s precondition holds: the state lock is held and
         // `!freed` was checked above under it.
-        self.release_slot(meta, state);
+        self.release_resident(meta, state);
         state.residency = Residency::Evicted;
     }
 
@@ -1259,15 +1601,13 @@ impl PoolInner {
     /// `BackedResident` instead of parking, and park with a timeout once
     /// everything reachable is backed.
     fn spill_worker(self: Arc<Self>) {
+        let mut hinted_retry = std::time::Instant::now();
         loop {
-            #[cfg(test)]
             if self.spill.stop.load(Ordering::Relaxed) {
                 return;
             }
-            // Tier-2 pageouts ride the spill threads: every pass through the
-            // loop (job completion, condvar wakeup, park timeout) trims the
-            // compressed tier if needed. A single atomic load when under cap.
-            self.enforce_compressed_cap();
+            self.spill_trim(&mut hinted_retry);
+            self.spill_file_upkeep();
             let popped = self.spill_queue().pop_front();
             if let Some(meta) = popped {
                 self.spill_process(&meta, SpillKind::Evict);
@@ -1286,10 +1626,67 @@ impl PoolInner {
                 let _ = self
                     .spill
                     .cv
-                    .wait_timeout(queue, std::time::Duration::from_millis(100))
+                    .wait_timeout(queue, SPILL_PARK_TIMEOUT)
                     .expect("spill queue poisoned");
             }
         }
+    }
+
+    /// The spill loop's compressed-tier trim. Tier-2 pageouts ride the spill
+    /// threads: every pass through the loop (job completion, condvar wakeup,
+    /// park timeout) trims the compressed tier if needed, at a single atomic
+    /// load when under cap. While the file store's full hint is set, a pass
+    /// runs only once `hinted_retry` has passed, which then moves one
+    /// [`SPILL_PARK_TIMEOUT`] ahead.
+    fn spill_trim(&self, hinted_retry: &mut std::time::Instant) {
+        if self.full_hint.load(Ordering::Relaxed) {
+            // Every worker-side `notify_one` wakes a spill thread, and a busy
+            // spill queue keeps it from parking, so keying the retry on the
+            // park's timeout would let wakeups drive a pass per job while the
+            // store can take nothing.
+            let now = std::time::Instant::now();
+            if now < *hinted_retry {
+                return;
+            }
+            *hinted_retry = now + SPILL_PARK_TIMEOUT;
+        }
+        self.enforce_compressed_cap(Pass::Background);
+    }
+
+    /// Re-derives the file store's capacity and releases warm file store
+    /// slots, each when due. The first spill thread to see one due claims
+    /// its interval.
+    fn spill_file_upkeep(&self) {
+        let ExtentStore::File(store) = &self.store else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let (refresh, release) = {
+            let mut release = self.file_release();
+            let refresh = now >= release.refresh_due;
+            if refresh {
+                release.refresh_due = now + FILE_CAPACITY_REFRESH_INTERVAL;
+            }
+            // A zero interval would release on every spill-loop wakeup and
+            // punch the warm slots demotions are about to reuse.
+            let due = release.bytes_per_class != 0
+                && !release.interval.is_zero()
+                && release.due.is_some_and(|due| now >= due);
+            if due {
+                release.due = now.checked_add(release.interval);
+            }
+            (refresh, due.then_some(release.bytes_per_class))
+        };
+        if refresh {
+            store.refresh_capacity();
+        }
+        if let Some(bytes_per_class) = release {
+            store.release_warm(bytes_per_class);
+        }
+    }
+
+    fn file_release(&self) -> MutexGuard<'_, FileRelease> {
+        self.file_release.lock().expect("file release poisoned")
     }
 
     /// Eagerly compresses one unbacked chunk from the eviction queues into
@@ -1353,16 +1750,17 @@ impl PoolInner {
         false
     }
 
-    /// Performs (or cancels) one scheduled compression. Lock discipline: the
-    /// chunk lock is held only to validate and to commit — never across the
-    /// compression or the `pageout` reclaim, which are the multi-millisecond
-    /// costs this path exists to keep off budget-enforcing threads.
+    /// Performs (or cancels) one scheduled compression. Runs on spill
+    /// threads only. Lock discipline: the chunk lock is held only to validate
+    /// and to commit, never across the compression or the `pageout`
+    /// reclaim, which are the multi-millisecond costs this path exists to
+    /// keep off budget-enforcing threads.
     fn spill_process(&self, meta: &Arc<ChunkMeta>, kind: SpillKind) {
         // Validate under the lock, then release it for the I/O. The slot is
         // captured under the lock and remains owned by this chunk for the
         // unlocked compression: in `WriteInFlight`, eviction skips the chunk
         // and `ChunkHandle::drop` defers slot release to this thread.
-        let slot;
+        let source: Result<u32, Vec<u64>>;
         {
             let mut state = meta.state();
             if state.freed {
@@ -1374,23 +1772,33 @@ impl PoolInner {
                     .spill_cancelled
                     .fetch_add(1, Ordering::Relaxed);
                 self.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
-                self.release_slot(meta, &mut state);
+                self.release_resident(meta, &mut state);
                 return;
             }
             if state.residency != Residency::WriteInFlight {
                 return;
             }
-            slot = state.slot.expect("write-in-flight chunk has a slot");
+            // A typed body is serialized here, under the lock: the
+            // serialization is one copy, and compressing the copy below needs
+            // no lock.
+            source = match (state.slot, state.typed.as_deref()) {
+                (Some(slot), _) => Ok(slot),
+                (None, Some(body)) => Err(serialize_typed(body)),
+                (None, None) => unreachable!("write-in-flight chunk holds a slot or a body"),
+            };
         }
-        // SAFETY: the chunk is live (the queue holds an `Arc`) and in
-        // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
-        // defers slot release to this thread in that state) and its contents
-        // are immutable; concurrent copy-out reads take the state lock and
-        // read the slot, but nothing writes it.
-        let data = unsafe { self.slot_data(meta, slot) };
+        let data = match &source {
+            // SAFETY: the chunk is live (the queue holds an `Arc`) and in
+            // `WriteInFlight`, so the slot is not recycled (`ChunkHandle::drop`
+            // defers slot release to this thread in that state) and its
+            // contents are immutable; concurrent copy-out reads take the
+            // state lock and read the slot, but nothing writes it.
+            Ok(slot) => unsafe { self.slot_data(meta, *slot) },
+            Err(words) => &words[..],
+        };
         // Spill threads see a steady job stream, so they keep the grown
         // compression scratch for the next job.
-        let extent = SwapExtent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
+        let extent = Extent::write(&self.extent_arena, data, meta.codec, Scratch::Retain);
         let mut state = meta.state();
         if state.freed {
             // Freed during compression: the extent is garbage; cleanup is
@@ -1398,7 +1806,7 @@ impl PoolInner {
             self.counters
                 .spill_cancelled
                 .fetch_add(1, Ordering::Relaxed);
-            self.release_slot(meta, &mut state);
+            self.release_resident(meta, &mut state);
             return;
         }
         self.commit_extent(meta, &mut state, extent);
@@ -1416,15 +1824,28 @@ impl PoolInner {
                 self.counters
                     .evictions_compress
                     .fetch_add(1, Ordering::Relaxed);
-                self.release_slot(meta, &mut state);
+                self.release_resident(meta, &mut state);
                 state.residency = Residency::Evicted;
             }
         };
-        drop(state);
-        // Counted a fresh resident extent: the tier may need trimming. Kept
-        // here (rather than relying on the spill loop alone) so the
-        // threadless test hooks observe deterministic post-commit states.
-        self.enforce_compressed_cap();
+        // The fresh resident extent may put the tier over its cap. The spill
+        // loop trims once per iteration, so a spill thread alternates one
+        // eviction with one demotion. A trim here as well would demote twice
+        // per eviction, with `in_flight` still counting this job, which
+        // pushes evictions inline onto the threads that trip the budget.
+    }
+
+    /// Releases whichever resident form the chunk holds, its slot or its
+    /// typed body, under [`PoolInner::release_slot`]'s precondition.
+    fn release_resident(&self, meta: &ChunkMeta, state: &mut ChunkState) {
+        if state.slot.is_some() {
+            self.release_slot(meta, state);
+        } else if let Some(body) = state.typed.take() {
+            drop(body);
+            self.counters
+                .resident_bytes
+                .fetch_sub(u64::cast_from(meta.len_bytes()), Ordering::Relaxed);
+        }
     }
 
     /// Releases `state`'s slot — slot returned to the region free list,
@@ -1694,7 +2115,8 @@ impl PoolInner {
                     }
                     Residency::BackedResident => {}
                 }
-                if state.touched || meta.class != Some(class) {
+                // A typed victim has no slot to hand over.
+                if state.touched || meta.class != Some(class) || state.slot.is_none() {
                     self.queue(band).push_back(weak);
                     continue;
                 }
@@ -1742,6 +2164,17 @@ impl PoolInner {
         target.saturating_sub(floor)
     }
 
+    /// Whether the compressed tier holds more than `over` bytes, counted as
+    /// enforcement counts it for the store.
+    fn compressed_tier_above(&self, over: u64) -> bool {
+        match &self.store {
+            ExtentStore::Swap => self.counters.extent_resident_bytes.load(Ordering::Relaxed) > over,
+            // Heap-fallback extents are never demoted, so they do not keep a
+            // pass walking the queue.
+            ExtentStore::File(_) => self.reclaimable_resident() > over,
+        }
+    }
+
     /// Slot bytes reserved above `budget` by insertions that outran
     /// enforcement, at most [`insert_slack`]. Oversize payloads live on the
     /// heap and are excluded, as in [`PoolInner::reserve_insert`].
@@ -1767,19 +2200,25 @@ impl PoolInner {
     /// Invariant: `extent_resident_bytes` equals the sum of `alloc_size`
     /// over live chunks' extents whose `is_resident()` is true, and
     /// `extent_residents` counts those extents; `extent_unreclaimable_bytes`
-    /// is the subset whose `pageout_capped()` is true. This method,
-    /// [`PoolInner::note_extent_reclaimable`],
-    /// [`PoolInner::note_extent_released`], and the pageout arms in
-    /// [`PoolInner::enforce_compressed_cap`] are the only adjusters; every
-    /// flag flip pairs with one of them under the chunk's state lock.
+    /// is the subset whose `pageout_capped()` is true. A freed chunk's
+    /// `Demoting` extent stays counted until its demoter's commit releases
+    /// it. This method, [`PoolInner::note_extent_reclaimable`],
+    /// [`PoolInner::note_extent_released`], the pageout arms in
+    /// [`PoolInner::enforce_compressed_cap`], and the demotion commit in
+    /// [`PoolInner::demote`] are the only adjusters. Every flag flip pairs
+    /// with one of them under the chunk's state lock.
+    ///
+    /// Likewise `extent_file_bytes` equals the sum of `file_bytes()` over
+    /// live chunks' extents. The demotion commit adds to it and
+    /// [`PoolInner::release_extent`] subtracts, each under the chunk's state
+    /// lock.
     fn note_extent_resident(&self, meta: &Arc<ChunkMeta>, extent_alloc: usize, reclaimable: bool) {
         self.counters
             .extent_resident_bytes
             .fetch_add(u64::cast_from(extent_alloc), Ordering::Relaxed);
         self.extent_residents.fetch_add(1, Ordering::Relaxed);
         if reclaimable {
-            self.prune_extent_queue();
-            self.extent_queue().push_back(Arc::downgrade(meta));
+            self.enqueue_extent(meta, extent_alloc);
         } else {
             self.counters
                 .extent_unreclaimable_bytes
@@ -1796,14 +2235,32 @@ impl PoolInner {
         self.counters
             .extent_unreclaimable_bytes
             .fetch_sub(u64::cast_from(extent_alloc), Ordering::Relaxed);
+        self.enqueue_extent(meta, extent_alloc);
+    }
+
+    /// Enqueues a reclaimable resident extent for RSS-target enforcement.
+    fn enqueue_extent(&self, meta: &Arc<ChunkMeta>, extent_alloc: usize) {
         self.prune_extent_queue();
-        self.extent_queue().push_back(Arc::downgrade(meta));
+        self.extent_queue()
+            .push_back(ExtentEntry::new(meta, extent_alloc));
+        // Without spill threads only an inline pass would demote this
+        // extent, and the set hint suppresses those. The probe runs only
+        // while the hint is set.
+        if let ExtentStore::File(store) = &self.store {
+            if self.full_hint.load(Ordering::Relaxed)
+                && store
+                    .class_for(extent_alloc)
+                    .is_some_and(|class| store.can_alloc(class))
+            {
+                self.full_hint.store(false, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Uncounts a resident extent that is being dropped (chunk freed or
     /// degraded). Its queue entry goes stale and is dropped on visit or by
     /// [`PoolInner::prune_extent_queue`].
-    fn note_extent_released(&self, extent: &SwapExtent) {
+    fn note_extent_released(&self, extent: &Extent) {
         if extent.is_resident() {
             self.counters
                 .extent_resident_bytes
@@ -1817,6 +2274,34 @@ impl PoolInner {
         }
     }
 
+    /// Drops a freed chunk's extent with its accounting, under the chunk's
+    /// state lock. A `Demoting` extent stays in place, per `Home::Demoting`.
+    fn release_extent(&self, state: &mut ChunkState) {
+        let Some(extent) = &state.extent else {
+            return;
+        };
+        if extent.is_demoting() {
+            return;
+        }
+        if extent.is_reclaimable_arena() {
+            self.counters
+                .extent_demotions_elided
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let file_bytes = extent.file_bytes();
+        if let Some(file_bytes) = file_bytes {
+            self.counters
+                .extent_file_bytes
+                .fetch_sub(u64::cast_from(file_bytes), Ordering::Relaxed);
+        }
+        self.note_extent_released(extent);
+        // Dropping a `File` extent returns its file slot.
+        state.extent = None;
+        if file_bytes.is_some() {
+            self.full_hint.store(false, Ordering::Relaxed);
+        }
+    }
+
     /// Drops extent-queue entries whose chunk has been freed, mirroring
     /// [`PoolInner::prune_queues`]: compact only when the queue outgrows
     /// all live resident extents (plus a small floor), so the cost
@@ -1826,43 +2311,125 @@ impl PoolInner {
     /// pin on the dead chunk's allocation) per freed extent forever.
     fn prune_extent_queue(&self) {
         let live = usize::cast_from(self.extent_residents.load(Ordering::Relaxed));
+        // Parked entries count as queued. Their count is read before the
+        // queue lock, so the two locks are never held together.
+        let parked = self.parked_classes.load(Ordering::Relaxed) != 0;
+        let parked_len = if parked { self.parked_extents().len } else { 0 };
         let mut queue = self.extent_queue();
-        if queue.len() > 2 * live + 16 {
-            queue.retain(|weak| weak.strong_count() > 0);
+        if queue.len() + parked_len <= 2 * live + 16 {
+            return;
+        }
+        queue.retain(|entry| entry.chunk.strong_count() > 0);
+        drop(queue);
+        if parked {
+            let mut parked = self.parked_extents();
+            let mut len = 0;
+            for (class, entries) in parked.classes.iter_mut().enumerate() {
+                entries.retain(|entry| entry.chunk.strong_count() > 0);
+                if entries.is_empty() {
+                    self.parked_classes
+                        .fetch_and(!class_bit(class), Ordering::Relaxed);
+                }
+                len += entries.len();
+            }
+            parked.len = len;
+        }
+    }
+
+    /// Sets aside `entry`, whose extent class `class` the store refused,
+    /// until a pass finds the class placeable. A class beyond the bit mask
+    /// is requeued at the back instead.
+    fn park_extent(&self, class: usize, entry: ExtentEntry) {
+        let bit = class_bit(class);
+        if bit == 0 {
+            self.extent_queue().push_back(entry);
+            return;
+        }
+        let mut parked = self.parked_extents();
+        if parked.classes.len() <= class {
+            parked.classes.resize_with(class + 1, VecDeque::new);
+        }
+        parked.classes[class].push_back(entry);
+        parked.len += 1;
+        self.parked_classes.fetch_or(bit, Ordering::Relaxed);
+    }
+
+    /// Returns the parked entries of every class `store` can place now to
+    /// the front of the extent queue, where they keep their age order ahead
+    /// of the younger entries queued since.
+    fn unpark_placeable(&self, store: &FileStore) {
+        if self.parked_classes.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let mut returned = Vec::new();
+        {
+            let mut parked = self.parked_extents();
+            for (class, entries) in parked.classes.iter_mut().enumerate() {
+                if !entries.is_empty() && store.can_alloc(class) {
+                    returned.extend(entries.drain(..));
+                    self.parked_classes
+                        .fetch_and(!class_bit(class), Ordering::Relaxed);
+                }
+            }
+            parked.len -= returned.len();
+        }
+        let mut queue = self.extent_queue();
+        for entry in returned.into_iter().rev() {
+            queue.push_front(entry);
         }
     }
 
     /// Routes compressed-cap enforcement off latency-sensitive threads: with
     /// spill threads spawned, wakes one to perform the pageouts
     /// (`MADV_PAGEOUT` is synchronous reclaim, bounded per extent but not
-    /// free at chunk rates); without them, enforces inline. The test is for
+    /// free at chunk rates). Without them, enforces inline unless the file
+    /// store's full hint is set. The test is for
     /// thread existence, not `spill.enabled`: spawned threads trim the tier
     /// in their loop even with eviction hand-off disabled.
     ///
     /// Deferral makes the target eventually-enforced with bounded lag, and
-    /// the backstop below turns the lag into a bound by construction: a
-    /// caller finding the reclaimable tier at double its capacity enforces
-    /// inline regardless, so sustained creation can never outrun trimming
-    /// by more than one capacity's worth.
+    /// the backstop below bounds the lag: a caller finding the reclaimable
+    /// tier at double its capacity enforces inline, so sustained creation
+    /// cannot outrun trimming by more than one capacity's worth. In file
+    /// mode the bound does not hold while the store's full hint is set or
+    /// its writes are disabled. The backstop then defers to the spill
+    /// threads, and the tier grows past the bound by whatever the store
+    /// cannot take.
     fn enforce_or_defer_compressed_cap(&self) {
         if self.spill.threads.load(Ordering::Relaxed) > 0 {
             // The inline backstop keys on the bytes enforcement can actually
             // reclaim. Unreclaimable extents (retry-capped, heap-backed)
             // would otherwise hold the backstop permanently over threshold
-            // and put a full enforcement pass on every caller.
-            let resident = self.counters.extent_resident_bytes.load(Ordering::Relaxed);
-            let unreclaimable = self
-                .counters
-                .extent_unreclaimable_bytes
-                .load(Ordering::Relaxed);
-            if resident.saturating_sub(unreclaimable) > self.compressed_cap().saturating_mul(2) {
-                self.enforce_compressed_cap();
+            // and put a full enforcement pass on every caller. For the same
+            // reason, a file store that cannot take a demotion right now
+            // leaves the backstop to the spill threads.
+            let stalled = match &self.store {
+                ExtentStore::Swap => false,
+                ExtentStore::File(store) => {
+                    store.writes_disabled() || self.full_hint.load(Ordering::Relaxed)
+                }
+            };
+            if !stalled && self.reclaimable_resident() > backstop_threshold(self.compressed_cap()) {
+                self.enforce_compressed_cap(Pass::Inline);
             } else {
                 self.spill.cv.notify_one();
             }
-        } else {
-            self.enforce_compressed_cap();
+        } else if !self.full_hint.load(Ordering::Relaxed) {
+            // Inline enforcement is the only demotion without spill threads,
+            // and a pass over a store that took nothing last time would
+            // repeat on every insert and eviction.
+            self.enforce_compressed_cap(Pass::Inline);
         }
+    }
+
+    /// Bytes of resident extents RSS-target enforcement can push out.
+    fn reclaimable_resident(&self) -> u64 {
+        let resident = self.counters.extent_resident_bytes.load(Ordering::Relaxed);
+        let unreclaimable = self
+            .counters
+            .extent_unreclaimable_bytes
+            .load(Ordering::Relaxed);
+        resident.saturating_sub(unreclaimable)
     }
 
     /// Pages out the oldest resident extents until the compressed tier falls
@@ -1878,30 +2445,105 @@ impl PoolInner {
     /// they leave the queue with their bytes on the unreclaimable gauge, so
     /// the tier may settle above its capacity by the bytes the kernel
     /// declined to reclaim without enforcement re-walking them.
-    fn enforce_compressed_cap(&self) {
+    ///
+    /// In file mode each victim is demoted to the file store instead, per
+    /// [`PoolInner::demote`]. A victim whose class the store cannot place
+    /// moves to the back of the queue, and a store that can place no class
+    /// or has writes disabled ends the pass. An inline file-mode pass with
+    /// spill threads present stops at the [`backstop_threshold`], and a
+    /// background file-mode pass stops per [`DEMOTION_PASS_BYTES`]. An inline
+    /// file-mode pass with spill threads present also stops after
+    /// [`DEMOTION_PASS_BYTES`].
+    fn enforce_compressed_cap(&self, pass: Pass) {
         let cap = self.compressed_cap();
-        let resident = |c: &Counters| c.extent_resident_bytes.load(Ordering::Relaxed);
+        let over = match (&self.store, pass) {
+            // An inline pass leaves the tier at the backstop threshold, and
+            // the spill threads demote the rest. This bounds a worker's write
+            // work to the overage beyond the backstop. Without spill threads
+            // nobody else would demote, so the pass goes down to the cap.
+            (ExtentStore::File(_), Pass::Inline)
+                if self.spill.threads.load(Ordering::Relaxed) > 0 =>
+            {
+                backstop_threshold(cap)
+            }
+            _ => cap,
+        };
+        let above = |inner: &PoolInner| inner.compressed_tier_above(over);
         // Under-cap is the common case: answer it with one atomic load and
         // no queue lock, so frequent callers (the spill loop) stay cheap.
-        if resident(&self.counters) <= cap {
+        if !above(self) {
             return;
         }
+        if let ExtentStore::File(store) = &self.store {
+            self.unpark_placeable(store);
+        }
+        // File mode: whether this pass demoted an extent, whether the store
+        // refused one, and whether a refusal ended the pass.
+        let (mut demoted, mut refused, mut stopped) = (false, false, false);
+        // File mode: the classes the store refused during this pass. Their
+        // entries are parked without a lock or a store probe, so a pass
+        // probes the store at most once per class.
+        let mut refused_classes = 0u64;
         let mut remaining = self.extent_queue().len();
-        while remaining > 0 && resident(&self.counters) > cap {
+        let demotion_limit = match pass {
+            Pass::Background if !self.spill_queue().is_empty() => 1,
+            Pass::Background => DEMOTION_PASS_BYTES,
+            Pass::Inline if self.spill.threads.load(Ordering::Relaxed) > 0 => DEMOTION_PASS_BYTES,
+            // Without spill threads nobody else would demote.
+            Pass::Inline => u64::MAX,
+        };
+        let mut demoted_bytes = 0u64;
+        while remaining > 0 && above(self) {
+            if demoted_bytes >= demotion_limit {
+                break;
+            }
             remaining -= 1;
             let popped = self.extent_queue().pop_front();
-            let Some(weak) = popped else {
+            let Some(entry) = popped else {
                 break;
             };
-            let Some(meta) = weak.upgrade() else {
+            #[cfg(test)]
+            testing::EXTENT_VISITS.with(|visits| visits.set(visits.get() + 1));
+            let Some(meta) = entry.chunk.upgrade() else {
                 continue;
             };
+            if let ExtentStore::File(store) = &self.store {
+                if let Some(class) = store.class_for(entry.alloc_size) {
+                    if refused_classes & class_bit(class) != 0 {
+                        self.park_extent(class, entry);
+                        continue;
+                    }
+                }
+            }
             // `try_lock`: a chunk mid-read or mid-compression holds its lock
             // for milliseconds; requeue rather than convoy behind it.
             let Ok(mut state) = meta.state.try_lock() else {
-                self.extent_queue().push_back(weak);
+                self.extent_queue().push_back(entry);
                 continue;
             };
+            if let ExtentStore::File(store) = &self.store {
+                let alloc_size = u64::cast_from(entry.alloc_size);
+                match self.demote(store, &meta, state, entry, pass) {
+                    Demotion::Committed => {
+                        demoted = true;
+                        demoted_bytes += alloc_size;
+                    }
+                    Demotion::Skipped => {}
+                    Demotion::Refused(class) => {
+                        refused = true;
+                        refused_classes |= class_bit(class);
+                    }
+                    Demotion::Stopped => {
+                        (refused, stopped) = (true, true);
+                        break;
+                    }
+                    Demotion::WriteFailed => {
+                        (refused, stopped) = (true, true);
+                        break;
+                    }
+                }
+                continue;
+            }
             match &mut state.extent {
                 Some(extent) if extent.is_resident() => {
                     if extent.pageout_capped() {
@@ -1937,7 +2579,7 @@ impl PoolInner {
                         } else {
                             // Budget remains: keep the queue slot so later
                             // passes retry it up to the cap.
-                            self.extent_queue().push_back(weak);
+                            self.extent_queue().push_back(entry);
                         }
                     }
                 }
@@ -1946,6 +2588,172 @@ impl PoolInner {
                 _ => {}
             }
         }
+        // Parked extents the store still cannot place keep the tier above
+        // its cap like a refusal in this pass.
+        if !refused && self.parked_classes.load(Ordering::Relaxed) != 0 && above(self) {
+            refused = true;
+        }
+        if refused {
+            self.counters
+                .extent_file_full
+                .fetch_add(1, Ordering::Relaxed);
+            // A pass that demoted something may succeed again on the next
+            // call, so it leaves the hint alone unless it stopped.
+            if stopped || !demoted {
+                self.full_hint.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Demotes the extent of the chunk behind `state` to `store`, the file
+    /// mode counterpart of the pageout arms of
+    /// [`PoolInner::enforce_compressed_cap`]. `entry` is the chunk's popped
+    /// queue entry, which this function requeues unless the entry is stale
+    /// or the extent left the arena.
+    ///
+    /// The write runs without the chunk lock, with the extent `Demoting`
+    /// (see `Home::Demoting` in `extent.rs`).
+    fn demote(
+        &self,
+        store: &Arc<FileStore>,
+        meta: &Arc<ChunkMeta>,
+        mut state: MutexGuard<'_, ChunkState>,
+        entry: ExtentEntry,
+        pass: Pass,
+    ) -> Demotion {
+        let Some(extent) = state.extent.as_mut() else {
+            // Dropped: the entry is stale.
+            return Demotion::Skipped;
+        };
+        if !extent.is_reclaimable_arena() {
+            // Demoted, being demoted by another pass, or heap-backed: the
+            // entry is stale. A failed demotion requeues its own entry.
+            return Demotion::Skipped;
+        }
+        let class = store
+            .class_for(extent.comp_len())
+            .expect("the file ladder fits every stored payload");
+        assert_eq!(
+            store.class_size(class),
+            extent.alloc_size(),
+            "the file store and the arena resolve the extent to different classes",
+        );
+        #[cfg(test)]
+        testing::DEMOTION_PROBES.with(|probes| probes.set(probes.get() + 1));
+        // NOTE: the allocation runs under the chunk lock and can punch holes
+        // or `fallocate`, so this lock can be held across those syscalls. The
+        // lock order permits it, since the store's locks are leaves.
+        let file_slot = match store.can_alloc(class).then(|| store.alloc(class)) {
+            Some(Ok(file_slot)) => file_slot,
+            Some(Err(_)) | None => {
+                drop(state);
+                return self.refuse(store, class, entry);
+            }
+        };
+        let source = extent.begin_demotion(file_slot);
+        let alloc_size = extent.alloc_size();
+        drop(state);
+
+        #[cfg(test)]
+        testing::run_demotion_hook();
+        // SAFETY: the extent stays `Demoting` until the commit below, per
+        // `Home::Demoting`: only this function moves it out of that home.
+        let (crc, written) = unsafe { source.write(store) };
+        // Counted here rather than at the commit, so that every write
+        // counter covers the writes that reached the device, including those
+        // whose chunk dies before the commit.
+        if let Ok(write_bytes) = written {
+            if pass == Pass::Inline {
+                self.counters
+                    .extent_file_writes_inline
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            let by_codec = if meta.codec.is_identity() {
+                &self.counters.extent_file_write_bytes_identity
+            } else {
+                &self.counters.extent_file_write_bytes_compressed
+            };
+            by_codec.fetch_add(u64::cast_from(write_bytes), Ordering::Relaxed);
+        }
+
+        let mut state = meta.state();
+        if state.freed {
+            // The chunk died mid-write. Its handle left the extent to this
+            // commit, which returns both slots: the file slot to the store,
+            // the arena slot through the extent's drop once it is back home.
+            let mut extent = state.extent.take().expect("demoting extent stays in place");
+            let file_slot = extent.abort_demotion();
+            // NOTE: a write that failed `Full` already returned the file
+            // slot, and freeing it again would list it free twice.
+            if !matches!(written, Err(WriteError::Full)) {
+                store.free(file_slot);
+            }
+            // A store with writes disabled stays unplaceable however many
+            // slots are free.
+            if !matches!(written, Err(WriteError::Disabled)) {
+                self.full_hint.store(false, Ordering::Relaxed);
+            }
+            self.note_extent_released(&extent);
+            drop(extent);
+            return Demotion::Skipped;
+        }
+        let extent = state
+            .extent
+            .as_mut()
+            .expect("demoting extent stays in place");
+        match written {
+            Ok(_) => {
+                extent.commit_demotion(Arc::clone(store), crc);
+                let file_bytes = u64::cast_from(store.class_size(class));
+                self.full_hint.store(false, Ordering::Relaxed);
+                self.counters
+                    .extent_resident_bytes
+                    .fetch_sub(u64::cast_from(alloc_size), Ordering::Relaxed);
+                self.extent_residents.fetch_sub(1, Ordering::Relaxed);
+                self.counters
+                    .extent_pageouts
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .extent_file_bytes
+                    .fetch_add(file_bytes, Ordering::Relaxed);
+                Demotion::Committed
+            }
+            Err(WriteError::Full) => {
+                // The store took the file slot back and lowered its
+                // capacity, so this is a refusal like a failed allocation.
+                let _ = extent.abort_demotion();
+                drop(state);
+                self.refuse(store, class, entry)
+            }
+            Err(WriteError::Disabled) => {
+                // The store disabled its writes and counted the error. The
+                // extent stays in the arena for good, and its entry returns
+                // to the front as on a stopped pass.
+                store.free(extent.abort_demotion());
+                self.extent_queue().push_front(entry);
+                Demotion::WriteFailed
+            }
+        }
+    }
+
+    /// Parks or requeues the entry of an extent whose `class` the store
+    /// could not take.
+    fn refuse(&self, store: &FileStore, class: usize, entry: ExtentEntry) -> Demotion {
+        // `can_alloc` is per class: a full store may still place smaller
+        // classes in its free capacity, or any class in a warm slot of that
+        // class. While some class can allocate, the entry is parked so the
+        // entries behind it get their turn, and later passes skip it until
+        // its class fits. Requeued at the back instead, it would cost every
+        // later pass a visit, which makes each pass linear in the number of
+        // unplaceable extents. Otherwise no entry can succeed and the pass
+        // ends, with the entry back at the front: every pass then stops at
+        // this entry while the store stays full.
+        if store.can_alloc_any() {
+            self.park_extent(class, entry);
+            return Demotion::Refused(class);
+        }
+        self.extent_queue().push_front(entry);
+        Demotion::Stopped
     }
 
     /// If the chunk is a live `UnbackedResident` holding a slot and the
@@ -1959,7 +2767,7 @@ impl PoolInner {
         // the missing slot.
         if state.residency != Residency::UnbackedResident
             || state.freed
-            || state.slot.is_none()
+            || (state.slot.is_none() && state.typed.is_none())
             || !self.spill_eligible()
         {
             return false;
@@ -1971,12 +2779,6 @@ impl PoolInner {
 }
 
 impl ChunkHandle {
-    /// Test hook: the chunk's current residency state.
-    #[cfg(test)]
-    fn residency(&self) -> Residency {
-        self.meta.state().residency
-    }
-
     /// Copies the whole contents into `dst` (cleared first), leaving the
     /// chunk's residency untouched: a resident slot is copied out directly,
     /// and an evicted extent decompresses straight into `dst` without
@@ -1986,8 +2788,9 @@ impl ChunkHandle {
     ///
     /// The copy runs under the chunk's state lock, which is what makes the
     /// no-reference contract cheap: eviction takes the same lock, so there
-    /// is no reader it could race. The admitting variant is
-    /// [`ChunkHandle::read_into_admit`].
+    /// is no reader it could race. The exception is an extent demoted to
+    /// file, whose read and decode run after the lock is released. The
+    /// admitting variant is [`ChunkHandle::read_into_admit`].
     pub fn read_into(&self, dst: &mut Vec<u64>) {
         self.read_impl(0..self.meta.len, dst, false);
     }
@@ -1996,10 +2799,10 @@ impl ChunkHandle {
     /// of the chunk's contents, which must lie within them. `dst` receives
     /// exactly the range.
     ///
-    /// The range narrows only the copy into `dst`: the swap backend's
-    /// stored form is a whole compressed block, so a cold read still
-    /// faults and decompresses the entire extent, and accounting is that
-    /// of a whole-chunk read.
+    /// The range narrows only the copy into `dst`: the stored form is a
+    /// whole compressed block, so a cold read still faults in or reads from
+    /// file and decompresses the entire extent, and accounting is that of a
+    /// whole-chunk read.
     pub fn read_range_into(&self, range: Range<usize>, dst: &mut Vec<u64>) {
         self.read_impl(range, dst, false);
     }
@@ -2030,7 +2833,8 @@ impl ChunkHandle {
     }
 
     /// Shared body of the copy-out reads: fills `dst` with the word range
-    /// `range` of the chunk's contents under the chunk's state lock,
+    /// `range` of the chunk's contents under the chunk's state lock (the
+    /// I/O of a plain read of a demoted extent runs after it),
     /// re-admitting an evicted chunk when `admit` is set and a slot is
     /// available. An empty range returns without locking or touching the
     /// chunk, like the whole-chunk read of an empty chunk always has.
@@ -2048,10 +2852,12 @@ impl ChunkHandle {
         let mut state = meta.state();
         state.touched = true;
         let mut extent_revived = false;
+        // A plain read of a demoted extent, which runs after the unlock.
+        let mut unlocked_file_read = None;
         match state.residency {
             Residency::Oversize => {
                 let payload = state.oversize.as_ref().expect("oversize chunk has payload");
-                dst.extend_from_slice(&payload[range]);
+                dst.extend_from_slice(&payload[range.start..range.end]);
             }
             Residency::Evicted => {
                 let slot = if admit {
@@ -2060,12 +2866,26 @@ impl ChunkHandle {
                     None
                 };
                 let extent = state.extent.as_mut().expect("evicted chunk has an extent");
-                // Reading faults the extent's pages back in either way, so
-                // it is re-counted against the compressed tier below.
+                if extent.file_bytes().is_some() && extent.note_file_read() {
+                    meta.pool
+                        .counters
+                        .extent_file_repeat_reads
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                if slot.is_none() {
+                    // Read after the unlock (sound per `PoolInner`'s lock
+                    // doc), so budget enforcement and admission scans need
+                    // not skip the chunk while it waits on the device.
+                    unlocked_file_read = extent.file_location();
+                }
+                // Reading faults an in-memory extent's pages back in, so it
+                // is re-counted against the compressed tier below. A file
+                // read leaves the extent on file.
                 let was_resident = extent.is_resident();
                 let was_capped = extent.pageout_capped();
                 let extent_alloc = extent.alloc_size();
                 match slot {
+                    None if unlocked_file_read.is_some() => {}
                     Some(slot) => {
                         // Admission: the extent decompresses straight into
                         // the acquired slot, fully overwriting its
@@ -2111,16 +2931,21 @@ impl ChunkHandle {
                         extent.read_range_into(
                             meta.codec,
                             meta.len_bytes(),
-                            range.start * 8,
+                            range.start * WORD_BYTES,
                             bytes,
                         );
                     }
                 }
-                // TODO: a sub-range read of a rangeable stored form (file
-                // extents, a sub-block-framed codec) revives only part of
-                // the extent; the whole-extent accounting below would then
-                // overcount and needs a partial-revival variant.
-                if !was_resident {
+                // TODO: a sub-range read of a rangeable stored form (a
+                // sub-block-framed codec) revives only part of the extent.
+                // The whole-extent accounting below would then overcount and
+                // needs a partial-revival variant.
+                let is_resident = state
+                    .extent
+                    .as_ref()
+                    .expect("evicted chunk has an extent")
+                    .is_resident();
+                if !was_resident && is_resident {
                     // Revived from the device: the decompress reset any
                     // retry budget, so the extent re-enters reclaimable.
                     meta.pool
@@ -2143,20 +2968,101 @@ impl ChunkHandle {
                 }
             }
             Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
-                let slot = state.slot.expect("resident non-empty chunk has a slot");
-                // SAFETY: the slot belongs to this chunk while the state lock
-                // is held (eviction and free both take it).
-                let src = unsafe { meta.pool.slot_data(meta, slot) };
-                dst.extend_from_slice(&src[range.start..range.end]);
+                match (state.slot, state.typed.as_deref()) {
+                    (Some(slot), _) => {
+                        // SAFETY: the slot belongs to this chunk while the
+                        // state lock is held (eviction and free both take
+                        // it).
+                        let src = unsafe { meta.pool.slot_data(meta, slot) };
+                        dst.extend_from_slice(&src[range.start..range.end]);
+                    }
+                    (None, Some(body)) if range == (0..meta.len) => {
+                        dst.resize(meta.len, 0);
+                        body.serialize_into(dst);
+                    }
+                    (None, Some(body)) => {
+                        dst.extend_from_slice(&serialize_typed(body)[range.start..range.end]);
+                    }
+                    (None, None) => unreachable!("resident non-empty chunk holds a slot or a body"),
+                }
             }
         }
         drop(state);
+        if let Some(location) = unlocked_file_read {
+            // The zero fill is deliberate, as in the locked plain read.
+            dst.resize(range.end - range.start, 0);
+            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
+            location.read_range_into(meta.codec, meta.len_bytes(), range.start * 8, bytes);
+        }
         // The read revived the extent's compressed pages; the tier may need
         // trimming. Enforcement locks chunk states itself, so it must run
         // after the unlock.
         if extent_revived {
             meta.pool.enforce_or_defer_compressed_cap();
         }
+    }
+
+    /// Runs `f` on the chunk's typed body while it is resident, under the
+    /// chunk's state lock, or on `None` without the lock in every other
+    /// state. Eviction only ever `try_lock`s a chunk, so a borrowed body is
+    /// skipped rather than waited on.
+    ///
+    /// NOTE: `f` must not touch this chunk through the pool. The state lock
+    /// is not reentrant, so a read of the same chunk inside `f` deadlocks.
+    pub fn with_typed<X>(&self, f: impl FnOnce(Option<&dyn TypedBody>) -> X) -> X {
+        let mut state = self.meta.state();
+        if state.typed.is_some() {
+            state.touched = true;
+            return f(state.typed.as_deref());
+        }
+        drop(state);
+        f(None)
+    }
+
+    /// Whether the chunk currently holds a resident typed body. Advisory: a
+    /// concurrent eviction can change the answer as soon as it returns.
+    pub fn is_typed(&self) -> bool {
+        self.meta.state().typed.is_some()
+    }
+
+    /// Frees the chunk and returns its typed body without a copy when the
+    /// body is resident and no spill thread is serializing it, else returns
+    /// the handle unchanged.
+    pub fn take_typed(self) -> Result<Box<dyn TypedBody>, ChunkHandle> {
+        let pool = &self.meta.pool;
+        let body = {
+            let mut state = self.meta.state();
+            let body = match state.residency {
+                Residency::UnbackedResident => state.typed.take(),
+                // A demoting extent stays with its demoter until the commit,
+                // which expects to find it, so the body stays too.
+                Residency::BackedResident
+                    if state.typed.is_some()
+                        && !state.extent.as_ref().is_some_and(Extent::is_demoting) =>
+                {
+                    pool.release_extent(&mut state);
+                    state.residency = Residency::UnbackedResident;
+                    state.typed.take()
+                }
+                Residency::BackedResident
+                | Residency::WriteInFlight
+                | Residency::Evicted
+                | Residency::Oversize => None,
+            };
+            if body.is_some() {
+                pool.counters
+                    .resident_bytes
+                    .fetch_sub(u64::cast_from(self.meta.len_bytes()), Ordering::Relaxed);
+                // Mark the chunk dead before the lock drops. Eager backing
+                // otherwise sees an `UnbackedResident` chunk with no body,
+                // moves it to `WriteInFlight`, and the spill thread panics
+                // finding nothing to serialize.
+                state.freed = true;
+            }
+            body
+        };
+        // The emptied chunk drops as an unbacked chunk holding nothing.
+        body.ok_or(self)
     }
 
     /// Copies the whole contents into `dst` (per [`ChunkHandle::read_into`],
@@ -2168,7 +3074,8 @@ impl ChunkHandle {
 
     /// Advisory a consumer may issue before a bulk read: hints the kernel to
     /// swap an evicted chunk's extent back in, and is a no-op in every other
-    /// state. Never blocks on I/O (`MADV_WILLNEED` is asynchronous).
+    /// state and for extents demoted or being demoted to file. Never blocks
+    /// on I/O (`MADV_WILLNEED` is asynchronous).
     pub fn prefetch(&self) {
         let state = self.meta.state();
         if state.residency == Residency::Evicted {
@@ -2179,18 +3086,11 @@ impl ChunkHandle {
 
     /// As [`ChunkHandle::prefetch`], scoped to the word range `range` of the
     /// chunk's contents. The range is advisory: a backend hints at whatever
-    /// granularity its stored form permits, and the swap backend's stored
-    /// form is a whole compressed block, so it hints the entire extent.
+    /// granularity its stored form permits, and the stored form is a whole
+    /// compressed block, so it hints the entire extent.
     pub fn prefetch_range(&self, range: Range<usize>) {
         let _ = range;
         self.prefetch();
-    }
-
-    /// Test hook: the byte size of the chunk's size class, or `None` for
-    /// empty and oversize chunks.
-    #[cfg(test)]
-    fn size_class_bytes(&self) -> Option<usize> {
-        self.meta.class.map(|class| SIZE_CLASSES[class])
     }
 }
 
@@ -2210,24 +3110,18 @@ impl Drop for ChunkHandle {
         // here, so concurrent queue visitors skip the chunk.
         match state.residency {
             Residency::UnbackedResident => {
-                if state.slot.is_some() {
+                if state.slot.is_some() || state.typed.is_some() {
                     pool.counters.writes_elided.fetch_add(1, Ordering::Relaxed);
-                    pool.release_slot(&self.meta, &mut state);
+                    pool.release_resident(&self.meta, &mut state);
                 }
             }
             Residency::BackedResident => {
-                pool.release_slot(&self.meta, &mut state);
-                if let Some(extent) = &state.extent {
-                    pool.note_extent_released(extent);
-                }
-                state.extent = None;
+                pool.release_resident(&self.meta, &mut state);
+                pool.release_extent(&mut state);
             }
             Residency::Evicted => {
                 crate::soft_assert_no_log!(state.slot.is_none(), "evicted chunk holds no slot");
-                if let Some(extent) = &state.extent {
-                    pool.note_extent_released(extent);
-                }
-                state.extent = None;
+                pool.release_extent(&mut state);
             }
             Residency::WriteInFlight => {
                 // A spill thread may be reading the slot to compress it.
@@ -2251,7 +3145,8 @@ impl Drop for ChunkHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pool::extent::TEST_CODEC;
+    use crate::pool::extent::testing::TEST_CODEC;
+    use crate::pool::testing::ENFORCE_BUDGET_HOOK;
 
     /// Keep test pools small: 64 MiB of virtual reservation per class.
     /// Under Miri the backing is real interpreter heap rather than lazy
@@ -2308,13 +3203,36 @@ mod tests {
     }
 
     /// Words that fill a 64 KiB class exactly.
-    const SMALL: usize = (64 << 10) / 8;
+    const SMALL: usize = (64 << 10) / WORD_BYTES;
 
     #[allow(dead_code)]
     fn assert_handle_send_sync() {
         fn check<T: Send + Sync>() {}
         check::<Pool>();
         check::<ChunkHandle>();
+    }
+
+    /// The public above-cap predicate follows the tier: false under the cap,
+    /// true when the kernel declines the pageouts that would restore it.
+    #[mz_ore::test]
+    fn compressed_tier_above_cap_tracks_the_tier() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let handle = insert(&pool, &mut payload(SMALL, 22));
+        pool.evict(&handle);
+        assert!(pool.stats().extent_resident_bytes > 0);
+        assert!(!pool.compressed_tier_above_cap());
+
+        region::fake_residency::decline_next(u64::MAX);
+        pool.set_rss_target(0);
+        assert_eq!(pool.compressed_cap(), 0);
+        assert!(
+            pool.compressed_tier_above_cap(),
+            "declined pageouts leave the tier above the cap"
+        );
+        region::fake_residency::decline_next(0);
+        drop(handle);
+        assert!(!pool.compressed_tier_above_cap());
     }
 
     /// With an RSS target set, evicted chunks keep their extents resident
@@ -2958,7 +3876,7 @@ mod tests {
         assert_eq!(read_admit(&handle), small_orig);
         let stats = pool.stats();
         assert_eq!(stats.admissions_steal, 1, "no headroom, so the read steals");
-        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(SMALL / 2 * WORD_BYTES));
         assert_eq!(victim.residency(), Residency::Evicted);
         assert_eq!(read(&victim), victim_orig, "victim serves from its extent");
 
@@ -3012,7 +3930,7 @@ mod tests {
         let resident = insert(&pool, &mut orig.clone());
         assert_eq!(read_admit(&resident), orig);
         assert_eq!(resident.residency(), Residency::UnbackedResident);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let oversize_orig = payload(words, 90);
         let oversize = insert(&pool, &mut oversize_orig.clone());
         assert_eq!(read_admit(&oversize), oversize_orig);
@@ -3292,14 +4210,14 @@ mod tests {
 
     #[mz_ore::test]
     fn insertion_debt_is_bounded_during_enforcement() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let mut handles = Vec::new();
         for seed in 0..16 {
             handles.push(insert(&pool, &mut payload(SMALL, seed)));
             assert!(
-                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * 8),
+                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * WORD_BYTES),
                 "an occupied enforcer must not allow unlimited insertion debt",
             );
         }
@@ -3315,7 +4233,7 @@ mod tests {
 
     #[mz_ore::test]
     fn admission_reserves_before_concurrent_fills() {
-        let budget = 2 * SMALL * 8;
+        let budget = 2 * SMALL * WORD_BYTES;
         let pool = test_pool(budget);
         let guard = pool.0.enforcing.lock().expect("enforcement lock");
         let gate = Arc::new(std::sync::Barrier::new(9));
@@ -3341,7 +4259,7 @@ mod tests {
             .map(|t| t.join().expect("producer panicked"))
             .collect();
         drop(guard);
-        assert!(reserved <= u64::cast_from(budget + SMALL * 8));
+        assert!(reserved <= u64::cast_from(budget + SMALL * WORD_BYTES));
         assert!(pool.stats().direct_extent_inserts > 0);
         for (seed, handle) in handles.iter().enumerate() {
             assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
@@ -3437,13 +4355,13 @@ mod tests {
     #[mz_ore::test]
     fn oversize_round_trips() {
         let pool = test_pool(256 << 20);
-        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1;
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
         let orig = payload(words, 10);
         let handle = insert(&pool, &mut orig.clone());
         assert_eq!(handle.residency(), Residency::Oversize);
         assert_eq!(handle.size_class_bytes(), None);
         let stats = pool.stats();
-        assert_eq!(stats.oversize_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.oversize_bytes, u64::cast_from(words * WORD_BYTES));
         // The payload outgrew the largest class, and no class was exhausted.
         assert_eq!(stats.oversize_payloads, 1);
         assert_eq!(stats.slot_exhausted_fallbacks, 0);
@@ -3462,7 +4380,7 @@ mod tests {
     #[mz_ore::test]
     fn payload_lands_in_smallest_fitting_class() {
         let pool = test_pool(256 << 20);
-        let handle = insert(&pool, &mut payload((100 << 10) / 8, 11));
+        let handle = insert(&pool, &mut payload((100 << 10) / WORD_BYTES, 11));
         assert_eq!(handle.size_class_bytes(), Some(128 << 10));
         let exact = insert(&pool, &mut payload(SMALL, 12));
         assert_eq!(exact.size_class_bytes(), Some(64 << 10));
@@ -3616,12 +4534,12 @@ mod tests {
         assert_eq!(pool.stats().warm_bytes, 64 << 10, "freed slot parks warm");
         // A payload of just over a page reuses the warm slot; the slot's
         // pages past it are released.
-        let words = 4096 / 8 + 1;
+        let words = 4096 / WORD_BYTES + 1;
         let orig = payload(words, 61);
         let handle = insert(&pool, &mut orig.clone());
         let stats = pool.stats();
         assert_eq!(stats.warm_reuses, 1, "reused the warm slot");
-        assert_eq!(stats.resident_bytes, u64::cast_from(words * 8));
+        assert_eq!(stats.resident_bytes, u64::cast_from(words * WORD_BYTES));
         assert_eq!(read(&handle), orig);
         // Round-trips through the extent as well.
         pool.evict(&handle);
@@ -3681,6 +4599,82 @@ mod tests {
         }
         let len = pool.queue_len();
         assert!(len <= 32, "queue holds {len} entries for zero live chunks");
+    }
+
+    #[mz_ore::test]
+    fn budget_pass_charges_each_hand_off_once() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let handles: Vec<_> = (0..16)
+            .map(|seed| insert(&pool, &mut payload(SMALL, 500 + seed)))
+            .collect();
+        // The first sweep hands off the 12 untouched chunks and spends the
+        // 4 touched chunks' second chance. The second sweep revisits the
+        // handed-off entries before it reaches the touched ones, and
+        // charging those again would exhaust the quota first.
+        for handle in &handles[12..] {
+            let _ = read(handle);
+        }
+        pool.set_budget(0);
+        for handle in &handles {
+            assert_eq!(
+                handle.residency(),
+                Residency::WriteInFlight,
+                "the pass hands off the whole overage it saw",
+            );
+        }
+        while pool.spill_step() {}
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 500 + u64::cast_from(i)));
+        }
+    }
+
+    #[mz_ore::test]
+    fn budget_pass_trims_the_tier_between_evictions() {
+        const CHUNKS: u64 = 32;
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(1 << 30);
+        let handles: Vec<_> = (0..CHUNKS)
+            .map(|seed| insert(&pool, &mut payload(SMALL, 600 + seed)))
+            .collect();
+        // The largest extent a chunk evicts to, measured on a probe chunk.
+        let extent = {
+            let probe = insert(&pool, &mut payload(SMALL, 600));
+            pool.evict(&probe);
+            pool.stats().extent_resident_bytes
+        };
+        assert!(extent > 0);
+        let cap = extent + extent / 2;
+        // Spill threads that exist but take no hand-off: the backstop then
+        // applies to inline passes, and nothing else pages out.
+        pool.0.spill.threads.store(1, Ordering::Relaxed);
+        // With a zero budget the slot budget, insertion slack, and warm cap
+        // are all zero, so the whole target is tier capacity.
+        pool.set_rss_target(usize::cast_from(cap));
+
+        // Shrinking the budget evicts every chunk inline in one pass. The
+        // hook fires after the evicting pass and before the trim that
+        // follows it, so it observes the tier the pass left behind.
+        let after_pass = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = std::rc::Rc::clone(&after_pass);
+        let inner = Arc::clone(&pool.0);
+        ENFORCE_BUDGET_HOOK.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(move || {
+                observed.set(inner.counters.extent_resident_bytes.load(Ordering::Relaxed));
+            }));
+        });
+        pool.set_budget(0);
+        assert_eq!(pool.0.compressed_cap(), cap);
+        assert!(
+            after_pass.get() <= 2 * cap + extent,
+            "tier {} after the pass exceeds the backstop {} plus one extent {}",
+            after_pass.get(),
+            2 * cap,
+            extent,
+        );
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 600 + u64::cast_from(i)));
+        }
     }
 
     #[mz_ore::test]
@@ -3837,7 +4831,7 @@ mod tests {
             assert!(dst.is_empty())
         });
         assert!(read(&empty).is_empty());
-        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8) + 1;
+        let big_len = (SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES) + 1;
         let big = pool.insert_with(big_len, ChunkHints::default(), &TEST_CODEC, |dst| {
             dst.fill(7)
         });
@@ -3868,4 +4862,228 @@ mod tests {
         assert_eq!(d.residency(), Residency::UnbackedResident);
         assert_eq!(read(&d), payload(SMALL, 703));
     }
+
+    /// A typed body whose serialized form is its words.
+    #[derive(Debug, PartialEq)]
+    struct Words(Vec<u64>);
+
+    impl TypedBody for Words {
+        fn words(&self) -> usize {
+            self.0.len()
+        }
+
+        fn serialize_into(&self, dst: &mut [u64]) {
+            dst.copy_from_slice(&self.0);
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+            self
+        }
+    }
+
+    fn insert_typed(pool: &Pool, words: Vec<u64>) -> ChunkHandle {
+        pool.insert_typed(Box::new(Words(words)), ChunkHints::default(), &TEST_CODEC)
+    }
+
+    fn borrowed(handle: &ChunkHandle) -> Option<Vec<u64>> {
+        handle.with_typed(|typed| {
+            typed.map(|typed| {
+                let words = typed.as_any().downcast_ref::<Words>().expect("test body");
+                words.0.clone()
+            })
+        })
+    }
+
+    fn taken(typed: Box<dyn TypedBody>) -> Vec<u64> {
+        typed.into_any().downcast::<Words>().expect("test body").0
+    }
+
+    #[mz_ore::test]
+    fn typed_insert_borrows_and_takes_without_serializing() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 800);
+        let handle = insert_typed(&pool, orig.clone());
+        assert_eq!(handle.residency(), Residency::UnbackedResident);
+        assert!(handle.is_typed());
+        assert_eq!(pool.stats().resident_bytes, 64 << 10);
+        assert_eq!(borrowed(&handle), Some(orig.clone()));
+        assert_eq!(read(&handle), orig, "copy-out serializes on demand");
+        let body = handle.take_typed().expect("resident typed body");
+        assert_eq!(taken(body), orig);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+        assert_eq!(stats.frees, 1);
+        assert_eq!(stats.extent_bytes_written, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_ranged_reads_match_full_read_slice() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 801);
+        let handle = insert_typed(&pool, orig.clone());
+        for range in [0..1, 7..SMALL - 3, SMALL - 1..SMALL, 0..SMALL] {
+            let mut out = Vec::new();
+            handle.read_range_into(range.clone(), &mut out);
+            assert_eq!(out, orig[range]);
+        }
+    }
+
+    #[mz_ore::test]
+    fn typed_evict_then_read_and_admit() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 802);
+        let handle = insert_typed(&pool, orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        assert!(!handle.is_typed());
+        let stats = pool.stats();
+        assert_eq!(stats.evictions_compress, 1);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(borrowed(&handle), None);
+        pool.poison_free_slots();
+        assert_eq!(read(&handle), orig);
+        assert_eq!(read_admit(&handle), orig);
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert_eq!(pool.stats().admissions_budget, 1);
+        assert_eq!(read(&handle), orig, "admitted chunk reads from its slot");
+        let handle = handle
+            .take_typed()
+            .expect_err("an admitted chunk holds a slot, not a typed body");
+        drop(handle);
+        assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_eager_backing_keeps_the_body_and_makes_eviction_cheap() {
+        let pool = test_pool(256 << 20);
+        let orig = payload(SMALL, 803);
+        let handle = insert_typed(&pool, orig.clone());
+        assert!(pool.back_step(), "one chunk is backable");
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert_eq!(borrowed(&handle), Some(orig.clone()));
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.eager_backs, 1);
+        assert_eq!(stats.evictions_cheap, 1);
+        assert_eq!(stats.evictions_compress, 0);
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(read(&handle), orig);
+    }
+
+    #[mz_ore::test]
+    fn typed_take_after_backing_releases_the_extent() {
+        let pool = test_pool(256 << 20);
+        pool.set_rss_target(usize::MAX / 2);
+        let orig = payload(SMALL, 804);
+        let handle = insert_typed(&pool, orig.clone());
+        assert!(pool.back_step());
+        assert_eq!(handle.residency(), Residency::BackedResident);
+        assert!(pool.stats().extent_resident_bytes > 0);
+        let body = handle.take_typed().expect("backed typed body");
+        assert_eq!(taken(body), orig);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.extent_resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_take_races_eager_backing() {
+        let pool = test_pool(usize::MAX);
+        pool.set_rss_target(usize::MAX / 2);
+        pool.set_spill_threads(4);
+        pool.set_eager_backing(true);
+        for round in 0..rounds(20_000, 20) {
+            let orig = payload(SMALL, round);
+            match insert_typed(&pool, orig.clone()).take_typed() {
+                Ok(body) => assert_eq!(taken(body), orig),
+                // A spill thread is backing the body.
+                Err(handle) => assert_eq!(read(&handle), orig),
+            }
+        }
+        pool.set_eager_backing(false);
+        pool.quiesce_spill();
+        pool.join_spill_threads();
+        assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_spill_evict_round_trip() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let orig = payload(SMALL, 805);
+        let handle = insert_typed(&pool, orig.clone());
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::WriteInFlight);
+        assert_eq!(borrowed(&handle), Some(orig.clone()), "readable in flight");
+        let handle = handle
+            .take_typed()
+            .expect_err("a spill thread owns an in-flight body");
+        assert!(pool.spill_step());
+        assert_eq!(handle.residency(), Residency::Evicted);
+        let stats = pool.stats();
+        assert_eq!(stats.evictions_compress, 1);
+        assert_eq!(stats.resident_bytes, 0);
+        pool.poison_free_slots();
+        assert_eq!(read(&handle), orig);
+    }
+
+    #[mz_ore::test]
+    fn typed_spill_freed_while_queued_is_elided() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let handle = insert_typed(&pool, payload(SMALL, 806));
+        pool.evict(&handle);
+        assert_eq!(handle.residency(), Residency::WriteInFlight);
+        drop(handle);
+        assert!(pool.spill_step());
+        let stats = pool.stats();
+        assert_eq!(stats.spill_cancelled, 1);
+        assert_eq!(stats.writes_elided, 1);
+        assert_eq!(stats.extent_bytes_written, 0);
+        assert_eq!(stats.resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_budget_is_enforced_on_insert() {
+        let budget = 4 * (64 << 10);
+        let pool = test_pool(budget);
+        let handles: Vec<_> = (0..16)
+            .map(|seed| insert_typed(&pool, payload(SMALL, 900 + seed)))
+            .collect();
+        let stats = pool.stats();
+        assert!(
+            stats.resident_bytes <= u64::cast_from(budget) + insert_slack(u64::cast_from(budget)),
+            "resident {} over budget {budget}",
+            stats.resident_bytes,
+        );
+        assert!(stats.evictions_compress > 0);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 900 + u64::cast_from(seed)));
+        }
+        drop(handles);
+        let stats = pool.stats();
+        assert_eq!(stats.resident_bytes, 0);
+        assert_eq!(stats.live_chunks, 0);
+    }
+
+    #[mz_ore::test]
+    fn typed_body_beyond_the_classes_is_serialized_to_the_heap() {
+        let pool = test_pool(256 << 20);
+        let words = SIZE_CLASSES[SIZE_CLASSES.len() - 1] / WORD_BYTES + 1;
+        let orig = payload(words, 807);
+        let handle = insert_typed(&pool, orig.clone());
+        assert_eq!(handle.residency(), Residency::Oversize);
+        assert!(!handle.is_typed());
+        assert_eq!(read(&handle), orig);
+    }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod file_mode_tests;

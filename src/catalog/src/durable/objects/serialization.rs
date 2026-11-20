@@ -16,18 +16,19 @@ use mz_repr::ColumnName;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexColumn, IndexColumnsKey,
-    IndexColumnsValue, IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId,
-    ItemColumn, ItemColumnsKey, ItemColumnsValue, ItemKey, ItemValue, NetworkPolicyKey,
-    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
-    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
-    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
-    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaSizeKey, ClusterReplicaSizeValue,
+    ClusterReplicaValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, IndexColumn, IndexColumnsKey, IndexColumnsValue,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemColumn,
+    ItemColumnsKey, ItemColumnsValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    QueryPolicyKey, QueryPolicyValue, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
+    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
+    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -65,6 +66,7 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
         proto::ClusterConfig {
             variant: self.variant.into_proto(),
             workload_class: self.workload_class.clone(),
+            query_policy: self.query_policy.into_proto(),
         }
     }
 
@@ -72,6 +74,7 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
         Ok(Self {
             variant: proto.variant.into_rust()?,
             workload_class: proto.workload_class,
+            query_policy: proto.query_policy.into_rust()?,
         })
     }
 }
@@ -804,6 +807,44 @@ impl RustType<proto::RoleAuthValue> for RoleAuthValue {
     }
 }
 
+impl RustType<proto::QueryPolicyKey> for QueryPolicyKey {
+    fn into_proto(&self) -> proto::QueryPolicyKey {
+        proto::QueryPolicyKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyValue> for QueryPolicyValue {
+    fn into_proto(&self) -> proto::QueryPolicyValue {
+        proto::QueryPolicyValue {
+            name: self.name.clone(),
+            mode: self.mode.into_proto(),
+            rules: self.rules.into_proto(),
+            owner_id: self.owner_id.into_proto(),
+            privileges: self.privileges.into_proto(),
+            oid: self.oid,
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            name: proto.name,
+            mode: proto.mode.into_rust()?,
+            rules: proto.rules.into_rust()?,
+            owner_id: proto.owner_id.into_rust()?,
+            privileges: proto.privileges.into_rust()?,
+            oid: proto.oid,
+        })
+    }
+}
+
 impl RustType<proto::NetworkPolicyKey> for NetworkPolicyKey {
     fn into_proto(&self) -> proto::NetworkPolicyKey {
         proto::NetworkPolicyKey {
@@ -836,6 +877,60 @@ impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeKey> for ClusterReplicaSizeKey {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeKey {
+        proto::ClusterReplicaSizeKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeValue {
+        proto::ClusterReplicaSizeValue {
+            name: self.name.clone(),
+            memory_limit: self.memory_limit,
+            cpu_limit: self.cpu_limit,
+            cpu_request: self.cpu_request,
+            disk_limit: self.disk_limit,
+            scale: self.scale,
+            workers: self.workers,
+            credits_per_hour: self.credits_per_hour.clone(),
+            cpu_exclusive: self.cpu_exclusive,
+            is_cc: self.is_cc,
+            family: self.family.clone(),
+            swap_enabled: self.swap_enabled,
+            disabled: self.disabled,
+            selectors: self.selectors.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeValue {
+            name: proto.name,
+            memory_limit: proto.memory_limit,
+            cpu_limit: proto.cpu_limit,
+            cpu_request: proto.cpu_request,
+            disk_limit: proto.disk_limit,
+            scale: proto.scale,
+            workers: proto.workers,
+            credits_per_hour: proto.credits_per_hour,
+            cpu_exclusive: proto.cpu_exclusive,
+            is_cc: proto.is_cc,
+            family: proto.family,
+            swap_enabled: proto.swap_enabled,
+            disabled: proto.disabled,
+            selectors: proto.selectors,
         })
     }
 }

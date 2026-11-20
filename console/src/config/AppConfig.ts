@@ -228,7 +228,6 @@ export class SelfManagedAppConfig implements IBaseAppConfig {
     {
       provider: "local",
       region: "flexible-deployment",
-      regionApiUrl: "",
     },
   ];
 

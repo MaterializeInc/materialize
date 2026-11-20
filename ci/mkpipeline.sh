@@ -58,7 +58,7 @@ rm "$tmpfile"
 
 if [ -n "$bootstrap_steps" ]; then
   queue=hetzner-x86-64-4cpu-8gb-mkpipeline
-  if is_truthy "${CI_FORCE_SWITCH_TO_AWS-1}"; then
+  if is_truthy "${CI_FORCE_SWITCH_TO_AWS-0}"; then
     queue=linux-x86_64-small
   fi
   exec buildkite-agent pipeline upload <<EOF

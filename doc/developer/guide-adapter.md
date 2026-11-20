@@ -115,6 +115,16 @@ no queries, but a stall there blocks promotion.
 
 ## Correctness Invariants
 
+### Command replay must respect DDL serialization
+
+Replaying a catalog command validates that command, not another statement's
+already-built plan. DDL that carries planned SQL across off-thread work relies
+on the coordinator's DDL lock to keep names stable. Acquire that same lock for
+each command commit attempt, including attempts resumed after external
+preparation. Release it while preparation runs so unrelated DDL can progress.
+Queue contenders instead of awaiting the mutex on the coordinator, which its
+owner needs to finish. Releasing the guard must also wake the deferred queue.
+
 ### Timestamp selection must respect real-time bounds
 
 For strict serializability, the timestamp assigned to a query must fall within

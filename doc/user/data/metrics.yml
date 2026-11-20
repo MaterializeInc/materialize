@@ -710,54 +710,6 @@ metrics:
   - stage
   source: src/timely-util/src/columnar/chunk/metrics.rs
   visibility: internal
-- name: mz_column_pager_budget_configured_bytes
-  help: Most-recently-configured total budget for the column-pager tiered policy.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_budget_remaining_bytes
-  help: >-
-    Bytes the column-pager tiered policy currently has available for resident
-    columns.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_in_total
-  help: >-
-    Total uncompressed bytes handed to the pager for pageout, before any codec is
-    applied.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_out_total
-  help: Total on-storage bytes after codec / padding.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pagein_bytes_total
-  help: Total uncompressed bytes delivered by page-in.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageins_total
-  help: Successful page-ins from `ColumnPager::take`.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageouts_total
-  help: Pager decisions that paged the chunk out.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_bytes_total
-  help: Total bytes returned to the budget by ticket drops.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_total
-  help: Resident-ticket drops returning budget.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_bytes_total
-  help: Total bytes kept resident by skip decisions.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_decisions_total
-  help: Pager decisions that kept the chunk resident.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
 - name: mz_column_pool_admissions_budget_total
   help: >-
     Evicted chunks re-admitted to compressed-but-resident by an admitting read out
@@ -776,6 +728,16 @@ metrics:
     backed victim of the same size class.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_backend
+  help: "The extent store the buffer pool runs on: 1 for the labeled backend, 0 for the others."
+  labels:
+  - backend
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_backend_fallback
+  help: "1 if the buffer pool was configured for the file store and installed on swap instead, else 0. Covers installation only: a store that later disables writes on an I/O error reports through mz_column_pool_extent_file_write_errors_total."
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_direct_extent_inserts_total
   help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs
@@ -791,7 +753,7 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_evictions_compress_total
-  help: Evictions that compressed a chunk into a new swap-backed extent.
+  help: Evictions that compressed a chunk into a new extent.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_arena_fallbacks_total
@@ -801,17 +763,87 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_bytes_written_total
-  help: Compressed bytes written into swap-backed extents.
+  help: Compressed bytes written into extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_demotions_elided_total
+  help: >-
+    Extents freed while resident in a reclaimable arena slot, so the free needed no
+    swap or file I/O.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_allocated_bytes
+  help: "Bytes the file store holds on the filesystem: slots in use plus free slots whose blocks were not punched."
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_bytes
+  help: Slot bytes of live extents demoted to the file store.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_capacity_bytes
+  help: The file store's effective capacity in bytes.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_full_total
+  help: >-
+    Demotion passes that left an extent in RAM because the file store was full or
+    had writes disabled.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_holes_punched_bytes_total
+  help: Bytes of free file store slots returned to the filesystem.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_read_bytes_total
+  help: Page-rounded bytes transferred by file store reads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_read_latency_bucket
+  help: Cumulative count of file store reads that took less than `le` seconds.
+  labels:
+  - le
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_reads_total
+  help: Reads of extents demoted to the file store.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_repeat_reads_total
+  help: File store reads of extents already read since their demotion.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_bytes_compressed_total
+  help: Page-rounded bytes of file store demotion writes of compressed extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_bytes_identity_total
+  help: Page-rounded bytes of file store demotion writes of uncompressed extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_errors_total
+  help: File store I/O errors, after which demotion writes are disabled.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_writes_inline_total
+  help: File store demotion writes run by inline enforcement rather than spill threads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_writes_total
+  help: >-
+    Demotion writes that reached the file store without error, including those
+    whose chunk was freed before the demotion committed.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_pageout_incomplete_total
   help: >-
     Pageout passes whose residency observation found pages still resident. Climbing
-    steadily means pages cannot reach the swap device.
+    steadily means pages cannot be moved out of RAM.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_pageouts_total
-  help: Extents pushed to the swap device by RSS-target enforcement.
+  help: >-
+    Extents pushed out of RAM by RSS-target enforcement, to the swap device or the
+    file store.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_resident_bytes
@@ -823,8 +855,8 @@ metrics:
 - name: mz_column_pool_extent_unreclaimable_bytes
   help: >-
     Allocation bytes of resident extents the RSS target cannot push out
-    (retry-capped and heap-fallback extents). Climbing steadily means pages cannot reach the
-    swap device.
+    (retry-capped and heap-fallback extents). Climbing steadily means pages cannot be moved out
+    of RAM.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_frees_total
@@ -1222,6 +1254,14 @@ metrics:
   - compute_instance
   - isolation_level
   - respond_immediately
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_frontend_transaction_completions_total
+  help: Read-only transaction completion attempts owned by the session.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_frontend_transaction_waits_total
+  help: Session-owned transaction completions that need a fresh oracle check.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_bucket
@@ -3504,6 +3544,14 @@ metrics:
   - source_id
   - table_name
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
+- name: mz_query_policy_queries_total
+  help: >-
+    Queries rejected by an enforced query policy or only warned by observe-only
+    policies. Each query is counted once.
+  labels:
+  - outcome
+  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.

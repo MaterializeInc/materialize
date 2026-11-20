@@ -45,6 +45,7 @@ SERVICES = [
     DockerService(
         name=MOCK_HOST,
         config={
+            # renovate: datasource=docker depName=python versioning=docker
             "image": "python:3.12-slim",
             "volumes": ["./mock_ld.py:/app/mock_ld.py"],
             "command": ["python3", "-u", "/app/mock_ld.py"],

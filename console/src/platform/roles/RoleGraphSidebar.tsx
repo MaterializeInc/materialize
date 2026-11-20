@@ -38,11 +38,11 @@ export interface RoleGraphSidebarProps {
   selectedRole: RoleItem | undefined;
   inheritsFrom: RoleItem[];
   grantedTo: RoleItem[];
-  onRoleClick: (roleName: string) => void;
+  onRoleClick: (roleId: string) => void;
   filterValue: string;
   onFilterChange: (value: string) => void;
   filteredRoles: RoleItem[];
-  onRoleSelect: (roleName: string) => void;
+  onRoleSelect: (roleId: string) => void;
 }
 
 const RoleGraphSidebar = ({
@@ -72,7 +72,7 @@ const RoleGraphSidebar = ({
     },
     onSelectedItemChange: ({ selectedItem }) => {
       if (selectedItem) {
-        onRoleSelect(selectedItem.roleName);
+        onRoleSelect(selectedItem.roleId);
       }
     },
     stateReducer: (_state, actionAndChanges) => {
@@ -237,14 +237,14 @@ const RoleLabel = ({ roleName }: RoleLabelProps) => {
 
 interface RelatedRoleProps {
   role: RoleItem;
-  onRoleClick: (roleName: string) => void;
+  onRoleClick: (roleId: string) => void;
 }
 
 const RelatedRole = ({ role, onRoleClick }: RelatedRoleProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
   return (
-    <chakra.button onClick={() => onRoleClick(role.roleName)} width="100%">
+    <chakra.button onClick={() => onRoleClick(role.roleId)} width="100%">
       <SidebarItem _hover={{ backgroundColor: colors.background.secondary }}>
         <RoleLabel roleName={role.roleName} />
       </SidebarItem>

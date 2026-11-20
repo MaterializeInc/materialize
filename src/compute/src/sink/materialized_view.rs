@@ -127,6 +127,7 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
+use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -413,11 +414,12 @@ pub(super) fn persist_source<'s>(
     let as_of = None;
 
     let until = Antichain::new();
-    let map_filter_project = None;
+    let map_filter_project: Option<&mut MfpPlan> = None;
 
     let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source::<
         DataflowErrorSer,
         mz_storage_operators::persist_source::RowVecBuilder<Timestamp>,
+        _,
     >(
         scope,
         sink_id,

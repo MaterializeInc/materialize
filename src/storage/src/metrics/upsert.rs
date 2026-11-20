@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
-    IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropHistogram, DeregisterOnDropCounter, DeregisterOnDropGauge, DeregisterOnDropVec,
+    HistogramVec, MetricsRegistry, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -26,35 +26,35 @@ use prometheus::core::{AtomicF64, AtomicU64};
 /// Metric definitions for the `upsert` operator.
 #[derive(Clone, Debug)]
 pub(crate) struct UpsertMetricDefs {
-    pub(crate) rehydration_latency: GaugeVec,
-    pub(crate) rehydration_total: UIntGaugeVec,
-    pub(crate) rehydration_updates: UIntGaugeVec,
+    pub(crate) rehydration_latency: DeregisterOnDropVec<raw::GaugeVec>,
+    pub(crate) rehydration_total: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) rehydration_updates: DeregisterOnDropVec<raw::UIntGaugeVec>,
 
     // These are used by `shared`.
     pub(crate) merge_snapshot_latency: HistogramVec,
-    pub(crate) merge_snapshot_updates: IntCounterVec,
-    pub(crate) merge_snapshot_inserts: IntCounterVec,
-    pub(crate) merge_snapshot_deletes: IntCounterVec,
-    pub(crate) upsert_inserts: IntCounterVec,
-    pub(crate) upsert_updates: IntCounterVec,
-    pub(crate) upsert_deletes: IntCounterVec,
+    pub(crate) merge_snapshot_updates: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) merge_snapshot_inserts: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) merge_snapshot_deletes: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) upsert_inserts: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) upsert_updates: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) upsert_deletes: DeregisterOnDropVec<raw::IntCounterVec>,
     pub(crate) multi_get_latency: HistogramVec,
-    pub(crate) multi_get_size: IntCounterVec,
-    pub(crate) multi_get_result_count: IntCounterVec,
-    pub(crate) multi_get_result_bytes: IntCounterVec,
+    pub(crate) multi_get_size: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) multi_get_result_count: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) multi_get_result_bytes: DeregisterOnDropVec<raw::IntCounterVec>,
     pub(crate) multi_put_latency: HistogramVec,
-    pub(crate) multi_put_size: IntCounterVec,
-    pub(crate) restashed: IntCounterVec,
+    pub(crate) multi_put_size: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) restashed: DeregisterOnDropVec<raw::IntCounterVec>,
 
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
-    pub(crate) rocksdb_multi_get_size: IntCounterVec,
-    pub(crate) rocksdb_multi_get_result_count: IntCounterVec,
-    pub(crate) rocksdb_multi_get_result_bytes: IntCounterVec,
-    pub(crate) rocksdb_multi_get_count: IntCounterVec,
-    pub(crate) rocksdb_multi_put_count: IntCounterVec,
+    pub(crate) rocksdb_multi_get_size: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) rocksdb_multi_get_result_count: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) rocksdb_multi_get_result_bytes: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) rocksdb_multi_get_count: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) rocksdb_multi_put_count: DeregisterOnDropVec<raw::IntCounterVec>,
     pub(crate) rocksdb_multi_put_latency: HistogramVec,
-    pub(crate) rocksdb_multi_put_size: IntCounterVec,
+    pub(crate) rocksdb_multi_put_size: DeregisterOnDropVec<raw::IntCounterVec>,
     // These are maps so that multiple timely workers can interact with the same
     // `DeleteOnDropHistogram`, which is only dropped once ALL workers drop it.
     // The map may contain arbitrary, old `Weak`s for deleted sources, which are
@@ -329,17 +329,13 @@ impl UpsertSharedMetrics {
 /// Metrics related to backpressure in `UPSERT` dataflows.
 #[derive(Clone, Debug)]
 pub(crate) struct UpsertBackpressureMetricDefs {
-    pub(crate) emitted_bytes: IntCounterVec,
-    pub(crate) last_backpressured_bytes: UIntGaugeVec,
-    pub(crate) retired_bytes: IntCounterVec,
+    pub(crate) emitted_bytes: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) last_backpressured_bytes: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) retired_bytes: DeregisterOnDropVec<raw::IntCounterVec>,
 }
 
 impl UpsertBackpressureMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
-        // We add a `worker_id` label here, even though only 1 worker is ever
-        // active, as this is the simplest way to avoid the non-active
-        // workers from un-registering metrics. This is consistent with how
-        // `persist_sink` metrics work.
         Self {
             emitted_bytes: registry.register(metric!(
                 name: "mz_storage_upsert_backpressure_emitted_bytes",
@@ -364,21 +360,21 @@ impl UpsertBackpressureMetricDefs {
 
 /// Metrics for the `upsert` operator.
 pub struct UpsertMetrics {
-    pub(crate) rehydration_latency: DeleteOnDropGauge<AtomicF64, Vec<String>>,
-    pub(crate) rehydration_total: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub(crate) rehydration_updates: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rehydration_latency: DeregisterOnDropGauge<AtomicF64>,
+    pub(crate) rehydration_total: DeregisterOnDropGauge<AtomicU64>,
+    pub(crate) rehydration_updates: DeregisterOnDropGauge<AtomicU64>,
 
-    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) restashed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_updates: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) merge_snapshot_inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) merge_snapshot_deletes: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) upsert_inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) upsert_updates: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) upsert_deletes: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) multi_get_size: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) multi_get_result_bytes: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) multi_get_result_count: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) multi_put_size: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) restashed: DeregisterOnDropCounter<AtomicU64>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -395,20 +391,22 @@ pub struct UpsertMetrics {
 /// `backpressure` operator plain handles to them.
 #[derive(Debug)]
 pub(crate) struct UpsertBackpressureMetrics {
-    emitted_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    last_backpressured_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    retired_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    emitted_bytes: DeregisterOnDropCounter<AtomicU64>,
+    last_backpressured_bytes: DeregisterOnDropGauge<AtomicU64>,
+    retired_bytes: DeregisterOnDropCounter<AtomicU64>,
 }
 
 impl UpsertBackpressureMetrics {
     pub(crate) fn new(defs: &UpsertBackpressureMetricDefs, id: GlobalId, worker_id: usize) -> Self {
         let labels = vec![id.to_string(), worker_id.to_string()];
         UpsertBackpressureMetrics {
-            emitted_bytes: defs.emitted_bytes.get_delete_on_drop_metric(labels.clone()),
+            emitted_bytes: defs
+                .emitted_bytes
+                .get_deregister_on_drop_metric(labels.clone()),
             last_backpressured_bytes: defs
                 .last_backpressured_bytes
-                .get_delete_on_drop_metric(labels.clone()),
-            retired_bytes: defs.retired_bytes.get_delete_on_drop_metric(labels),
+                .get_deregister_on_drop_metric(labels.clone()),
+            retired_bytes: defs.retired_bytes.get_deregister_on_drop_metric(labels),
         }
     }
 
@@ -434,68 +432,68 @@ impl UpsertMetrics {
         Self {
             rehydration_latency: defs
                 .rehydration_latency
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_total: defs
                 .rehydration_total
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_updates: defs
                 .rehydration_updates
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_updates: defs
                 .merge_snapshot_updates
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_inserts: defs
                 .merge_snapshot_inserts
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_deletes: defs
                 .merge_snapshot_deletes
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_inserts: defs
                 .upsert_inserts
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_updates: defs
                 .upsert_updates
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_deletes: defs
                 .upsert_deletes
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_size: defs
                 .multi_get_size
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_result_count: defs
                 .multi_get_result_count
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_result_bytes: defs
                 .multi_get_result_bytes
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             restashed: defs
                 .restashed
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
             rocksdb_shared: defs.rocksdb_shared(&source_id),
             rocksdb_instance_metrics: Arc::new(RocksDBInstanceMetrics {
                 multi_get_size: defs
                     .rocksdb_multi_get_size
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_result_count: defs
                     .rocksdb_multi_get_result_count
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_result_bytes: defs
                     .rocksdb_multi_get_result_bytes
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_count: defs
                     .rocksdb_multi_get_count
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_count: defs
                     .rocksdb_multi_put_count
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_deregister_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_size: defs
                     .rocksdb_multi_put_size
-                    .get_delete_on_drop_metric(vec![source_id_s, worker_id]),
+                    .get_deregister_on_drop_metric(vec![source_id_s, worker_id]),
             }),
             _backpressure_metrics: backpressure_metrics,
         }

@@ -48,6 +48,7 @@ from materialize.cargo_bench.compare import (
     confirm,
     render_markdown,
 )
+from materialize.cargo_bench.host import describe_host
 from materialize.cargo_bench.targets import (
     BenchTarget,
     BuiltBench,
@@ -382,7 +383,7 @@ def run_benches(
     ancestor target and then every HEAD target, keeps the machine's page
     cache and thermal state close between the two runs of a benchmark, which
     is what produced repeatable false regressions in the I/O-bound
-    mz-ore/pager benches when the two phases ran far apart. A target present
+    mz-ore benches when the two phases ran far apart. A target present
     only in the ancestor is never run, since there is no HEAD result to
     compare it against.
 
@@ -498,6 +499,7 @@ def run_benches(
 def render_report(
     ancestor: str | None,
     threshold: float,
+    host: str,
     report: CompareReport,
     ancestor_failures: list[TargetFailure],
     current_failures: list[TargetFailure],
@@ -514,6 +516,7 @@ def render_report(
         )
     else:
         sections.append("Ancestor run skipped, no comparison performed")
+    sections.append(f"Host: {host}")
     if current_failures:
         sections.append(
             "Bench targets failing on the current commit:\n"
@@ -682,6 +685,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # embeds the result, so without a fixed value the two checkouts always
     # differ, which also defeats the skip. The dummy build info uses all zeros.
     env["MZ_DEV_BUILD_SHA"] = "0" * 40
+    env.setdefault("MZ_BENCH_MEASUREMENT", "instructions")
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same
@@ -840,6 +844,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     markdown = render_report(
         ancestor,
         args.threshold,
+        describe_host(),
         report,
         ancestor_failures,
         current_failures,

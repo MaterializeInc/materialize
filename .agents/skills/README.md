@@ -55,4 +55,5 @@ choosing which framework to use, start with **mz-test**.
 | Skill | When to use | What it does |
 |---|---|---|
 | **mz-console-review** | Reviewing a PR or diff under `console/` | Checklist of what Console reviewers actually flag (distilled from ~570 review comments), plus running the change to verify claims and posting findings as one GitHub review |
+| **mz-renovate-triage** | Triaging Renovate dependency PRs, by hand or on a schedule | Sorts open Renovate PRs by risk, checks what CI can't (breaking changes that touch our code, silently ignored config, dev scripts, Node and browser support), and posts one verdict comment per PR for the approver. `lessons.md` records what past Console upgrades needed |
 | **mz-query-perf** | A Console/catalog SQL query is slow | Diagnoses the plan on real `mz_catalog` / `mz_internal` relations, then measures candidate rewrites with a synthetic-fleet sweep |

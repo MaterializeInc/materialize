@@ -42,6 +42,9 @@
         "mcp_developer": {
           "enabled": false
         },
+        "mcp": {
+          "enabled": false
+        },
         "console_config": {
           "enabled": false
         }
@@ -72,6 +75,9 @@
           "enabled": false
         },
         "mcp_developer": {
+          "enabled": false
+        },
+        "mcp": {
           "enabled": false
         },
         "console_config": {

@@ -51,7 +51,8 @@ import { parseDbVersion } from "~/version/api";
 
 import { ClusterMetrics } from "../ClusterMetrics";
 import { ResourceUsage } from "./ResourceUsage";
-import { CHART_MARGIN } from "./resourceUsageStyles";
+import { mergedBucketMs } from "./resourceUsageModel";
+import { MIN_BAR_SLOT_PX, RESOURCE_CHART_MARGIN } from "./resourceUsageStyles";
 
 // The Metrics page's other card has its own tests and queries.
 vi.mock("../MemoryByObject", () => ({ MemoryByObject: () => null }));
@@ -603,9 +604,10 @@ const hoverAt = async (timeMs: number) => {
   const svg = await screen.findByRole("img", { name: "Memory usage" });
   const overlay = svg.querySelector('rect[fill="transparent"]');
   if (!overlay) throw new Error("hover overlay not rendered");
-  const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+  const plotWidthPx =
+    WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
   const clientX =
-    CHART_MARGIN.left +
+    RESOURCE_CHART_MARGIN.left +
     ((timeMs - WINDOW_START_MS) / (NOW_MS - WINDOW_START_MS)) * plotWidthPx;
   fireEvent.pointerMove(overlay, { clientX, clientY: 80 });
   return screen.findByTestId("chart-tooltip");
@@ -752,11 +754,12 @@ describe("ResourceUsage", () => {
     expect(tooltip).toHaveTextContent(/r2.*CPU5\.0 cores · 250\.0%/);
   });
 
-  it("keeps the CPU axis at 100% while replicas stay within their allocation", async () => {
+  it("leaves headroom above 100% without marking the allocation while replicas stay within it", async () => {
     await renderResourceUsage({ withSwap: true });
 
     const cpu = await screen.findByRole("img", { name: "CPU usage" });
     expect(within(cpu).getByText("100%")).toBeInTheDocument();
+    expect(within(cpu).queryByText("125%")).not.toBeInTheDocument();
     expect(screen.queryByText("CPU allocation")).not.toBeInTheDocument();
   });
 
@@ -770,7 +773,7 @@ describe("ResourceUsage", () => {
     expect(within(status).getByText("r2")).toBeInTheDocument();
   });
 
-  it("truncates a long replica name in its status row, keeping the full name as its title", async () => {
+  it("cuts a long replica name short, with the full name on hover", async () => {
     await renderResourceUsage({
       withSwap: true,
       replicaNames: { u1: "r1", u2: "blue_green_r2" },
@@ -779,15 +782,9 @@ describe("ResourceUsage", () => {
     const status = await screen.findByRole("img", {
       name: "Replica status over time",
     });
-    expect(within(status).getByText("blue_…")).toBeInTheDocument();
-    expect(within(status).getByText("r1")).toBeInTheDocument();
-    // An SVG `title` is the browser's tooltip for its parent.
-    expect(
-      [...status.querySelectorAll("title")].map((title) => [
-        title.textContent,
-        title.parentElement?.textContent,
-      ]),
-    ).toEqual([["blue_green_r2", "blue_green_r2blue_…"]]);
+    const longName = within(status).getByText("blue…");
+    expect(longName.querySelector("title")).toHaveTextContent("blue_green_r2");
+    expect(within(status).getByText("r1").querySelector("title")).toBeNull();
   });
 
   it("orders the status rows like the replica pills", async () => {
@@ -1275,7 +1272,8 @@ describe("ResourceUsage", () => {
     expect(barWidths.length).toBeGreaterThan(0);
     // No bar is split with replicas that weren't running at its time: each
     // spans at least one hourly bucket, less the 2px gap between times.
-    const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+    const plotWidthPx =
+      WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
     const hourPx = (plotWidthPx * HOUR_MS) / (TIME_PERIOD_MINUTES * 60_000);
     expect(Math.min(...barWidths)).toBeGreaterThan(hourPx - 2 - 0.01);
 
@@ -1285,13 +1283,21 @@ describe("ResourceUsage", () => {
   });
 
   it("draws a refresh that fits in one merged bucket as a dot", async () => {
-    // Three hourly buckets starting on a 3h boundary merge into one of the
-    // week's 3h buckets, a single reading with no line to draw.
-    const alignedMs = Math.ceil(FIRST_BUCKET_MS / (3 * HOUR_MS)) * 3 * HOUR_MS;
+    // Hourly buckets filling one of the week's merged buckets, starting on its
+    // boundary, merge into a single reading with no line to draw.
+    const groupMs = mergedBucketMs({
+      sourceBucketMs: HOUR_MS,
+      domainMs: TIME_PERIOD_MINUTES * 60_000,
+      plotWidthPx:
+        WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right,
+      replicaCount: 1,
+      minSlotPx: MIN_BAR_SLOT_PX,
+    });
+    const alignedMs = Math.ceil(FIRST_BUCKET_MS / groupMs) * groupMs;
     const lastMs = FIRST_BUCKET_MS + BUCKET_COUNT * HOUR_MS;
     const refreshIds = Array.from(
       {
-        length: Math.floor((lastMs - alignedMs - 3 * HOUR_MS) / (6 * HOUR_MS)),
+        length: Math.floor((lastMs - alignedMs - groupMs) / (2 * groupMs)),
       },
       (_, index) => `u${index + 10}`,
     );
@@ -1301,8 +1307,8 @@ describe("ResourceUsage", () => {
           replicaId,
           "r1",
           (startMs) =>
-            startMs >= alignedMs + index * 6 * HOUR_MS &&
-            startMs < alignedMs + (index * 6 + 3) * HOUR_MS,
+            startMs >= alignedMs + index * 2 * groupMs &&
+            startMs < alignedMs + (index * 2 + 1) * groupMs,
         ),
       ),
       replicaIds: refreshIds,
@@ -1415,6 +1421,7 @@ describe("ResourceUsage", () => {
       const user = userEvent.setup();
       await renderDeployments();
 
+      await user.tab();
       await user.tab();
       await user.tab();
       const pastToggle = screen.getByRole("button", {
@@ -1623,10 +1630,10 @@ describe("ResourceUsage", () => {
     expect(lineCount("CPU by Process")).toEqual(2);
     expect(lineCount("Memory by Process")).toEqual(2);
     const legendLabels = () =>
-      within(drawer)
-        .queryAllByText(/^r1 · process \d+$/)
-        .map((label) => label.textContent);
-    expect(legendLabels()).toEqual(["r1 · process 0", "r1 · process 1"]);
+      within(within(drawer).getByRole("list", { name: "Processes" }))
+        .getAllByRole("listitem")
+        .map((item) => item.textContent);
+    expect(legendLabels()).toEqual(["0", "1"]);
     expect(
       within(drawer).getByText(
         "Check a process to draw its line. Memory is a share of each process's heap limit.",
@@ -1642,7 +1649,7 @@ describe("ResourceUsage", () => {
       within(table).getByRole("checkbox", { name: "Show process 1" }),
     );
     expect(lineCount("CPU by Process")).toEqual(1);
-    expect(legendLabels()).toEqual(["r1 · process 0"]);
+    expect(legendLabels()).toEqual(["0"]);
     expect(showEvery).toBePartiallyChecked();
     await userEvent.click(showEvery);
     expect(lineCount("Memory by Process")).toEqual(2);
@@ -1765,11 +1772,10 @@ describe("ResourceUsage", () => {
         ),
       ).toBeVisible();
       expect(
-        within(drawer)
-          .queryAllByText(/^r1 · process \d+$/)
-          .map((label) => label.textContent),
-      ).toEqual(["r1 · process 0"]);
-      expect(within(drawer).getByText("Other processes")).toBeVisible();
+        within(within(drawer).getByRole("list", { name: "Processes" }))
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(["0", "other"]);
     });
 
     it("highlights a hovered grey process in a color outside the palette", async () => {
@@ -1805,10 +1811,11 @@ describe("ResourceUsage", () => {
       const endMs = Date.now();
       const hoverMs =
         Math.floor(NEWER_MS / BUCKET_MS) * BUCKET_MS + BUCKET_MS / 2;
-      const plotWidthPx = WIDTH_PX - CHART_MARGIN.left - CHART_MARGIN.right;
+      const plotWidthPx =
+        WIDTH_PX - RESOURCE_CHART_MARGIN.left - RESOURCE_CHART_MARGIN.right;
       fireEvent.pointerMove(overlay, {
         clientX:
-          CHART_MARGIN.left +
+          RESOURCE_CHART_MARGIN.left +
           ((hoverMs - (endMs - DAY_MS)) / DAY_MS) * plotWidthPx,
         clientY: 80,
       });

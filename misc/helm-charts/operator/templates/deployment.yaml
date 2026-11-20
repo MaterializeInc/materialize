@@ -94,9 +94,6 @@ spec:
         {{- if not .Values.operator.args.enableLicenseKeyChecks }}
         - "--disable-license-key-checks"
         {{- end }}
-        {{- range .Values.operator.args.licenseKeyIntermediateCerts }}
-        - "--license-key-intermediate-cert={{ . }}"
-        {{- end }}
         {{- if not .Values.operator.args.enableDatabaseNetworkPolicies }}
         - "--disable-database-network-policies"
         {{- end }}
@@ -249,6 +246,7 @@ spec:
         - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
         {{- end }}
         - "--balancerd-readiness-probe-path={{ .Values.balancerd.readinessProbePath }}"
+        - "--balancerd-termination-grace-period-seconds={{ .Values.balancerd.terminationGracePeriodSeconds }}"
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"

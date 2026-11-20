@@ -16,6 +16,7 @@ use std::iter;
 use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, VecCollection};
+use mz_expr::MfpPlan;
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -29,7 +30,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
-use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::builder_async::{PressOnDropButton, button};
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -319,7 +320,7 @@ where
                             Some(as_of),
                             SnapshotMode::Include,
                             Antichain::new(),
-                            None,
+                            None::<&mut MfpPlan>,
                             flow_control,
                             false.then_some(|| unreachable!()),
                             async {},
@@ -345,43 +346,43 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
-                            .get(storage_state.storage_configuration.config_set())
-                        {
-                            // Resolved here, at operator construction, so the
-                            // dataflow keeps one stash flavor for its whole
-                            // life even if the flag flips underneath it.
-                            let stash_flavor =
-                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
-                                    storage_state.storage_configuration.config_set(),
-                                );
-                            crate::upsert::upsert_v2(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                backpressure_metrics,
-                                stash_flavor,
-                            )
-                        } else {
-                            crate::upsert::upsert(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous_ok,
-                                previous_err,
-                                previous_token,
-                                export_config,
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
-                                backpressure_metrics,
-                            )
-                        };
+                    // The v2 stash spills only to swap, through the
+                    // buffer pool. On a replica that cannot swap, v1 keeps its
+                    // state in RocksDB on the scratch disk where one exists,
+                    // and v2's footprint without swap has not been measured.
+                    let use_upsert_v2 = dyncfgs::ENABLE_UPSERT_V2
+                        .get(storage_state.storage_configuration.config_set())
+                        && storage_state.instance_context.swap_available;
+                    let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
+                    {
+                        let (stats_shutdown, stats_button) = button(scope, scope.addr());
+                        needed_tokens.push(stats_button.press_on_drop());
+                        crate::upsert::upsert_v2(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            backpressure_metrics,
+                            stats_shutdown,
+                        )
+                    } else {
+                        crate::upsert::upsert(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous_ok,
+                            previous_err,
+                            previous_token,
+                            export_config,
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        )
+                    };
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register

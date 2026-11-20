@@ -15,7 +15,6 @@ bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 dec.workspace = true
-fallible-iterator.workspace = true
 futures.workspace = true
 hex.workspace = true
 itertools.workspace = true

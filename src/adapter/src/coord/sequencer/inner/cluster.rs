@@ -31,7 +31,7 @@ use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
-use mz_sql::names::QualifiedItemName;
+use mz_sql::names::FullItemName;
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterOptionParameter, AlterSetClusterPlan,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
@@ -142,6 +142,12 @@ impl Coordinator {
         let cluster = self.catalog.get_cluster(cluster_id);
         let config = cluster.config.clone();
         let mut new_config = config.clone();
+
+        match options.query_policy {
+            Set(policy) => new_config.query_policy = policy,
+            Reset => new_config.query_policy = None,
+            Unchanged => {}
+        }
 
         match (&new_config.variant, &options.managed) {
             (Managed(_), Reset) | (Managed(_), Unchanged) | (Managed(_), Set(true)) => {}
@@ -553,13 +559,20 @@ impl Coordinator {
 
         // Validate the target up front, so a bad reshape errors at `ALTER` time
         // rather than silently parking an unconvergeable record.
+        // A size disabled after the cluster started using it stays valid for it.
+        let size_in_use = matches!(
+            &cluster.config.variant,
+            ClusterVariant::Managed(managed) if managed.size == target.size
+        ) || in_flight
+            .as_ref()
+            .is_some_and(|record| record.target.size == target.size);
         let role_id = session.role_metadata().current_role;
         self.catalog.ensure_valid_replica_size(
             &self
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &target.size,
-            false,
+            size_in_use,
         )?;
         self.ensure_valid_azs(target.availability_zones.iter())?;
 
@@ -809,6 +822,7 @@ impl Coordinator {
             variant,
             workload_class,
             if_not_exists,
+            query_policy,
         }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
@@ -848,6 +862,7 @@ impl Coordinator {
         let config = ClusterConfig {
             variant: cluster_variant,
             workload_class,
+            query_policy,
         };
         let ops = vec![catalog::Op::CreateCluster {
             id,
@@ -1261,14 +1276,14 @@ impl Coordinator {
         &self,
         session: &Session,
         cluster: &Cluster,
-        creating_source: Option<&QualifiedItemName>,
+        creating_source: Option<&FullItemName>,
     ) {
         if self.notice_relevant_replica_count(cluster) <= 1 {
             return;
         }
         let mut sources = self.single_replica_source_names(cluster);
         if let Some(name) = creating_source {
-            let full_name = self.catalog().resolve_full_name(name, None).to_string();
+            let full_name = name.to_string();
             if !sources.contains(&full_name) {
                 sources.push(full_name);
             }
@@ -1507,10 +1522,11 @@ impl Coordinator {
         } = new_managed;
 
         let role_id = Some(session.role_metadata().current_role);
+        // A size disabled after the cluster started using it stays valid for it.
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
-            false,
+            new_size == size,
         )?;
         if new_auto_scaling_strategy != auto_scaling_strategy {
             if let Some(on_hydration) = new_auto_scaling_strategy
@@ -1690,7 +1706,14 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
+                AlterOptionParameter::Set(size) => {
+                    let role_id = Some(session.role_metadata().current_role);
+                    self.catalog.ensure_valid_replica_size(
+                        &self.catalog().get_role_allowed_cluster_sizes(&role_id),
+                        size,
+                        false,
+                    )?;
+                }
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");
@@ -1891,6 +1914,7 @@ fn alter_changes_reconfiguration_target(options: &PlanClusterOption) -> bool {
         schedule: _,
         workload_class: _,
         auto_scaling_strategy: _,
+        query_policy: _,
     } = options;
     !matches!(size, Unchanged)
         || !matches!(replication_factor, Unchanged)

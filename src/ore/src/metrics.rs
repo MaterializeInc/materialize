@@ -62,8 +62,10 @@ use prometheus::{HistogramOpts, Registry};
 
 pub mod aggregation;
 mod delete_on_drop;
+mod deregister_on_drop;
 
 pub use delete_on_drop::*;
+pub use deregister_on_drop::*;
 pub use prometheus::Opts as PrometheusOpts;
 
 /// Define a metric for use in materialize.

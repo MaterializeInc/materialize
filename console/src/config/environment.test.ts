@@ -17,7 +17,6 @@ describe("getEnvironmentdConfig", () => {
         cloudRegionOverride: {
           provider: "aws",
           region: "us-est-1",
-          regionApiUrl: "",
         },
         impersonation: {
           provider: "aws",
@@ -43,7 +42,6 @@ describe("getEnvironmentdConfig", () => {
         cloudRegionOverride: {
           provider: "",
           region: "local",
-          regionApiUrl: "",
         },
         impersonation: null,
       }),

@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 
-# Basic sanity checks around the SET failpoints syntax
+# Basic sanity checks around the SET unsafe_failpoints syntax
 
-! SET failpoints = 'a';
-contains:parameter "failpoints" cannot have value "a": missing failpoint action
+! SET unsafe_failpoints = 'a';
+contains:parameter "unsafe_failpoints" cannot have value "a": missing failpoint action
 
-! SET failpoints = 'a=1';
-contains:parameter "failpoints" cannot have value "a=1": unrecognized command "1"
+! SET unsafe_failpoints = 'a=1';
+contains:parameter "unsafe_failpoints" cannot have value "a=1": unrecognized command "1"
 
-> SET failpoints = 'a=off';
+> SET unsafe_failpoints = 'a=off';

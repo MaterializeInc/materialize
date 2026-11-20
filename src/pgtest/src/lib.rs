@@ -103,13 +103,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use bytes::{BufMut, BytesMut};
-use fallible_iterator::FallibleIterator;
 use mz_ore::collections::CollectionExt;
 use postgres_protocol::IsNull;
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::fallible_iterator::FallibleIterator;
 
 struct PgConn {
     stream: TcpStream,

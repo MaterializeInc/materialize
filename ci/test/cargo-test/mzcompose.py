@@ -48,7 +48,7 @@ SERVICES = [
         ports=["30123:30123"],
         allow_host_ports=True,
         advertised_listeners=[
-            "HOST://localhost:30123",
+            "HOST://127.0.0.1:30123",
             "PLAINTEXT://kafka:9092",
         ],
         environment_extra=[
@@ -139,7 +139,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     env = dict(
         os.environ,
-        KAFKA_ADDRS="localhost:30123",
+        KAFKA_ADDRS="127.0.0.1:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
         MZ_TEST_MYSQL_URL=mysql_url,

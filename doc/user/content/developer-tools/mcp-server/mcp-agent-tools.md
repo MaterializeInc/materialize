@@ -108,7 +108,7 @@ default.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `cluster` | string | Yes | Exact cluster name from the data product details. |
+| `cluster` | string | No | Exact cluster name from the data product details. Omit it when the data product's `cluster` is null, which means your role lacks `USAGE` on that cluster. The query then runs on your session's default cluster. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
 
 

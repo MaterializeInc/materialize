@@ -258,6 +258,12 @@ pub struct ServiceConfig {
 
     /// The maximum amount of scratch disk space that the service is allowed to consume.
     pub disk_limit: Option<DiskLimit>,
+    /// Whether the service is provisioned with swap.
+    ///
+    /// An orchestrator that provisions swap per service passes `--no-swap` to
+    /// services without it. An orchestrator that does not control swap passes
+    /// nothing.
+    pub swap_enabled: bool,
     /// Node selector for this service.
     pub node_selector: BTreeMap<String, String>,
 }

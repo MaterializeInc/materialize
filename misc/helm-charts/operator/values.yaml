@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.49.1
+    tag: v26.51.1
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -56,9 +56,6 @@ operator:
     statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
-    # -- Root-signed intermediate certificates whose keys may also sign
-    # license keys. Requires an operator built from v26.49.0-dev.0 or later.
-    licenseKeyIntermediateCerts: []
     # -- Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`
     # in environmentd. Network policies match on client IP, which self-managed
     # deployments generally do not preserve (port-forwards and most ingress
@@ -418,6 +415,10 @@ balancerd:
   # Controller registers from the endpoints: deregistration cuts held sessions
   # after the deregistration delay and excludes the pod from fail-open.
   readinessProbePath: /api/readyz
+  # -- Termination grace period for balancerd pods. Keep it at least
+  # `balancerd_sigterm_listen_wait` plus `balancerd_sigterm_connection_wait`
+  # (10 minutes by default), or open connections are cut before they drain.
+  terminationGracePeriodSeconds: 600
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for balancerd's CPU and memory

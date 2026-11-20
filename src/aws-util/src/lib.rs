@@ -19,6 +19,8 @@ use crate::http_pool::{PooledHttpClient, SwitchedHttpClient};
 pub use crate::http_pool::HttpPoolMetrics;
 
 mod http_pool;
+#[cfg(feature = "rds")]
+pub mod rds;
 #[cfg(feature = "s3")]
 pub mod s3;
 #[cfg(feature = "s3")]

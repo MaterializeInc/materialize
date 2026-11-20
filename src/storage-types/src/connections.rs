@@ -2467,6 +2467,9 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
+    /// Reference to the AWS connection to use for IAM authentication with
+    /// Amazon RDS or Aurora, in place of a password.
+    pub aws_connection: Option<AwsConnectionReference<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
@@ -2483,6 +2486,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection,
         } = self;
 
         PostgresConnection {
@@ -2491,10 +2495,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             database,
             user,
             password,
-            tunnel: tunnel.into_inline_connection(r),
+            tunnel: tunnel.into_inline_connection(&r),
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection: aws_connection.map(|aws| aws.into_inline_connection(&r)),
         }
     }
 }
@@ -2640,11 +2645,27 @@ impl PostgresConnection<InlinedConnection> {
             }
         };
 
+        let aws_config = match self.aws_connection.as_ref() {
+            None => None,
+            Some(aws_ref) => Some(
+                aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await?,
+            ),
+        };
+
         Ok(mz_postgres_util::Config::new(
             config,
             tunnel,
             params.ssh_timeout_config,
             in_task,
+            aws_config,
         )?)
     }
 
@@ -2745,6 +2766,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
             tls_mode: _,
             tls_root_cert: _,
             tls_identity: _,
+            aws_connection: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];

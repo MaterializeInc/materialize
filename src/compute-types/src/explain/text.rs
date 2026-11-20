@@ -26,7 +26,9 @@ use std::ops::Deref;
 use itertools::Itertools;
 use mz_expr::Id;
 use mz_expr::MfpPlan;
-use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
+use mz_expr::explain::{
+    HumanizedExplain, HumanizerMode, fmt_temporal_filter, fmt_text_constant_rows,
+};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
@@ -1083,19 +1085,8 @@ fn fmt_temporal_bounds(
         return Ok(());
     }
 
-    write!(f, "{}TemporalFilter: ", ctx.indent)?;
-    if !lower_bounds.is_empty() {
-        let lowers = lower_bounds.iter().map(|b| mode.expr(b, None));
-        write!(f, "{} <= ", separated(", ", lowers))?;
-    }
-    write!(f, "mz_now()")?;
-    if !upper_bounds.is_empty() {
-        let uppers = upper_bounds.iter().map(|b| mode.expr(b, None));
-        write!(f, " < {}", separated(", ", uppers))?;
-    }
-    writeln!(f)?;
-
-    Ok(())
+    write!(f, "{}", ctx.indent)?;
+    fmt_temporal_filter(lower_bounds, upper_bounds, &mode.expr(mfp_plan, None), f)
 }
 
 impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for AvailableCollections {

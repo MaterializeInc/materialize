@@ -303,7 +303,6 @@ case "$cmd" in
                 --env AZURE_SQL_DATABASE
                 --env AZURE_SQL_USER
                 --env AZURE_SQL_PASSWORD
-                --env GCP_SERVICE_ACCOUNT_JSON
                 # For test/terraform gcp-temporary and cargo-test through
                 # Buildkite OIDC
                 --env GCP_WORKLOAD_IDENTITY_PROVIDER
@@ -422,6 +421,12 @@ case "$cmd" in
             args+=(
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
             )
+
+            # Docker's default seccomp profile only allows perf_event_open,
+            # which counting instructions in benches needs, with CAP_PERFMON.
+            if is_truthy "${CI_BUILDER_PERF_EVENTS:-0}"; then
+                args+=(--cap-add=PERFMON)
+            fi
 
             if [[ $secrets == "true" ]]; then
                 # Allow Docker-in-Docker by mounting the Docker socket in the

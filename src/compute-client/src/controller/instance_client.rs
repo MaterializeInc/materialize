@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::instance::{Command, Instance, SharedCollectionState};
+use crate::controller::peek_lifecycle::PeekLifecycle;
 use crate::controller::{
     ComputeControllerResponse, IntrospectionUpdates, ReplicaId, StorageCollections,
 };
@@ -220,9 +221,14 @@ impl InstanceClient {
         .await?
     }
 
-    /// Issue a peek by calling into the instance task.
+    /// Issues a peek on the instance task.
     ///
-    /// If this returns an error, then it didn't modify any `Instance` state.
+    /// With a `lifecycle`, issue is ordered against cancellation and terminal
+    /// notifications go to the lifecycle, not the coordinator. If the peek was
+    /// already retired, sends the saved response through `peek_response_tx`
+    /// without issuing compute work and returns `Ok(())`. The caller must retire
+    /// the lifecycle if this returns `Err`, if it drops this future, or if the
+    /// instance shuts down.
     pub async fn peek(
         &self,
         peek_target: PeekTarget,
@@ -235,21 +241,151 @@ impl InstanceClient {
         target_read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
     ) -> Result<(), PeekError> {
-        self.call_sync(move |i| {
-            i.peek(
-                peek_target,
-                literal_constraints,
-                uuid,
-                timestamp,
-                result_desc,
-                finishing,
-                map_filter_project,
-                target_read_hold,
-                target_replica,
-                peek_response_tx,
-            )
-        })
-        .await?
+        let issue = self.peek_command(
+            peek_target,
+            literal_constraints,
+            uuid,
+            timestamp,
+            result_desc,
+            finishing,
+            map_filter_project,
+            target_read_hold,
+            target_replica,
+            peek_response_tx,
+            lifecycle,
+        );
+        self.call_sync(issue).await?
+    }
+
+    /// Returns the instance-task command behind [`Self::peek`], which documents
+    /// the `lifecycle` contract.
+    pub(super) fn peek_command(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: Timestamp,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+        lifecycle: Option<Arc<PeekLifecycle>>,
+    ) -> impl FnOnce(&mut Instance) -> Result<(), PeekError> + Send + 'static {
+        let client = self.clone();
+        move |i| {
+            let mut response_tx = Some(peek_response_tx);
+            let issue = || {
+                i.peek(
+                    peek_target,
+                    literal_constraints,
+                    uuid,
+                    timestamp,
+                    result_desc,
+                    finishing,
+                    map_filter_project,
+                    target_read_hold,
+                    target_replica,
+                    response_tx.take().expect("peek issued once"),
+                    lifecycle.clone(),
+                )
+            };
+            let Some(lifecycle) = &lifecycle else {
+                return issue();
+            };
+            // The lifecycle's critical section must run on the instance task.
+            // Holding it across a caller's await of this command would block
+            // cancellation for as long as the command is queued.
+            let retired = lifecycle.issue(issue, move |reason| {
+                // A shut down instance has no peek left to cancel.
+                let _ = client.call(move |i| i.cancel_peek(uuid, reason));
+            })?;
+            if let Some(response) = retired {
+                let _ = response_tx
+                    .take()
+                    .expect("retired peek was not issued")
+                    .send(response);
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::task::Poll;
+
+    use mz_expr::{MapFilterProject, RowSetFinishing, SafeMfpPlan};
+    use mz_repr::{GlobalId, RelationDesc, Timestamp};
+    use mz_storage_types::read_holds::ReadHold;
+    use timely::progress::Antichain;
+    use tokio::sync::{mpsc, oneshot};
+    use uuid::Uuid;
+
+    use crate::controller::PeekNotification;
+    use crate::controller::instance::tests::peek_test_instance;
+    use crate::controller::peek_lifecycle::PeekLifecycle;
+    use crate::protocol::command::PeekTarget;
+    use crate::protocol::response::{PeekError, PeekResponse};
+
+    use super::InstanceClient;
+
+    #[mz_ore::test(tokio::test)]
+    async fn cancellation_before_instance_processes_issue_delivers_result() {
+        for response in [
+            PeekResponse::Canceled,
+            PeekResponse::Error(PeekError::unstructured("dependency dropped")),
+        ] {
+            let (mut instance, mut coordinator) = peek_test_instance();
+            let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+            let client = InstanceClient {
+                command_tx,
+                read_hold_tx: Arc::new(|_, _| Ok(())),
+            };
+            let (retired_tx, mut retired_rx) = oneshot::channel();
+            let lifecycle = Arc::new(PeekLifecycle::new(move |outcome| {
+                retired_tx.send(outcome).unwrap();
+            }));
+            let (result_tx, result_rx) = oneshot::channel();
+            // A mismatched hold would fail validation if Instance::peek ran.
+            let hold = ReadHold::new(
+                GlobalId::User(2),
+                Antichain::from_elem(Timestamp::MIN),
+                Arc::new(|_, _| Ok(())),
+            );
+            let peek = client.peek(
+                PeekTarget::Index {
+                    id: GlobalId::User(1),
+                },
+                None,
+                Uuid::new_v4(),
+                Timestamp::MIN,
+                RelationDesc::empty(),
+                RowSetFinishing::trivial(0),
+                SafeMfpPlan::from_mfp(MapFilterProject::new(0)),
+                hold,
+                None,
+                result_tx,
+                Some(Arc::clone(&lifecycle)),
+            );
+            futures::pin_mut!(peek);
+            assert!(matches!(futures::poll!(&mut peek), Poll::Pending));
+            let issue = command_rx.try_recv().expect("issue queued");
+            lifecycle.cancel(response.clone());
+            assert_eq!(retired_rx.try_recv().unwrap(), PeekNotification::Canceled);
+            issue(&mut instance);
+            peek.await
+                .expect("canceled issue succeeds without validation");
+            assert_eq!(result_rx.await.unwrap(), response);
+            assert!(
+                command_rx.try_recv().is_err(),
+                "unissued peek needs no cancel command"
+            );
+            assert!(coordinator.try_recv().is_err());
+        }
     }
 }

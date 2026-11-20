@@ -9,23 +9,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-echo "Starting materialized in docker..."
+set -euo pipefail
 
-# Start materialized in docker
+echo "Starting materialized in docker..."
 
 # Allow specifying a version, default to latest
 VERSION=${1:-latest}
-docker run -d -p 6875:6875 "materialize/materialized:$VERSION"
+container=$(docker run -d --rm --pull always -p 6875:6875 "materialize/materialized:$VERSION")
+trap 'docker stop "$container" > /dev/null' EXIT
 
 # Wait a few seconds for materialized to be ready
 sleep 30
 
-# The schemas below must correspond with the search path set in executeSql
-yarn kysely-codegen \
-  --no-domains \
-  --schema mz_catalog \
-  --schema mz_catalog_unstable \
-  --schema mz_internal \
-  --schema mz_introspection \
-  --out-file types/materialize.d.ts \
-  --url postgres://localhost:6875/materialize
+yarn tsx bin/kysely-codegen.ts

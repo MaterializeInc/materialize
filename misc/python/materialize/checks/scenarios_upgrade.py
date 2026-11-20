@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
@@ -77,6 +78,7 @@ def start_mz_read_only(
     system_parameter_defaults: dict[str, str] | None = None,
     system_parameter_version: MzVersion | None = None,
     force_migrations: str | None = None,
+    force_catalog_migration: bool = False,
     publish: bool | None = None,
 ) -> StartMz:
     return StartMz(
@@ -89,6 +91,7 @@ def start_mz_read_only(
         system_parameter_defaults=system_parameter_defaults,
         system_parameter_version=system_parameter_version,
         force_migrations=force_migrations,
+        force_catalog_migration=force_catalog_migration,
         publish=publish,
     )
 
@@ -505,7 +508,9 @@ class PreflightCheckContinue(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            start_mz_read_only(self, tag=None, deploy_generation=1),
+            start_mz_read_only(
+                self, tag=None, deploy_generation=1, force_catalog_migration=True
+            ),
             WaitReadyMz(),
             # KillMz above already removed the previous generation.
             PromoteMz(retire_mz_service=None),
@@ -517,6 +522,7 @@ class PreflightCheckContinue(Scenario):
                 self,
                 tag=None,
                 deploy_generation=1,
+                force_catalog_migration=True,
             ),
             Validate(self),
         ]
@@ -545,6 +551,7 @@ class PreflightCheckRollback(Scenario):
                 tag=None,
                 deploy_generation=1,
                 system_parameter_version=self.base_version(),
+                force_catalog_migration=True,
             ),
             WaitReadyMz(),
             KillMz(capture_logs=True),
@@ -670,6 +677,19 @@ def print_upgrade_path(versions: list[MzVersion | None]):
     )
 
 
+def get_self_managed_linear_upgrade_versions() -> list[MzVersion]:
+    """Select at most 30 released versions, retaining the oldest and newest."""
+    versions = keep_latest_patch_per_minor(get_compatible_upgrade_from_versions())
+    # The initial version needs no upgrade, leaving room for the upgrade to current.
+    max_versions = 30
+    if len(versions) <= max_versions:
+        return versions
+    return [
+        versions[i * (len(versions) - 1) // (max_versions - 1)]
+        for i in range(max_versions)
+    ]
+
+
 class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
     """
     Upgrade from the oldest Self-Managed version in the supported window to the current version.
@@ -684,11 +704,7 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        # Thin to one version per minor so the linear path stays within the
-        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
-        self.self_managed_versions = keep_latest_patch_per_minor(
-            get_compatible_upgrade_from_versions()
-        )
+        self.self_managed_versions = get_self_managed_linear_upgrade_versions()
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
@@ -745,11 +761,7 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         seed: str | None = None,
         **kwargs: Any,
     ):
-        # Thin to one version per minor so the linear path stays within the
-        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
-        self.self_managed_versions = keep_latest_patch_per_minor(
-            get_compatible_upgrade_from_versions()
-        )
+        self.self_managed_versions = get_self_managed_linear_upgrade_versions()
         super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
@@ -830,14 +842,19 @@ class SelfManagedRandomUpgradePath(Scenario):
 
         return generate_random_upgrade_path(versions, self.rng)
 
+    @cached_property
+    def upgrade_path(self) -> list[MzVersion]:
+        return self._generate_random_upgrade_path(self.self_managed_versions)
+
     def base_version(self) -> MzVersion:
-        return self.self_managed_versions[0]
+        # Checks gate on base_version(), so it must be the version Initialize
+        # runs on, which the random path can place well after the oldest
+        # supported one.
+        return self.upgrade_path[0]
 
     def actions(self) -> list[Action]:
 
-        versions = self._generate_random_upgrade_path(self.self_managed_versions) + [
-            None
-        ]
+        versions = self.upgrade_path + [None]
 
         mz_services = create_mz_service_upgrade_info_list(
             versions,

@@ -676,10 +676,11 @@ pub type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 ///
 /// Its source operators are already planned. Rendering evaluates them as
 /// given, so lowering is the only place they are planned.
-pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S, MfpPlan>;
+pub type LirDataflowDescription<S = ()> =
+    DataflowDescription<LirRelationExpr, S, MfpPlan<LirScalarExpr>>;
 
 /// A dataflow ready to render.
-pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S, MfpPlan>;
+pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S, MfpPlan<LirScalarExpr>>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
@@ -742,6 +743,7 @@ mod tests {
     use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
 
+    use crate::plan::scalar::mfp_plan_mir_to_lir;
     use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
     use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -943,7 +945,7 @@ mod tests {
         let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
             .expect("lowers");
         let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
-        assert_eq!(operators.as_ref(), Some(&planned));
+        assert_eq!(operators.as_ref(), Some(&mfp_plan_mir_to_lir(planned)));
     }
 
     /// MIR predicate pushdown copies `mz_now() <= #0` into the source's operators and keeps it in

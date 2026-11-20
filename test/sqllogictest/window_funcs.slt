@@ -8013,3 +8013,45 @@ ORDER BY x,u;
 10  16  -5
 15  6  1
 15  16  7
+
+# Regression test for CPU-337: an erroring predicate above a window function is fused into the
+# window `Reduce` as `mfp_after`, and its errors must not be dropped.
+
+statement ok
+CREATE TABLE t_cpu337(k INTEGER, s TEXT);
+
+statement ok
+INSERT INTO t_cpu337 VALUES (1, 'bad');
+
+query error invalid input syntax for type integer
+SELECT * FROM (SELECT k, s, count(*) OVER () AS w FROM t_cpu337) WHERE s::int = 0;
+
+query error invalid input syntax for type integer
+SELECT * FROM (SELECT k, s, count(*) OVER (PARTITION BY k) AS w FROM t_cpu337) WHERE s::int = 0;
+
+query error invalid input syntax for type integer
+SELECT * FROM (SELECT k, s, row_number() OVER (ORDER BY k) AS w FROM t_cpu337) WHERE s::int = 0;
+
+query error division by zero
+SELECT * FROM (SELECT k, s, count(*) OVER () AS w FROM t_cpu337) WHERE 1 / (k - 1) = 0;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_cpu337 AS
+SELECT * FROM (SELECT k, s, count(*) OVER () AS w FROM t_cpu337) WHERE s::int = 0;
+
+query error invalid input syntax for type integer
+SELECT * FROM mv_cpu337;
+
+statement ok
+UPDATE t_cpu337 SET s = '0';
+
+query ITI
+SELECT * FROM mv_cpu337;
+----
+1  0  1
+
+statement ok
+UPDATE t_cpu337 SET s = 'bad';
+
+query error invalid input syntax for type integer
+SELECT * FROM mv_cpu337;

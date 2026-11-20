@@ -53,9 +53,9 @@ import {
   seriesWithBarAt,
 } from "./resourceUsageModel";
 import {
-  CHART_MARGIN,
-  PERCENT_TICKS,
-  percentScale,
+  percentChart,
+  RESOURCE_CHART_MARGIN,
+  truncatedLabelProps,
   useStatusStyles,
 } from "./resourceUsageStyles";
 
@@ -65,14 +65,17 @@ export type PercentScale = ReturnType<typeof scaleLinear<number>>;
 
 export type Layout = ReturnType<typeof buildXYGraphLayoutProps>;
 
-const PLOT_HEIGHT_PX = 168;
-const PLOT_SVG_HEIGHT_PX =
-  CHART_MARGIN.top + PLOT_HEIGHT_PX + CHART_MARGIN.bottom;
-const STATUS_ROW_HEIGHT_PX = 14;
+// Room above a chart with no headroom, such as the status rows, for its
+// header.
+const INSET_HEADER_PX = 32;
+const AXIS_LABEL_FONT_PX = 11;
+const AXIS_LABEL_INSET_PX = 4;
+const TIME_AXIS_HEIGHT_PX = 18;
+const STATUS_ROW_HEIGHT_PX = 18;
 const STATUS_ROW_GAP_PX = 10;
-const STATUS_MARGIN = { ...CHART_MARGIN, top: 0, bottom: 0 };
+const STATUS_MARGIN = { ...RESOURCE_CHART_MARGIN, top: 0, bottom: 0 };
 const MIN_STATUS_SEGMENT_PX = 4;
-const CHANGES_ROW_HEIGHT_PX = 16;
+const CHANGES_ROW_HEIGHT_PX = 18;
 // Creations closer than this share a tick, which is also each tick's hover
 // target width.
 const CHANGE_MERGE_PX = 8;
@@ -89,12 +92,13 @@ const BADGE_FONT_PX = 11;
 // Monospace glyphs are about 0.6em wide, which sizes a badge to its label.
 const BADGE_CHAR_PX = BADGE_FONT_PX * 0.6;
 const BADGE_PADDING_PX = 4;
-const STATUS_LABEL_FONT_PX = 12;
-const STATUS_LABEL_GAP_PX = 8;
-// The most of a replica's name the gutter left of the plot fits, at the
-// badge's glyph width.
-const STATUS_LABEL_MAX_CHARS = Math.floor(
-  (CHART_MARGIN.left - STATUS_LABEL_GAP_PX) / (STATUS_LABEL_FONT_PX * 0.6),
+// Shorter than a status row, so the row's state shows above and below it.
+const BADGE_HEIGHT_PX = 14;
+// A replica's name sits in the right margin with the percent labels, so it
+// gets as many monospace glyphs as fit there.
+const STATUS_NAME_MAX_CHARS = Math.floor(
+  (RESOURCE_CHART_MARGIN.right - AXIS_LABEL_INSET_PX) /
+    (AXIS_LABEL_FONT_PX * 0.6),
 );
 
 // The square swatch is 8px wide, so more stripes are too thin to tell apart.
@@ -162,6 +166,48 @@ export const LegendSwatch = ({ color, variant }: LegendSwatchProps) => {
     </svg>
   );
 };
+
+// A crowded legend shrinks each label to this many characters, behind an
+// ellipsis, before wrapping onto another line.
+const MIN_LEGEND_LABEL_CHARS = 3;
+
+export interface FittedLegendItemProps {
+  /** The width of everything in the item but its text, in px. */
+  fixedPx: number;
+  /** Text in the item that never shrinks, such as a replica's size. */
+  fixedText?: string;
+  children: React.ReactNode;
+}
+
+/**
+ * A list item as wide as its label. A crowded list shrinks the label to
+ * `MIN_LEGEND_LABEL_CHARS` and an ellipsis before wrapping the item onto
+ * another line. The label is the child with `truncatedLabelProps`.
+ */
+export const FittedLegendItem = ({
+  fixedPx,
+  fixedText = "",
+  children,
+}: FittedLegendItemProps) => (
+  <Flex
+    as="li"
+    textStyle="text-small"
+    // A wrapping line breaks on each item's basis, so a basis of the shrunk
+    // width keeps items on one line until even that doesn't fit. Growing
+    // then gives the room back, up to each item's full width.
+    flex={`1 1 calc(${fixedPx}px + ${MIN_LEGEND_LABEL_CHARS + 1 + fixedText.length}ch)`}
+    maxWidth="max-content"
+    minWidth={0}
+  >
+    {children}
+  </Flex>
+);
+
+// The legend's gap between a swatch and its label.
+const LEGEND_SWATCH_GAP_PX = 6;
+
+const legendSwatchWidthPx = (variant: LegendSwatchProps["variant"]) =>
+  variant === "line" || variant === "dashed" ? 16 : 8;
 
 /** The charted replicas' colors, for a swatch that stands for all of them. */
 const replicaColors = (
@@ -235,6 +281,144 @@ export const ChartHeader = ({
   );
 };
 
+export interface ResourceChartHeaderProps extends ChartHeaderProps {
+  /** `opacity` fades a swatch to match marks drawn see-through. */
+  legend?: Array<{ label: string; opacity?: number } & LegendSwatchProps>;
+  /** Names the legend's entries as a group, before the first of them. */
+  legendLabel?: string;
+}
+
+/** A title and a legend, baseline-aligned across the top of a chart. */
+export const ResourceChartHeader = ({
+  title,
+  description,
+  legend,
+  legendLabel,
+  action,
+}: ResourceChartHeaderProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  // Only the title and legend take the pointer, so hovering between them
+  // reaches the chart below.
+  const headerItem = { px: 1.5, pointerEvents: "auto" } as const;
+  return (
+    <Flex
+      justifyContent="space-between"
+      alignItems="baseline"
+      flexWrap="wrap"
+      columnGap={6}
+      rowGap={1}
+      width="100%"
+      pointerEvents="none"
+    >
+      <HStack spacing={2} alignItems="baseline" {...headerItem}>
+        <Text textStyle="text-ui-med">{title}</Text>
+        {description && (
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            {description}
+          </Text>
+        )}
+      </HStack>
+      {(legend || action) && (
+        <Flex
+          // A zero basis keeps the legend beside the title, so a crowded
+          // legend shrinks and wraps its own items instead.
+          flex="1 1 0"
+          flexWrap="wrap"
+          justifyContent="flex-end"
+          alignItems="center"
+          columnGap={4}
+          rowGap={1}
+          minWidth={0}
+          px={headerItem.px}
+          // This box fills the row, so only its contents take the pointer.
+          sx={{ "& > *": { pointerEvents: "auto" } }}
+        >
+          {legend && (
+            <HStack spacing={2} minWidth={0}>
+              {legendLabel && (
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                  flexShrink={0}
+                  aria-hidden
+                >
+                  {legendLabel}:
+                </Text>
+              )}
+              <Flex
+                as="ul"
+                aria-label={legendLabel}
+                flexWrap="wrap"
+                justifyContent="flex-end"
+                columnGap={4}
+                rowGap={1}
+                minWidth={0}
+                listStyleType="none"
+              >
+                {legend.map(({ label, color, variant, opacity }) => (
+                  <FittedLegendItem
+                    key={label}
+                    fixedPx={
+                      legendSwatchWidthPx(variant) + LEGEND_SWATCH_GAP_PX
+                    }
+                  >
+                    <HStack spacing={1.5} minWidth={0}>
+                      <Box flexShrink={0} opacity={opacity}>
+                        <LegendSwatch color={color} variant={variant} />
+                      </Box>
+                      <Text
+                        textStyle="text-small"
+                        color={colors.foreground.secondary}
+                        {...truncatedLabelProps}
+                      >
+                        {label}
+                      </Text>
+                    </HStack>
+                  </FittedLegendItem>
+                ))}
+              </Flex>
+            </HStack>
+          )}
+          {action}
+        </Flex>
+      )}
+    </Flex>
+  );
+};
+
+export interface ChartFrameProps extends ResourceChartHeaderProps {
+  /**
+   * Leaves room above the chart for the header. Without it, the header floats
+   * over the chart's headroom.
+   */
+  isHeaderInset?: boolean;
+  children: React.ReactNode;
+}
+
+/** A chart between rules, with its header in the top corners. */
+export const ChartFrame = ({
+  isHeaderInset = false,
+  children,
+  ...header
+}: ChartFrameProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box
+      position="relative"
+      borderTopWidth="1px"
+      borderBottomWidth="1px"
+      borderColor={colors.border.secondary}
+      pt={isHeaderInset ? `${INSET_HEADER_PX}px` : undefined}
+      pb={isHeaderInset ? 2 : undefined}
+    >
+      {children}
+      <Box position="absolute" top={1} left={0} right={0} pointerEvents="none">
+        <ResourceChartHeader {...header} />
+      </Box>
+    </Box>
+  );
+};
+
 export const PercentAxis = ({
   layout,
   yScale,
@@ -271,6 +455,49 @@ export const PercentAxis = ({
           dy: 4,
         })}
       />
+    </>
+  );
+};
+
+/** Dashed lines at `ticks`, labeled in the right margin just below each. */
+export const ResourcePercentAxis = ({
+  layout,
+  yScale,
+  ticks,
+}: {
+  layout: Layout;
+  yScale: PercentScale;
+  ticks: number[];
+}) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  const [rangeStart, rangeEnd] = layout.xScaleRange;
+  return (
+    <>
+      <GridRows
+        {...layout.gridRowsProps}
+        // Through the label margin, so each label sits on its line.
+        width={layout.svgProps.width - rangeStart}
+        scale={yScale}
+        tickValues={ticks}
+        stroke={colors.border.secondary}
+        strokeDasharray="3 3"
+        pointerEvents="none"
+      />
+      <g pointerEvents="none">
+        {ticks.map((tick) => (
+          <text
+            key={tick}
+            x={rangeEnd + AXIS_LABEL_INSET_PX}
+            y={yScale(tick) + AXIS_LABEL_INSET_PX}
+            dominantBaseline="hanging"
+            fill={colors.foreground.secondary}
+            fontFamily={fonts.mono}
+            fontSize={AXIS_LABEL_FONT_PX}
+          >
+            {tick}%
+          </text>
+        ))}
+      </g>
     </>
   );
 };
@@ -378,7 +605,7 @@ const CpuMarks = React.memo(
     const { colors } = useTheme<MaterializeTheme>();
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         {series.map((replica) => (
           <LinePath
             key={replica.id}
@@ -448,15 +675,6 @@ export const CpuChart = ({
   headerAction,
 }: CpuChartProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: PLOT_SVG_HEIGHT_PX,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const peak = React.useMemo(
     () =>
       max(series, (replica) =>
@@ -465,29 +683,33 @@ export const CpuChart = ({
     [series],
   );
   const isOverflowing = peak > 100;
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader
-        title="CPU"
-        legend={
-          isOverflowing
-            ? [
-                {
-                  label: "CPU allocation",
-                  color: colors.accent.red,
-                  variant: "dashed",
-                },
-              ]
-            : undefined
-        }
-        action={headerAction}
-      />
-      <svg {...layout.svgProps} role="img" aria-label="CPU usage">
+    <ChartFrame
+      title="CPU"
+      legend={
+        isOverflowing
+          ? [
+              {
+                label: "CPU allocation",
+                color: colors.accent.red,
+                variant: "dashed",
+              },
+            ]
+          : undefined
+      }
+      action={headerAction}
+    >
+      <svg
+        {...layout.svgProps}
+        display="block"
+        role="img"
+        aria-label="CPU usage"
+      >
         <CpuMarks
           layout={layout}
           xScale={xScale}
@@ -531,7 +753,7 @@ export const CpuChart = ({
           onPointerLeave={onPointerLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 
@@ -540,6 +762,7 @@ const MemoryMarks = React.memo(
     layout,
     xScale,
     yScale,
+    ticks,
     series,
     colorMap,
     ramLimit,
@@ -547,6 +770,7 @@ const MemoryMarks = React.memo(
     layout: Layout;
     xScale: TimeScale;
     yScale: PercentScale;
+    ticks: number[];
     series: ReplicaData[];
     colorMap: Map<string, string>;
     ramLimit: number | undefined;
@@ -603,7 +827,7 @@ const MemoryMarks = React.memo(
     );
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={PERCENT_TICKS} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         <g pointerEvents="none">{bars}</g>
         {ramLimit !== undefined && (
           <ThresholdLine
@@ -652,23 +876,16 @@ export const MemoryChart = ({
   hasHeapLimit,
 }: MemoryChartProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const layout = React.useMemo(
+  const peak = React.useMemo(
     () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: PLOT_SVG_HEIGHT_PX,
-        margin: CHART_MARGIN,
-      }),
-    [width],
+      max(series, (replica) =>
+        max(replica.data, (point) => memoryBar(point)?.heap),
+      ) ?? 0,
+    [series],
   );
-  const yScale = React.useMemo(
-    () =>
-      scaleLinear<number>({
-        domain: [0, 100],
-        range: layout.yScaleRange,
-        clamp: true,
-      }),
-    [layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
   const { hasSplit, hasSwap, ramLimit } = React.useMemo(() => {
     const seriesData = series.map((replica) => replica.data);
@@ -714,13 +931,18 @@ export const MemoryChart = ({
   });
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader title="Memory" legend={legend} />
-      <svg {...layout.svgProps} role="img" aria-label="Memory usage">
+    <ChartFrame title="Memory" legend={legend}>
+      <svg
+        {...layout.svgProps}
+        display="block"
+        role="img"
+        aria-label="Memory usage"
+      >
         <MemoryMarks
           layout={layout}
           xScale={xScale}
           yScale={yScale}
+          ticks={ticks}
           series={series}
           colorMap={colorMap}
           ramLimit={ramLimit}
@@ -742,7 +964,7 @@ export const MemoryChart = ({
           onPointerLeave={onPointerLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 
@@ -752,6 +974,22 @@ export interface TimeAxisProps {
   /** Labels each tick. Defaults to the time before the window's end. */
   tickFormat?: (ms: number) => string;
 }
+
+/**
+ * Evenly spaced from the start of `xScale`'s domain, then its end, matching
+ * `UtilizationGraph`.
+ */
+const timeTickValues = (xScale: TimeScale) => {
+  const [startMs, endMs] = xScale.domain().map((date) => date.getTime());
+  return [
+    ...Array.from(
+      { length: TIME_TICK_COUNT },
+      (_, tickIndex) =>
+        startMs + (tickIndex * (endMs - startMs)) / TIME_TICK_COUNT,
+    ),
+    endMs,
+  ];
+};
 
 export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
@@ -796,6 +1034,80 @@ export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   );
 };
 
+/** Each tick's label, just right of its gridline. */
+export const ResourceTimeAxis = ({
+  width,
+  xScale,
+  tickFormat,
+}: TimeAxisProps) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  const [startDate, endDate] = xScale.domain();
+  const endMs = endDate.getTime();
+  // Clock labels take the scale's round times, which stay put as the window
+  // slides.
+  const tickValues = tickFormat
+    ? xScale.ticks(TIME_TICK_COUNT).map((date) => date.getTime())
+    : timeTickValues(xScale);
+  return (
+    <svg width={width} height={TIME_AXIS_HEIGHT_PX} display="block" aria-hidden>
+      {tickValues.map((value) => (
+        <text
+          key={value}
+          x={xScale(value) + AXIS_LABEL_INSET_PX}
+          y={TIME_AXIS_HEIGHT_PX / 2}
+          dominantBaseline="central"
+          fill={colors.foreground.secondary}
+          fontFamily={fonts.mono}
+          fontSize={AXIS_LABEL_FONT_PX}
+        >
+          {tickFormat
+            ? tickFormat(value)
+            : value === endMs
+              ? "now"
+              : relativeTimeTickFormat(value, startDate, endDate)}
+        </text>
+      ))}
+    </svg>
+  );
+};
+
+/**
+ * Dashed lines at the time ticks and the right edge, for behind a stack of
+ * charts and their time axes. Its parent must be positioned, and the stack
+ * positioned too so it paints over the lines.
+ */
+export const TimeGridLines = ({ width, xScale }: TimeAxisProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  // Inset half a pixel so the edge lines aren't clipped to half their width.
+  const xs = [
+    ...timeTickValues(xScale).map((value) => xScale(value)),
+    width,
+  ].map((x) => Math.min(width - 0.5, Math.max(0.5, x)));
+  return (
+    <Box
+      as="svg"
+      position="absolute"
+      inset={0}
+      width="100%"
+      height="100%"
+      pointerEvents="none"
+      aria-hidden
+    >
+      {xs.map((x) => (
+        <line
+          key={x}
+          x1={x}
+          x2={x}
+          y1="0"
+          y2="100%"
+          stroke={colors.border.secondary}
+          strokeDasharray="3 3"
+        />
+      ))}
+    </Box>
+  );
+};
+
 export interface StatusTimelineRow {
   id: string;
   name: string;
@@ -809,11 +1121,11 @@ export interface StatusTimelineRow {
 const HydratingBadge = ({
   count,
   right,
-  top,
+  center,
 }: {
   count: number;
   right: number;
-  top: number;
+  center: number;
 }) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const statusStyles = useStatusStyles();
@@ -823,16 +1135,16 @@ const HydratingBadge = ({
     <g>
       <rect
         x={right - width}
-        y={top}
+        y={center - BADGE_HEIGHT_PX / 2}
         width={width}
-        height={STATUS_ROW_HEIGHT_PX}
+        height={BADGE_HEIGHT_PX}
         rx={3}
         fill={colors.background.primary}
         stroke={statusStyles.hydrating.color}
       />
       <text
         x={right - BADGE_PADDING_PX}
-        y={top + STATUS_ROW_HEIGHT_PX / 2 + 4}
+        y={center + 4}
         textAnchor="end"
         fill={colors.foreground.primary}
         fontFamily={fonts.mono}
@@ -841,6 +1153,36 @@ const HydratingBadge = ({
         {label}
       </text>
     </g>
+  );
+};
+
+/** A replica's name, cut short with its full name on hover. */
+const StatusRowName = ({
+  name,
+  x,
+  y,
+}: {
+  name: string;
+  x: number;
+  y: number;
+}) => {
+  const { colors, fonts } = useTheme<MaterializeTheme>();
+  const isTruncated = name.length > STATUS_NAME_MAX_CHARS;
+  return (
+    <text
+      x={x}
+      y={y}
+      dominantBaseline="central"
+      fill={colors.foreground.primary}
+      fontFamily={fonts.mono}
+      fontSize={AXIS_LABEL_FONT_PX}
+      // The row ignores the pointer so hovering reaches the chart. A cut-off
+      // name takes it back to show its title.
+      pointerEvents={isTruncated ? "auto" : undefined}
+    >
+      {isTruncated && <title>{name}</title>}
+      {isTruncated ? `${name.slice(0, STATUS_NAME_MAX_CHARS - 1)}…` : name}
+    </text>
   );
 };
 
@@ -854,7 +1196,7 @@ const StatusRows = React.memo(
     xScale: TimeScale;
     rows: StatusTimelineRow[];
   }) => {
-    const { colors, fonts } = useTheme<MaterializeTheme>();
+    const { colors } = useTheme<MaterializeTheme>();
     const statusStyles = useStatusStyles();
     const [rangeStart, rangeEnd] = layout.xScaleRange;
     const rowPitch = STATUS_ROW_HEIGHT_PX + STATUS_ROW_GAP_PX;
@@ -863,31 +1205,13 @@ const StatusRows = React.memo(
         {rows.map((row, rowIndex) => {
           const top = rowIndex * rowPitch + STATUS_ROW_GAP_PX / 2;
           const center = top + STATUS_ROW_HEIGHT_PX / 2;
-          const isTruncated = row.name.length > STATUS_LABEL_MAX_CHARS;
           return (
             <g key={row.id} pointerEvents="none">
-              {/* Hoverable, so a truncated name's title shows it in full. */}
-              <g pointerEvents="auto">
-                {isTruncated && <title>{row.name}</title>}
-                <text
-                  x={rangeStart - STATUS_LABEL_GAP_PX}
-                  y={center + 4}
-                  textAnchor="end"
-                  fill={colors.foreground.secondary}
-                  fontFamily={fonts.mono}
-                  fontSize={STATUS_LABEL_FONT_PX}
-                >
-                  {isTruncated
-                    ? `${row.name.slice(0, STATUS_LABEL_MAX_CHARS - 1)}…`
-                    : row.name}
-                </text>
-              </g>
               <rect
                 x={rangeStart}
                 y={top}
                 width={Math.max(0, rangeEnd - rangeStart)}
                 height={STATUS_ROW_HEIGHT_PX}
-                rx={3}
                 fill={colors.background.secondary}
               />
               {placeStatusSegments(
@@ -902,7 +1226,6 @@ const StatusRows = React.memo(
                   y: top,
                   width: segmentWidth,
                   height: STATUS_ROW_HEIGHT_PX,
-                  rx: 3,
                 };
                 return (
                   <g key={segment.startMs}>
@@ -938,9 +1261,14 @@ const StatusRows = React.memo(
                   <HydratingBadge
                     count={row.unhydratedCount}
                     right={rangeEnd}
-                    top={top}
+                    center={center}
                   />
                 )}
+              <StatusRowName
+                name={row.name}
+                x={rangeEnd + AXIS_LABEL_INSET_PX}
+                y={center}
+              />
             </g>
           );
         })}
@@ -976,24 +1304,26 @@ export const ReplicaStatusTimeline = ({
   );
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader
-        title="Replica Status"
-        legend={[
-          ...Object.values(statusStyles).map(({ label, color }) => ({
-            label,
-            color,
-            variant: "square" as const,
-          })),
-          {
-            label: "out of memory",
-            color: colors.accent.red,
-            variant: "diamond",
-          },
-        ]}
-      />
+    <ChartFrame
+      isHeaderInset
+      title="Replica Status"
+      legend={[
+        ...Object.values(statusStyles).map(({ label, color, opacity }) => ({
+          label,
+          color,
+          opacity,
+          variant: "square" as const,
+        })),
+        {
+          label: "out of memory",
+          color: colors.accent.red,
+          variant: "diamond",
+        },
+      ]}
+    >
       <svg
         {...layout.svgProps}
+        display="block"
         role="img"
         aria-label="Replica status over time"
       >
@@ -1011,7 +1341,7 @@ export const ReplicaStatusTimeline = ({
           onPointerLeave={onPointerLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 
@@ -1102,24 +1432,28 @@ export const ChangesLane = ({
   const bottom = top + CHANGES_ROW_HEIGHT_PX;
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader
-        title="Objects Created"
-        legend={[
-          {
-            label: "index or materialized view created",
-            color: colors.foreground.secondary,
-            variant: "tick",
-          },
-        ]}
-      />
-      <svg {...layout.svgProps} role="group" aria-label="Objects created">
+    <ChartFrame
+      isHeaderInset
+      title="Objects Created"
+      legend={[
+        {
+          label: "index or materialized view created",
+          color: colors.foreground.secondary,
+          variant: "tick",
+        },
+      ]}
+    >
+      <svg
+        {...layout.svgProps}
+        display="block"
+        role="group"
+        aria-label="Objects created"
+      >
         <rect
           x={rangeStart}
           y={top}
           width={Math.max(0, rangeEnd - rangeStart)}
           height={CHANGES_ROW_HEIGHT_PX}
-          rx={3}
           fill={colors.background.secondary}
         />
         {ticks.map((tick) => {
@@ -1165,6 +1499,6 @@ export const ChangesLane = ({
           );
         })}
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };

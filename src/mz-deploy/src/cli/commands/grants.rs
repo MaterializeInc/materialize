@@ -285,6 +285,8 @@ fn parse_privilege(s: &str) -> Option<Privilege> {
         Privilege::CREATECLUSTER
     } else if s.eq_ignore_ascii_case("CREATENETWORKPOLICY") {
         Privilege::CREATENETWORKPOLICY
+    } else if s.eq_ignore_ascii_case("CREATEQUERYPOLICY") {
+        Privilege::CREATEQUERYPOLICY
     } else {
         return None;
     };

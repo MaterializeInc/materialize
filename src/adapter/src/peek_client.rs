@@ -7,30 +7,38 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
+use itertools::Itertools;
+use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_client::controller::instance_client::InstanceClient;
 use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
+use mz_compute_client::controller::peek_lifecycle::PeekLifecycle;
 use mz_compute_client::protocol::command::PeekTarget;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
+use mz_expr::{RowSetFinishing, RowSetFinishingIncremental};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
-use mz_persist_client::PersistClient;
+use mz_persist_client::{PersistClient, Schemas};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{RelationDesc, Row};
+use mz_repr::{IntoRowIterator, RelationDesc};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
-use mz_storage_types::sources::Timeline;
+use mz_storage_types::sources::{SourceData, Timeline};
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use qcell::QCell;
@@ -39,17 +47,18 @@ use timely::progress::Antichain;
 use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
-use crate::coord::peek::FastPathPlan;
+use crate::coord::peek::{FastPathPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
 use crate::metrics::Metrics;
+use crate::peek_registry::{ConnectionPeeks, RegisterError, RegisteredPeek};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
-    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
+    PreparedStatementLoggingInfo, StatementLog, StatementLoggingFrontend, StatementLoggingId,
+    WatchSetCreation,
 };
 use crate::{
     AdapterError, AdapterNotice, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging,
@@ -62,6 +71,8 @@ pub type StorageCollectionsHandle =
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug, Clone)]
 pub struct PeekClient {
+    /// The peek partition of the connection this client serves.
+    connection_peeks: Arc<ConnectionPeeks>,
     coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
     /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
@@ -146,6 +157,111 @@ impl CoordinatorClient {
 }
 
 impl PeekClient {
+    pub(crate) fn connection_peeks(&self) -> &Arc<ConnectionPeeks> {
+        &self.connection_peeks
+    }
+
+    /// Registers a peek with the connection's partition and creates its
+    /// lifecycle.
+    ///
+    /// The lifecycle takes over the statement's end of execution from `logging`
+    /// on every path, including the errors this returns.
+    pub(crate) async fn register_peek(
+        &mut self,
+        cluster_id: ComputeInstanceId,
+        depends_on: BTreeSet<GlobalId>,
+        mut catalog: Arc<Catalog>,
+        cancellation_epoch: u64,
+        logging: &mut ExecutionLogging,
+        is_fast_path: bool,
+    ) -> Result<PeekHandle, AdapterError> {
+        let connection = Arc::clone(&self.connection_peeks);
+        let uuid = Uuid::new_v4();
+        let retired = Arc::clone(&connection);
+        let logging = logging.hand_off();
+        let lifecycle = Arc::new(PeekLifecycle::new(move |notification| {
+            retired.remove(&uuid);
+            if let Some(logging) = logging {
+                let reason = match notification {
+                    PeekNotification::Success { rows, result_size } => {
+                        statement_logging::StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
+                            rows_returned: Some(rows),
+                            execution_strategy: Some(if is_fast_path {
+                                statement_logging::StatementExecutionStrategy::FastPath
+                            } else {
+                                statement_logging::StatementExecutionStrategy::Standard
+                            }),
+                        }
+                    }
+                    PeekNotification::Error(error) => {
+                        statement_logging::StatementEndedExecutionReason::Errored { error }
+                    }
+                    PeekNotification::Canceled => {
+                        statement_logging::StatementEndedExecutionReason::Canceled
+                    }
+                };
+                logging.retire(reason);
+            }
+        }));
+        let peek = PeekHandle { uuid, lifecycle };
+        loop {
+            match connection.register(
+                uuid,
+                RegisteredPeek {
+                    cluster_id,
+                    depends_on: depends_on.clone(),
+                    lifecycle: Arc::downgrade(&peek.lifecycle),
+                },
+                cancellation_epoch,
+                || catalog.transient_revision_is_current(),
+            ) {
+                Ok(()) => return Ok(peek),
+                Err(RegisterError::Canceled) => {
+                    peek.lifecycle.cancel(PeekResponse::Canceled);
+                    return Err(AdapterError::Canceled);
+                }
+                Err(RegisterError::CatalogChanged) => {
+                    // Not `catalog_snapshot`, for the reason `background_peek`
+                    // gives: a background client may race the coordinator's
+                    // shutdown.
+                    let refreshed = self
+                        .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+                        .await;
+                    catalog = match refreshed {
+                        Ok(CatalogSnapshot { catalog }) => catalog,
+                        Err(error) => {
+                            peek.lifecycle
+                                .complete(PeekNotification::Error(error.to_string()));
+                            return Err(error);
+                        }
+                    };
+                    self.catalog_cache = Arc::downgrade(&catalog);
+                    let error = if catalog.try_get_cluster(cluster_id).is_none() {
+                        Some(AdapterError::ConcurrentDependencyDrop {
+                            dependency_kind: "cluster",
+                            dependency_id: cluster_id.to_string(),
+                        })
+                    } else {
+                        depends_on.iter().find_map(|id| {
+                            catalog.try_get_entry_by_global_id(id).is_none().then(|| {
+                                AdapterError::ConcurrentDependencyDrop {
+                                    dependency_kind: "collection",
+                                    dependency_id: id.to_string(),
+                                }
+                            })
+                        })
+                    };
+                    if let Some(error) = error {
+                        peek.lifecycle
+                            .complete(PeekNotification::Error(error.to_string()));
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+
     /// Creates a PeekClient.
     ///
     /// `catalog` seeds the catalog snapshot cache, so that the session's
@@ -153,6 +269,7 @@ impl PeekClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         coordinator_client: CoordinatorClient,
+        connection_peeks: Arc<ConnectionPeeks>,
         catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
@@ -164,6 +281,7 @@ impl PeekClient {
         read_only: bool,
     ) -> Self {
         Self {
+            connection_peeks,
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
             compute_instances: Default::default(), // lazily populated
@@ -381,7 +499,7 @@ impl PeekClient {
     }
 
     /// Implement a fast-path peek plan.
-    /// This is similar to `Coordinator::implement_peek_plan`, but only for fast path peeks.
+    /// The slow-path counterpart is `Coordinator::implement_slow_path_peek`.
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
@@ -389,11 +507,8 @@ impl PeekClient {
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
     ///
-    /// For a constant peek the logging slot stays armed and the caller logs the
-    /// end from the returned result. For a `PeekExisting`/`PeekPersist` peek,
-    /// successful registration with the coordinator hands ownership of the end
-    /// to the coordinator and the slot is defused here. That holds even when the
-    /// subsequent `client.peek()` fails to issue.
+    /// Constant peeks leave retirement with the caller. Streaming peeks transfer
+    /// it to a frontend lifecycle shared with compute and cancellation.
     pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -412,6 +527,8 @@ impl PeekClient {
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
         logging: &mut ExecutionLogging,
+        catalog: Arc<Catalog>,
+        cancellation_epoch: u64,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -462,7 +579,7 @@ impl PeekClient {
                 &row_set_finishing_seconds,
             ) {
                 Ok((rows, _bytes)) => Ok(Coordinator::send_immediate_rows(rows)),
-                // TODO(peek-seq): make this a structured error. (also in the old sequencing)
+                // TODO(peek-seq): make this a structured error.
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }
@@ -516,7 +633,6 @@ impl PeekClient {
         };
 
         let (rows_tx, rows_rx) = oneshot::channel();
-        let uuid = Uuid::new_v4();
 
         // At this stage we don't know column names for the result because we
         // only know the peek's result type as a bare SqlRelationType.
@@ -533,27 +649,24 @@ impl PeekClient {
                 )
             })?;
 
-        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
-        //
-        // Warning: If we fail to actually issue the peek after this point, then we need to
-        // unregister it to avoid an orphaned registration.
-        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
-            uuid,
-            conn_id: conn_id.clone(),
-            cluster_id: compute_instance,
-            depends_on,
-            is_fast_path: true,
-            watch_set,
-            tx,
-        })
-        .await??;
-
-        // The peek is registered: the coordinator's `pending_peeks` entry now
-        // owns end-of-execution logging. It logs the end on peek completion,
-        // cancellation, concurrent teardown (e.g. a DROP CLUSTER), or the
-        // unregistration below. We defuse the guard so the frontend doesn't
-        // also log the end.
-        logging.defuse();
+        if let Some(watch_set) = watch_set {
+            self.call_coordinator(|tx| Command::InstallPeekWatchSets {
+                conn_id: conn_id.clone(),
+                watch_set,
+                tx,
+            })
+            .await??;
+        }
+        let peek = self
+            .register_peek(
+                compute_instance,
+                depends_on,
+                catalog,
+                cancellation_epoch,
+                logging,
+                true,
+            )
+            .await?;
 
         // Test-only synchronization point: parks a peek between registration
         // and issue, so a test can land a concurrent DROP CLUSTER in this
@@ -566,7 +679,7 @@ impl PeekClient {
             .peek(
                 peek_target,
                 literal_constraints,
-                uuid,
+                peek.uuid,
                 timestamp,
                 result_desc,
                 finishing_for_instance,
@@ -574,6 +687,7 @@ impl PeekClient {
                 target_read_hold,
                 target_replica,
                 rows_tx,
+                Some(Arc::clone(&peek.lifecycle)),
             )
             .await;
 
@@ -582,24 +696,12 @@ impl PeekClient {
                 err,
                 compute_instance,
             );
-            // The peek failed to issue, so no peek response will ever arrive.
-            // The coordinator owns end-of-execution logging (see above), so we
-            // ask it to unregister the peek and retire it with this error. If
-            // a concurrent teardown already retired the peek, the end is
-            // already logged and the unregistration is a no-op.
-            let _ = self
-                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
-                    uuid,
-                    reason: statement_logging::StatementEndedExecutionReason::Errored {
-                        error: err.to_string(),
-                    },
-                    tx,
-                })
-                .await;
+            peek.lifecycle
+                .complete(PeekNotification::Error(err.to_string()));
             return Err(err);
         }
 
-        let peek_response_stream = Coordinator::create_peek_response_stream(
+        let peek_response_stream = create_peek_response_stream(
             rows_rx,
             finishing,
             max_result_size,
@@ -611,7 +713,7 @@ impl PeekClient {
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
-            rows: Box::pin(peek_response_stream),
+            rows: Box::pin(peek.guard_stream(peek_response_stream)),
             instance_id: compute_instance,
             strategy,
         })
@@ -629,7 +731,7 @@ impl PeekClient {
         catalog: &Catalog,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> StatementLoggingGuard {
-        let result = self.statement_logging_frontend.begin_statement_execution(
+        let id = self.statement_logging_frontend.begin_statement_execution(
             session,
             params,
             logging,
@@ -637,35 +739,11 @@ impl PeekClient {
             lifecycle_timestamps,
         );
 
-        let id = result.map(
-            |(logging_id, began_execution, mseh_update, prepared_statement)| {
-                self.log_began_execution(began_execution, mseh_update, prepared_statement);
-                logging_id
-            },
-        );
-
         StatementLoggingGuard {
             id,
-            coordinator_client: self.coordinator_client.clone(),
+            log: Arc::clone(&self.statement_logging_frontend.log),
             now: self.statement_logging_frontend.now.clone(),
         }
-    }
-
-    /// Log the beginning of statement execution.
-    pub(crate) fn log_began_execution(
-        &self,
-        record: statement_logging::StatementBeganExecutionRecord,
-        mseh_update: Row,
-        prepared_statement: Option<PreparedStatementEvent>,
-    ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::BeganExecution {
-                    record,
-                    mseh_update,
-                    prepared_statement,
-                },
-            ));
     }
 
     /// Log cluster selection for a statement.
@@ -675,22 +753,16 @@ impl PeekClient {
         cluster_id: mz_controller_types::ClusterId,
         cluster_name: String,
     ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetCluster {
-                    id,
-                    cluster_id,
-                    cluster_name,
-                },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_cluster(id, cluster_id, cluster_name);
     }
 
     /// Log timestamp determination for a statement.
     pub(crate) fn log_set_timestamp(&self, id: StatementLoggingId, timestamp: mz_repr::Timestamp) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetTimestamp { id, timestamp },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_timestamp(id, timestamp);
     }
 
     /// Log transient index ID for a statement.
@@ -699,13 +771,43 @@ impl PeekClient {
         id: StatementLoggingId,
         transient_index_id: mz_repr::GlobalId,
     ) {
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetTransientIndex {
-                    id,
-                    transient_index_id,
-                },
-            ));
+        self.statement_logging_frontend
+            .log
+            .set_execution_transient_index(id, transient_index_id);
+    }
+
+    /// Returns the watch set that reports when the dependencies of a logged
+    /// statement have caught up to its timestamp. Returns `None` if they
+    /// already have, after recording that.
+    pub(crate) fn dependency_watch_set(
+        &self,
+        id: StatementLoggingId,
+        catalog_state: &CatalogState,
+        input_id_bundle: &CollectionIdBundle,
+        determination: &TimestampDetermination,
+    ) -> Option<WatchSetCreation> {
+        // The determination's upper is not beyond any input's write frontier.
+        // Once every input is complete at the timestamp, the statement no
+        // longer waits for anything, whatever the frontiers of the
+        // collections that those inputs are derived from.
+        //
+        // NOTE: `respond_immediately` is true for every read without a
+        // timestamp. Such a read still waits for its inputs' frontiers to
+        // become empty, which is what comparing against the maximum timestamp
+        // checks.
+        let timestamp = determination.timestamp_context.timestamp_or_default();
+        if !determination.upper.less_equal(&timestamp) {
+            use statement_logging::StatementLifecycleEvent::*;
+            self.log_lifecycle_event(id, StorageDependenciesFinished);
+            self.log_lifecycle_event(id, ComputeDependenciesFinished);
+            return None;
+        }
+        Some(WatchSetCreation::new(
+            id,
+            catalog_state,
+            input_id_bundle,
+            timestamp,
+        ))
     }
 
     /// Log a statement lifecycle event.
@@ -715,10 +817,64 @@ impl PeekClient {
         event: statement_logging::StatementLifecycleEvent,
     ) {
         let when = (self.statement_logging_frontend.now)();
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::Lifecycle { id, event, when },
-            ));
+        self.statement_logging_frontend
+            .log
+            .record_lifecycle_event(id, &event, when);
+    }
+}
+
+/// Owns cleanup while sequencing and while the returned response is in flight.
+#[derive(Debug)]
+pub struct PeekHandle {
+    pub(crate) uuid: Uuid,
+    pub(crate) lifecycle: Arc<PeekLifecycle>,
+}
+
+/// Dropping read-only sequencing is safe. An unrelated coordinator-owned
+/// side effect must instead produce its definitive result once dispatched.
+pub(crate) struct PeekCancelSafety(AtomicBool);
+
+impl PeekCancelSafety {
+    pub(crate) fn new() -> Self {
+        Self(AtomicBool::new(true))
+    }
+
+    pub(crate) fn delegate_side_effect(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn can_abort(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl PeekHandle {
+    pub(crate) fn guard_stream<S>(
+        self,
+        stream: S,
+    ) -> impl futures::Stream<Item = crate::PeekResponseUnary> + Send + Sync
+    where
+        S: futures::Stream<Item = crate::PeekResponseUnary> + Send + Sync,
+    {
+        async_stream::stream! {
+            let peek = self;
+            futures::pin_mut!(stream);
+            while let Some(response) = futures::StreamExt::next(&mut stream).await {
+                // Instance shutdown can close the response channel without a
+                // controller notification. Finishing errors after a normal
+                // completion cannot change the already-retired outcome.
+                if let crate::PeekResponseUnary::Error(error) = &response {
+                    peek.lifecycle.complete(PeekNotification::Error(error.to_string()));
+                }
+                yield response;
+            }
+        }
+    }
+}
+
+impl Drop for PeekHandle {
+    fn drop(&mut self) {
+        self.lifecycle.cancel(PeekResponse::Canceled);
     }
 }
 
@@ -726,14 +882,12 @@ impl PeekClient {
 ///
 /// Unless logging responsibility is handed off via
 /// [`defuse`](StatementLoggingGuard::defuse), the guard ensures that every
-/// statement for which `BeganExecution` was logged also receives a
-/// corresponding `EndedExecution`, even on early-return, panic, or mid-flight
+/// statement whose beginning was logged also has its end logged, even on early-return, panic, or mid-flight
 /// drop of the enclosing future: if the guard is dropped without being defused,
 /// it emits `StatementEndedExecutionReason::Aborted`.
 ///
-/// When the guard is `defuse`d, some other component (e.g. the coordinator, for
-/// streaming peek / subscribe responses) takes over and logs `EndedExecution`
-/// itself.
+/// When the guard is `defuse`d, some other component (e.g. the protocol layer,
+/// for subscribe responses) takes over and logs the end itself.
 ///
 /// For non-sampled statements the guard still exists but carries no id, and
 /// retirement / drop are no-ops.
@@ -742,7 +896,7 @@ impl PeekClient {
 struct StatementLoggingGuard {
     /// `None` if the statement was not sampled for logging.
     id: Option<StatementLoggingId>,
-    coordinator_client: CoordinatorClient,
+    log: Arc<StatementLog>,
     now: mz_ore::now::NowFn,
 }
 
@@ -752,7 +906,7 @@ impl StatementLoggingGuard {
     fn adopt(outer: ExecuteContextGuard, peek_client: &PeekClient) -> Self {
         Self {
             id: outer.defuse().retire(),
-            coordinator_client: peek_client.coordinator_client.clone(),
+            log: Arc::clone(&peek_client.statement_logging_frontend.log),
             now: peek_client.statement_logging_frontend.now.clone(),
         }
     }
@@ -786,19 +940,7 @@ impl StatementLoggingGuard {
             return;
         };
         let ended_at = (self.now)();
-        let record = statement_logging::StatementEndedExecutionRecord {
-            id: id.0,
-            reason,
-            ended_at,
-        };
-        // A guard can outlive the coordinator during shutdown. Failing to send
-        // costs us one end event, panicking in `Drop` would cost the whole
-        // connection.
-        let _ = self
-            .coordinator_client
-            .try_send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::EndedExecution(record),
-            ));
+        self.log.end_execution(id, reason, ended_at);
     }
 }
 
@@ -812,16 +954,19 @@ impl Drop for StatementLoggingGuard {
 
 /// The session task's slot for the end-of-execution obligation of the statement
 /// it is running. One slot is held for the whole `SessionClient::execute` call
-/// and there is exactly one retirement site.
+/// and the session task retires it at exactly one site.
 ///
 /// An empty slot means no log entry exists for this execution, so a fallback to
 /// the coordinator lets it begin its own. An occupied slot means the session
 /// task owes an end event: [`Self::retire`] pays it, [`Self::release`] transfers
-/// it to the coordinator. [`Self::id`] returning `None` covers both "not
-/// sampled" and "the end is logged elsewhere", which want identical treatment
-/// everywhere.
+/// it to the coordinator, [`Self::hand_off`] transfers it to a peek lifecycle.
+/// [`Self::id`] returning `None` covers both "not sampled" and "the end is
+/// logged elsewhere", which want identical treatment everywhere.
 pub(crate) struct ExecutionLogging {
     guard: Option<StatementLoggingGuard>,
+    /// Whether [`Self::hand_off`] moved the guard out. A log entry exists then,
+    /// although `guard` is empty.
+    handed_off: bool,
     /// Whether the coordinator must not run this statement, because the session
     /// task has already counted it in the metrics `Coordinator::handle_execute`
     /// maintains. Handing it over afterwards would count it twice.
@@ -850,6 +995,7 @@ impl ExecutionLogging {
     pub(crate) fn adopt(outer: Option<ExecuteContextGuard>, peek_client: &PeekClient) -> Self {
         Self {
             guard: outer.map(|outer| StatementLoggingGuard::adopt(outer, peek_client)),
+            handed_off: false,
             coordinator_must_not_run: false,
         }
     }
@@ -928,6 +1074,9 @@ impl ExecutionLogging {
                  its per-statement metrics are counted twice"
             );
         }
+        if self.handed_off {
+            return Some(ExecuteContextExtra::new(None));
+        }
         self.guard.take().map(|guard| guard.release())
     }
 
@@ -946,11 +1095,20 @@ impl ExecutionLogging {
     }
 
     /// Leaves the slot inert, for dispatch sites that hand the end of execution
-    /// to the coordinator or the protocol layer (registered peeks, subscribes).
+    /// to the protocol layer (subscribes).
     pub(crate) fn defuse(&mut self) {
         if let Some(guard) = self.guard.as_mut() {
             guard.defuse();
         }
+    }
+
+    /// Moves the end-of-execution obligation into the returned guard, for a
+    /// peek whose lifecycle logs the end. Afterwards the slot behaves as after
+    /// [`Self::defuse`]. Returns `None` if no log entry exists.
+    fn hand_off(&mut self) -> Option<StatementLoggingGuard> {
+        let guard = self.guard.take();
+        self.handed_off = guard.is_some();
+        guard
     }
 }
 
@@ -975,11 +1133,12 @@ fn end_reason(
     result.into()
 }
 
-/// Bumps the per-statement counters `Coordinator::handle_execute` maintains.
+/// Bumps `query_total`, as `Coordinator::handle_execute` does for the statements
+/// it sequences, `subscribe_outputs` for a subscribe, and `as_of_queries` for an
+/// `AS OF` query.
 ///
 /// `stmt` is `None` for an empty portal, which is logged but not counted. The
-/// coordinator skips it the same way, and matching that is the point of this
-/// function.
+/// coordinator skips it the same way.
 fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
     let Some(stmt) = stmt else {
         return;
@@ -1007,7 +1166,7 @@ fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
 }
 
 /// Whether someone else logs the end of execution for `response`: the
-/// coordinator for a registered peek, the protocol layer for a subscribe, a
+/// peek lifecycle, the protocol layer for a subscribe, a
 /// FETCH or a COPY FROM. The dispatch sites that produce these defuse the slot,
 /// so an armed slot alongside one of them means a dispatch site did not.
 fn terminates_elsewhere(response: &ExecuteResponse) -> bool {
@@ -1063,5 +1222,328 @@ impl From<AcquireReadHoldsError> for CollectionLookupError {
             AcquireReadHoldsError::CollectionMissing(id) => Self::CollectionMissing(id),
             AcquireReadHoldsError::InstanceShutDown => Self::InstanceShutDown,
         }
+    }
+}
+
+/// Creates an async stream that processes peek responses and yields rows.
+#[mz_ore::instrument(level = "debug")]
+pub(crate) fn create_peek_response_stream(
+    rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
+    finishing: RowSetFinishing,
+    max_result_size: u64,
+    max_returned_query_size: Option<u64>,
+    duration_histogram: prometheus::Histogram,
+    mut persist_client: mz_persist_client::PersistClient,
+    peek_stash_read_batch_size_bytes: usize,
+    peek_stash_read_memory_budget_bytes: usize,
+) -> impl futures::Stream<Item = PeekResponseUnary> {
+    async_stream::stream!({
+        let result = rows_rx.await;
+
+        let rows = match result {
+            Ok(rows) => rows,
+            Err(e) => {
+                yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
+                return;
+            }
+        };
+
+        match rows {
+            PeekResponse::Rows(rows) => {
+                let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
+                match finishing.finish(
+                    rows,
+                    max_result_size,
+                    max_returned_query_size,
+                    &duration_histogram,
+                ) {
+                    Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                    Err(e) => {
+                        yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                            anyhow::Error::msg(e),
+                        ))
+                    }
+                }
+            }
+            PeekResponse::Stashed(response) => {
+                let response = *response;
+
+                let shard_id = response.shard_id;
+
+                let mut batches = Vec::new();
+                for proto_batch in response.batches.into_iter() {
+                    let batch =
+                        persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                    batches.push(batch);
+                }
+                tracing::trace!(?batches, "stashed peek response");
+
+                let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                let read_schemas: Schemas<SourceData, ()> = Schemas {
+                    id: None,
+                    key: Arc::new(response.relation_desc.clone()),
+                    val: Arc::new(UnitSchema),
+                };
+
+                let mut row_cursor = persist_client
+                    .read_batches_consolidated::<_, _, _, i64>(
+                        response.shard_id,
+                        as_of,
+                        read_schemas,
+                        batches,
+                        |_stats| true,
+                        peek_stash_read_memory_budget_bytes,
+                    )
+                    .await
+                    .expect("invalid usage");
+
+                // NOTE: Using the cursor creates Futures that are not Sync,
+                // while `ExecuteResponse::SendingRowsStreaming` needs a Sync
+                // stream, so a spawned task drives them. The task has the
+                // additional benefit that we get to delete batches once we're
+                // done.
+                //
+                // Batch deletion is best-effort, though, and there are
+                // multiple known ways in which they can leak, among them:
+                //
+                // - ProtoBatch is lost in flight
+                // - ProtoBatch is lost because when combining PeekResponse
+                // from workers a cancellation or error "overrides" other
+                // results, meaning we drop them
+                // - This task here is not run to completion before it can
+                // delete all batches
+                //
+                // This is semi-ok, because persist needs a reaper of leaked
+                // batches already, and so we piggy-back on that, even if it
+                // might not exist as of today.
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                mz_ore::task::spawn(|| "read_peek_batches", async move {
+                    // We always send our inline rows first. Ordering
+                    // doesn't matter because we can only be in this case
+                    // when there is no ORDER BY.
+                    //
+                    // We _could_ write these out as a Batch, and include it
+                    // in the batches we read via the Consolidator. If we
+                    // wanted to get a consistent ordering. That's not
+                    // needed for correctness! But might be nice for more
+                    // aesthetic reasons.
+                    for rows in response.inline_rows {
+                        let result = tx.send(rows).await;
+                        if result.is_err() {
+                            tracing::debug!("receiver went away");
+                        }
+                    }
+
+                    let mut current_batch = Vec::new();
+                    let mut current_batch_size: usize = 0;
+
+                    'outer: while let Some(rows) = row_cursor.next().await {
+                        for ((source_data, _val), _ts, diff) in rows {
+                            let row = source_data
+                                .0
+                                .expect("we are not sending errors on this code path");
+
+                            let diff = usize::try_from(diff)
+                                .expect("peek responses cannot have negative diffs");
+
+                            if diff > 0 {
+                                let diff = NonZeroUsize::new(diff).expect("checked to be non-zero");
+                                current_batch_size =
+                                    current_batch_size.saturating_add(row.byte_len());
+                                current_batch.push((row, diff));
+                            }
+
+                            if current_batch_size > peek_stash_read_batch_size_bytes {
+                                // We're re-encoding the rows as a RowCollection
+                                // here, for which we pay in CPU time. We're in a
+                                // slow path already, since we're returning a big
+                                // stashed result so this is worth the convenience
+                                // of that for now.
+                                let result = tx
+                                    .send(RowCollection::new(
+                                        current_batch.drain(..).collect_vec(),
+                                        &[],
+                                    ))
+                                    .await;
+                                if result.is_err() {
+                                    tracing::debug!("receiver went away");
+                                    // Don't return but break so we fall out to the
+                                    // batch delete logic below.
+                                    break 'outer;
+                                }
+
+                                current_batch_size = 0;
+                            }
+                        }
+                    }
+
+                    if current_batch.len() > 0 {
+                        let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                        if result.is_err() {
+                            tracing::debug!("receiver went away");
+                        }
+                    }
+
+                    let batches = row_cursor.into_lease();
+                    tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                    for batch in batches {
+                        batch.delete().await;
+                    }
+                });
+
+                assert!(
+                    finishing.is_streamable(response.relation_desc.arity()),
+                    "can only get stashed responses when the finishing is streamable"
+                );
+
+                tracing::trace!("query result is streamable!");
+
+                assert!(finishing.is_streamable(response.relation_desc.arity()));
+                let mut incremental_finishing = RowSetFinishingIncremental::new(
+                    finishing.offset,
+                    finishing.limit,
+                    finishing.project,
+                    max_returned_query_size,
+                );
+
+                let mut got_zero_rows = true;
+                while let Some(rows) = rx.recv().await {
+                    got_zero_rows = false;
+
+                    let result_rows = incremental_finishing.finish_incremental(
+                        rows,
+                        max_result_size,
+                        &duration_histogram,
+                    );
+
+                    match result_rows {
+                        Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
+                        Err(e) => {
+                            yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                anyhow::Error::msg(e),
+                            ))
+                        }
+                    }
+                }
+
+                // Even when there's zero rows, clients still expect an
+                // empty PeekResponse.
+                if got_zero_rows {
+                    let row_iter = vec![].into_row_iter();
+                    yield PeekResponseUnary::Rows(Box::new(row_iter));
+                }
+            }
+            PeekResponse::Canceled => {
+                yield PeekResponseUnary::Canceled;
+            }
+            PeekResponse::Error(e) => {
+                yield PeekResponseUnary::Error(e.into());
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use futures::{FutureExt, StreamExt};
+    use mz_compute_client::controller::PeekNotification;
+    use mz_compute_client::controller::peek_lifecycle::PeekLifecycle;
+    use uuid::Uuid;
+
+    use super::{PeekCancelSafety, PeekHandle};
+
+    fn owned_peek() -> (PeekHandle, Arc<Mutex<Vec<PeekNotification>>>) {
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let retired = Arc::clone(&outcomes);
+        let lifecycle = Arc::new(PeekLifecycle::new(move |outcome| {
+            retired.lock().expect("test lock poisoned").push(outcome)
+        }));
+        (
+            PeekHandle {
+                uuid: Uuid::new_v4(),
+                lifecycle,
+            },
+            outcomes,
+        )
+    }
+
+    #[mz_ore::test]
+    fn unpolled_response_drop_retires_peek() {
+        let (peek, outcomes) = owned_peek();
+        let stream = peek.guard_stream(futures::stream::pending());
+        drop(stream);
+        assert_eq!(
+            *outcomes.lock().expect("test lock poisoned"),
+            vec![PeekNotification::Canceled]
+        );
+    }
+
+    #[mz_ore::test]
+    fn pending_response_drop_retires_peek_once() {
+        let (peek, outcomes) = owned_peek();
+        let lifecycle = Arc::clone(&peek.lifecycle);
+        let mut stream = Box::pin(peek.guard_stream(futures::stream::pending()));
+        assert!(stream.next().now_or_never().is_none());
+        drop(stream);
+        lifecycle.complete(PeekNotification::Success {
+            rows: 1,
+            result_size: 8,
+        });
+        assert_eq!(
+            *outcomes.lock().expect("test lock poisoned"),
+            vec![PeekNotification::Canceled]
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn closed_instance_response_retires_error_before_stream_drop() {
+        let (peek, outcomes) = owned_peek();
+        let error = crate::AdapterError::Internal("instance stopped".into());
+        let message = error.to_string();
+        let mut stream =
+            Box::pin(
+                peek.guard_stream(futures::stream::iter([crate::PeekResponseUnary::Error(
+                    error,
+                )])),
+            );
+        assert!(matches!(
+            stream.next().await,
+            Some(crate::PeekResponseUnary::Error(_))
+        ));
+        drop(stream);
+        assert_eq!(
+            *outcomes.lock().expect("test lock poisoned"),
+            vec![PeekNotification::Error(message)]
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn finishing_error_does_not_overwrite_controller_retirement() {
+        let (peek, outcomes) = owned_peek();
+        let success = PeekNotification::Success {
+            rows: 1,
+            result_size: 8,
+        };
+        peek.lifecycle.complete(success.clone());
+        let mut stream =
+            Box::pin(
+                peek.guard_stream(futures::stream::iter([crate::PeekResponseUnary::Error(
+                    crate::AdapterError::ResultSize("too large".into()),
+                )])),
+            );
+        assert!(stream.next().await.is_some());
+        drop(stream);
+        assert_eq!(*outcomes.lock().expect("test lock poisoned"), vec![success]);
+    }
+
+    #[mz_ore::test]
+    fn dispatched_non_peek_side_effect_must_not_be_aborted() {
+        let safety = PeekCancelSafety::new();
+        assert!(safety.can_abort());
+        safety.delegate_side_effect();
+        assert!(!safety.can_abort());
     }
 }

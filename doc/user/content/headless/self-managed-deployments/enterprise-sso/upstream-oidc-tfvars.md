@@ -13,8 +13,12 @@ upstream_identity_providers = [
     issuer_url    = "https://your-org.okta.com"
     scope         = ["openid", "email", "profile"]
     label         = "Sign in with Okta"
+
+    allowed_email_domains = ["example.com"]
   },
 ]
 ```
+
+`allowed_email_domains` is required: only emails in these domains can sign in through the provider. See [Sign-in checks](/self-managed-deployments/sso/advanced/identity-providers/#sign-in-checks) for the other options.
 
 Register the redirect URI `https://<ory_kratos_fqdn>/self-service/methods/oidc/callback/<id>` at the upstream IdP. See [Configure identity providers](/self-managed-deployments/sso/advanced/identity-providers/) for SAML and SCIM setup once the stack is up.

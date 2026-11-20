@@ -441,11 +441,8 @@ mod tests {
     use mz_persist_types::stats::{NoneStats, StructStats};
     use timely::progress::Antichain;
 
-    use async_trait::async_trait;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_persist::location::{
-        CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
-    };
+    use mz_persist::location::{Blob, Consensus};
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -455,7 +452,7 @@ mod tests {
     use crate::internal::metrics::Metrics;
     use crate::read::ReadHandle;
     use crate::rpc::NoopPubSubSender;
-    use crate::tests::new_test_client;
+    use crate::tests::{LoseOneCasResponse, new_test_client};
     use crate::{Diagnostics, PersistClient, PersistConfig};
 
     use super::*;
@@ -696,58 +693,6 @@ mod tests {
         assert_eq!(write1.write_schemas.id.unwrap(), SchemaId(1));
     }
 
-    /// A [Consensus] that, once armed, runs one `compare_and_set` and then
-    /// reports it as timed out. Models the metadata store committing a write
-    /// but losing the response, which persist surfaces as an indeterminate
-    /// error.
-    ///
-    /// UnreliableConsensus can also run-then-timeout, but only probabilistically
-    /// and per-op-kind. This test needs one deterministic timeout on one
-    /// `compare_and_set`.
-    #[derive(Debug)]
-    struct LoseOneCasResponse {
-        inner: Arc<dyn Consensus>,
-        armed: Arc<AtomicBool>,
-    }
-
-    #[async_trait]
-    impl Consensus for LoseOneCasResponse {
-        fn list_keys(&self) -> ResultStream<'_, String> {
-            self.inner.list_keys()
-        }
-
-        async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-            self.inner.head(key).await
-        }
-
-        async fn compare_and_set(
-            &self,
-            key: &str,
-            new: VersionedData,
-        ) -> Result<CaSResult, ExternalError> {
-            // Delegate first so the write commits, then drop the response. A
-            // committed-but-lost CaS is the case under test.
-            let res = self.inner.compare_and_set(key, new).await;
-            if self.armed.swap(false, Ordering::SeqCst) {
-                return Err(ExternalError::new_timeout(Instant::now()));
-            }
-            res
-        }
-
-        async fn scan(
-            &self,
-            key: &str,
-            from: SeqNo,
-            limit: usize,
-        ) -> Result<Vec<VersionedData>, ExternalError> {
-            self.inner.scan(key, from, limit).await
-        }
-
-        async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-            self.inner.truncate(key, seqno).await
-        }
-    }
-
     /// Regression test for SQL-616. `compare_and_evolve_schema` runs through
     /// `apply_unbatched_idempotent_cmd`, which retries indeterminate errors. A
     /// retry re-runs the command against state that already carries our own
@@ -816,6 +761,128 @@ mod tests {
         );
         // Old check order returns ExpectedMismatch here; the fix returns Ok.
         assert_eq!(res, CaESchema::Ok(SchemaId(1)));
+    }
+
+    /// A client with its own metrics and state cache and without PubSub, like
+    /// a separate process.
+    fn new_process(blob: &Arc<dyn Blob>, consensus: &Arc<dyn Consensus>) -> PersistClient {
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        PersistClient::new(
+            cfg,
+            Arc::clone(blob),
+            Arc::clone(consensus),
+            metrics,
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            Arc::new(StateCache::new_no_metrics()),
+            Arc::new(NoopPubSubSender),
+        )
+        .expect("client construction failed")
+    }
+
+    /// Regression test for PER-130.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn append_with_schema_evolved_by_other_process() {
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        let evolver = new_process(&blob, &consensus);
+        let appender = new_process(&blob, &consensus);
+        let d = Diagnostics::for_tests();
+        let shard_id = ShardId::new();
+        let schema1 = StringsSchema(vec![false, true]);
+
+        // Keeps the appender's cached state alive, at schema 0.
+        let mut write0 = appender
+            .open_writer::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(StringsSchema(vec![false])),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        write0.try_register_schema().await;
+
+        let res = evolver
+            .compare_and_evolve_schema::<Strings, (), u64, i64>(
+                shard_id,
+                SchemaId(0),
+                &schema1,
+                &UnitSchema,
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res, CaESchema::Ok(SchemaId(1)));
+
+        let mut write1 = appender
+            .open_writer::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(schema1),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(write1.schema_id(), None, "appender state should be stale");
+        write1
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(0),
+                Antichain::from_elem(1),
+                true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(write1.schema_id(), Some(SchemaId(1)));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn register_schema_on_tombstone_skips_refetch() {
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        // The registerer's metrics count only its own state fetches.
+        let finalizer = new_process(&blob, &consensus);
+        let registerer = new_process(&blob, &consensus);
+        let d = Diagnostics::for_tests();
+        let shard_id = ShardId::new();
+
+        let (mut write, mut read) = finalizer
+            .open::<Strings, (), u64, i64>(
+                shard_id,
+                Arc::new(StringsSchema(vec![false])),
+                Arc::new(UnitSchema),
+                d.clone(),
+                true,
+            )
+            .await
+            .unwrap();
+        read.downgrade_since(&Antichain::new()).await;
+        write.advance_upper(&Antichain::new()).await;
+        write.expire().await;
+        read.expire().await;
+
+        let machine = registerer
+            .make_machine::<Strings, (), u64, i64>(shard_id, d)
+            .await
+            .unwrap();
+        assert!(machine.applier.is_tombstone());
+        let state = &registerer.metrics.state;
+        let fetches = || {
+            state.update_state_noop_path.get()
+                + state.update_state_empty_path.get()
+                + state.update_state_fast_path.get()
+                + state.update_state_slow_path.get()
+        };
+        let before = fetches();
+        let (schema_id, _) = machine
+            .register_schema(&StringsSchema(vec![false, true]), &UnitSchema)
+            .await;
+        assert_eq!(schema_id, None);
+        assert_eq!(fetches(), before, "tombstone should skip the refetch");
     }
 
     fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {

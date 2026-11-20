@@ -57,6 +57,7 @@ pub enum CollectionType {
     ComputeInstance,
     ComputeIntrospectionSourceIndex,
     ComputeReplicas,
+    ClusterReplicaSize,
     Comments,
     Config,
     Database,
@@ -66,6 +67,7 @@ pub enum CollectionType {
     Item,
     ItemColumns,
     NetworkPolicy,
+    QueryPolicy,
     Role,
     RoleAuth,
     Schema,
@@ -157,6 +159,14 @@ collection_impl!({
     update: StateUpdateKind::ClusterReplica,
 });
 collection_impl!({
+    name: ClusterReplicaSizeCollection,
+    key: proto::ClusterReplicaSizeKey,
+    value: proto::ClusterReplicaSizeValue,
+    collection_type: CollectionType::ClusterReplicaSize,
+    trace_field: cluster_replica_sizes,
+    update: StateUpdateKind::ClusterReplicaSize,
+});
+collection_impl!({
     name: CommentCollection,
     key: proto::CommentKey,
     value: proto::CommentValue,
@@ -227,6 +237,14 @@ collection_impl!({
     collection_type: CollectionType::NetworkPolicy,
     trace_field: network_policies,
     update: StateUpdateKind::NetworkPolicy,
+});
+collection_impl!({
+    name: QueryPolicyCollection,
+    key: proto::QueryPolicyKey,
+    value: proto::QueryPolicyValue,
+    collection_type: CollectionType::QueryPolicy,
+    trace_field: query_policies,
+    update: StateUpdateKind::QueryPolicy,
 });
 collection_impl!({
     name: RoleCollection,
@@ -368,6 +386,7 @@ pub struct Trace {
     pub clusters: CollectionTrace<ClusterCollection>,
     pub introspection_sources: CollectionTrace<ClusterIntrospectionSourceIndexCollection>,
     pub cluster_replicas: CollectionTrace<ClusterReplicaCollection>,
+    pub cluster_replica_sizes: CollectionTrace<ClusterReplicaSizeCollection>,
     pub comments: CollectionTrace<CommentCollection>,
     pub configs: CollectionTrace<ConfigCollection>,
     pub databases: CollectionTrace<DatabaseCollection>,
@@ -377,6 +396,7 @@ pub struct Trace {
     pub item_columns: CollectionTrace<ItemColumnsCollection>,
     pub index_columns: CollectionTrace<IndexColumnsCollection>,
     pub network_policies: CollectionTrace<NetworkPolicyCollection>,
+    pub query_policies: CollectionTrace<QueryPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
     pub role_auth: CollectionTrace<RoleAuthCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
@@ -399,6 +419,7 @@ impl Trace {
             clusters: CollectionTrace::new(),
             introspection_sources: CollectionTrace::new(),
             cluster_replicas: CollectionTrace::new(),
+            cluster_replica_sizes: CollectionTrace::new(),
             comments: CollectionTrace::new(),
             configs: CollectionTrace::new(),
             databases: CollectionTrace::new(),
@@ -408,6 +429,7 @@ impl Trace {
             item_columns: CollectionTrace::new(),
             index_columns: CollectionTrace::new(),
             network_policies: CollectionTrace::new(),
+            query_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
             role_auth: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
@@ -430,6 +452,7 @@ impl Trace {
             clusters,
             introspection_sources,
             cluster_replicas,
+            cluster_replica_sizes,
             comments,
             configs,
             databases,
@@ -439,6 +462,7 @@ impl Trace {
             item_columns,
             index_columns,
             network_policies,
+            query_policies,
             roles,
             role_auth,
             schemas,
@@ -457,6 +481,7 @@ impl Trace {
         clusters.sort();
         introspection_sources.sort();
         cluster_replicas.sort();
+        cluster_replica_sizes.sort();
         comments.sort();
         configs.sort();
         databases.sort();
@@ -466,6 +491,7 @@ impl Trace {
         item_columns.sort();
         index_columns.sort();
         network_policies.sort();
+        query_policies.sort();
         roles.sort();
         role_auth.sort();
         schemas.sort();

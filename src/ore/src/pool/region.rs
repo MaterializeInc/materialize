@@ -42,6 +42,7 @@
 //! pool's tests (including the unsafe slot borrows they exercise) run under
 //! the interpreter.
 
+use std::collections::VecDeque;
 use std::io;
 use std::sync::Mutex;
 
@@ -94,17 +95,18 @@ pub(crate) struct Region {
 /// theirs released. Never-allocated slots beyond the high-water mark are
 /// untouched virtual space and fault on first write like cold ones.
 #[derive(Debug)]
-struct SlotAllocator {
-    free_warm: Vec<u32>,
+pub(crate) struct SlotAllocator {
+    /// Oldest free at the front.
+    free_warm: VecDeque<u32>,
     free_cold: Vec<u32>,
     high_water: u32,
     max_slots: u32,
 }
 
 impl SlotAllocator {
-    fn new(max_slots: u32) -> SlotAllocator {
+    pub(crate) fn new(max_slots: u32) -> SlotAllocator {
         SlotAllocator {
-            free_warm: Vec::new(),
+            free_warm: VecDeque::new(),
             free_cold: Vec::new(),
             high_water: 0,
             max_slots,
@@ -114,8 +116,8 @@ impl SlotAllocator {
     /// Allocates a slot index, or `None` when every slot is in use; the flag
     /// reports whether the slot came from the warm list. Warm slots are
     /// preferred, then cold, then never-touched bump slots.
-    fn alloc(&mut self) -> Option<(u32, bool)> {
-        if let Some(slot) = self.free_warm.pop() {
+    pub(crate) fn alloc(&mut self) -> Option<(u32, bool)> {
+        if let Some(slot) = self.free_warm.pop_back() {
             return Some((slot, true));
         }
         if let Some(slot) = self.free_cold.pop() {
@@ -130,13 +132,27 @@ impl SlotAllocator {
     }
 
     /// Returns a previously allocated slot to the warm or cold free list.
-    fn free(&mut self, slot: u32, warm: bool) {
+    pub(crate) fn free(&mut self, slot: u32, warm: bool) {
         crate::soft_assert_no_log!(slot < self.high_water);
         if warm {
-            self.free_warm.push(slot);
+            self.free_warm.push_back(slot);
         } else {
             self.free_cold.push(slot);
         }
+    }
+
+    /// Takes the longest-free slot from the warm free list only, or `None`
+    /// when it is empty. `alloc` takes the most recently freed one, so a
+    /// caller releasing warm slots leaves the ones likeliest to be reused.
+    pub(crate) fn pop_oldest_warm(&mut self) -> Option<u32> {
+        self.free_warm.pop_front()
+    }
+
+    /// Puts a slot taken by [`SlotAllocator::pop_oldest_warm`] back at the
+    /// old end of the warm free list.
+    pub(crate) fn return_oldest_warm(&mut self, slot: u32) {
+        crate::soft_assert_no_log!(slot < self.high_water);
+        self.free_warm.push_front(slot);
     }
 }
 
@@ -258,7 +274,7 @@ impl Region {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
         let mut cooled = 0;
         while cooled < want_bytes {
-            let Some(slot) = slots.free_warm.pop() else {
+            let Some(slot) = slots.pop_oldest_warm() else {
                 break;
             };
             let offset = usize::cast_from(slot) * self.class_size;
@@ -272,22 +288,6 @@ impl Region {
             cooled += self.class_size;
         }
         cooled
-    }
-
-    /// Test hook: overwrites every free slot with `0xDE` so stale contents
-    /// cannot masquerade as correct data when a slot is reused.
-    #[cfg(test)]
-    pub(crate) fn poison_free_slots(&self) {
-        let slots = self.slots.lock().expect("region allocator poisoned");
-        for &slot in slots.free_warm.iter().chain(slots.free_cold.iter()) {
-            let offset = usize::cast_from(slot) * self.class_size;
-            // SAFETY: the slot is on a free list and the allocator mutex is
-            // held, so no chunk owns it and no allocation can race; the write
-            // stays within the region's mapping.
-            unsafe {
-                std::ptr::write_bytes(self.base.add(offset), 0xDE, self.class_size);
-            }
-        }
     }
 
     /// The base address of a slot, fixed while its owning chunk is resident.
@@ -867,6 +867,9 @@ mod proofs {
         }
     }
 }
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 mod tests {

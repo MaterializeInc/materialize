@@ -114,6 +114,13 @@ pub fn plan_insert(
             expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // `RETURNING` is evaluated in `environmentd`.
+    if let Some(func) = returning.iter().find_map(|e| e.unbounded_func()) {
+        bail_unsupported!(format!(
+            "{} in a RETURNING clause",
+            mz_expr::func_for_error(func)
+        ));
+    }
 
     Ok(Plan::Insert(InsertPlan {
         id,

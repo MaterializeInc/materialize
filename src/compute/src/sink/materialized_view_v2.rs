@@ -895,7 +895,7 @@ mod write {
         match cmd {
             WriteCommand::Batch(batch) => apply_batch(sink_id, corrections, batch).await,
             WriteCommand::WriteBatch(desc) => {
-                // Reading the updates back clones a row per update and, with the pager enabled,
+                // Reading the updates back clones a row per update and, with spilling enabled,
                 // pages chunks back in, so it stalls the same way the consolidation does and runs
                 // on the same blocking thread: the closure keeps the buffers, consolidates, and
                 // streams the consolidated updates back in chunks that this task feeds to the
@@ -1002,8 +1002,8 @@ mod write {
                 // the same side of the `spawn_blocking` boundary as the work it stands for.
                 //
                 // NOTE: activate it with the `FAILPOINTS` env var on the clusterd process, e.g.
-                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `failpoints` session variable
-                // only reaches environmentd, never a cluster.
+                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `unsafe_failpoints` session
+                // variable only reaches environmentd, never a cluster.
                 fail::fail_point!("mv_sink_correction");
 
                 // Apply the same logical sequence of operations that the per-chunk commands

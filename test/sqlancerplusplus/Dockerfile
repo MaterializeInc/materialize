@@ -23,7 +23,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 # Build SQLancer++
-RUN git clone --single-branch --depth=1 https://github.com/MaterializeInc/sqlancerplusplus \
+RUN git clone --single-branch https://github.com/MaterializeInc/sqlancerplusplus \
     && cd sqlancerplusplus \
     && git checkout 7e48df047c3c71facc978bae4ec4150c40de9ea8 \
     && rm -rf .git \

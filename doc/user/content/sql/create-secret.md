@@ -25,6 +25,10 @@ The privileges required to execute this statement are:
 
 {{% include-headless "/headless/sql-command-privileges/create-secret" %}}
 
+{{< warning >}}
+{{% include-headless "/headless/rbac-cloud/secret-usage-consideration" %}}
+{{</ warning >}}
+
 ## Related pages
 
 - [`CREATE CONNECTION`](../create-connection)

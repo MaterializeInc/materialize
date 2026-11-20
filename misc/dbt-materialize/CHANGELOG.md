@@ -2,10 +2,41 @@
 
 ## Unreleased
 
+## 1.9.14 - 2026-11-17
+
+* Fix installing with pip 26.3 or later, which failed with `Distributions
+  from PyPI cannot declare direct URL dependencies`. The package declared a
+  test-only `dev` extra that pointed at a git URL. The extra is removed.
+
+* Quote the cluster name in `drop_cluster`, matching `create_cluster` and
+  `deploy_cleanup`. A cluster whose name needs quoting, such as one with
+  uppercase letters, was left in place while the operation reported it as
+  dropped.
+
+## 1.9.13 - 2026-11-10
+
 * Quote names in the hints `deploy_init` prints when the deploying role lacks
   a permission, so each hint can be run as is for names that need quoting. The
   ownership hints now quote the cluster or schema name, and the CREATECLUSTER
   hint quotes the role.
+
+* Fix `refresh_interval` configs that set both `at` and `at_creation`. The
+  two options were rendered without a comma between them, so creating the
+  materialized view failed with `Expected right parenthesis, found REFRESH`.
+
+* Fail fast with a clear error when the profile points at PostgreSQL. The
+  server rejected the adapter's session parameters at startup, so dbt retried
+  the connection and then reported only `unrecognized configuration parameter
+  "auto_route_catalog_queries"`.
+
+* Fix the hint `deploy_init` prints when a deployment schema is not empty.
+  It named a `create_deployment_environment` operation that does not exist
+  instead of `deploy_init`.
+
+* Fix `deploy_promote` when `git` is not installed. Looking up the commit SHA
+  for the schema tag raised `FileNotFoundError`, so the operation stopped
+  after the swap committed, before tagging the schemas and cutting over
+  sinks. The tag now leaves out the SHA instead.
 
 ## 1.9.12 - 2026-11-03
 

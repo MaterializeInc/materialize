@@ -179,6 +179,9 @@ impl PromLabelsExt for BTreeMap<&str, &str> {
 /// this type derived `Clone` directly, which made every clone's `Drop` unregister the metric
 /// and silently disabled the metric for surviving clones.
 ///
+/// Handles obtained by separate calls for the same labels each unregister them on drop. Use
+/// [`DeregisterOnDropVec`](super::DeregisterOnDropVec) when several owners hold the same labels.
+///
 /// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
 /// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
 /// type.

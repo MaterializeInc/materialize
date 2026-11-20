@@ -1329,6 +1329,8 @@ pub enum PgConfigOptionName {
     Details,
     /// The name of the publication to sync
     Publication,
+    /// Whether to create the replication slot with `FAILOVER`
+    Failover,
     /// Columns whose types you want to unconditionally format as text
     /// NOTE(roshan): This value is kept around to allow round-tripping a
     /// `CREATE SOURCE` statement while we still allow creating implicit
@@ -1350,6 +1352,7 @@ impl AstDisplay for PgConfigOptionName {
         f.write_str(match self {
             PgConfigOptionName::Details => "DETAILS",
             PgConfigOptionName::Publication => "PUBLICATION",
+            PgConfigOptionName::Failover => "FAILOVER",
             PgConfigOptionName::TextColumns => "TEXT COLUMNS",
             PgConfigOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
         })
@@ -1367,6 +1370,7 @@ impl WithOptionName for PgConfigOptionName {
         match self {
             PgConfigOptionName::Details
             | PgConfigOptionName::Publication
+            | PgConfigOptionName::Failover
             | PgConfigOptionName::TextColumns
             | PgConfigOptionName::ExcludeColumns => false,
         }

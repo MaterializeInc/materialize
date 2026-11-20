@@ -42,6 +42,77 @@ fn datadriven() {
 }
 
 #[mz_ore::test]
+fn query_policy_syntax() {
+    use mz_sql_parser::ast::{QueryPolicyOption, Statement, Value};
+
+    let sql = "CREATE QUERY POLICY guarded (MODE = 'enforce', RULES (no_slow (action = 'reject', metric = 'query_plan_includes', value = 'temporary_dataflow'), no_persist (action = 'reject', metric = 'query_plan_includes', value = 'storage_read')))";
+    let ast = parse_statements(sql).unwrap().remove(0).ast;
+    let Statement::CreateQueryPolicy(policy) = &ast else {
+        panic!("expected CREATE QUERY POLICY");
+    };
+    assert_eq!(policy.name.as_str(), "guarded");
+    assert_eq!(
+        policy.options[0],
+        QueryPolicyOption::Mode(Value::String("enforce".into()))
+    );
+    let QueryPolicyOption::Rules(rules) = &policy.options[1] else {
+        panic!("expected RULES");
+    };
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].name.as_str(), "no_slow");
+    assert_eq!(rules[1].name.as_str(), "no_persist");
+
+    for sql in [
+        sql,
+        "CREATE QUERY POLICY \"guarded name\" (RULES ())",
+        "ALTER QUERY POLICY guarded SET (MODE = 'warn')",
+        "ALTER QUERY POLICY guarded SET (RULES ())",
+        "ALTER QUERY POLICY guarded OWNER TO policy_admin",
+        "DROP QUERY POLICY IF EXISTS guarded, other",
+        "DROP QUERY POLICY guarded RESTRICT",
+        "DROP QUERY POLICY guarded CASCADE",
+        "GRANT USAGE ON QUERY POLICY guarded TO analyst",
+        "REVOKE USAGE ON QUERY POLICY guarded FROM analyst",
+        "GRANT USAGE ON ALL QUERY POLICIES TO analyst",
+        "SHOW DEFAULT PRIVILEGES ON QUERY POLICIES FOR analyst",
+        "ALTER CLUSTER c SET (QUERY POLICY = guarded)",
+        "ALTER CLUSTER c RESET (QUERY POLICY)",
+    ] {
+        let ast = parse_statements(sql).unwrap().remove(0).ast;
+        for displayed in [ast.to_ast_string_simple(), ast.to_ast_string_stable()] {
+            let reparsed = parse_statements(&displayed).unwrap().remove(0).ast;
+            assert_eq!(
+                ast, reparsed,
+                "query policy round trip: {sql} -> {displayed}"
+            );
+        }
+    }
+
+    for (suffix, cascade) in [("", false), (" RESTRICT", false), (" CASCADE", true)] {
+        let sql = format!("DROP QUERY POLICY guarded{suffix}");
+        let ast = parse_statements(&sql).unwrap().remove(0).ast;
+        let Statement::DropObjects(drop) = ast else {
+            panic!("expected DROP QUERY POLICY");
+        };
+        assert_eq!(drop.cascade, cascade, "{sql}");
+    }
+
+    for sql in [
+        "CREATE QUERY POLICY schema.guarded (RULES ())",
+        "ALTER QUERY POLICY schema.guarded SET (MODE = 'warn')",
+        "DROP QUERY POLICY schema.guarded",
+        "DROP QUERY POLICY guarded CASCADE RESTRICT",
+        "CREATE QUERY POLICY guarded (RULES (r (duration = 10)))",
+        "CREATE QUERY POLICY guarded (RULES (r (heap = 10)))",
+    ] {
+        assert!(
+            parse_statements(sql).is_err(),
+            "unexpectedly accepted {sql}"
+        );
+    }
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
@@ -957,13 +1028,38 @@ fn test_quoted_special_grammar_function_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-fn test_resolved_cluster_name_empty_id_rejected() {
-    // A resolved cluster name renders as `[id]`; an empty id (`[""]`) would
-    // display as `[]` and fail to reparse, so it must be rejected at parse time.
-    // A non-empty resolved id still round-trips. Regression for the
-    // parse_display_roundtrip finding `SHOW SINKS IN CLUSTER[""]`.
-    assert!(parse_statements("SHOW SINKS IN CLUSTER[\"\"]").is_err());
+fn test_bracketed_name_empty_id_rejected() {
+    for sql in [
+        "SHOW SINKS IN CLUSTER[\"\"]",
+        "COMMENT ON NETWORK POLICY [\"\"] IS 'x'",
+        "SELECT * FROM [\"\" AS foo.bar]",
+    ] {
+        assert!(parse_statements(sql).is_err(), "accepted empty id: {sql}");
+    }
     assert_display_roundtrips("SHOW SINKS IN CLUSTER[u1]");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_bracketed_name_numeric_id_rejected() {
+    for id in [
+        "1".to_owned(),
+        "1.5".to_owned(),
+        "1e2".to_owned(),
+        "1".repeat(300),
+        format!("1.{}", "1".repeat(300)),
+    ] {
+        for sql in [
+            format!("CREATE INDEX i IN CLUSTER [{id}] ON t (a)"),
+            format!("COMMENT ON NETWORK POLICY [{id}] IS 'x'"),
+            format!("SELECT * FROM [{id} AS foo.bar]"),
+        ] {
+            assert!(
+                parse_statements(&sql).is_err(),
+                "accepted numeric id: {sql}"
+            );
+        }
+    }
 }
 
 #[mz_ore::test]
@@ -1428,5 +1524,30 @@ fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
             ast, reparsed,
             "postfix-access receiver display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
         );
+    }
+}
+
+#[mz_ore::test]
+fn create_query_policy_privilege() {
+    use mz_sql_parser::ast::{Privilege, PrivilegeSpecification, Statement};
+
+    for sql in [
+        "GRANT CREATEQUERYPOLICY ON SYSTEM TO alice",
+        "REVOKE CREATEQUERYPOLICY ON SYSTEM FROM alice",
+    ] {
+        let ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        let privileges = match &ast {
+            Statement::GrantPrivileges(stmt) => &stmt.privileges,
+            Statement::RevokePrivileges(stmt) => &stmt.privileges,
+            _ => panic!("expected a privilege statement"),
+        };
+        assert_eq!(
+            privileges,
+            &PrivilegeSpecification::Privileges(vec![Privilege::CREATEQUERYPOLICY])
+        );
+        assert_eq!(ast.to_ast_string_simple(), sql);
     }
 }

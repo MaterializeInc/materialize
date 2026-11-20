@@ -217,6 +217,51 @@ describe("subscribeSession", () => {
     }
   });
 
+  it("keeps an atom-fed collection's live rows when its scope settles after them", async () => {
+    const store = setTwoRegions();
+    const scopeAtom = atom<
+      | { state: "loading" }
+      | { state: "hasError"; error: unknown }
+      | { state: "hasData"; data: string | undefined }
+    >({ state: "hasData", data: "org|regionA" });
+    const sourceAtom = atom<SubscribeState<Row>>(loadingState);
+    const target = createSubscribeCollection<Row>({
+      id: "session-test-scope-late",
+      getKey: (row) => row.id,
+      persistName: "session-scope-late",
+    });
+    // The collection last hydrated region A, in a session that has ended.
+    createAtomFedCollectionSession({
+      store,
+      sourceAtom,
+      target,
+      scopeAtom,
+    }).destroy();
+
+    // Region B's rows are live before the next session's scope settles.
+    store.set(scopeAtom, { state: "loading" });
+    store.set(sourceAtom, {
+      data: [{ id: "b" }],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    const session = createAtomFedCollectionSession({
+      store,
+      sourceAtom,
+      target,
+      scopeAtom,
+    });
+    try {
+      store.set(scopeAtom, { state: "hasData", data: "org|regionB" });
+      await flush();
+      expect(target.collection.has("b")).toBe(true);
+      expect(store.get(target.statusAtom).snapshotComplete).toBe(true);
+    } finally {
+      session.destroy();
+      localStorage.clear();
+    }
+  });
+
   it("suspends persistence when the scope fails to resolve", () => {
     vi.useFakeTimers();
     const store = setTwoRegions();

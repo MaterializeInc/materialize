@@ -420,12 +420,13 @@ impl Coordinator {
             .collect();
 
         let ops = vec![
-            catalog::Op::DropObjects(
-                drop_ids
+            catalog::Op::DropObjects {
+                objects: drop_ids
                     .iter()
                     .map(|id| catalog::DropObjectInfo::Item(*id))
                     .collect(),
-            ),
+                cascade: false,
+            },
             catalog::Op::CreateItem {
                 id: item_id,
                 name: name.clone(),

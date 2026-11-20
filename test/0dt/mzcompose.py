@@ -13,6 +13,7 @@ version, no upgrade).
 """
 
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from textwrap import dedent
@@ -55,10 +56,25 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
+
+def _mz_new(*, force_catalog_migration: bool = False) -> Materialized:
+    return Materialized(
+        name="mz_new",
+        sanity_restart=False,
+        deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        restart="on-failure",
+        external_metadata_store=True,
+        default_replication_factor=2,
+        force_catalog_migration=force_catalog_migration,
+    )
+
+
 SERVICES = [
     DockerService(
         name="hydration-flags",
         config={
+            # renovate: datasource=docker depName=python versioning=docker
             "image": "python:3.12-slim",
             "volumes": ["./mock_hydration_flags.py:/app/server.py"],
             "command": ["python3", "-u", "/app/server.py"],
@@ -88,15 +104,7 @@ SERVICES = [
         external_metadata_store=True,
         default_replication_factor=2,
     ),
-    Materialized(
-        name="mz_new",
-        sanity_restart=False,
-        deploy_generation=1,
-        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-        restart="on-failure",
-        external_metadata_store=True,
-        default_replication_factor=2,
-    ),
+    _mz_new(),
     # A second process of mz_new's generation, as the container entrypoint
     # starts it after `restart_in_place!`.
     Materialized(
@@ -409,6 +417,18 @@ def workflow_read_only(c: Composition) -> None:
             contains: cannot write in read-only mode
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
+            ! CREATE SOURCE readonly_source FROM LOAD GENERATOR COUNTER;
+            contains: cannot write in read-only mode
+            ! CREATE TABLE readonly_export FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}") FORMAT BYTES;
+            contains: cannot write in read-only mode
+            ! ALTER SOURCE postgres_source REFRESH REFERENCES;
+            contains: cannot write in read-only mode
+            ! CREATE CONNECTION readonly_conn TO KAFKA (BROKER 'localhost:1', SECURITY PROTOCOL = 'PLAINTEXT');
+            contains: cannot write in read-only mode
+            ! ALTER CONNECTION kafka_conn SET (BROKER 'localhost:1');
+            contains: cannot write in read-only mode
+            > SELECT 1;
+            1
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
             contains: cannot write in read-only mode
 
@@ -524,6 +544,11 @@ def workflow_read_only(c: Composition) -> None:
             AAA
             CCC
             """))
+
+
+def workflow_basic_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_basic(c)
 
 
 def workflow_basic(c: Composition) -> None:
@@ -1708,6 +1733,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         Service("testdrive", idle=True),
     )
 
+    # The fail_state_multi_put failpoint exists only in the v1 upsert
+    # operator. Under v2 it is never hit and the source stays running.
+    upsert_v1 = {"enable_upsert_v2": "false"}
+
     # Start the original Materialized instance with the failpoint enabled.
     with c.override(
         Materialized(
@@ -1715,6 +1744,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=0,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             external_metadata_store=True,
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
             default_replication_factor=2,
@@ -1751,6 +1781,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
@@ -2377,6 +2408,11 @@ def workflow_upsert_sources(c: Composition) -> None:
         thread.join()
 
 
+def workflow_ddl_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_ddl(c)
+
+
 def workflow_ddl(c: Composition) -> None:
     """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
     c.down(destroy_volumes=True)
@@ -2965,6 +3001,43 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_unreadable_input_drags_as_of(c: Composition) -> None:
+    """Verify that an input without readable data doesn't drag index as-ofs back.
+
+    `mv` never ran, like a builtin MV replaced in an upgrade. `v_idx` can't hydrate before `mv`
+    advances, so it must not drag its input `t_idx` back to the since `mv` holds on `t`.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        """
+        CREATE CLUSTER paused SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER paused AS SELECT * FROM t;
+        CREATE INDEX t_idx IN CLUSTER test ON t (a);
+        CREATE VIEW v AS SELECT a FROM t JOIN mv USING (a);
+        CREATE INDEX v_idx IN CLUSTER test ON v (a);
+        """,
+        service="mz_old",
+    )
+    # Ages the since `mv` holds on `t`, which is what `t_idx` would get dragged back to.
+    time.sleep(30)
+
+    started = time.time()
+    c.up("mz_new")
+    as_ofs = []
+    for _ in range(60):
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        as_ofs = re.findall(r"dataflow name=\S+\.t_idx .* as_of=\[(\d+)\]", logs)
+        if as_ofs:
+            break
+        time.sleep(1)
+    assert as_ofs, "no `creating dataflow` log line for t_idx on mz_new"
+    lag = started - int(as_ofs[-1]) / 1000
+    assert lag < 15, f"t_idx starts {lag:.0f}s in the past on the read-only deployment"
 
 
 def workflow_caught_up_stability(c: Composition) -> None:

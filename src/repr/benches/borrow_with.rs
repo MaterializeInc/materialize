@@ -22,7 +22,7 @@
 use mz_alloc_default as _;
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use mz_bench_util::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{DatumVec, Row};
 use rand::rngs::StdRng;

@@ -415,6 +415,22 @@ load balancer, set the operator Helm value `balancerd.readinessProbePath` to
 balancerd internal HTTP port, and disable the target group's
 `target_health_state.unhealthy.connection_termination.enabled` attribute.
 
+The AWS modules in the Materialize Terraform repository configure this for the
+NLB they create. If you instead expose balancerd with your own
+`type: LoadBalancer` Service and let the AWS Load Balancer Controller create the
+target group, set `balancerd.readinessProbePath` as above and add these
+annotations to the Service. If the Service already sets
+`aws-load-balancer-target-group-attributes`, append the attribute to its
+comma-separated value instead of replacing it.
+
+```yaml
+service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
+service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /api/readyz
+service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: target_health_state.unhealthy.connection_termination.enabled=false
+```
+
 ## Troubleshooting
 
 ### ConfigMap not being applied

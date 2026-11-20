@@ -86,9 +86,9 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 bincode.workspace = true
-criterion.workspace = true
 insta.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 mz-persist = { path = "../persist" }
 mz-repr = { path = ".", features = ["proptest"] }
 proptest.workspace = true

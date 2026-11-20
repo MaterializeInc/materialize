@@ -14,7 +14,10 @@
 
 MZFROM debian-base
 
-ARG ELAN_VERSION=v4.2.4
+# renovate: datasource=github-release-attachments depName=leanprover/elan
+ARG ELAN_AMD64=v4.2.4@42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+# renovate: datasource=github-release-attachments depName=leanprover/elan
+ARG ELAN_ARM64=v4.2.4@05febd124d84ebf994b2e7479922a5650b1e950c17ae3bd1ddd776b65bb72bf9
 
 ENV ELAN_HOME=/opt/elan
 ENV PATH=$ELAN_HOME/bin:$PATH
@@ -34,9 +37,10 @@ COPY lean-toolchain /workspace/
 # it. Batteries, a dependency of Aesop and Mathlib, has the `runLinter`
 # executable among its default targets. Linking it needs the toolchain's static
 # libraries and LLVM, so removing them breaks the dependency build below.
-RUN case "$(uname -m)" in \
-        x86_64) triple=x86_64-unknown-linux-gnu; sha256=42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63 ;; \
-        aarch64) triple=aarch64-unknown-linux-gnu; sha256=05febd124d84ebf994b2e7479922a5650b1e950c17ae3bd1ddd776b65bb72bf9 ;; \
+RUN ELAN_VERSION=${ELAN_AMD64%@*} \
+    && case "$(uname -m)" in \
+        x86_64) triple=x86_64-unknown-linux-gnu; sha256=${ELAN_AMD64#*@} ;; \
+        aarch64) triple=aarch64-unknown-linux-gnu; sha256=${ELAN_ARM64#*@} ;; \
         *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;; \
     esac \
     && curl -fsSL -o /tmp/elan.tar.gz \

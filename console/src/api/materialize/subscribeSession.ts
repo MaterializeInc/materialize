@@ -43,11 +43,17 @@ function subscribeToScope(
     hydrate: (scope: string) => void;
     suspendPersistence: () => void;
   },
+  applySource: () => void,
 ) {
   const applyScope = () => {
     const value = store.get(scopeAtom);
-    if (value.state === "hasData" && value.data) target.hydrate(value.data);
-    else if (value.state === "hasError") target.suspendPersistence();
+    if (value.state === "hasData" && value.data) {
+      target.hydrate(value.data);
+      // A scope change drops the held rows, including live ones applied while
+      // the scope loaded. Region changes reset the source, so the rows it
+      // holds belong to the new scope.
+      applySource();
+    } else if (value.state === "hasError") target.suspendPersistence();
   };
   applyScope();
   return store.sub(scopeAtom, applyScope);
@@ -181,14 +187,15 @@ export function createCollectionSubscribeSession<
   // Hold a subscriber for the session so the collection doesn't pause/GC
   // while no component is querying it.
   const keepAlive = target.collection.subscribeChanges(() => {});
-  const unsubscribeScope = scopeAtom
-    ? subscribeToScope(store, scopeAtom, target)
-    : undefined;
   const session = createSubscribeSession(options, {
     apply: (snapshot) => target.applySnapshot(snapshot),
     onRegionChange: () => target.reset(),
   });
-  target.applySnapshot(session.manager.getSnapshot());
+  const apply = () => target.applySnapshot(session.manager.getSnapshot());
+  const unsubscribeScope = scopeAtom
+    ? subscribeToScope(store, scopeAtom, target, apply)
+    : undefined;
+  apply();
   return {
     manager: session.manager,
     destroy() {
@@ -221,13 +228,13 @@ export function createAtomFedCollectionSession<R extends object>(options: {
   scopeAtom?: ScopeLoadableAtom;
 }): { destroy: () => void } {
   const { store, sourceAtom, target, scopeAtom } = options;
+  const apply = () => target.applySnapshot(store.get(sourceAtom));
   const unsubscribeScope = scopeAtom
-    ? subscribeToScope(store, scopeAtom, target)
+    ? subscribeToScope(store, scopeAtom, target, apply)
     : undefined;
   const unsubscribeRegion = subscribeToRegionChange(store, () =>
     target.reset(),
   );
-  const apply = () => target.applySnapshot(store.get(sourceAtom));
   apply();
   const unsubscribeSource = store.sub(sourceAtom, apply);
   return {

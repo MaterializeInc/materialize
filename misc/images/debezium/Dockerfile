@@ -11,14 +11,21 @@
 # converter (which knows how to write schemas to the Confluent Schema Registry)
 # and Debezium connectors, so we have to build our own.
 
-FROM confluentinc/cp-kafka-connect-base:8.0.0
+MZFROM debian-base AS fetch
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest minor
 # version in the release series, and minor versions have been known to introduce
 # breakage.
-ARG DEBEZIUM_VERSION="3.3.1.Final"
+# renovate: datasource=maven depName=io.debezium:debezium-connector-postgres versioning=maven
+ARG DEBEZIUM_VERSION="3.7.1.Final"
 
-RUN : \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}/debezium-connector-mysql-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java \
-    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}/debezium-connector-sqlserver-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl \
+    && mkdir /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}/debezium-connector-mysql-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}/debezium-connector-postgres-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins \
+    && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}/debezium-connector-sqlserver-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /plugins
+
+FROM confluentinc/cp-kafka-connect-base:8.3.3@sha256:5b40ff05e94d8940527c4fabc2bc2210f27a6e0f7f67f4b7f93499ebcf322911
+
+COPY --from=fetch /plugins/ /usr/share/java/

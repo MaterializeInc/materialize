@@ -266,3 +266,47 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2 true
 # should be empty because the source was dropped
 > SELECT count(*) FROM mz_internal.mz_source_statistics;
 0
+
+# Adding a table to a source re-renders its ingestion dataflow in place, which
+# builds the new dataflow before the old one is torn down. The existing table's
+# per-worker metrics must survive that.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
+
+> CREATE CLUSTER rerender_cluster SIZE 'scale=1,workers=1'
+
+> CREATE SOURCE rerender_source
+  IN CLUSTER rerender_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-${testdrive.seed}')
+
+> CREATE TABLE rerender_tbl FROM SOURCE rerender_source (REFERENCE "testdrive-upsert-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+
+$ set-from-sql var=rerender-tbl-id
+SELECT id FROM mz_tables WHERE name = 'rerender_tbl'
+
+$ set-from-sql var=rerender-tbl-shard
+SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${rerender-tbl-id}'
+
+> SET cluster = rerender_cluster
+
+> SELECT metric_name FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE (metric_name = 'mz_source_row_inserts' AND labels->'shard' = '${rerender-tbl-shard}')
+  OR (metric_name = 'mz_storage_upsert_inserts_total' AND labels->'source_id' = '${rerender-tbl-id}')
+mz_source_row_inserts
+mz_storage_upsert_inserts_total
+
+> CREATE TABLE rerender_tbl2 FROM SOURCE rerender_source (REFERENCE "testdrive-upsert-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+
+# Wait out several scrape intervals so the check below cannot pass on a
+# snapshot taken before the old dataflow finished shutting down.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+> SELECT metric_name FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE (metric_name = 'mz_source_row_inserts' AND labels->'shard' = '${rerender-tbl-shard}')
+  OR (metric_name = 'mz_storage_upsert_inserts_total' AND labels->'source_id' = '${rerender-tbl-id}')
+mz_source_row_inserts
+mz_storage_upsert_inserts_total

@@ -1997,6 +1997,65 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    // One update per part and a max run len of 2 make in-builder compaction spill hollow runs.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn rewrite_ts_compacted_user_batch() {
+        let cache = PersistClientCache::new_no_metrics();
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        cache.cfg.set_config(&MAX_RUNS, 2);
+        cache.cfg.set_config(&MAX_RUN_LEN, 2);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let (mut write, read) = client
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
+        let keys: Vec<String> = (0..10).map(|i| format!("{i:02}")).collect();
+        let has_hollow_run = |batch: &Batch<String, (), u64, i64>| {
+            batch
+                .batch
+                .parts
+                .iter()
+                .any(|p| matches!(p, RunPart::Many(_)))
+        };
+
+        // A plain builder spills, so the rewrite fails.
+        let mut builder = write.builder(Antichain::from_elem(0));
+        for k in &keys {
+            builder.add(k, &(), &0, &1).await.unwrap();
+        }
+        let mut batch = builder.finish(Antichain::from_elem(1)).await.unwrap();
+        assert!(has_hollow_run(&batch), "{:?}", batch.batch.parts);
+        assert!(
+            batch
+                .rewrite_ts(&Antichain::from_elem(2), Antichain::from_elem(3))
+                .is_err()
+        );
+        batch.delete().await;
+
+        let mut builder = write.rewritable_builder(Antichain::from_elem(0));
+        for k in &keys {
+            builder.add(k, &(), &0, &1).await.unwrap();
+        }
+        let mut batch = builder.finish(Antichain::from_elem(1)).await.unwrap();
+        assert!(!has_hollow_run(&batch), "{:?}", batch.batch.parts);
+
+        batch
+            .rewrite_ts(&Antichain::from_elem(2), Antichain::from_elem(3))
+            .unwrap();
+        write
+            .expect_compare_and_append_batch(&mut [&mut batch], 0, 3)
+            .await;
+
+        let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
+        let expected: Vec<_> = keys.into_iter().map(|k| ((k, ()), 2, 1)).collect();
+        assert_eq!(actual, expected);
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn structured_lowers() {

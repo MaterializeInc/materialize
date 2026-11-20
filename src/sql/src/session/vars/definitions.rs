@@ -386,8 +386,11 @@ pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static FAILPOINTS: VarDefinition = VarDefinition::new(
-    "failpoints",
+// The `unsafe_` prefix limits this variable to unsafe mode: a failpoint applies
+// to the whole process, so any session could, for example, crash environmentd
+// with a `panic` action.
+pub static UNSAFE_FAILPOINTS: VarDefinition = VarDefinition::new(
+    "unsafe_failpoints",
     value!(Failpoints; Failpoints),
     "Allows failpoints to be dynamically activated.",
     true,
@@ -613,6 +616,13 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
     "The maximum number of network policies in the region.",
+    true,
+);
+
+pub static MAX_QUERY_POLICIES: VarDefinition = VarDefinition::new(
+    "max_query_policies",
+    value!(u32; 25),
+    "The maximum number of query policies in the region.",
     true,
 );
 
@@ -2185,6 +2195,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_postgres_source_failover,
+        desc: "the FAILOVER option for PostgreSQL sources",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_load_generator_counter,
         desc: "Create a LOAD GENERATOR COUNTER",
         default: false,
@@ -2335,6 +2351,18 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_query_policies,
+        desc: "Enable creating and managing query policies and their attachments.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_query_policy_enforcement,
+        desc: "Enable checking attached query policies during query admission.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: true,
@@ -2397,6 +2425,12 @@ feature_flags!(
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_frontend_transaction_completion, // changes take effect for new sessions
+        desc: "Complete session-owned read-only transactions without a coordinator round trip.",
+        default: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_replacement_materialized_views,

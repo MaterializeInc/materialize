@@ -16,8 +16,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-cargo deny --locked --manifest-path misc/materialize-sdk/Cargo.toml \
-    check --config deny.toml licenses bans sources
+cargo deny --locked --manifest-path misc/materialize-sdk/Cargo.toml --config deny.toml \
+    check licenses bans sources
 cd misc/materialize-sdk
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked

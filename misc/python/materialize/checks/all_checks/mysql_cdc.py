@@ -254,6 +254,11 @@ class MySqlCdcNoWait(MySqlCdcBase, Check):
 
 @externally_idempotent(False)
 class MySqlCdcMzNow(Check):
+    # validate() dates its rows ahead: a row lagging over WINDOW_SECS never enters the view.
+    WINDOW_SECS = 60
+    LEAD_SECS = 3600
+    SLACK_SECS = WINDOW_SECS + 120
+
     def initialize(self) -> Testdrive:
         return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
@@ -288,10 +293,10 @@ class MySqlCdcMzNow(Check):
                   FROM MYSQL CONNECTION mysql_mz_now_conn;
                 > CREATE TABLE mysql_mz_now_table FROM SOURCE mysql_mz_now_source (REFERENCE public.mysql_mz_now_table);
 
-                # Return all rows fresher than 60 seconds
+                # Return all rows fresher than WINDOW_SECS
                 > CREATE MATERIALIZED VIEW mysql_mz_now_view AS
                   SELECT * FROM mysql_mz_now_table
-                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
+                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '{self.WINDOW_SECS}' SECOND) * 1000)
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -336,22 +341,21 @@ class MySqlCdcMzNow(Check):
 
                 $ mysql-execute name=mysql
                 USE public;
-                INSERT INTO mysql_mz_now_table VALUES (NOW(), 'A4');
-                INSERT INTO mysql_mz_now_table VALUES (NOW(), 'B4');
-                INSERT INTO mysql_mz_now_table VALUES (NOW(), 'C4');
-                INSERT INTO mysql_mz_now_table VALUES (NOW(), 'D4');
-                INSERT INTO mysql_mz_now_table VALUES (NOW(), 'E4');
+                INSERT INTO mysql_mz_now_table VALUES (NOW() + INTERVAL {self.LEAD_SECS} SECOND, 'A4');
+                INSERT INTO mysql_mz_now_table VALUES (NOW() + INTERVAL {self.LEAD_SECS} SECOND, 'B4');
+                INSERT INTO mysql_mz_now_table VALUES (NOW() + INTERVAL {self.LEAD_SECS} SECOND, 'C4');
+                INSERT INTO mysql_mz_now_table VALUES (NOW() + INTERVAL {self.LEAD_SECS} SECOND, 'D4');
+                INSERT INTO mysql_mz_now_table VALUES (NOW() + INTERVAL {self.LEAD_SECS} SECOND, 'E4');
                 DELETE FROM mysql_mz_now_table WHERE f2 = 'B3';
-                UPDATE mysql_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
+                UPDATE mysql_mz_now_table SET f1 = NOW() + INTERVAL {self.LEAD_SECS} SECOND WHERE f2 = 'E1'
 
-                # Expect some rows newer than 60 seconds in view
-                > SELECT COUNT(*) >= 6 FROM mysql_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '60' SECOND;
-                true
+                # Expect the rows dated ahead (A4 to E4, E1) in view
+                > SELECT COUNT(*) FROM mysql_mz_now_view WHERE f1 > NOW();
+                6
 
-                # Expect no rows older than 60 seconds in view
+                # Expect no rows older than SLACK_SECS in view
                 > SELECT COUNT(*) FROM mysql_mz_now_view
-                  WHERE f1 < NOW() - INTERVAL '60' SECOND;
+                  WHERE f1 < NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times

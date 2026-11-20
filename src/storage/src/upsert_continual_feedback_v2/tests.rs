@@ -17,6 +17,7 @@ use mz_repr::{Datum, Timestamp as MzTimestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::sources::SourceEnvelope;
 use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+use mz_timely_util::builder_async::button;
 use timely::dataflow::operators::capture::Extract;
 use timely::dataflow::operators::{Capture, Input};
 use timely::progress::Timestamp;
@@ -62,17 +63,15 @@ fn row(k: i64, v: i64) -> Row {
     Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
 }
 
-// Runs the test body once per stash flavor and asserts the two flavors
-// produce identical (consolidated) output, so every scenario covers both
-// operator arms. Returns one flavor's output for the caller's own
-// expected-value assertion.
+// Runs the test body against the operator and returns its consolidated output
+// for the caller's own expected-value assertion.
 macro_rules! upsert_test {
     (|$input:ident, $persist:ident, $worker:ident| $body:block) => {
         upsert_test!(|$input, $persist, $worker, _registry| $body)
     };
     // `$registry` holds the operator's upsert metrics, for `$body` to read.
     (|$input:ident, $persist:ident, $worker:ident, $registry:ident| $body:block) => {{
-        let run = |flavor: UpsertStashFlavor| {
+        let run = || {
             let $registry = MetricsRegistry::new();
             let output_handle = timely::execute_directly(move |$worker| {
                 let (mut $input, mut $persist, output_handle) = $worker
@@ -110,8 +109,9 @@ macro_rules! upsert_test {
                                 source_statistics,
                             };
 
+                            let (stats_shutdown, _stats_button) =
+                                button(scope, scope.addr());
                             let (output, _, _, button) = upsert_inner(
-                                flavor,
                                 input.as_collection(),
                                 vec![0],
                                 Antichain::from_elem(Timestamp::minimum()),
@@ -120,6 +120,7 @@ macro_rules! upsert_test {
                                 None,
                                 upsert_metrics,
                                 source_config,
+                                stats_shutdown,
                             );
                             std::mem::forget(button);
                             (input_handle, persist_handle, output.inner.capture())
@@ -140,10 +141,7 @@ macro_rules! upsert_test {
             actual
         };
 
-        let paged = run(UpsertStashFlavor::Paged);
-        let chunked = run(UpsertStashFlavor::Chunked);
-        assert_eq!(paged, chunked, "stash flavors must produce equal output");
-        chunked
+        run()
     }};
 }
 
@@ -646,9 +644,8 @@ fn persist_jump_into_tail() {
 }
 
 /// A tail of several timestamps, each larger than one committed chunk,
-/// drains correctly when the chunked stash spills, and each seal passes
-/// the spilled chunks wholly past its upper through. The paged flavor
-/// stays resident and is the reference.
+/// drains correctly when the stash spills, and each seal passes the spilled
+/// chunks wholly past its upper through.
 ///
 /// Each timestamp's 25k updates fill one to two committed chunks. Loading
 /// commits each chunk once and ages it into a compressed body once, and
@@ -811,26 +808,6 @@ where
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn paged_stash_matches_model() {
-    stash_matches_model::<PagedArm>(|sealed| {
-        use columnar::Index;
-        let mut out = Vec::new();
-        for column in &sealed {
-            for (k, ts, diff) in column.borrow().into_index_iter() {
-                let diff = <UpsertDiff<i32> as columnar::Columnar>::into_owned(diff);
-                out.push((
-                    *k,
-                    <Ts as columnar::Columnar>::into_owned(ts),
-                    diff.from_time,
-                ));
-            }
-        }
-        out
-    });
-}
-
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)]
 fn chunked_stash_matches_model() {
     stash_matches_model::<ChunkedArm>(|sealed| {
         use columnar::{Index, Len};
@@ -950,13 +927,10 @@ fn drain_crosses_probe_window() {
 }
 
 /// The probe-window scenario with committed chunks forced through a
-/// private buffer pool, so the chunked flavor's seal and drain read
+/// private buffer pool, so the seal and drain read
 /// spilled bodies back through the pool codec rather than resident
 /// memory. The override is thread-scoped and `execute_directly` runs the
-/// worker on this thread, so it reaches the operator's batchers. The
-/// paged flavor (which the harness also runs) routes through the column
-/// pager rather than the chunk override, so it stays resident and serves
-/// as the reference.
+/// worker on this thread, so it reaches the operator's batchers.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn drain_reads_spilled_chunks() {
@@ -1166,35 +1140,29 @@ fn idempotent_update() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn lagging_replacement_below_upper_strands_data() {
-    for flavor in [UpsertStashFlavor::Paged, UpsertStashFlavor::Chunked] {
-        let (frontier, emitted) = run_below_upper_scenario_v2(flavor);
+    let (frontier, emitted) = run_below_upper_scenario_v2();
 
-        // The below-upper data is discarded (no output) and the output
-        // frontier is not pinned below the shard upper (10); it advances
-        // to the input upper (11), matching v1's behavior.
-        assert!(
-            emitted.is_empty(),
-            "below-upper data should be dropped, not emitted; got {emitted:?} ({flavor:?})"
-        );
-        assert_eq!(
-            frontier,
-            vec![new_ts(11)],
-            "v2 output frontier should advance to the input upper, not pin below \
-             persist_upper ({flavor:?})"
-        );
-        assert!(
-            frontier[0] >= new_ts(10),
-            "v2 output frontier {frontier:?} should reach at least persist_upper (10) \
-             ({flavor:?})"
-        );
-    }
+    // The below-upper data is discarded (no output) and the output
+    // frontier is not pinned below the shard upper (10); it advances
+    // to the input upper (11), matching v1's behavior.
+    assert!(
+        emitted.is_empty(),
+        "below-upper data should be dropped, not emitted; got {emitted:?}"
+    );
+    assert_eq!(
+        frontier,
+        vec![new_ts(11)],
+        "v2 output frontier should advance to the input upper, not pin below persist_upper"
+    );
+    assert!(
+        frontier[0] >= new_ts(10),
+        "v2 output frontier {frontier:?} should reach at least persist_upper (10)"
+    );
 }
 
 /// Shared driver for the lagging-replacement scenario against v2. Returns
 /// `(output_frontier, consolidated_emitted_updates)`.
-fn run_below_upper_scenario_v2(
-    flavor: UpsertStashFlavor,
-) -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, Ts, Diff)>) {
+fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, Ts, Diff)>) {
     use timely::dataflow::operators::Probe;
 
     let (frontier, capture) = timely::execute_directly(move |worker| {
@@ -1237,8 +1205,8 @@ fn run_below_upper_scenario_v2(
                         source_statistics,
                     };
 
+                    let (stats_shutdown, _stats_button) = button(scope, scope.addr());
                     let (output, _, _, button) = upsert_inner(
-                        flavor,
                         input.as_collection(),
                         vec![0],
                         Antichain::from_elem(Timestamp::minimum()),
@@ -1247,6 +1215,7 @@ fn run_below_upper_scenario_v2(
                         None,
                         upsert_metrics,
                         source_config,
+                        stats_shutdown,
                     );
                     std::mem::forget(button);
                     let (probe, stream) = output.inner.probe();
@@ -1280,4 +1249,96 @@ fn run_below_upper_scenario_v2(
         .collect();
     differential_dataflow::consolidation::consolidate_updates(&mut emitted);
     (frontier, emitted)
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn shutdown_stops_records_indexed() {
+    let stats_registry = MetricsRegistry::new();
+    let records_indexed = |registry: &MetricsRegistry| -> u64 {
+        registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "mz_source_records_indexed")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| u64::cast_lossy(metric.get_gauge().value()))
+            .sum()
+    };
+
+    let registry = stats_registry.clone();
+    timely::execute_directly(move |worker| {
+        let (mut persist, stats_token) = worker.dataflow::<MzTimestamp, _, _>(|scope| {
+            scope.scoped::<Ts, _, _>("upsert", |scope| {
+                let (_input_handle, input) = scope.new_input();
+                let (persist_handle, persist_input) = scope.new_input();
+                let (_persist_err_handle, persist_err_input) = scope.new_input();
+                let source_id = GlobalId::User(0);
+
+                let reg = MetricsRegistry::new();
+                let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+                let storage_metrics = StorageMetrics::register_with(&MetricsRegistry::new());
+
+                let stats_defs = SourceStatisticsMetricDefs::register_with(&registry);
+                let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                    source_arity: 2,
+                    style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                    key_indices: vec![0],
+                });
+                let source_statistics = SourceStatistics::new(
+                    source_id,
+                    0,
+                    &stats_defs,
+                    source_id,
+                    &ShardId::new(),
+                    envelope,
+                    Antichain::from_elem(Timestamp::minimum()),
+                    Antichain::from_elem(Timestamp::minimum()),
+                );
+                let source_config = SourceExportCreationConfig {
+                    id: source_id,
+                    worker_id: 0,
+                    metrics: storage_metrics,
+                    source_statistics,
+                };
+
+                let (stats_shutdown, stats_button) = button(scope, scope.addr());
+                let (_output, _, _, upsert_button) = upsert_inner::<_, i32>(
+                    input.as_collection(),
+                    vec![0],
+                    Antichain::from_elem(Timestamp::minimum()),
+                    persist_input.as_collection(),
+                    persist_err_input.as_collection(),
+                    None,
+                    upsert_metrics,
+                    source_config,
+                    stats_shutdown,
+                );
+                std::mem::forget(upsert_button);
+                (persist_handle, stats_button.press_on_drop())
+            })
+        });
+
+        persist.send((row(1, 1), new_ts(0), Diff::ONE));
+        persist.send((row(2, 1), new_ts(0), Diff::ONE));
+        persist.advance_to(new_ts(1));
+        for _ in 0..5 {
+            worker.step();
+        }
+        assert_eq!(records_indexed(&registry), 2);
+
+        // Feedback that arrives after the statistics button is pressed
+        // belongs to an incarnation whose statistics may already be reset.
+        drop(stats_token);
+        persist.send((row(3, 1), new_ts(1), Diff::ONE));
+        persist.advance_to(new_ts(2));
+        for _ in 0..5 {
+            worker.step();
+        }
+        assert_eq!(
+            records_indexed(&registry),
+            2,
+            "feedback after shutdown must not count toward records_indexed",
+        );
+    });
 }

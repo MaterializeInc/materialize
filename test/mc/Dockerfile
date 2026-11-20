@@ -14,17 +14,20 @@
 # dead project's images.
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:8b33d821344902366f6ac0fd2cabf4c39d5b98abe37ebc9eb8c35943f8ede923 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
 
-FROM golang:1.24.0@sha256:3f7444391c51a11a039bf0359ee81cc64e663c17d787ad0e637a4de1a3f62a71 AS builder
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS builder
 # Fetch apt sources over HTTPS only.
 COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
     && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
+# renovate: datasource=github-tags depName=minio/mc versioning=loose extractVersion=^RELEASE\.(?<version>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)$
+ARG MC_RELEASE=2025-08-13T08-35-41Z
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git \
-    && git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \
+    && git clone --depth=1 --branch RELEASE.$MC_RELEASE https://github.com/minio/mc.git \
     && cd mc \
     && CGO_ENABLED=0 go build -trimpath -o /out/mc .
 # Upstream's Makefile stamps a release version through ldflags; this build does

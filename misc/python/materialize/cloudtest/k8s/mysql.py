@@ -26,6 +26,7 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.mzcompose.services.mysql import MySql
 
 
 class MySqlService(K8sService):
@@ -59,7 +60,9 @@ class MySqlDeployment(K8sDeployment):
         ports = [V1ContainerPort(container_port=3306, name="sql")]
         container = V1Container(
             name="mysql",
-            image=self.image("mysql", tag="9.7.0", release_mode=True, org=None),
+            image=self.image(
+                "mysql", tag=MySql.DEFAULT_VERSION, release_mode=True, org=None
+            ),
             args=[
                 "--log-bin=mysql-bin",
                 "--gtid_mode=ON",

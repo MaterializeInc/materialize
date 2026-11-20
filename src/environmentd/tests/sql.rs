@@ -53,7 +53,7 @@ use serde_json::json;
 use timely::order::PartialOrder;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::error::SqlState;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
 
 /// An HTTP server whose responses can be controlled from another thread.
@@ -509,28 +509,41 @@ async fn test_empty_subscribe_notice() {
         .await
         .unwrap();
     let now = test_util::get_explain_timestamp("t", &client).await;
+    let mut expect_empty_notice = || {
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let e = match rx.try_recv() {
+                    Ok(e) => e,
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
+                    Err(_) => return Err("No notice received".to_string()),
+                };
+                if e.message().contains("guaranteed to be empty") {
+                    Ok(())
+                } else {
+                    Err(format!("wrong notice received: {e:?}"))
+                }
+            })
+            .unwrap();
+        // So that the next statement's check cannot match a leftover notice of this one.
+        while rx.try_recv().is_ok() {}
+    };
+
     client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
         .await
         .unwrap();
+    expect_empty_notice();
 
-    Retry::default()
-        .max_duration(Duration::from_secs(10))
-        .retry(|_| {
-            let e = match rx.try_recv() {
-                Ok(e) => e,
-                Err(futures::channel::mpsc::TryRecvError::Closed) => {
-                    panic!("unexpected channel close")
-                }
-                Err(_) => return Err("No notice received".to_string()),
-            };
-            if e.message().contains("guaranteed to be empty") {
-                Ok(())
-            } else {
-                Err(format!("wrong notice received: {e:?}"))
-            }
-        })
+    client
+        .batch_execute(&format!(
+            "EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t AS OF {now} UP TO {now}"
+        ))
+        .await
         .unwrap();
+    expect_empty_notice();
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -1188,6 +1201,91 @@ async fn test_subscribe_shutdown() {
     // `SUBSCRIBE v` had disconnected, and would hang forever waiting for data
     // to be written to `path`, which in this test never comes. So if this
     // function exits, things are working correctly.
+}
+
+// A client that disconnects while its SELECT is being optimized ends its session without waiting
+// for the optimizer.
+//
+// The SELECT parks at the `peek_before_optimize` failpoint until the test hands it back, so the
+// optimizer cannot finish first. The test watches the session end through the
+// `mz_active_sessions` gauge rather than through SQL, which would park at the failpoint as well.
+// The failpoint is process-global, so the test relies on running in its own process, as nextest
+// runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
+async fn test_peek_optimization_abandoned_on_disconnect() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+
+    let user_sessions = || {
+        server
+            .metrics_registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "mz_active_sessions")
+            .and_then(|family| {
+                family
+                    .get_metric()
+                    .iter()
+                    .find(|m| m.get_label().iter().any(|l| l.value() == "user"))
+                    .map(|m| m.get_gauge().value())
+            })
+            .unwrap_or(0.0)
+    };
+
+    let (victim, conn_task) = server.connect().with_handle().await.unwrap();
+    // The optimizer wait also gives up at the statement timeout, which would end the session
+    // without the disconnect being noticed.
+    victim
+        .batch_execute("SET statement_timeout = 0")
+        .await
+        .unwrap();
+    let sessions_before = user_sessions();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("peek_before_optimize", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            parked.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let query = task::spawn(|| "victim_select", async move {
+        victim.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    conn_task.abort_and_wait().await;
+    let session_ended = Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry_async(|_| async {
+            if user_sessions() < sessions_before {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await
+        .is_ok();
+
+    // Hand the optimizer back before asserting, so a failure does not leave it parked.
+    fail::remove("peek_before_optimize");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    assert!(
+        session_ended,
+        "session still waits for the optimizer after its client disconnected"
+    );
+    assert_err!(query.await);
 }
 
 #[mz_ore::test]
@@ -1957,6 +2055,102 @@ async fn test_timestamp_notice_after_concurrent_index_drop() {
         .expect("environmentd is still up");
 }
 
+/// Runs `drop_stmt` while an `EXPLAIN TIMESTAMP FOR SELECT * FROM t` on a session prepared by
+/// `explainer_setup` sits between its timestamp determination and the coordinator's lookup of the
+/// frontiers it reads, and returns the error the EXPLAIN fails with. Panics if environmentd does
+/// not survive.
+///
+/// The EXPLAIN parks at the `explain_timestamp_before_dispatch` failpoint. The failpoint is
+/// process-global, so callers rely on running in their own process, as nextest runs them.
+#[allow(clippy::disallowed_methods)]
+async fn explain_timestamp_after_concurrent_drop(
+    setup: &[&str],
+    explainer_setup: &[&str],
+    drop_stmt: &str,
+) -> DbError {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in setup {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+    let explainer = server.connect().await.unwrap();
+    for stmt in explainer_setup {
+        explainer.batch_execute(stmt).await.unwrap();
+    }
+
+    // Arm only once setup is done, so it's the EXPLAIN below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("explain_timestamp_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run `drop_stmt`.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let explain = task::spawn(|| "explainer", async move {
+        explainer
+            .query("EXPLAIN TIMESTAMP FOR SELECT * FROM t", &[])
+            .await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute(drop_stmt).await.unwrap();
+
+    // Disarm before handing the EXPLAIN back, so that no later statement parks.
+    fail::remove("explain_timestamp_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let err = explain
+        .await
+        .expect_err("EXPLAIN TIMESTAMP must fail on the dropped dependency")
+        .unwrap_db_error();
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+    err
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_after_concurrent_index_drop() {
+    let err = explain_timestamp_after_concurrent_drop(
+        &["CREATE TABLE t (a int)", "CREATE DEFAULT INDEX t_idx ON t"],
+        &[],
+        "DROP INDEX t_idx",
+    )
+    .await;
+    assert_contains!(err.message(), "was dropped");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_after_concurrent_cluster_drop() {
+    let err = explain_timestamp_after_concurrent_drop(
+        &[
+            "CREATE CLUSTER c REPLICAS (r1 (size 'scale=1,workers=1'))",
+            "CREATE TABLE t (a int)",
+            "CREATE DEFAULT INDEX IN CLUSTER c ON t",
+        ],
+        &["SET cluster = c"],
+        "DROP CLUSTER c CASCADE",
+    )
+    .await;
+    let message = err.message();
+    assert!(
+        message.starts_with("cluster '") && message.ends_with("' was dropped"),
+        "expected the dropped cluster in the error, got: {message}"
+    );
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
@@ -2679,6 +2873,73 @@ fn test_dataflow_error_codes() {
         err.code().code(),
         err.message(),
     );
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_query_policy_warn_notice() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_query_policies".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_query_policy_enforcement".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut admin = server.pg_config().connect(postgres::NoTls).unwrap();
+    for stmt in [
+        "CREATE TABLE t (a INT, b INT)",
+        "INSERT INTO t VALUES (1, 10), (1, 30), (2, 20)",
+        "CREATE DEFAULT INDEX ON t",
+        "CREATE QUERY POLICY no_dataflows (MODE = 'warn', RULES (
+             fast_only (action = 'reject', metric = 'query_plan_includes',
+                        value = 'temporary_dataflow')
+         ))",
+        "ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows)",
+    ] {
+        admin.batch_execute(stmt).unwrap();
+    }
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let row = client.query_one("SELECT sum(b) FROM t", &[]).unwrap();
+    assert_eq!(row.get::<_, i64>(0), 60);
+
+    let notice = rx.try_recv().expect("missing query policy warning");
+    assert_eq!(notice.severity(), "NOTICE");
+    assert_eq!(notice.code(), &SqlState::SUCCESSFUL_COMPLETION);
+    assert_eq!(
+        notice.message(),
+        "query would be rejected under query policy \"no_dataflows\" (rule \"fast_only\"): \
+         this query would build a temporary dataflow"
+    );
+    assert_eq!(
+        notice.detail(),
+        Some(
+            "Query policy \"no_dataflows\" rule \"fast_only\" applies to this query on cluster \
+             \"quickstart\". Policy mode is 'warn', so this rule does not reject the query."
+        )
+    );
+    assert_eq!(
+        notice.hint(),
+        Some(
+            "Run EXPLAIN to inspect the query plan. Create an index that serves the query on this \
+             cluster, or use a cluster whose query policy permits this plan."
+        )
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a matching rule must warn only once"
+    );
+
+    let row = client.query_one("SELECT 42", &[]).unwrap();
+    assert_eq!(row.get::<_, i32>(0), 42);
+    assert!(rx.try_recv().is_err(), "a nonmatching query must not warn");
 }
 
 #[mz_ore::test]
@@ -4211,17 +4472,45 @@ async fn test_cancel_linearize_commit_discards_set_local() {
 /// A COMMIT whose write is queued for group commit and then cancelled must not leave its
 /// `SET LOCAL` values on the session.
 ///
-/// Group commits run one at a time, so a group commit parked at the
+/// Group commits that take the group commit permit run one at a time, so one parked at the
 /// `group_commit_before_apply_write` failpoint holds the COMMIT in `pending_writes`, where the
-/// cancel finds it. The failpoint is process-global, so the test relies on running in its own
-/// process, as nextest runs it.
+/// cancel finds it. `BuiltinTableAppend::execute` stages a group commit without the permit. Such a
+/// commit either moves the COMMIT into the group committer, out of the cancel's reach, or, when it
+/// is the one parked, leaves the permit free for the COMMIT. The test therefore runs no DDL while
+/// the failpoint is armed, and first waits out the startup prune of
+/// `mz_object_arrangement_size_history`, which calls `execute` even with nothing to retract.
+///
+/// The failpoint is process-global, so the test relies on running in its own process, as nextest
+/// runs it.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
 fn test_cancel_group_commit_discards_set_local() {
     let server = test_util::TestHarness::default().start_blocking();
+    let prune_handled = || {
+        server
+            .metrics_registry()
+            .gather()
+            .iter()
+            .filter(|m| m.name() == "mz_slow_message_handling")
+            .flat_map(|m| m.get_metric())
+            .filter(|m| {
+                m.get_label()
+                    .iter()
+                    .any(|l| l.name() == "message_kind" && l.value() == "arrangement_sizes_prune")
+            })
+            .map(|m| m.get_histogram().get_sample_count())
+            .sum::<u64>()
+            > 0
+    };
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| if prune_handled() { Ok(()) } else { Err(()) })
+        .expect("startup prune of mz_object_arrangement_size_history was handled");
     let mut client = server.connect(postgres::NoTls).unwrap();
     let client_cancel = client.cancel_token();
+    // The prune's handler has staged its group commit. The group committer applies it no later
+    // than this DDL's builtin table write, which the DDL waits for.
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
     client
         .batch_execute("SET transaction_isolation = 'serializable'")
@@ -4269,14 +4558,17 @@ fn test_cancel_group_commit_discards_set_local() {
         .retry(|_| {
             client_cancel.cancel_query(postgres::NoTls).unwrap();
             commit_rx.try_recv()
-        })
-        .expect("COMMIT returned");
+        });
+    // Resume before asserting. A panic while the group commit is parked hangs the test, because
+    // the runtime's shutdown waits for the parked worker.
     fail::remove("group_commit_before_apply_write");
     resume.wait();
     writer_thread.join().unwrap().unwrap();
     let mut client = commit_thread.join().unwrap();
 
-    let err = commit_res.expect_err("COMMIT was cancelled");
+    let err = commit_res
+        .expect("COMMIT returned while group commit was parked")
+        .expect_err("COMMIT was cancelled");
     assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
     // NOTE: This must use the simple query protocol, see
     // `test_cancel_linearize_commit_discards_set_local`.
@@ -4706,4 +4998,100 @@ fn test_drop_index_read_by_in_flight_subscribe_notice() {
     );
 
     subscribe_client.batch_execute("COMMIT").unwrap();
+}
+
+/// What a statement that is expected to park at a failpoint did.
+#[derive(Debug, PartialEq)]
+enum ParkEvent {
+    Parked,
+    /// The statement returned. Seeing this first means it never reached the failpoint.
+    Exited,
+}
+
+/// Parks the first arrival at `failpoint` until the returned sender is dropped. Later arrivals
+/// pass.
+///
+/// The failpoint is process-global, so arm it after all setup statements ran.
+fn park_first_arrival(
+    failpoint: &'static str,
+    events: std::sync::mpsc::Sender<ParkEvent>,
+) -> std::sync::mpsc::Sender<()> {
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let slot = Mutex::new(Some((events, resume_rx)));
+    fail::cfg_callback(failpoint, move || {
+        let Some((events, resume_rx)) = slot.lock().expect("not poisoned").take() else {
+            return;
+        };
+        let _ = events.send(ParkEvent::Parked);
+        // NOTE: The arrival can be a runtime worker. `block_in_place` hands its queue to
+        // another thread before parking.
+        tokio::task::block_in_place(|| {
+            let _ = resume_rx.recv();
+        });
+    })
+    .unwrap();
+    resume_tx
+}
+
+/// The server's message for `err`, or the client-side error if there is none.
+fn db_message(err: &postgres::Error) -> String {
+    match err.as_db_error() {
+        Some(db_error) => db_error.message().to_string(),
+        None => err.to_string(),
+    }
+}
+
+/// Runs `sql` on its own thread and reports when it returns.
+fn spawn_statement(
+    mut client: postgres::Client,
+    sql: &'static str,
+    events: std::sync::mpsc::Sender<ParkEvent>,
+) -> thread::JoinHandle<(postgres::Client, Result<Vec<Row>, postgres::Error>)> {
+    thread::spawn(move || {
+        let result = client.query(sql, &[]);
+        let _ = events.send(ParkEvent::Exited);
+        (client, result)
+    })
+}
+
+// A cancel request that arrives while a SELECT is being optimized ends the SELECT, although no
+// peek is registered yet that the coordinator could cancel.
+//
+// The failpoint is process-global, so this test relies on running in its own process, as nextest
+// runs it.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_cancel_select_during_optimization() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client.query("SELECT a + 1 FROM t", &[]).unwrap();
+    let cancel_token = client.cancel_token();
+
+    let (events_tx, events_rx) = std::sync::mpsc::channel();
+    let resume = park_first_arrival("optimize_mir_local", events_tx.clone());
+    let select = spawn_statement(client, "SELECT a + 1 FROM t", events_tx);
+    assert_eq!(events_rx.recv().unwrap(), ParkEvent::Parked);
+
+    cancel_token.cancel_query(postgres::NoTls).unwrap();
+
+    // The optimizer stays parked, so only the cancel can end the statement. The timeout
+    // bounds the hang of a build that ignores the cancel.
+    let event = events_rx.recv_timeout(Duration::from_secs(30));
+    fail::remove("optimize_mir_local");
+    drop(resume);
+    let (mut client, result) = select.join().unwrap();
+    assert_eq!(
+        event,
+        Ok(ParkEvent::Exited),
+        "SELECT ignored the cancel while it was being optimized, and then returned {result:?}"
+    );
+    let err = result.expect_err("canceled SELECT returned rows");
+    assert_eq!(err.code(), Some(&SqlState::QUERY_CANCELED), "{err:?}");
+    assert_contains!(db_message(&err), "canceling statement due to user request");
+
+    let rows = client.query("SELECT a + 1 FROM t", &[]).unwrap();
+    assert_eq!(rows.len(), 1, "the session works after the cancel");
 }

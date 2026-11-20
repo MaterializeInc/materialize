@@ -655,7 +655,7 @@ has no replicas — needs operator action."
 | `cluster`     | [`text`] | Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null). |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
-| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. |
+| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. A null `cluster` means your role lacks USAGE on that cluster, and only materialized views appear that way, since a view is listed only with an index on a cluster you can use. A read of such a row runs on another cluster and returns the materialized view's stored results, so `hydration` then reports the materialized view's own cluster, the one that keeps those results current. |
 
 ## `mz_object_dependencies`
 
@@ -1648,6 +1648,9 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policies -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policy_attachments -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_query_policy_rules -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_replacements -->
@@ -1660,6 +1663,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_query_policies -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_roles -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_schemas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_secrets -->

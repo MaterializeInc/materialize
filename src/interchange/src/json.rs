@@ -106,7 +106,7 @@ pub trait ToJson {
 impl ToJson for TypedDatum<'_> {
     fn json(self, number_policy: &JsonNumberPolicy) -> serde_json::Value {
         let TypedDatum { datum, typ } = self;
-        if typ.nullable && datum.is_null() {
+        if datum.is_null() {
             return serde_json::Value::Null;
         }
         let value = match &typ.scalar_type {

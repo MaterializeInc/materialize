@@ -12,8 +12,8 @@
 use mz_ore::{
     metric,
     metrics::{
-        DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec, IntCounterVec,
-        MetricTag, MetricVisibility, UIntGaugeVec,
+        DeregisterOnDropCounter, DeregisterOnDropGauge, DeregisterOnDropHistogram,
+        DeregisterOnDropVec, MetricTag, MetricVisibility, raw,
     },
     stats::histogram_seconds_buckets,
 };
@@ -23,29 +23,24 @@ use prometheus::core::AtomicU64;
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergSinkMetricDefs {
     /// Number of data files written by the iceberg sink.
-    pub data_files_written: IntCounterVec,
+    pub data_files_written: DeregisterOnDropVec<raw::IntCounterVec>,
     /// Number of delete files written by the iceberg sink.
-    pub delete_files_written: IntCounterVec,
+    pub delete_files_written: DeregisterOnDropVec<raw::IntCounterVec>,
     /// Number of stashed rows in the iceberg sink.
-    pub stashed_rows: UIntGaugeVec,
+    pub stashed_rows: DeregisterOnDropVec<raw::UIntGaugeVec>,
     /// Number of snapshots committed by the iceberg sink.
-    pub snapshots_committed: IntCounterVec,
+    pub snapshots_committed: DeregisterOnDropVec<raw::IntCounterVec>,
     /// Commit failures in the iceberg sink.
-    pub commit_failures: IntCounterVec,
+    pub commit_failures: DeregisterOnDropVec<raw::IntCounterVec>,
     /// Commit conflicts in the iceberg sink.
-    pub commit_conflicts: IntCounterVec,
+    pub commit_conflicts: DeregisterOnDropVec<raw::IntCounterVec>,
     /// Time spent committing batches to Iceberg.
-    pub commit_duration_seconds: HistogramVec,
+    pub commit_duration_seconds: DeregisterOnDropVec<raw::HistogramVec>,
     /// Time spent closing Iceberg DeltaWriters.
-    pub writer_close_duration_seconds: HistogramVec,
+    pub writer_close_duration_seconds: DeregisterOnDropVec<raw::HistogramVec>,
 }
 
 impl IcebergSinkMetricDefs {
-    // Every metric must have a worker specific id associated with it. These are later wrapped
-    // in a DeleteOnDrop helper. If the label was just `source_id` and one worker completed, it
-    // would call the DeleteOnDrop code that deregestiers the metric for `source_id`. Other
-    // workers may still be running, but the metrics registry will no longer record or report
-    // metrics for that `source_id`.
     pub(crate) fn register_with(registry: &mz_ore::metrics::MetricsRegistry) -> Self {
         Self {
             data_files_written: registry.register(metric!(
@@ -108,21 +103,21 @@ impl IcebergSinkMetricDefs {
 
 pub(crate) struct IcebergSinkMetrics {
     /// Number of data files written by the iceberg sink.
-    pub data_files_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub data_files_written: DeregisterOnDropCounter<AtomicU64>,
     /// Number of delete files written by the iceberg sink.
-    pub delete_files_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub delete_files_written: DeregisterOnDropCounter<AtomicU64>,
     /// Number of stashed rows in the iceberg sink.
-    pub stashed_rows: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub stashed_rows: DeregisterOnDropGauge<AtomicU64>,
     /// Number of snapshots committed by the iceberg sink.
-    pub snapshots_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub snapshots_committed: DeregisterOnDropCounter<AtomicU64>,
     /// Number of commit failures in the iceberg sink.
-    pub commit_failures: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub commit_failures: DeregisterOnDropCounter<AtomicU64>,
     /// Number of commit conflicts in the iceberg sink.
-    pub commit_conflicts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub commit_conflicts: DeregisterOnDropCounter<AtomicU64>,
     /// Time spent committing batches to Iceberg.
-    pub commit_duration_seconds: DeleteOnDropHistogram<Vec<String>>,
+    pub commit_duration_seconds: DeregisterOnDropHistogram,
     /// Time spent closing Iceberg DeltaWriters.
-    pub writer_close_duration_seconds: DeleteOnDropHistogram<Vec<String>>,
+    pub writer_close_duration_seconds: DeregisterOnDropHistogram,
 }
 
 impl IcebergSinkMetrics {
@@ -132,26 +127,28 @@ impl IcebergSinkMetrics {
         Self {
             data_files_written: defs
                 .data_files_written
-                .get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
             delete_files_written: defs
                 .delete_files_written
-                .get_delete_on_drop_metric(labels.clone()),
-            stashed_rows: defs.stashed_rows.get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
+            stashed_rows: defs
+                .stashed_rows
+                .get_deregister_on_drop_metric(labels.clone()),
             snapshots_committed: defs
                 .snapshots_committed
-                .get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
             commit_failures: defs
                 .commit_failures
-                .get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
             commit_conflicts: defs
                 .commit_conflicts
-                .get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
             commit_duration_seconds: defs
                 .commit_duration_seconds
-                .get_delete_on_drop_metric(labels.clone()),
+                .get_deregister_on_drop_metric(labels.clone()),
             writer_close_duration_seconds: defs
                 .writer_close_duration_seconds
-                .get_delete_on_drop_metric(labels),
+                .get_deregister_on_drop_metric(labels),
         }
     }
 }

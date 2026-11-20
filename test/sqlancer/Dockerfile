@@ -29,7 +29,7 @@ RUN git clone https://github.com/MaterializeInc/sqlancer \
     && git checkout a22a122a7804c7ac347dc8f0247cc4c65d0b4047 \
     && rm -rf .git \
     && mvn package -DskipTests
-# RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
+# RUN git clone --single-branch https://github.com/sqlancer/sqlancer \
 #     && cd sqlancer \
 #     && rm -rf .git \
 #     && mvn package -DskipTests

@@ -28,6 +28,7 @@ This macro creates a cluster with the specified properties.
     e.g. {'on_hydration': {'hydration_size': '800cc', 'linger_duration': '15s'}}.
     The cluster temporarily bursts to the hydration size while it has un-hydrated
     objects. Only applicable when schedule_type is 'manual'.
+  - query_policy (str, optional): The query policy to attach to the cluster.
 
   Incompatibilities:
   - replication_factor is only applicable when schedule_type is 'manual'.
@@ -45,7 +46,8 @@ This macro creates a cluster with the specified properties.
     refresh_hydration_time_estimate=none,
     ignore_existing_objects=false,
     force_deploy_suffix=false,
-    auto_scaling_strategy=none
+    auto_scaling_strategy=none,
+    query_policy=none
 ) %}
 
     {# Input validation #}
@@ -70,6 +72,9 @@ This macro creates a cluster with the specified properties.
         {% set create_cluster_ddl %}
             CREATE CLUSTER {{ adapter.quote(deploy_cluster) }} (
                 SIZE = {{ dbt.string_literal(size) }}
+                {% if query_policy is not none %}
+                    , QUERY POLICY = {{ adapter.quote(query_policy | replace('"', '""')) }}
+                {% endif %}
                 {% if replication_factor is not none and ( schedule_type == 'manual' or schedule_type is none ) %}
                     , REPLICATION FACTOR = {{ replication_factor }}
                 {% elif schedule_type == 'on-refresh' %}

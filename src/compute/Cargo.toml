@@ -29,7 +29,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-metrics = { path = "../metrics" }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "pager", "region"] }
+mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "region"] }
 mz-proto = { path = "../proto" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
@@ -62,6 +62,7 @@ core_affinity.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true

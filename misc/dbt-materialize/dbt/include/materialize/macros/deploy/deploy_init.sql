@@ -83,7 +83,7 @@
                         If you are certain the objects in this schema are supposed to exist, you can ignore this
                         error by setting ignore_existing_objects to True.
 
-                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
+                        dbt run-operation deploy_init --args '{ignore_existing_objects: True}'
                     """) }}
                 {% endif %}
             {% endif %}
@@ -138,6 +138,7 @@
                 schedule_type=schedule_type,
                 refresh_hydration_time_estimate=refresh_hydration_time_estimate,
                 auto_scaling_strategy=auto_scaling_strategy,
+                query_policy=internal_get_cluster_query_policy(origin_cluster),
                 ignore_existing_objects=ignore_existing_objects,
                 force_deploy_suffix=True
             ) %}

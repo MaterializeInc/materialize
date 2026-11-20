@@ -20,9 +20,63 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.50.2, v26.49.2, v26.44.2, v26.41.3 {#v26502}
+*Released to Materialize Self-Managed: 2026-11-19* <br>
+
+### Security {#v26.50.2-security}
+- Updated the Console's nginx base image to nginx 1.31.9
+  (`nginx/nginx-unprivileged:alpine`), which fixes the vulnerabilities in F5's
+  advisory [K000163930](https://my.f5.com/manage/s/article/K000163930) and the
+  [nginx security advisories](https://nginx.org/en/security_advisories.html)
+  published with that release: CVE-2026-113425, CVE-2026-118899,
+  CVE-2026-120967, CVE-2026-120993, CVE-2026-121810, CVE-2026-123007,
+  CVE-2026-123633, CVE-2026-123634, CVE-2026-123640 and CVE-2026-125283.
+  Shipped as a patch of every supported line in use: v26.50.2, v26.49.2,
+  v26.44.2 and v26.41.3. Each contains only this change over its
+  predecessor; v26.41.3 also carries the contents of v26.41.1 and v26.41.2.
+
+## v26.50.1
+*Released to Materialize Self-Managed: 2026-11-15* <br>
+
+### Bug Fixes {#v26.50.1-bug-fixes}
+- Fixed a dataflow retaining memory proportional to the largest batch it consolidated until the dataflow was dropped, a regression introduced in v26.50.0 that affected consolidation during rendering, including the final consolidation of top-K results.
+
+## v26.50.0
+*Released to Materialize Cloud: 2026-11-12* <br>
+*Released to Materialize Self-Managed: 2026-11-13* <br>
+
+### Update Azure node pools on your own schedule {#v26.50-azure-node-auto-provisioning}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v18.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the Azure modules provision Materialize nodes with AKS [Node Auto Provisioning](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning) (NAP), Azure's managed Karpenter, instead of VMSS node pools. To change VM sizes, you no longer create a second node pool and migrate to it: update the NodePool, cordon the old nodes, and roll out Materialize, and NAP provisions new nodes and removes the old ones once they are empty. NAP does not drain nodes running Materialize pods when their spec changes, so you move the pods on your own schedule.
+
+Moving to NAP is a breaking change. To migrate an existing deployment, follow the [v18.0.0 upgrade notes](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v18.0.0/README.md#v1800). For more information, see [Resize node pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
+
+### Improvements {#v26.50-improvements}
+- **Run Materialize pods in Kubernetes user namespaces**: The operator can now run the `environmentd`, `clusterd`, balancer, and Console pods with `hostUsers: false` through the new `operator.args.enableUserNamespaces` Helm value, so a container escape lands as an unprivileged user on the node rather than as root; it is off by default and requires nodes that permit user namespaces.
+- **`dbt-materialize` 1.9.12**: Version 1.9.12 of the dbt adapter is released with fixes for blue/green deployments and error messages, support for dbt-postgres 1.11, and a strict-mode warning, which previously never fired, when a view, materialized view, or table is built in a schema reserved for sources, source tables, and sinks.
+
+### Bug Fixes {#v26.50-bug-fixes}
+- Fixed a cast to `time`, `timestamp`, or `timestamptz` failing to parse when a clause's `WITH` follows it, as in `COPY t TO 's3://b/' || now()::timestamp WITH (FORMAT = 'csv')`.
+- Fixed a failed query sending a second, duplicate error when its transaction rolled back, which recent versions of client libraries such as `psycopg` reject.
+- Fixed `ALTER CLUSTER` not validating a newly referenced hydration size when the hydration strategy was changed together with a resize or an unmanaged-to-managed conversion, rather than on its own.
+- Fixed `mz_source_statistics` reporting `snapshot_committed` and a `rehydration_latency` for a table added to an existing source before that table's snapshot had started.
+- Fixed a spurious internal consistency error at startup when `environmentd` restarted while a table newly added to a source was still snapshotting.
+- Fixed the Console's Codex instructions telling you to run `codex mcp login materialize-agent` while writing the configuration under a different name, so the login command failed with "No MCP server named ... found".
+- Fixed a panic in background storage maintenance when two processes raced to clean up the same collection and one found the work already done.
+
 ## v26.49.1
 *Released to Materialize Cloud: 2026-11-05 (v26.49.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-06* <br>
+
+### Serve more queries per second {#v26.49-qps}
+
+Materialize now does less work per query, so it can serve more queries per second when many clients query it at once.
+
+![Queries per second from 16 to 512 concurrent clients against environmentd running 32 CPUs, v26.48 versus v26.49: with statement logging on, QPS improves by 29% to 66%, for example from 3,302 to 4,265 at 512 clients, and with statement logging off, by 49% to 105%, for example from 5,918 to 8,813 at 512 clients](/images/releases/v2649_qps.png)
+
+We tested v26.48 against v26.49, running `environmentd` with 32 CPUs and between 16 and 512 concurrent clients issuing point lookups against an indexed view. At 512 clients, we observed throughput improved by 29% with [statement logging](/self-managed-deployments/query-history/) on, and by 49% with statement logging off. At lower concurrency, the gains were larger, up to 66% with statement logging on and 105% with it off.
 
 ### Right size your clusters, using the new Hydration tab on the console {#v26.49-hydration-tab}
 
@@ -46,7 +100,6 @@ Tables created before this release keep every key they recorded. Before you drop
 - **Concurrent DDL for rename and swap transactions is now supported**: Transactions whose DDL consists only of `ALTER ... RENAME` or `ALTER ... SWAP` can now run concurrently while another session runs unrelated DDL. This means it is easier to manage large environments with several concurrent users, who are all concurrently deploying changes to Materialize. Previously, these transactions failed if any other session ran DDL before they committed, even DDL on unrelated objects, such as creating a new view. Transactions that conflict will still fail at commit, such as if a target was missing or a permission was revoked.
 - **SQL Server tables key only on the capture instance's index**: A table created from a SQL Server source now records as its key only the `PRIMARY KEY` or `UNIQUE` constraint backing the index its CDC capture instance uses, which SQL Server does not allow dropping while that capture instance is the table's newest one. Other `UNIQUE` constraints are no longer recorded, so dropping one upstream can no longer cause queries in Materialize to return incorrect results. See [Unique keys](/ingest-data/sql-server/#unique-keys).
 - **Freshness and cluster details pages on Self-Managed**: The Console's [Freshness page](#v26.48-freshness-page), which tracks p90, p99, p99.9, and maximum freshness across your environment's objects, and its [redesigned cluster details page](#v26.47-cluster-details-page), which charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory, are now available on Materialize Self-Managed. To try the cluster details page, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
-- **Higher query throughput at high concurrency**: Materialize now does less work per query, so it can serve more queries per second when many clients query it at once. In our benchmarks of single-row lookups on an index over 256 concurrent connections, throughput roughly doubled.
 - **Improved performance for materialized views on large replicas**: Materialize now batches small writes from materialized views more efficiently on replicas larger than 1600cc. In our tests, this reduced bytes written to the metadata database by 70% for materialized views with steady-state updates.
 - **`DROP INDEX` no longer orphans the objects reading from an index**: `DROP INDEX`, with or without `CASCADE`, now fails with an error that names the dependent objects when a materialized view or another index reads from the index, instead of leaving those readers running on an orphaned dataflow, so drop the readers first and drop indexes on the same relation newest first; Terraform configurations that replace such an index need `lifecycle { replace_triggered_by = [...] }` on the materialized view that reads it.
 - **Lower catalog server load when connections close**: Closing a connection no longer forces an immediate write to the system tables, which cut `mz_catalog_server` CPU per closed connection from 326 ms to 3 ms in testing, and a closed session can now remain visible in `mz_sessions` for up to about a second.

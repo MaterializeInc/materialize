@@ -21,8 +21,6 @@ export interface CloudRegion {
   provider: string;
   /** The region of the cloud provider (e.g., `us-east-1`). */
   region: string;
-  /** The URL for the region api. */
-  regionApiUrl: string;
 }
 
 export const SELECTED_REGION_KEY = "mz-selected-region";
@@ -51,7 +49,6 @@ export const fetchOrBuildCloudRegions = async (): Promise<CloudRegion[]> => {
     .map((r) => ({
       provider: r.cloudProvider,
       region: r.name,
-      regionApiUrl: r.url,
     }))
     .sort((a, b) => b.region.localeCompare(a.region));
 };

@@ -35,6 +35,7 @@ pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub query_total: IntCounterVec,
+    pub query_policy_queries: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
     pub active_internal_subscribes: IntGaugeVec,
@@ -52,7 +53,11 @@ pub struct Metrics {
     pub as_of_queries: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
+    pub linearize_read_immediate_seconds: Histogram,
+    pub linearize_read_delayed_seconds: Histogram,
     pub linearize_read_fast_path: IntCounter,
+    pub frontend_transaction_completions: IntCounter,
+    pub frontend_transaction_waits: IntCounter,
     pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounter,
     pub statement_logging_actual_bytes: IntCounter,
@@ -83,6 +88,12 @@ pub struct Metrics {
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
+        let linearize_message_seconds: HistogramVec = registry.register(metric!(
+            name: "mz_linearize_message_seconds",
+            help: "The number of seconds it takes to linearize strict serializable messages",
+            var_labels: ["type", "immediately_handled"],
+            buckets: histogram_seconds_buckets(0.000_128, 8.0),
+        ));
         Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
@@ -90,6 +101,11 @@ impl Metrics {
                 var_labels: ["session_type", "statement_type"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Environment],
+            )),
+            query_policy_queries: registry.register(metric!(
+                name: "mz_query_policy_queries_total",
+                help: "Queries rejected by an enforced query policy or only warned by observe-only policies. Each query is counted once.",
+                var_labels: ["outcome"],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
@@ -174,15 +190,20 @@ impl Metrics {
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
             )),
-            linearize_message_seconds: registry.register(metric!(
-                name: "mz_linearize_message_seconds",
-                help: "The number of seconds it takes to linearize strict serializable messages",
-                var_labels: ["type", "immediately_handled"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
+            linearize_read_immediate_seconds: linearize_message_seconds.with_label_values(&["read", "true"]),
+            linearize_read_delayed_seconds: linearize_message_seconds.with_label_values(&["read", "false"]),
+            linearize_message_seconds,
             linearize_read_fast_path: registry.register(metric!(
                 name: "mz_linearize_read_fast_path_total",
                 help: "The number of ordinary strict serializable reads already linearized at transaction end",
+            )),
+            frontend_transaction_completions: registry.register(metric!(
+                name: "mz_frontend_transaction_completions_total",
+                help: "Read-only transaction completion attempts owned by the session.",
+            )),
+            frontend_transaction_waits: registry.register(metric!(
+                name: "mz_frontend_transaction_waits_total",
+                help: "Session-owned transaction completions that need a fresh oracle check.",
             )),
             statement_logging_records: registry.register(metric! {
                 name: "mz_statement_logging_record_count",
@@ -337,6 +358,7 @@ impl Metrics {
             subscribe_outputs: self.subscribe_outputs.clone(),
             as_of_queries: self.as_of_queries.clone(),
             by_cluster: self.by_cluster.clone(),
+            query_policy_queries: self.query_policy_queries.clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
@@ -354,6 +376,7 @@ pub struct SessionMetrics {
     subscribe_outputs: IntCounterVec,
     as_of_queries: IntCounterVec,
     by_cluster: ClusterLabeledMetrics,
+    query_policy_queries: IntCounterVec,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
@@ -379,6 +402,10 @@ impl SessionMetrics {
 
     pub(crate) fn as_of_queries(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.as_of_queries.with_label_values(label_values)
+    }
+
+    pub(crate) fn query_policy_queries(&self, outcome: &str) -> GenericCounter<AtomicU64> {
+        self.query_policy_queries.with_label_values(&[outcome])
     }
 
     pub(crate) fn by_cluster(&self) -> &ClusterLabeledMetrics {

@@ -40,7 +40,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
-    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_UNIFIED,
     MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
@@ -89,8 +89,8 @@ impl ProtocolVersion {
     /// Any copy naming 2026-07-28 selects it. Serving 2025-11-25 there would
     /// skip the header check while a proxy that reads that copy trusts
     /// `Mcp-Name`. `McpHeaders::check` then refuses the repetition.
-    fn select(values: &[HeaderValue], v2026_07_28_enabled: bool) -> Self {
-        if v2026_07_28_enabled && asks_for_2026_07_28(values) {
+    fn select(values: &[HeaderValue]) -> Self {
+        if asks_for_2026_07_28(values) {
             Self::V2026_07_28
         } else {
             Self::V2025_11_25
@@ -167,8 +167,7 @@ fn check_modern_request(headers: &McpHeaders, raw: &RawRequest) -> Result<(), Mc
 }
 
 /// Whether any `MCP-Protocol-Version` copy names 2026-07-28, also inside a
-/// comma-joined list. Whether it is served on it also depends on the flag
-/// (see [`ProtocolVersion::select`]).
+/// comma-joined list.
 fn asks_for_2026_07_28<'a>(values: impl IntoIterator<Item = &'a HeaderValue>) -> bool {
     // Bytes, since a copy with a non-ASCII byte elsewhere still names it.
     let modern = ProtocolVersion::V2026_07_28.as_str().as_bytes();
@@ -539,11 +538,83 @@ fn default_read_limit() -> u32 {
 
 #[derive(Debug, Deserialize)]
 struct QueryParams {
-    cluster: String,
+    /// Required on the developer endpoint. The agent endpoint accepts `None`
+    /// (omitted or JSON null) so products whose cluster discovery hides stay
+    /// readable (DEX-71).
+    cluster: Option<String>,
     /// Only honored on the developer endpoint. The agent endpoint's dispatch
     /// arm drops it, since replica pinning is not part of the agent surface.
     cluster_replica: Option<String>,
     sql_query: String,
+}
+
+impl QueryParams {
+    fn developer_placement(&self) -> Result<Placement<'_>, McpRequestError> {
+        match (self.cluster.as_deref(), self.cluster_replica.as_deref()) {
+            (None, _) => Err(McpRequestError::QueryValidationFailed(
+                "cluster is required".to_string(),
+            )),
+            (Some(cluster), None) => Ok(Placement::Cluster(cluster)),
+            (Some(cluster), Some(replica)) => Ok(Placement::Replica { cluster, replica }),
+        }
+    }
+}
+
+/// Where a read runs. Each endpoint builds it under its own rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement<'a> {
+    SessionDefault,
+    Cluster(&'a str),
+    /// One replica of `cluster`, e.g. for `EXPLAIN ANALYZE` on a cluster with
+    /// more than one replica.
+    Replica {
+        cluster: &'a str,
+        replica: &'a str,
+    },
+}
+
+impl<'a> Placement<'a> {
+    fn cluster_or_default(cluster: Option<&'a str>) -> Self {
+        cluster.map_or(Placement::SessionDefault, Placement::Cluster)
+    }
+
+    /// The `SET` clause scoping a read to this placement. Names are escaped,
+    /// since they are interpolated into SQL string literals.
+    fn set_clause(&self) -> Option<String> {
+        match self {
+            Placement::SessionDefault => None,
+            Placement::Cluster(cluster) => {
+                Some(format!("SET CLUSTER = {}", escaped_string_literal(cluster)))
+            }
+            Placement::Replica { cluster, replica } => Some(format!(
+                "SET CLUSTER = {}; SET CLUSTER_REPLICA = {}",
+                escaped_string_literal(cluster),
+                escaped_string_literal(replica),
+            )),
+        }
+    }
+
+    /// Rejects an empty or whitespace-only name, which would otherwise reach
+    /// the engine as `SET CLUSTER = ''` and fail there as an opaque execution
+    /// error.
+    fn validate(&self) -> Result<(), McpRequestError> {
+        let names = match self {
+            Placement::SessionDefault => [None, None],
+            Placement::Cluster(cluster) => [Some(("cluster", *cluster)), None],
+            Placement::Replica { cluster, replica } => [
+                Some(("cluster", *cluster)),
+                Some(("cluster_replica", *replica)),
+            ],
+        };
+        for (field, value) in names.into_iter().flatten() {
+            if value.trim().is_empty() {
+                return Err(McpRequestError::QueryValidationFailed(format!(
+                    "{field} must not be empty or whitespace-only"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -781,6 +852,9 @@ impl From<McpRequestError> for McpError {
 enum McpEndpointType {
     Agent,
     Developer,
+    /// Serves the agent endpoint's tools and instructions until `/api/mcp`
+    /// gets its own (DEX-109, DEX-110).
+    Unified,
 }
 
 impl McpEndpointType {
@@ -790,6 +864,7 @@ impl McpEndpointType {
         match self {
             McpEndpointType::Agent => "agent",
             McpEndpointType::Developer => "developer",
+            McpEndpointType::Unified => "unified",
         }
     }
 }
@@ -846,6 +921,29 @@ pub async fn handle_mcp_developer(
         McpHeaders::from_map(&headers),
         body,
         McpEndpointType::Developer,
+        metrics,
+    )
+    .await
+    .into_response()
+}
+
+/// Unified endpoint at `/api/mcp`.
+pub async fn handle_mcp_unified(
+    headers: HeaderMap,
+    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
+    client: AuthedClient,
+    body: Bytes,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
+        return resp;
+    }
+    handle_mcp_request(
+        client,
+        parse_mcp_request(&headers, &body),
+        McpHeaders::from_map(&headers),
+        body,
+        McpEndpointType::Unified,
         metrics,
     )
     .await
@@ -938,13 +1036,14 @@ async fn handle_mcp_request(
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
 ) -> impl IntoResponse {
+    let protocol = ProtocolVersion::select(&mcp_headers.protocol_version);
     // Only a 2026-07-28 request gets a JSON-RPC answer for a body that is not
     // JSON or not a request. Every other request gets axum's rejection.
     let request =
         match request {
             Err(
                 rejection @ (JsonRejection::JsonDataError(_) | JsonRejection::JsonSyntaxError(_)),
-            ) if asks_for_2026_07_28(&mcp_headers.protocol_version) => Err(rejection),
+            ) if protocol.is_modern() => Err(rejection),
             Err(rejection) => return rejection.into_response(),
             Ok(request) => Ok(request),
         };
@@ -956,7 +1055,7 @@ async fn handle_mcp_request(
     let record_request =
         |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
-    // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
+    // Check the per-endpoint feature flag via a catalog snapshot, similar to peek_sequencing.rs.
     // The configured `MCP_REQUEST_TIMEOUT` lives in the snapshot we are about
     // to fetch, so bound this phase with the compiled-in default. Without it a
     // stalled snapshot would hang the request past any configured timeout.
@@ -968,29 +1067,16 @@ async fn handle_mcp_request(
     {
         Ok(catalog) => catalog,
         Err(_elapsed) => {
-            // The flag is unknown, so the 2026-07-28 path cannot be picked.
-            if let Err(rejection) = request {
-                return rejection.into_response();
-            }
             warn!(endpoint = %endpoint_type, "MCP catalog snapshot timed out");
             record_request(McpCallStatus::Timeout);
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
     let dyncfgs = catalog.system_config().dyncfgs();
-    let protocol = ProtocolVersion::select(
-        &mcp_headers.protocol_version,
-        ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
-    );
-    // With the flag off, reject parse failures before the endpoint check, as on
-    // 2025-11-25.
-    let request = match request {
-        Err(rejection) if !protocol.is_modern() => return rejection.into_response(),
-        request => request,
-    };
     let enabled = match endpoint_type {
         McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
+        McpEndpointType::Unified => ENABLE_MCP_UNIFIED.get(dyncfgs),
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
@@ -1003,7 +1089,9 @@ async fn handle_mcp_request(
     // signatures unchanged since each handler invocation is already bound to a
     // single endpoint.
     let query_tool_enabled = match endpoint_type {
-        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
+        McpEndpointType::Agent | McpEndpointType::Unified => {
+            ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs)
+        }
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
     };
     // Only meaningful on the agent endpoint; the developer endpoint doesn't
@@ -1026,6 +1114,7 @@ async fn handle_mcp_request(
     let app_name = match endpoint_type {
         McpEndpointType::Agent => "mz_mcp_agents",
         McpEndpointType::Developer => "mz_mcp_developer",
+        McpEndpointType::Unified => "mz_mcp",
     };
     client
         .client
@@ -1313,7 +1402,7 @@ fn endpoint_instructions(
     read_data_product_tool_enabled: bool,
 ) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => {
+        McpEndpointType::Agent | McpEndpointType::Unified => {
             // Only reference tools that are actually exposed by tools/list.
             // Both flags off is a valid (if unusual) config where the agent
             // can only discover products, not read them — we say so instead
@@ -1333,8 +1422,9 @@ fn endpoint_instructions(
                     "Use the `query` tool to read data products, passing the cluster from \
                      `get_data_product_details` so indexed reads hit the arrangement. If \
                      `get_data_product_details` returns a null `cluster`, your role lacks USAGE on \
-                     the object's index/compute cluster; run the `query` against any cluster your \
-                     role can use (the read still works, just without the index arrangement). "
+                     the object's index/compute cluster; omit `cluster` from the `query` call so it \
+                     runs on your session's default cluster, and if that fails, pass any cluster \
+                     your role can use (the read works without the index arrangement). "
                 }
                 (false, false) => {
                     "This server is configured for discovery only: no read tool is exposed. \
@@ -1449,7 +1539,7 @@ fn handle_tools_list(
     );
 
     let tools = match endpoint_type {
-        McpEndpointType::Agent => {
+        McpEndpointType::Agent | McpEndpointType::Unified => {
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
@@ -1510,20 +1600,20 @@ fn handle_tools_list(
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
                     title: Some("Query Data Products".to_string()),
-                    description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. {size_hint}"),
+                    description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Pass the cluster from the data product details so indexed reads hit the arrangement. If the data product's cluster is null, omit it. This provides fresh, up-to-date results from materialized views. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
                             "cluster": {
                                 "type": "string",
-                                "description": "Exact cluster name from the data product details - required for query execution"
+                                "description": "Exact cluster name from the data product details. Omit it when the data product's cluster is null, which means your role lacks USAGE on that cluster: the query then runs on your session's default cluster, without the index arrangement. If that fails, pass any cluster your role can use."
                             },
                             "sql_query": {
                                 "type": "string",
                                 "description": "PostgreSQL-compatible SELECT statement to retrieve data. Use the fully qualified data product name exactly as provided (with double quotes). You can JOIN multiple data products, but only those on the same cluster."
                             }
                         },
-                        "required": ["cluster", "sql_query"]
+                        "required": ["sql_query"]
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
                 });
@@ -1598,7 +1688,11 @@ async fn handle_tools_call(
     // Drop-recording so metrics survive task cancellation.
     let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
 
-    let result = match (endpoint_type, params) {
+    let tool_set = match endpoint_type {
+        McpEndpointType::Unified => McpEndpointType::Agent,
+        other => other,
+    };
+    let result = match (tool_set, params) {
         (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
@@ -1631,7 +1725,13 @@ async fn handle_tools_call(
         (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
             // Replica pinning is deliberately not part of the agent surface:
             // drop `cluster_replica` even if a client supplies it.
-            execute_query(client, &p.cluster, None, &p.sql_query, max_response_size).await
+            execute_query(
+                client,
+                Placement::cluster_or_default(p.cluster.as_deref()),
+                &p.sql_query,
+                max_response_size,
+            )
+            .await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
@@ -1641,20 +1741,18 @@ async fn handle_tools_call(
                 "query tool is not available. Use query_system_catalog instead.".to_string(),
             ))
         }
-        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
-            execute_query(
-                client,
-                &p.cluster,
-                p.cluster_replica.as_deref(),
-                &p.sql_query,
-                max_response_size,
-            )
-            .await
-        }
+        // NOTE: a `?` here would skip `guard.set_status` below and record the
+        // call as cancelled.
+        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => match p.developer_placement() {
+            Ok(placement) => {
+                execute_query(client, placement, &p.sql_query, max_response_size).await
+            }
+            Err(e) => Err(e),
+        },
         // Tool called on wrong endpoint
-        (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
+        (_, tool) => Err(McpRequestError::ToolNotFound(format!(
             "{} is not available on {} endpoint",
-            tool, endpoint
+            tool, endpoint_type
         ))),
     };
 
@@ -1881,7 +1979,11 @@ async fn read_data_product(
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
     // max_result_size at the adapter layer. Mirrors the SQL HTTP endpoint,
     // which also leans on a size cap rather than a row cap.
-    let read_query = build_read_query(&safe_name, limit, target_cluster);
+    let read_query = build_read_query(
+        &safe_name,
+        limit,
+        Placement::cluster_or_default(target_cluster),
+    );
 
     let rows = execute_sql(client, &read_query).await?;
 
@@ -1891,29 +1993,23 @@ async fn read_data_product(
 /// Builds the SQL the agent runs for `read_data_product`.
 ///
 /// `safe_name` must already be the validated, quoted form produced by
-/// [`safe_data_product_name`]. When `target_cluster` is `Some`, it is escaped
-/// as a SQL string literal and wrapped in `SET CLUSTER` inside the `BEGIN READ
-/// ONLY` transaction so the cluster choice is scoped to this read and does not
-/// leak into the session. When it is `None`, no `SET CLUSTER` is emitted and
-/// the read runs on the session's default (serving) cluster.
-fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
+/// [`safe_data_product_name`].
+fn build_read_query(safe_name: &str, limit: u32, placement: Placement<'_>) -> String {
     let body = format!("SELECT * FROM {safe_name} LIMIT {limit}");
-    match target_cluster {
-        Some(cluster) => read_only_txn(
-            &format!("SET CLUSTER = {}", escaped_string_literal(cluster)),
-            &body,
-        ),
-        None => format!("BEGIN READ ONLY; {body}\n; COMMIT;"),
-    }
+    read_only_txn(placement.set_clause().as_deref(), &body)
 }
 
 /// Wraps `body` in a `BEGIN READ ONLY; <set_clause>; <body>; COMMIT;` frame so
 /// `set_clause` is scoped to this read and does not leak into the session.
+/// Without a `set_clause` the read runs on the session's default cluster.
 ///
 /// NOTE: the newline before `; COMMIT;` stops a trailing `--` comment in `body`
 /// from swallowing the `COMMIT`.
-fn read_only_txn(set_clause: &str, body: &str) -> String {
-    format!("BEGIN READ ONLY; {set_clause}; {body}\n; COMMIT;")
+fn read_only_txn(set_clause: Option<&str>, body: &str) -> String {
+    match set_clause {
+        Some(set_clause) => format!("BEGIN READ ONLY; {set_clause}; {body}\n; COMMIT;"),
+        None => format!("BEGIN READ ONLY; {body}\n; COMMIT;"),
+    }
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -1967,54 +2063,22 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
 
 async fn execute_query(
     client: &mut AuthedClient,
-    cluster: &str,
-    cluster_replica: Option<&str>,
+    placement: Placement<'_>,
     sql_query: &str,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(cluster = %cluster, cluster_replica = ?cluster_replica, "Executing user query");
+    debug!(?placement, "Executing user query");
 
     validate_readonly_query(sql_query)?;
-    validate_cluster_replica(cluster_replica)?;
+    placement.validate()?;
 
-    // READ ONLY prevents mutations; SET CLUSTER (and, when requested,
-    // SET CLUSTER_REPLICA) scope the placement to this read.
-    let combined_query = read_only_txn(&query_set_clause(cluster, cluster_replica), sql_query);
+    // READ ONLY prevents mutations, and the SET clause scopes any placement to
+    // this read.
+    let combined_query = read_only_txn(placement.set_clause().as_deref(), sql_query);
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
-}
-
-/// Builds the `SET` clause for `execute_query`: always `SET CLUSTER`, plus
-/// `SET CLUSTER_REPLICA` when a replica is requested (e.g. for
-/// `EXPLAIN ANALYZE` on a cluster with multiple replicas). Both names pass
-/// through `escaped_string_literal` since they are interpolated into SQL
-/// string literals.
-fn query_set_clause(cluster: &str, cluster_replica: Option<&str>) -> String {
-    let mut set_clause = format!("SET CLUSTER = {}", escaped_string_literal(cluster));
-    if let Some(replica) = cluster_replica {
-        set_clause.push_str(&format!(
-            "; SET CLUSTER_REPLICA = {}",
-            escaped_string_literal(replica)
-        ));
-    }
-    set_clause
-}
-
-/// Rejects an empty or whitespace-only `cluster_replica`. Such a name would
-/// otherwise produce `SET CLUSTER_REPLICA = ''`, which fails deep in the engine
-/// as a generic execution error rather than a clean validation error. `None`
-/// (no replica pin requested) is always valid.
-fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequestError> {
-    if let Some(replica) = cluster_replica {
-        if replica.trim().is_empty() {
-            return Err(McpRequestError::QueryValidationFailed(
-                "cluster_replica must not be empty or whitespace-only".to_string(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 async fn query_system_catalog(
@@ -2036,7 +2100,7 @@ async fn query_system_catalog(
     // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
     // used by the agent `query` tool).
     let combined_query = read_only_txn(
-        "SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema",
+        Some("SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema"),
         sql_query,
     );
 
@@ -2051,6 +2115,9 @@ struct TableReferenceCollector {
     tables: Vec<(Option<String>, String)>,
     /// CTE names to exclude from validation (they're not real tables)
     cte_names: std::collections::BTreeSet<String>,
+    /// Item names written as `[<id> AS <name>]`. The planner resolves these by
+    /// ID and ignores the name, so the name cannot be checked.
+    id_references: Vec<String>,
 }
 
 impl TableReferenceCollector {
@@ -2058,45 +2125,61 @@ impl TableReferenceCollector {
         Self {
             tables: Vec::new(),
             cte_names: std::collections::BTreeSet::new(),
+            id_references: Vec::new(),
         }
+    }
+
+    fn record_table(&mut self, name: &RawItemName) {
+        let parts = &name.name().0;
+        let Some(last) = parts.last() else {
+            return;
+        };
+        let table_name = last.as_str().to_lowercase();
+
+        // Only an unqualified name can refer to a CTE. `public.t` names a
+        // catalog item even when a CTE `t` is in scope.
+        if parts.len() == 1 && self.cte_names.contains(&table_name) {
+            return;
+        }
+
+        // Extract schema if qualified (e.g., mz_catalog.mz_tables)
+        let schema = (parts.len() >= 2).then(|| parts[parts.len() - 2].as_str().to_lowercase());
+        self.tables.push((schema, table_name));
     }
 }
 
 impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
-    fn visit_cte(&mut self, cte: &'ast mz_sql_parser::ast::Cte<Raw>) {
-        // Track CTE names so we don't treat them as table references
-        self.cte_names
-            .insert(cte.alias.name.as_str().to_lowercase());
-        visit::visit_cte(self, cte);
+    fn visit_cte_block(&mut self, block: &'ast mz_sql_parser::ast::CteBlock<Raw>) {
+        // Bindings are registered before any body is visited, because a
+        // WITH MUTUALLY RECURSIVE body can reference any binding in its block.
+        self.cte_names.extend(
+            block
+                .bound_identifiers()
+                .map(|ident| ident.as_str().to_lowercase()),
+        );
+        visit::visit_cte_block(self, block);
     }
 
     fn visit_table_factor(&mut self, table_factor: &'ast mz_sql_parser::ast::TableFactor<Raw>) {
         // Only visit actual table references in FROM/JOIN clauses, not function names
         if let mz_sql_parser::ast::TableFactor::Table { name, .. } = table_factor {
-            match name {
-                RawItemName::Name(n) | RawItemName::Id(_, n, _) => {
-                    let parts = &n.0;
-                    if !parts.is_empty() {
-                        let table_name = parts.last().unwrap().as_str().to_lowercase();
-
-                        // Skip if this is a CTE reference, not a real table
-                        if self.cte_names.contains(&table_name) {
-                            visit::visit_table_factor(self, table_factor);
-                            return;
-                        }
-
-                        // Extract schema if qualified (e.g., mz_catalog.mz_tables)
-                        let schema = if parts.len() >= 2 {
-                            Some(parts[parts.len() - 2].as_str().to_lowercase())
-                        } else {
-                            None
-                        };
-                        self.tables.push((schema, table_name));
-                    }
-                }
-            }
+            self.record_table(name);
         }
         visit::visit_table_factor(self, table_factor);
+    }
+
+    fn visit_set_expr(&mut self, set_expr: &'ast mz_sql_parser::ast::SetExpr<Raw>) {
+        // `TABLE t` parses to a set expression, not a table factor.
+        if let mz_sql_parser::ast::SetExpr::Table(name) = set_expr {
+            self.record_table(name);
+        }
+        visit::visit_set_expr(self, set_expr);
+    }
+
+    fn visit_item_name(&mut self, name: &'ast RawItemName) {
+        if let RawItemName::Id(..) = name {
+            self.id_references.push(name.to_ast_string_simple());
+        }
     }
 }
 
@@ -2126,6 +2209,13 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     let mut collector = TableReferenceCollector::new();
     for stmt in &stmts {
         collector.visit_statement(&stmt.ast);
+    }
+
+    if !collector.id_references.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(format!(
+            "Query references objects by ID: {}. Reference system catalog tables by name.",
+            collector.id_references.join(", ")
+        )));
     }
 
     // Use the canonical system schema list, excluding mz_unsafe which contains
@@ -2550,6 +2640,37 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_validate_system_catalog_query_rejects_hidden_user_references() {
+        for sql in [
+            "SELECT * FROM mz_catalog.mz_tables UNION ALL TABLE public.user_data",
+            "WITH user_data AS (SELECT 1) \
+             SELECT * FROM public.user_data, mz_catalog.mz_tables",
+            "SELECT * FROM [u1 AS mz_catalog.mz_tables]",
+        ] {
+            assert!(
+                validate_system_catalog_query(sql).is_err(),
+                "should reject {sql}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_accepts_table_and_mutual_recursion() {
+        for sql in [
+            "TABLE mz_catalog.mz_tables",
+            "WITH MUTUALLY RECURSIVE \
+               t (id text) AS (TABLE u), \
+               u (id text) AS (SELECT id FROM mz_catalog.mz_tables) \
+             SELECT * FROM t",
+        ] {
+            assert!(
+                validate_system_catalog_query(sql).is_ok(),
+                "should accept {sql}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
     fn test_validate_system_catalog_query_adversarial_cases() {
         // Try to sneak in user table via CTE
         assert!(
@@ -2945,33 +3066,24 @@ mod tests {
     #[mz_ore::test]
     fn test_protocol_version_select() {
         use ProtocolVersion::*;
-        for (header, enabled, want) in [
-            (&[][..], true, V2025_11_25),
-            (&["2025-11-25"], true, V2025_11_25),
-            (&["2025-06-18"], true, V2025_11_25),
-            (&["2026-07-28"], true, V2026_07_28),
-            (&["2026-07-28"], false, V2025_11_25),
-            (&["not-a-version"], true, V2025_11_25),
-            (&["2026-07-28X"], true, V2025_11_25),
-            (&["2025-11-25", "2026-07-28"], true, V2026_07_28),
-            (&["2025-11-25, 2026-07-28"], true, V2026_07_28),
-            (&["2025-11-25", "2026-07-28"], false, V2025_11_25),
+        for (header, want) in [
+            (&[][..], V2025_11_25),
+            (&["2025-11-25"], V2025_11_25),
+            (&["2025-06-18"], V2025_11_25),
+            (&["2026-07-28"], V2026_07_28),
+            (&["not-a-version"], V2025_11_25),
+            (&["2026-07-28X"], V2025_11_25),
+            (&["2025-11-25", "2026-07-28"], V2026_07_28),
+            (&["2025-11-25, 2026-07-28"], V2026_07_28),
         ] {
             let values: Vec<_> = header.iter().map(|v| HeaderValue::from_static(v)).collect();
-            assert_eq!(
-                ProtocolVersion::select(&values, enabled),
-                want,
-                "for {header:?} with the flag {enabled}"
-            );
+            assert_eq!(ProtocolVersion::select(&values), want, "for {header:?}");
         }
         let non_ascii = HeaderValue::from_bytes(b"2026-07-28\xff").expect("valid header bytes");
-        assert_eq!(ProtocolVersion::select(&[non_ascii], true), V2025_11_25);
+        assert_eq!(ProtocolVersion::select(&[non_ascii]), V2025_11_25);
         let non_ascii_list =
             HeaderValue::from_bytes(b"\xff, 2026-07-28").expect("valid header bytes");
-        assert_eq!(
-            ProtocolVersion::select(&[non_ascii_list], true),
-            V2026_07_28
-        );
+        assert_eq!(ProtocolVersion::select(&[non_ascii_list]), V2026_07_28);
     }
 
     fn json_headers() -> HeaderMap {
@@ -3235,68 +3347,91 @@ mod tests {
     /// A trailing `--` comment in the body must not swallow the `; COMMIT;`.
     #[mz_ore::test]
     fn test_read_only_txn_comment_cannot_swallow_commit() {
-        let sql = read_only_txn("SET CLUSTER = 'c'", "SELECT 1 --");
+        let sql = read_only_txn(Some("SET CLUSTER = 'c'"), "SELECT 1 --");
         assert!(
             sql.contains("\n; COMMIT;"),
             "COMMIT must sit on its own line: {sql}",
         );
     }
 
-    // ── query_set_clause tests (QAR-136) ───────────────────────────────
+    // ── Placement tests (QAR-136) ──────────────────────────────────────
 
-    /// Without a replica, only `SET CLUSTER` is emitted.
     #[mz_ore::test]
-    fn test_query_set_clause_without_replica() {
-        let clause = query_set_clause("prod_cluster", None);
-        assert_eq!(clause, "SET CLUSTER = 'prod_cluster'");
-    }
-
-    /// With a replica, `SET CLUSTER_REPLICA` follows `SET CLUSTER`, scoping
-    /// the read to one replica (what makes EXPLAIN ANALYZE usable on
-    /// clusters with multiple replicas).
-    #[mz_ore::test]
-    fn test_query_set_clause_with_replica() {
-        let clause = query_set_clause("prod_cluster", Some("r1"));
+    fn test_placement_set_clause() {
+        assert_eq!(Placement::SessionDefault.set_clause(), None);
         assert_eq!(
-            clause,
-            "SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'"
+            Placement::Cluster("prod_cluster").set_clause().as_deref(),
+            Some("SET CLUSTER = 'prod_cluster'")
+        );
+        assert_eq!(
+            Placement::Replica {
+                cluster: "prod_cluster",
+                replica: "r1"
+            }
+            .set_clause()
+            .as_deref(),
+            Some("SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'")
         );
     }
 
-    /// Replica names are interpolated into a SQL string literal, so they get
-    /// the same escaping treatment as cluster names. Defends against
-    /// injection via adversarial replica names.
     #[mz_ore::test]
-    fn test_query_set_clause_escapes_replica_name() {
-        let clause = query_set_clause("c", Some("evil'; DROP TABLE secrets; --"));
+    fn test_placement_set_clause_escapes_replica_name() {
+        let clause = Placement::Replica {
+            cluster: "c",
+            replica: "evil'; DROP TABLE secrets; --",
+        }
+        .set_clause();
         assert_eq!(
-            clause,
-            "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
+            clause.as_deref(),
+            Some("SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'")
         );
     }
 
-    /// A `None` replica (no pinning requested) is always valid, and a normal
-    /// replica name passes validation.
     #[mz_ore::test]
-    fn test_validate_cluster_replica_accepts_none_and_names() {
-        assert!(validate_cluster_replica(None).is_ok());
-        assert!(validate_cluster_replica(Some("r1")).is_ok());
-    }
-
-    /// An empty or whitespace-only replica name is rejected as a validation
-    /// error up front, rather than producing `SET CLUSTER_REPLICA = ''` that
-    /// fails deep in the engine as a generic execution error.
-    #[mz_ore::test]
-    fn test_validate_cluster_replica_rejects_empty() {
-        for name in ["", "   ", "\t\n"] {
+    fn test_placement_validate() {
+        assert!(Placement::SessionDefault.validate().is_ok());
+        assert!(Placement::Cluster("c").validate().is_ok());
+        let replica = |cluster, replica| Placement::Replica { cluster, replica };
+        assert!(replica("c", "r1").validate().is_ok());
+        for bad in [
+            Placement::Cluster(""),
+            Placement::Cluster("   "),
+            replica("", "r1"),
+            replica("c", ""),
+            replica("c", "\t\n"),
+        ] {
             assert!(
                 matches!(
-                    validate_cluster_replica(Some(name)),
+                    bad.validate(),
                     Err(McpRequestError::QueryValidationFailed(_))
                 ),
-                "expected validation error for {name:?}",
+                "expected validation error for {bad:?}",
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn test_developer_placement() {
+        let params = |cluster: Option<&str>, replica: Option<&str>| QueryParams {
+            cluster: cluster.map(str::to_string),
+            cluster_replica: replica.map(str::to_string),
+            sql_query: "SELECT 1".to_string(),
+        };
+        assert!(matches!(
+            params(None, Some("r1")).developer_placement(),
+            Err(McpRequestError::QueryValidationFailed(_))
+        ));
+        assert_eq!(
+            params(Some("c"), None).developer_placement().unwrap(),
+            Placement::Cluster("c")
+        );
+        assert_eq!(
+            params(Some("c"), Some("r1")).developer_placement().unwrap(),
+            Placement::Replica {
+                cluster: "c",
+                replica: "r1"
+            }
+        );
     }
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────
@@ -3306,7 +3441,11 @@ mod tests {
     /// into the rest of the session.
     #[mz_ore::test]
     fn test_build_read_query_with_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Some("prod_cluster"));
+        let sql = build_read_query(
+            "\"db\".\"sch\".\"v\"",
+            50,
+            Placement::Cluster("prod_cluster"),
+        );
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(sql.contains("SET CLUSTER = 'prod_cluster'"), "{sql}");
         assert!(
@@ -3320,7 +3459,7 @@ mod tests {
     /// the read omits `SET CLUSTER` and runs on the session's serving cluster.
     #[mz_ore::test]
     fn test_build_read_query_without_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, None);
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Placement::SessionDefault);
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(!sql.contains("SET CLUSTER"), "{sql}");
         assert!(
@@ -3339,7 +3478,7 @@ mod tests {
         let sql = build_read_query(
             "\"db\".\"sch\".\"v\"",
             10,
-            Some("evil'; DROP TABLE secrets; --"),
+            Placement::Cluster("evil'; DROP TABLE secrets; --"),
         );
         // The single quote in `evil'` must be doubled inside the literal.
         assert!(

@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use mz_ore::iter::IteratorExt;
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, IntGaugeVec, MetricsRegistry};
+use mz_ore::metrics::{DeregisterOnDropGauge, DeregisterOnDropVec, MetricsRegistry, raw};
 use mz_repr::GlobalId;
 use prometheus::core::AtomicI64;
 use tracing::debug;
@@ -21,7 +21,7 @@ use tracing::debug;
 /// Definitions for kafka-specific per-partition metrics.
 #[derive(Clone, Debug)]
 pub(crate) struct KafkaSourceMetricDefs {
-    pub(crate) partition_offset_max: IntGaugeVec,
+    pub(crate) partition_offset_max: DeregisterOnDropVec<raw::IntGaugeVec>,
 }
 
 impl KafkaSourceMetricDefs {
@@ -40,7 +40,7 @@ impl KafkaSourceMetricDefs {
 pub(crate) struct KafkaSourceMetrics {
     labels: Vec<String>,
     defs: KafkaSourceMetricDefs,
-    partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<AtomicI64, Vec<String>>>,
+    partition_offset_map: BTreeMap<i32, DeregisterOnDropGauge<AtomicI64>>,
 }
 
 impl KafkaSourceMetrics {
@@ -57,7 +57,7 @@ impl KafkaSourceMetrics {
                 (
                     *id,
                     defs.partition_offset_max
-                        .get_delete_on_drop_metric(labels.to_vec()),
+                        .get_deregister_on_drop_metric(labels.to_vec()),
                 )
             })),
             labels: vec![topic.clone(), source_id.to_string()],
@@ -79,13 +79,15 @@ impl KafkaSourceMetrics {
         self.partition_offset_map
             .entry(id)
             .or_insert_with_key(|id| {
-                self.defs.partition_offset_max.get_delete_on_drop_metric(
-                    self.labels
-                        .iter()
-                        .cloned()
-                        .chain_one(format!("{}", id))
-                        .collect(),
-                )
+                self.defs
+                    .partition_offset_max
+                    .get_deregister_on_drop_metric(
+                        self.labels
+                            .iter()
+                            .cloned()
+                            .chain_one(format!("{}", id))
+                            .collect(),
+                    )
             })
             .set(offset);
     }

@@ -151,12 +151,3 @@ output "gke_cluster" {
   }
   sensitive = true
 }
-
-output "connection_strings" {
-  description = "Connection strings for mzcompose"
-  value = {
-    metadata_backend_url = local.metadata_backend_url
-    persist_backend_url  = local.persist_backend_url
-  }
-  sensitive = true
-}

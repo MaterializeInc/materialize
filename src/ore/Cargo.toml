@@ -27,6 +27,7 @@ clap = { workspace = true, optional = true, features = ["env", "string"] }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
 compact_bytes = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
 ctor = { workspace = true, optional = true }
 differential-dataflow = { workspace = true, optional = true }
 derivative.workspace = true
@@ -75,9 +76,8 @@ http = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
-tokio-native-tls = { workspace = true, optional = true }
-native-tls = { workspace = true, optional = true }
-hyper-tls = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
@@ -97,6 +97,7 @@ anyhow.workspace = true
 criterion.workspace = true
 lz4_flex.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
+mz-bench-util = { path = "../bench-util" }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
@@ -129,10 +130,9 @@ tracing = [
     "tracing-subscriber",
     "tracing-subscriber/ansi",
     "tracing-opentelemetry",
-    "tokio-native-tls",
-    "native-tls",
     "http",
-    "hyper-tls",
+    "hyper-rustls",
+    "rustls",
     "hyper-util",
     "metrics",
     "opentelemetry",
@@ -154,8 +154,7 @@ assert-no-tracing = ["ctor"]
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
-pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
-pool = ["dep:bytemuck", "libc", "dep:tracing"]
+pool = ["dep:bytemuck", "dep:crc32fast", "libc", "dep:tracing"]
 
 [[test]]
 name = "future"
@@ -177,12 +176,3 @@ harness = false
 name = "bytes"
 harness = false
 required-features = ["bytes", "region", "tracing"]
-
-[[bench]]
-name = "pager"
-harness = false
-required-features = ["pager"]
-
-[[example]]
-name = "pager_merge"
-required-features = ["pager"]

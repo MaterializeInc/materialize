@@ -389,9 +389,6 @@ pub(crate) fn check_runaway_write_ts(now: &mz_repr::Timestamp, timestamp: mz_rep
 /// they might read from. We use a heuristic of "anything in the same database
 /// schemas with the same timeline as whatever the first query is".
 ///
-/// This is a free-standing function that can be called from both the old peek sequencing
-/// and the new frontend peek sequencing.
-///
 /// This function assumes that uses_ids only includes such ids that are the latest versions of each
 /// object. This should be easy to satisfy when calling this function with the ids directly
 /// referenced by a new query, because a new query should not be able to refer to old versions of
