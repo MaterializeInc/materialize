@@ -7,8 +7,10 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-**Next action:** after scratch reauthentication, remove the four completed timing
-fixtures' stopped databases/blob state, then prepare final-head native acceptance.
+**Next action:** after scratch reauthentication, inspect replacement worker
+`i-0622cbf6d7530a395` and its build cache. Its deletion deadline has passed.
+The debug build hit its one-hour limit while compiling `mz-compute`, so no
+final acceptance ran. Resume the same bounded build if its cache survives.
 Run lifecycle, DDL, adapter loss, scheduled-refresh MV and the compatible-version
 walkthrough once on the final implementation. Keep the PR draft.
 
@@ -19,9 +21,9 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
 
 ## Live blockers and constraints
 
-- Scratch SSO expired after the successful startup comparison. All timing runtimes
-  stopped and restored caps. Their evidence is archived locally, but stopped
-  containers and blob state still need removal. No heavy local builds.
+- Scratch SSO expired again. The original timing worker was confirmed absent
+  before provisioning its replacement. Timing evidence is archived locally.
+  The replacement's current state is unverified. No heavy local builds.
 - [CI 144357](https://buildkite.com/materialize/test/builds/144357), at `f46813b3`,
   passes Linux/macOS Clippy, formatting, docs and dependency lint. It remains red:
   merge-skew encounters source conflicts, and the x86 build fails its image-publicity
@@ -68,8 +70,8 @@ arbitrary-release or migration coverage and needs current-head revalidation.
 
 ## Worker and evidence
 
-Worker `i-0f602658c617effda`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
-Scheduled shutdown: 2026-11-21 01:08:33 UTC. Deletion: 2026-11-21 01:38:21 UTC.
+Replacement worker `i-0622cbf6d7530a395`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
+Scheduled shutdown: 2026-11-21 23:31:19 UTC. Deletion: 2026-11-22 00:27:20 UTC.
 Recheck state and expiry before reuse. Extend within existing caps when needed.
 Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk reserve.
 Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
@@ -77,14 +79,16 @@ Never overlap builds and measured runtimes.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, currently using source overlays.
+`/home/ubuntu/materialize-m3-controller-followups`, provisioned clean at `8ef1fc1b`.
 Verify and preserve remote work before syncing an explicit revision to an idle,
-clean worker. `replica-build-inputs.json` and artifact receipts identify tested
-source, not the displayed worker Git revision.
+clean worker. `worker-recovery-20261121.json` records provisioning and resource caps.
+`build-final-native-driver.log` records the timeout, 31.5 GiB peak memory and no swap.
 
-`replica-startup-deferred/artifacts` contains the verified implementation binaries.
-The shared target clusterd was last built as the full-reconstruction control and
-must be rebuilt before use as current code. The baseline worktree expired.
+Do not assume the old timing binaries or any completed final artifacts survive.
+`final-acceptance/` contains locally prepared source receipts, pair-build and
+lifecycle harnesses. The versioned lifecycle preserves its predecessor assertions
+and adds the existing clean-controller-exit check. Container-driver repointing
+remains unverified. The baseline worktree expired.
 Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
 
