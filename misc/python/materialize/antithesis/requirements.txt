@@ -7,5 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Optional SDK shared by the workload and Python documentation checks.
+# Optional packages shared by the workload images and the Python
+# documentation checks: the Antithesis SDK, and hegel, which runs the
+# driver's state machine.
 antithesis==0.4.0
+hegeltest==0.5.0

@@ -449,6 +449,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .expect("invalid usage");
 
         if let Err(e @ UpperMismatch { .. }) = res {
+            mz_ore::antithesis_reachable!(
+                "catalog: a durable catalog write loses its compare_and_append",
+                &serde_json::json!({})
+            );
             // Most likely we were fenced out.
             // Sync to the current upper to detect that.
             self.sync_to_current_upper().await?;

@@ -29,7 +29,7 @@ def test_workload_can_read_termination_logs_without_mutating_them(
     role_name: str,
 ) -> None:
     resources = yaml.safe_load_all(
-        (MZ_ROOT / "test/antithesis/manifests/30-workload.yaml").read_text()
+        (MZ_ROOT / "test/antithesis/manifests/25-workload-rbac.yaml").read_text()
     )
     role = next(
         resource

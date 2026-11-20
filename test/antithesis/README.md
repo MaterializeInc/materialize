@@ -7,8 +7,63 @@ race, or in a timing window: 0dt rollouts, persist leases and finalization,
 controller and catalog state rebuilt at boot, and source ingestion across
 restarts.
 
-The workload commands under `workload/test/main/` select independent drivers
-and checks from `misc/python/materialize/antithesis/drivers/`.
+## Two workloads
+
+The same deployment runs one of two workloads, chosen when the manifests are
+rendered (`render --workload`):
+
+- **driver** (`driver/`, code in `misc/python/materialize/antithesis_driver/`):
+  one process in the fault-excluded `driver` pod, a [hegel](https://hegel.dev)
+  state machine whose rules send SQL and Kubernetes requests and check every
+  outcome against in-memory models. Its one test command,
+  `first_start_workload`, starts the workload. An eventually rule stops
+  faults, runs the post-fault checks and ends the timeline. The design and
+  its comparison with the legacy workload are in
+  [the design doc](../../doc/developer/design/20261120_antithesis_driver.md).
+- **legacy** (`workload/`, the default): the Test Composer workload described
+  in the rest of this file. Its commands under `workload/test/main/` select
+  independent drivers and checks from
+  `misc/python/materialize/antithesis/drivers/`.
+
+The legacy workload stays until the driver's runs reach every property the
+legacy runs reach.
+
+### The driver
+
+The driver ports the client history, contended counters, atomic commits, IVM,
+rollout, pod restart, recovery and crash-loop checks so far, keeping their
+assertion messages. Its
+assertions use the SDK's semantics as they are: a guarantee is an `always`,
+which fails when a run never evaluates it, and a situation worth reaching is a
+`sometimes` or `reachable`, which fails when a run never reaches it. Expect
+the latter on situations that need faults in short runs.
+
+Run it locally against a standalone container, or against these manifests on
+kind with a release's published images:
+
+```
+bin/pyactivate -m pip install -r misc/python/materialize/antithesis/requirements.txt
+bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --duration 300 standalone
+bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --duration 300 kind
+```
+
+Each runs the workload for `--duration` seconds, then the eventually, and
+lists the assertions a run would fail. `kind` builds only the driver image
+and needs `kind`, `kubectl`, `helm` and the license key.
+
+Launch with the `driver-config` image of the CI artifact (see "Submitting to
+Antithesis") and exclude the driver from faults:
+
+```
+snouty launch --launcher basic_k8s_test \
+    --config-image "$(jq -r '."driver-config"' antithesis-images.json)" \
+    --param "antithesis.images=$(jq -r 'del(.config, ."driver-config", ."upgrade-base-version") | [.[]] | join(";")' antithesis-images.json)" \
+    --fault-tolerance high_availability --fault-exclusions '^driver$' \
+    --max-compute-hours <hours> ...
+```
+
+hegel reports the run's own verdict as `::materialize_driver passes
+properties`, which fails if the state machine raised.
 
 ## Coverage
 
@@ -207,6 +262,8 @@ oracles need.
 |---|---|
 | `manifests/` | Kubernetes manifest templates and the orchestratord Helm values |
 | `workload/` | mzbuild image `antithesis-workload`: the Python workload, its entrypoint, and authoritative commands under `test/main/` |
+| `driver/` | mzbuild image `antithesis-driver`: the state machine driver and its `first_start_workload` command |
+| `misc/python/materialize/antithesis_driver/` | The driver's state machine, components and local loop |
 | `config/manifests/` | Rendered manifests (gitignored: they embed the license key) |
 | `misc/python/materialize/antithesis/` | Workload library and drivers (importable outside Antithesis) |
 | `misc/python/materialize/orchestratord/` | Kubernetes client for an orchestratord-managed environment |
@@ -443,13 +500,14 @@ CI builds the images on PRs labeled `ci-antithesis` (see `ci/README.md`) and
 pushes them to the Antithesis registry. The step requires `MZ_CI_LICENSE_KEY`
 to render and publish the config image against those exact references.
 The step's `antithesis-images.json` artifact lists the images, upgrade base
-images, and a `config` reference pinned to its pushed digest. Download the
+images, and the `config` (legacy) and `driver-config` references pinned to
+their pushed digests. Download the
 artifact and launch without a local registry login:
 
 ```
 snouty launch --launcher basic_k8s_test \
     --config-image "$(jq -r '.config' antithesis-images.json)" \
-    --param "antithesis.images=$(jq -r 'del(.config, ."upgrade-base-version") | [.[]] | join(";")' antithesis-images.json)" \
+    --param "antithesis.images=$(jq -r 'del(.config, ."driver-config", ."upgrade-base-version") | [.[]] | join(";")' antithesis-images.json)" \
     --duration <minutes> ...
 ```
 

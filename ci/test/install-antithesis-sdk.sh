@@ -21,15 +21,17 @@ import importlib.metadata
 from pathlib import Path
 import sys
 
-requirement = next(
-    line.strip()
+requirements = [
+    line.strip().split("==")
     for line in Path(sys.argv[1]).read_text().splitlines()
     if line.strip() and not line.startswith("#")
-)
-package, expected = requirement.split("==")
+]
 try:
     importlib.import_module("antithesis.assertions")
-    sys.exit(importlib.metadata.version(package) != expected)
+    importlib.import_module("hegel")
+    sys.exit(
+        any(importlib.metadata.version(p) != expected for p, expected in requirements)
+    )
 except (ImportError, importlib.metadata.PackageNotFoundError):
     sys.exit(1)
 PY

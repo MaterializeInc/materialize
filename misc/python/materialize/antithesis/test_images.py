@@ -348,7 +348,10 @@ def test_config_artifact_uses_just_published_images_and_a_private_digest(
             assert options["--environmentd-image"] == refs["environmentd"]
             assert options["--clusterd-image"] == refs["clusterd"]
             assert options["--orchestratord-image"] == refs["orchestratord"]
-            assert options["--workload-image"] == refs["antithesis-workload"]
+            assert (
+                options["--workload-image"]
+                == refs[images.WORKLOAD_IMAGES[options["--workload"]]]
+            )
             if upgrade:
                 assert (
                     options["--upgrade-from-environmentd-image"]
@@ -369,7 +372,7 @@ def test_config_artifact_uses_just_published_images_and_a_private_digest(
             assert output.parent.stat().st_mode & 0o077 == 0
         elif command[1] == "build":
             context = Path(command[-1])
-            assert context == contexts[0]
+            assert context == contexts[-1]
             assert (
                 context / "Dockerfile"
             ).read_text() == "FROM scratch\nCOPY manifests /manifests\n"
@@ -377,19 +380,29 @@ def test_config_artifact_uses_just_published_images_and_a_private_digest(
 
     monkeypatch.setattr(images.spawn, "runv", run)
     digest = f"{images.CONFIG_REGISTRY}/antithesis-config@sha256:" + "a" * 64
+    driver_digest = (
+        f"{images.CONFIG_REGISTRY}/antithesis-driver-config@sha256:" + "c" * 64
+    )
     inspect = Mock(
-        return_value=json.dumps(["ghcr.io/example/config@sha256:" + "b" * 64, digest])
+        return_value=json.dumps(
+            ["ghcr.io/example/config@sha256:" + "b" * 64, digest, driver_digest]
+        )
     )
     monkeypatch.setattr(images.spawn, "capture", inspect)
     assert images.main() == 0
-    expected = {**refs, **(bases if upgrade else {}), "config": digest}
+    expected = {
+        **refs,
+        **(bases if upgrade else {}),
+        "config": digest,
+        "driver-config": driver_digest,
+    }
     assert json.loads(artifact.read_text()) == expected
-    assert commands[-1] == [
-        "docker",
-        "push",
-        f"{images.CONFIG_REGISTRY}/antithesis-config:{tag}",
+    pushes = [c for c in commands if c[:2] == ["docker", "push"]]
+    assert pushes == [
+        ["docker", "push", f"{images.CONFIG_REGISTRY}/antithesis-config:{tag}"],
+        ["docker", "push", f"{images.CONFIG_REGISTRY}/antithesis-driver-config:{tag}"],
     ]
-    assert not contexts[0].exists()
+    assert not any(context.exists() for context in contexts)
 
 
 @pytest.mark.parametrize("failure", ["render", "build", "push", "digest"])

@@ -30,8 +30,9 @@ JSON. With
 `--upgrade-base`, it also builds and pushes the base images for the release
 `upgrade_base_version` picks, unless the registry already has them. It expects
 `docker login` for the registry to have happened already.
-`--config` adds a config image pinned to its pushed digest, and requires
-`MZ_CI_LICENSE_KEY` and the destination `CONFIG_REGISTRY`.
+`--config` adds config images pinned to their pushed digests, one per workload
+(`config` for the legacy workload, `driver-config` for the driver), and
+requires `MZ_CI_LICENSE_KEY` and the destination `CONFIG_REGISTRY`.
 """
 
 from __future__ import annotations
@@ -52,7 +53,15 @@ from materialize.mz_version import MzVersion
 from materialize.version_list import get_published_minor_mz_versions
 from materialize.xcompile import Arch
 
-IMAGES = ["environmentd", "clusterd", "orchestratord", "antithesis-workload"]
+IMAGES = [
+    "environmentd",
+    "clusterd",
+    "orchestratord",
+    "antithesis-workload",
+    "antithesis-driver",
+]
+# The workload image of each config `render` can produce.
+WORKLOAD_IMAGES = {"legacy": "antithesis-workload", "driver": "antithesis-driver"}
 UPGRADE_BASE_IMAGES = ["environmentd", "clusterd"]
 CONFIG_REGISTRY = (
     "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repository"
@@ -316,13 +325,25 @@ def config_publish_preflight(registry: str) -> None:
         raise ValueError("MZ_CI_LICENSE_KEY must be set to publish a config image")
 
 
-def publish_config(refs: dict[str, str], registry: str, tag: str, root: Path) -> str:
-    """Publish a rendered config against the given image references and return its digest."""
+def publish_config(
+    refs: dict[str, str],
+    registry: str,
+    tag: str,
+    root: Path,
+    workload: str = "legacy",
+) -> str:
+    """Publish a rendered config against the given image references and return its digest.
+
+    `workload` selects the workload pod, as for `render.render`.
+    """
     config_publish_preflight(registry)
     base_keys = ("upgrade-base-environmentd", "upgrade-base-clusterd")
     if (base_keys[0] in refs) != (base_keys[1] in refs):
         raise ValueError("the upgrade-base images must be given together")
-    ref = f"{registry}/antithesis-config:{tag}"
+    name = (
+        "antithesis-config" if workload == "legacy" else f"antithesis-{workload}-config"
+    )
+    ref = f"{registry}/{name}:{tag}"
     with tempfile.TemporaryDirectory(prefix="mz-antithesis-config-") as directory:
         context = Path(directory)
         if context.resolve().is_relative_to(root.resolve()):
@@ -339,8 +360,10 @@ def publish_config(refs: dict[str, str], registry: str, tag: str, root: Path) ->
             refs["clusterd"],
             "--orchestratord-image",
             refs["orchestratord"],
+            "--workload",
+            workload,
             "--workload-image",
-            refs["antithesis-workload"],
+            refs[WORKLOAD_IMAGES[workload]],
         ]
         if base_keys[0] in refs:
             command.extend(
@@ -360,7 +383,7 @@ def publish_config(refs: dict[str, str], registry: str, tag: str, root: Path) ->
             ["docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}"]
         )
     )
-    pattern = re.escape(f"{registry}/antithesis-config") + r"@sha256:[0-9a-f]{64}"
+    pattern = re.escape(f"{registry}/{name}") + r"@sha256:[0-9a-f]{64}"
     matches = {
         digest
         for digest in digests or []
@@ -392,7 +415,7 @@ def main() -> int:
     parser.add_argument(
         "--config",
         action="store_true",
-        help="also render and publish the licensed Kubernetes config to the Antithesis CI registry",
+        help="also render and publish the licensed Kubernetes configs to the Antithesis CI registry",
     )
     parser.add_argument(
         "--output", type=Path, help="also write the references to this JSON file"
@@ -414,6 +437,9 @@ def main() -> int:
         refs.update(publish_upgrade_base(args.registry, args.arch))
     if args.config:
         refs["config"] = publish_config(refs, args.registry, tag, args.root)
+        refs["driver-config"] = publish_config(
+            refs, args.registry, tag, args.root, workload="driver"
+        )
     rendered = json.dumps(refs, indent=2)
     print(rendered)
     if args.output:

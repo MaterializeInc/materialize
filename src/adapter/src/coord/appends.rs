@@ -456,6 +456,10 @@ impl GroupCommitter {
             {
                 TxnsWriteAttempt::Applied => return Some(write_ts),
                 TxnsWriteAttempt::UpperConflict => {
+                    mz_ore::antithesis_reachable!(
+                        "adapter: a table write conflicts in the txns shard and retries at a fresh timestamp",
+                        &serde_json::json!({"attempt": attempt})
+                    );
                     warn!(
                         write_ts = %write_ts.timestamp,
                         attempt,

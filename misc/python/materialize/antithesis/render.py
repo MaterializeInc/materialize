@@ -34,6 +34,9 @@ from materialize import MZ_ROOT
 MANIFESTS = MZ_ROOT / "test" / "antithesis" / "manifests"
 OPERATOR_CHART = MZ_ROOT / "misc" / "helm-charts" / "operator"
 ENVIRONMENT_NAME = "antithesis"
+# The manifest of each workload. A config deploys exactly one of them, since
+# each reports `setup_complete` on its own.
+WORKLOADS = {"legacy": "30-workload.yaml", "driver": "30-driver.yaml"}
 
 DEFAULT_IMAGES = {
     "POSTGRES_IMAGE": "docker.io/library/postgres:17.6",
@@ -108,13 +111,18 @@ def render(
     workload_image: str,
     license_key: str,
     upgrade_from: tuple[str, str] | None = None,
+    workload: str = "legacy",
 ) -> None:
     """Write the manifests.
 
-    `upgrade_from` is an (environmentd, clusterd) image pair at an older
-    release. When set, the environment starts on it and the rollouts driver
+    `workload_image` is the image of the selected `workload`, a key of
+    `WORKLOADS`. `upgrade_from` is an (environmentd, clusterd) image pair at an
+    older release. When set, the environment starts on it and the workload
     upgrades it to `environmentd_image`.
     """
+    if workload not in WORKLOADS:
+        raise ValueError(f"unknown workload {workload!r}")
+    excluded = {f for name, f in WORKLOADS.items() if name != workload}
     check_image_pair(environmentd_image, clusterd_image)
     if upgrade_from is not None:
         check_image_pair(*upgrade_from)
@@ -143,6 +151,8 @@ def render(
         stale.unlink()
 
     for template in sorted(MANIFESTS.glob("*.yaml")):
+        if template.name in excluded:
+            continue
         text = string.Template(template.read_text()).substitute(values)
         if template.name == "operator-values.yaml":
             values_file = output.parent / "operator-values.rendered.yaml"
@@ -174,7 +184,12 @@ def main() -> int:
     parser.add_argument("--environmentd-image", required=True)
     parser.add_argument("--clusterd-image", required=True)
     parser.add_argument("--orchestratord-image", required=True)
-    parser.add_argument("--workload-image", required=True)
+    parser.add_argument("--workload", choices=sorted(WORKLOADS), default="legacy")
+    parser.add_argument(
+        "--workload-image",
+        required=True,
+        help="antithesis-workload for --workload legacy, antithesis-driver for driver",
+    )
     parser.add_argument(
         "--upgrade-from-environmentd-image",
         help="start on this older release and upgrade to --environmentd-image",
@@ -203,6 +218,7 @@ def main() -> int:
             if args.upgrade_from_environmentd_image
             else None
         ),
+        workload=args.workload,
     )
     return 0
 
