@@ -3824,13 +3824,18 @@ async fn replica_reconstruction_preserves_late_sink_schema() {
             panic!("expected sink");
         };
         assert_eq!(
-            replica.state().storage_sink_description(actual, timely::progress::Antichain::from_elem(Timestamp::MIN)),
-            writer.state().storage_sink_description(expected, timely::progress::Antichain::from_elem(Timestamp::MIN)),
+            replica.state().storage_sink_description(
+                actual, timely::progress::Antichain::from_elem(Timestamp::MIN),
+            ),
+            writer.state().storage_sink_description(
+                expected, timely::progress::Antichain::from_elem(Timestamp::MIN),
+            ),
         );
         // Follow several commits at once, including rewritten dependent SQL.
         let view_id = ids[1];
         for to_name in ["schema_view_renamed", "schema_view_renamed_again"] {
-            let current_full_name = writer.resolve_full_name(writer.get_entry(&view_id).name(), None);
+            let current_full_name =
+                writer.resolve_full_name(writer.get_entry(&view_id).name(), None);
             let ts = writer.current_upper().await;
             writer.transact(None, None, ts, None, vec![Op::RenameItem {
                 id: view_id,

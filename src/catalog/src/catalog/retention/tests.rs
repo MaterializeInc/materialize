@@ -856,10 +856,12 @@ async fn empty_progress_respects_catalog_retry_budget() {
         while let Some(resume) = candidates.recv().await {
             attempts += 1;
             assert!(attempts <= 3, "empty progress must obey the retry budget");
-            peer.sync_to_current_updates().await.unwrap();
+            peer.sync_to_current_updates().await.expect("sync peer");
             let upper = peer.current_upper().await;
-            peer.advance_upper(upper.step_forward()).await.unwrap();
-            resume.send(()).unwrap();
+            peer.advance_upper(upper.step_forward())
+                .await
+                .expect("advance peer progress");
+            resume.send(()).expect("resume candidate");
         }
         attempts
     };
@@ -874,11 +876,14 @@ async fn empty_progress_respects_catalog_retry_budget() {
     assert!(catch_up.updates.is_empty());
     // No partial admission escaped. The retained operation can succeed after
     // the owner gets another turn and the peer stops winning the CAS.
-    f.catalog.sync_to_current_updates().await.unwrap();
+    f.catalog
+        .sync_to_current_updates()
+        .await
+        .expect("catch up after interference");
     f.catalog
         .transact(Some(&mut catch_up), None, ts, None, ops)
         .await
-        .unwrap();
+        .expect("commit retained operation");
     assert!(f.catalog.state().try_get_entry(&view_id).is_some());
     peer.expire().await;
 }

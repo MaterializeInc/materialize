@@ -1140,15 +1140,19 @@ mod tests {
             store
                 .read_plans(vec![(id, revision)])
                 .await
-                .unwrap()
+                .expect("read after abandoned request")
                 .is_empty()
         );
         store
             .write_plans(vec![(id, revision, gen_global_expressions())])
             .await
-            .unwrap();
+            .expect("publish subsequent request");
         assert_eq!(
-            store.read_plans(vec![(id, revision)]).await.unwrap().len(),
+            store
+                .read_plans(vec![(id, revision)])
+                .await
+                .expect("read published plan")
+                .len(),
             1
         );
     }

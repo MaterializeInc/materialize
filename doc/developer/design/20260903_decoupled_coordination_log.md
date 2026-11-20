@@ -43,12 +43,12 @@ M2, the 60s publication default and existing resource limits remain closed.
   target clusterd is the full-reconstruction control and needs rebuilding before
   use as current code. Completed runtimes stopped and restored caps. Keep builds
   off the editing VM and preserve existing caps.
-- Repository-wide formatting fails on an unchanged tracing macro in
-  `src/adapter/src/coord/caught_up.rs:603`. Changed-file formatting and whitespace
-  checks pass. See `plan-introspection-red-green.md`.
-- Catalog test Clippy fails on eight existing `unwrap_used` findings in
-  `catalog/retention/tests.rs` and `expr_cache.rs`. See
-  `native-plan-admission-verification.md`. No lint suppression was added.
+- Repository-wide formatting and catalog documentation checks now pass locally.
+  Focused orchestrator test Clippy also passes. The recorded catalog test unwraps
+  were replaced with diagnostic expectations without changing assertions, but
+  catalog test Clippy remains unverified: its lightweight local attempt reached
+  the 4 GiB cap before checking the tests. Do not raise local limits. See
+  `ci-144350-repairs.md`.
 - Moving publication waits and further retry owners are deferred by the approved
   cut. No finite overall login retry limit or authentication-policy change is approved.
 - The unchanged MV admission suite had an intermittent compaction-scheduling
@@ -60,11 +60,12 @@ M2, the 60s publication default and existing resource limits remain closed.
   verification remain outstanding.
 - Promoted-adapter storage initialization can reject structural catch-up.
   Revalidate preparation rather than removing the guard.
-- Broad current-head CI and combined ingestion remain open. The last inspected
-  [CI build](https://buildkite.com/materialize/test/builds/143929), at `6e7a3107`,
-  passed lint/docs checks but image builds were blocked by public pubsubd visibility.
-  Merge-skew failed before compilation and dependent runtime jobs did not run.
-  See `current-ci-143929.md`. Do not merge main without approval.
+- Broad current-head CI and combined ingestion remain open. The inspected
+  [CI build](https://buildkite.com/materialize/test/builds/144350), at `621ec3e3`,
+  reports formatting/docs/test-Clippy failures, merge-skew conflicts and the
+  pubsubd image visibility blocker. Local repairs need fresh CI verification.
+  Runtime image coverage remains incomplete. See `ci-144350-repairs.md`.
+  Do not merge main or change registry visibility without approval.
 - Debug upsert OOM also reproduces on pinned upstream. Do not raise memory or
   shrink workloads. Positive builtin migrations, pre-native conversion and
   Kubernetes/operator/Terraform integration remain deferred. No Persist redesign

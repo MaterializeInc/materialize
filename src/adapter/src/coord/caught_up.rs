@@ -600,7 +600,8 @@ impl Coordinator {
                 let coordinator_elapsed = coordinator_started.elapsed();
                 catalog = Arc::clone(&check.catalog);
                 let revision_changed = catalog.transient_revision() != leader_revision;
-                tracing::info!(attempt, ?slept, ?catalog_elapsed, ?reference_elapsed, ?oracle_elapsed,
+                tracing::info!(attempt, ?slept, ?catalog_elapsed,
+                    ?reference_elapsed, ?oracle_elapsed,
                     ?coordinator_elapsed, ?leader_revision,
                     candidate_revision = ?catalog.transient_revision(), revision_changed,
                     "caught-up check inputs acquired");

@@ -419,10 +419,10 @@ In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this view on
 SQL objects that don't exist in the compute layer (such as views) are omitted.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
-| Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
-| ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
-| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions.id`](#mz_subscriptions).                                                        |
-| `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| Field | Type | Meaning |
+|-------|------|---------|
+| `object_id` | [`text`] | The global ID of a maintained compute object or the execution-qualified ID of a subscription. Corresponds to [`mz_internal.mz_object_global_ids.global_id`](#mz_object_global_ids) or [`mz_internal.mz_subscriptions.id`](#mz_subscriptions). |
+| `dependency_id` | [`text`] | The global ID of a physical compute dependency. Corresponds to [`mz_internal.mz_object_global_ids.global_id`](#mz_object_global_ids). |
 
 ## `mz_compute_hydration_statuses`
 
@@ -619,14 +619,14 @@ strategies, a row will exist for each.
 
 ## `mz_materialized_view_refreshes`
 
-The `mz_materialized_view_refreshes` table shows the time of the last
+The `mz_materialized_view_refreshes` view shows the time of the last
 successfully completed refresh and the time of the next scheduled refresh for
 each materialized view with a refresh strategy other than `on-commit`.
 
 <!-- RELATION_SPEC mz_internal.mz_materialized_view_refreshes -->
 | Field                    | Type                         | Meaning                                                                                                                      |
 |--------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| `materialized_view_id`   | [`text`]                     | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
+| `materialized_view_id`   | [`text`]                     | The global ID of the materialized view's current writer. Corresponds to [`mz_internal.mz_object_global_ids.global_id`](#mz_object_global_ids). |
 | `last_completed_refresh` | [`mz_timestamp`]             | The time of the last successfully completed refresh. `NULL` if the materialized view hasn't completed any refreshes yet.  |
 | `next_refresh`           | [`mz_timestamp`]             | The time of the next scheduled refresh. `NULL` if the materialized view has no future scheduled refreshes.                 |
 

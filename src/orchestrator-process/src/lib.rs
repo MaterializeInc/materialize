@@ -1779,8 +1779,8 @@ mod tests {
             assert_eq!(process_restart_delay(&Ok(status)), delay, "exit {code}");
             assert!(!did_process_crash(status), "exit {code}");
         }
-        for (signal, crashed) in [(Signal::SIGTERM, false), (Signal::SIGSEGV, true)] {
-            let status = ExitStatus::from_raw(signal as i32);
+        for (signal, crashed) in [(nix::libc::SIGTERM, false), (nix::libc::SIGSEGV, true)] {
+            let status = ExitStatus::from_raw(signal);
             assert_eq!(
                 process_restart_delay(&Ok(status)),
                 Some(Duration::from_secs(5)),
