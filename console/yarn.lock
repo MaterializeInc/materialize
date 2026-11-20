@@ -7590,7 +7590,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"get-east-asian-width@npm:^1.0.0, get-east-asian-width@npm:^1.5.0":
+"get-east-asian-width@npm:^1.0.0, get-east-asian-width@npm:^1.5.0, get-east-asian-width@npm:^1.7.0":
   version: 1.7.0
   resolution: "get-east-asian-width@npm:1.7.0"
   checksum: 10c0/680a5f611a186e4a065291f31821f7e4ad7742625be814e05b8ab5535c6fa53562bc0333a83138fca5f2e1030ed960a561b2fd4629e0cff0dc68b19cf46d7c53
@@ -9255,7 +9255,7 @@ __metadata:
     semver: "npm:^7.8.6"
     storybook: "npm:^10"
     stream: "npm:^0.0.3"
-    string-width: "npm:^7.2.0"
+    string-width: "npm:^9.0.0"
     stripe: "npm:^23.1.0"
     style-mod: "npm:^4.1.4"
     terser: "npm:^5.51.2"
@@ -11809,6 +11809,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"string-width@npm:^9.0.0":
+  version: 9.0.0
+  resolution: "string-width@npm:9.0.0"
+  dependencies:
+    get-east-asian-width: "npm:^1.7.0"
+    strip-ansi: "npm:^7.2.0"
+  checksum: 10c0/fe420883178c224a121e771d81aafc520606bae31be5fdc0f368ff5c3facdb427b659ee3ad85710b67fe6e2a7d4535d0332b61e096326ea0eb92c7b5cafa0b06
+  languageName: node
+  linkType: hard
+
 "string.prototype.matchall@npm:^4.0.12":
   version: 4.1.0
   resolution: "string.prototype.matchall@npm:4.1.0"
@@ -11888,7 +11898,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"strip-ansi@npm:^7.1.0, strip-ansi@npm:^7.1.2":
+"strip-ansi@npm:^7.1.0, strip-ansi@npm:^7.1.2, strip-ansi@npm:^7.2.0":
   version: 7.2.0
   resolution: "strip-ansi@npm:7.2.0"
   dependencies:
