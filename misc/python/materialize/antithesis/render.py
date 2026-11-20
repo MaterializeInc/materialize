@@ -39,6 +39,9 @@ DEFAULT_IMAGES = {
     "POSTGRES_IMAGE": "docker.io/library/postgres:17.6",
     "MINIO_IMAGE": "docker.io/materialize/minio:v26.42.0",
     "REDPANDA_IMAGE": "docker.io/redpandadata/redpanda:v26.1.8",
+    # The versions `mzcompose` tests the MySQL and SQL Server sources with.
+    "MYSQL_IMAGE": "docker.io/library/mysql:9.7.4",
+    "SQL_SERVER_IMAGE": "mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04",
 }
 
 INTROSPECTION_PARAMETERS = {

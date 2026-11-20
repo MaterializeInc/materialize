@@ -242,13 +242,22 @@ def classify_as_of_read(error: BaseException) -> Classified:
     return c
 
 
-# `StorageError::Generic` around a tokio-postgres transport error, whose Display
-# drops the cause. Observed: "error communicating with the server". The others
-# are the remaining transport kinds of the same client. For a Kafka source it
-# wraps rdkafka's metadata or watermark fetch error.
+# `StorageError::Generic` around the upstream client's error, whose Display
+# drops the cause. Observed with the upstream refusing connections or its name
+# not resolving: tokio-postgres's "error connecting to server", mysql_async's
+# "Input/output error: ...", SQL Server's "direct" (the context of its TCP
+# connect), and for both of the latter "failed to lookup address information:
+# ...". The other alternatives are the remaining transport errors of the same
+# clients: tokio-postgres's other kinds, tiberius's and `SqlServerError`'s I/O
+# errors after connecting, and for a Kafka source rdkafka's metadata or
+# watermark fetch error. A partitioned upstream instead times the read out
+# (57014), which `classify` already leaves indeterminate.
 _RTR_UPSTREAM_TEMPLATE = re.compile(
     r"^storage error: (error communicating with the server|error connecting to server"
-    r"|connection closed|timeout waiting for server|Meta data fetch error: .*)$"
+    r"|connection closed|timeout waiting for server|Meta data fetch error: .*"
+    r"|Input/output error: .*|direct|failed to lookup address information: .*"
+    r"|An error occured during the attempt of performing I/O: .*"
+    r"|sql server client encountered I/O error: .*)$"
 )
 
 
@@ -256,7 +265,7 @@ def classify_rtr_read(error: BaseException) -> Classified:
     """`classify` for a read with `real_time_recency` on.
 
     Such a read first fetches the upstream frontier from environmentd
-    (`fetch_write_frontier` of the Postgres or Kafka source connection), and
+    (`fetch_write_frontier` of the source's connection), and
     one failed connect or query fails the read, without a retry within the RTR
     timeout. No other read contacts the upstream, so for them the same error
     is a violation.

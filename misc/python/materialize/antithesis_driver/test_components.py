@@ -286,53 +286,52 @@ def test_subscriber_starts_its_stream_at_the_first_progress_row() -> None:
 
 
 def _pg_model() -> Any:
-    from materialize.antithesis_driver import pg
+    from materialize.antithesis_driver import cdc
 
-    model = pg.Model()
+    model = cdc.Model()
     plans = [
-        (pg.Plan(0, "upsert", 1, "a"), pg.Plan(1, "upsert", 1, "b")),
-        (pg.Plan(0, "update", 1, "c"),),
-        (pg.Plan(1, "delete", 1),),
+        (cdc.Plan(0, "upsert", 1, "a"), cdc.Plan(1, "upsert", 1, "b")),
+        (cdc.Plan(0, "update", 1, "c"),),
+        (cdc.Plan(1, "delete", 1),),
     ]
     for i, p in enumerate(plans, start=1):
-        model.commit(
-            pg.Txn(i, p, lsn_before=100 * i, lsn_after=100 * i + 50, acked_at=None)
-        )
+        model.commit(cdc.Txn(i, p, begun=100 * i, acked_at=None))
+        model.positions[i] = 100 * i + 50
     return model
 
 
-def test_postgres_judge_accepts_a_consistent_prefix() -> None:
-    from materialize.antithesis_driver import pg
+def test_cdc_judge_accepts_a_consistent_prefix() -> None:
+    from materialize.antithesis_driver import cdc
 
     model = _pg_model()
-    snap = pg.Snapshot(
+    snap = cdc.Snapshot(
         ts=1,
-        lsn=260,
-        lsn_rows=1,
+        position=260,
+        position_rows=1,
         ledger=[(1, 0), (1, 1), (2, 0)],
         exports=[[(1, "c")], [(1, "b")], []],
     )
-    v = pg.judge(model, snap)
+    v = cdc.judge(model, snap)
     assert v.prefix == 2 and not v.mismatches and not v.committed_below_missing
 
 
-def test_postgres_judge_reports_torn_gaps_and_stale_exports() -> None:
-    from materialize.antithesis_driver import pg
+def test_cdc_judge_reports_torn_gaps_and_stale_exports() -> None:
+    from materialize.antithesis_driver import cdc
 
     model = _pg_model()
-    torn = pg.judge(model, pg.Snapshot(1, None, 0, [(1, 0)], [[], [], []]))
+    torn = cdc.judge(model, cdc.Snapshot(1, None, 0, [(1, 0)], [[], [], []]))
     assert torn.torn == [1]
-    gap = pg.judge(model, pg.Snapshot(1, None, 0, [(2, 0)], [[], [], []]))
+    gap = cdc.judge(model, cdc.Snapshot(1, None, 0, [(2, 0)], [[], [], []]))
     assert gap.gaps == [2]
     # The ledger says two transactions, table 0 still shows the first.
-    stale = pg.judge(
+    stale = cdc.judge(
         model,
-        pg.Snapshot(1, 260, 1, [(1, 0), (1, 1), (2, 0)], [[(1, "a")], [(1, "b")], []]),
+        cdc.Snapshot(1, 260, 1, [(1, 0), (1, 1), (2, 0)], [[(1, "a")], [(1, "b")], []]),
     )
     assert stale.mismatches[0]["changed"] == [1]
     # The mapped LSN is past the second commit, but the ledger misses it.
-    behind = pg.judge(
-        model, pg.Snapshot(1, 260, 1, [(1, 0), (1, 1)], [[(1, "a")], [(1, "b")], []])
+    behind = cdc.judge(
+        model, cdc.Snapshot(1, 260, 1, [(1, 0), (1, 1)], [[(1, "a")], [(1, "b")], []])
     )
     assert behind.committed_below_missing == [2]
 
@@ -350,19 +349,57 @@ def test_partition_frontier_needs_exactly_one_range_per_partition() -> None:
     assert kafka.partition_frontier(overlapping, 2)[1] == [0, 1]
 
 
-def test_postgres_judge_places_a_visible_inflight_commit_last() -> None:
-    from materialize.antithesis_driver import pg
+def test_cdc_judge_places_a_visible_inflight_commit_last() -> None:
+    from materialize.antithesis_driver import cdc
 
     model = _pg_model()
-    pending = pg.Txn(4, (pg.Plan(2, "upsert", 5, "d"),), 400, None, None)
+    pending = cdc.Txn(4, (cdc.Plan(2, "upsert", 5, "d"),), 400, None)
     ledger = [(1, 0), (1, 1), (2, 0), (3, 1), (4, 2)]
     exports: list[list[tuple[int, str | None]]] = [[(1, "c")], [], [(5, "d")]]
-    v = pg.judge(model, pg.Snapshot(1, None, 0, ledger, exports), pending)
+    v = cdc.judge(model, cdc.Snapshot(1, None, 0, ledger, exports), pending)
     assert not v.unattempted and v.prefix == 4 and not v.mismatches
     # Without the in-flight transaction, the same read shows an unknown one.
-    assert pg.judge(model, pg.Snapshot(1, None, 0, ledger, exports)).unattempted == [4]
+    assert cdc.judge(model, cdc.Snapshot(1, None, 0, ledger, exports)).unattempted == [
+        4
+    ]
     # Not visible yet: the read is a prefix of the known transactions.
-    v = pg.judge(
-        model, pg.Snapshot(1, None, 0, ledger[:-1], exports[:2] + [[]]), pending
+    v = cdc.judge(
+        model, cdc.Snapshot(1, None, 0, ledger[:-1], exports[:2] + [[]]), pending
     )
     assert v.prefix == 3 and not v.mismatches
+
+
+def test_mysql_gtid_max_reads_only_the_servers_uuid() -> None:
+    from materialize.antithesis_driver import mysql
+
+    own = "3E11FA47-71CA-11E1-9E33-C80AA9429562"
+    other = "a0000000-0000-0000-0000-000000000000"
+    gtids = f"{other}:1-900,\n{own.lower()}:1-5:7-12"
+    assert mysql.gtid_max(gtids, own) == 12
+    assert mysql.gtid_max(f"{other}:1-3", own) == 0
+
+
+def test_webhook_judge_requires_rows_acknowledged_before_a_visible_send() -> None:
+    from materialize.antithesis_driver import webhook
+
+    requests_ = {
+        1: webhook.Request(1, "src", "a", sent_at=1.0, acked_at=2.0),
+        2: webhook.Request(2, "src", "b", sent_at=3.0, acked_at=4.0),
+        3: webhook.Request(3, "src", "c", sent_at=3.5, acked_at=None),
+        4: webhook.Request(4, "tbl", "d", sent_at=5.0, acked_at=6.0),
+    }
+    ok = webhook.judge(requests_, [("src", "1", "a"), ("src", "2", "b")])
+    assert not ok.out_of_order and ok.ordered_pairs == 1
+    # Row 2 was sent after row 1 was acknowledged: showing 2 without 1 is wrong.
+    gap = webhook.judge(requests_, [("src", "2", "b")])
+    assert gap.out_of_order == [1]
+    # Row 3 has no acknowledgement, so a read may show or omit it.
+    assert not webhook.judge(requests_, [("src", "1", "a")]).out_of_order
+    odd = webhook.judge(
+        requests_,
+        [("src", "1", "a"), ("src", "1", "a"), ("tbl", "1", "a"), ("src", "3", "x")],
+    )
+    assert odd.duplicates == [("src", "1")]
+    assert odd.phantoms == [("tbl", "1")]
+    assert odd.altered == [("src", 3)]
+    assert odd.unknown_visible == 1

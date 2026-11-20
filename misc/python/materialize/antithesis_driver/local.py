@@ -35,6 +35,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from materialize import MZ_ROOT, spawn
 
@@ -42,6 +45,8 @@ DRIVER_IMAGE = "antithesis-driver"
 STANDALONE_CONTAINER = "mz-antithesis-driver"
 UPSTREAM_CONTAINER = "mz-antithesis-driver-pg"
 BROKER_CONTAINER = "mz-antithesis-driver-redpanda"
+MYSQL_CONTAINER = "mz-antithesis-driver-mysql"
+SQL_SERVER_CONTAINER = "mz-antithesis-driver-mssql"
 NETWORK = "mz-antithesis-driver"
 LICENSE_KEY_FILE = Path.home() / ".config" / "materialize" / "antithesis-license-key"
 
@@ -68,7 +73,6 @@ class Kind:
             spawn.runv(["kind", "create", "cluster", "--name", self.name])
 
     def load(self, images: list[str]) -> None:
-        from materialize.xcompile import Arch
 
         for image in images:
             present = (
@@ -78,7 +82,11 @@ class Kind:
                 == 0
             )
             if not present:
-                spawn.runv(["docker", "pull", image])
+                pulled = subprocess.run(["docker", "pull", image]).returncode == 0
+                if not pulled:
+                    # SQL Server publishes only amd64, which runs under
+                    # emulation on arm64.
+                    spawn.runv(["docker", "pull", "--platform", "linux/amd64", image])
             result = subprocess.run(
                 ["kind", "load", "docker-image", image, "--name", self.name],
                 capture_output=True,
@@ -91,7 +99,20 @@ class Kind:
                     result.returncode, result.args, result.stdout, result.stderr
                 )
             # Docker's containerd store can keep a multi-platform index without
-            # its other platforms' blobs. Export the host platform first.
+            # its other platforms' blobs. Export the platform pulled.
+            platform = subprocess.run(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Os}}/{{.Architecture}}",
+                    image,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
             with tempfile.TemporaryDirectory(
                 prefix="mz-antithesis-image-"
             ) as directory:
@@ -102,7 +123,7 @@ class Kind:
                         "image",
                         "save",
                         "--platform",
-                        f"linux/{Arch.host().go_str()}",
+                        platform,
                         "--output",
                         str(archive),
                         image,
@@ -188,13 +209,31 @@ def report(output: Path) -> int:
     return 0
 
 
+def dependency(name: str) -> dict[str, Any]:
+    """The container of a dependency's StatefulSet in the manifests, so the
+    local loop runs it as Antithesis does."""
+    from materialize.antithesis import render
+
+    text = (render.MANIFESTS / "10-dependencies.yaml").read_text()
+    for doc in yaml.safe_load_all(text):
+        if doc and doc["kind"] == "StatefulSet" and doc["metadata"]["name"] == name:
+            return doc["spec"]["template"]["spec"]["containers"][0]
+    raise KeyError(name)
+
+
 def standalone(args: argparse.Namespace) -> int:
     from materialize.antithesis import render
 
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
     (output / "sdk.jsonl").unlink(missing_ok=True)
-    containers = [STANDALONE_CONTAINER, UPSTREAM_CONTAINER, BROKER_CONTAINER]
+    containers = [
+        STANDALONE_CONTAINER,
+        UPSTREAM_CONTAINER,
+        BROKER_CONTAINER,
+        MYSQL_CONTAINER,
+        SQL_SERVER_CONTAINER,
+    ]
     subprocess.run(["docker", "rm", "-f", *containers], capture_output=True)
     subprocess.run(["docker", "network", "rm", NETWORK], capture_output=True)
     spawn.runv(["docker", "network", "create", NETWORK])
@@ -245,6 +284,32 @@ def standalone(args: argparse.Namespace) -> int:
             "redpanda.auto_create_topics_enabled=false",
         ]
     )
+    mysql = dependency("mysql-upstream")
+    spawn.runv(
+        [
+            *run,
+            MYSQL_CONTAINER,
+            "-p",
+            "13306:3306",
+            *(f"--env={e['name']}={e['value']}" for e in mysql["env"]),
+            render.DEFAULT_IMAGES["MYSQL_IMAGE"],
+            *mysql["args"],
+        ]
+    )
+    sql_server = dependency("sql-server-upstream")
+    spawn.runv(
+        [
+            *run,
+            SQL_SERVER_CONTAINER,
+            # The only image there is. It runs under emulation on arm64.
+            "--platform",
+            "linux/amd64",
+            "-p",
+            "11433:1433",
+            *(f"--env={e['name']}={e['value']}" for e in sql_server["env"]),
+            render.DEFAULT_IMAGES["SQL_SERVER_IMAGE"],
+        ]
+    )
     spawn.runv(
         [
             *run,
@@ -252,12 +317,17 @@ def standalone(args: argparse.Namespace) -> int:
             "-p",
             "6875:6875",
             "-p",
+            "6876:6876",
+            "-p",
             "6877:6877",
             f"materialize/materialized:{args.release}",
         ]
     )
     active = output / "workload-active"
     active.touch()
+    sa_password = next(
+        e["value"] for e in sql_server["env"] if e["name"] == "MSSQL_SA_PASSWORD"
+    )
     env = {
         **os.environ,
         "PYTHONPATH": str(MZ_ROOT / "misc" / "python"),
@@ -267,6 +337,10 @@ def standalone(args: argparse.Namespace) -> int:
         "MZ_ANTITHESIS_EVENTUALLY_AFTER": str(args.duration),
         "MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL": "postgres://postgres:postgres@localhost:15432/upstream",
         "MZ_ANTITHESIS_UPSTREAM_POSTGRES_MZ_HOST": f"{UPSTREAM_CONTAINER}:5432",
+        "MZ_ANTITHESIS_UPSTREAM_MYSQL_URL": "mysql://root:mysqlpass@localhost:13306",
+        "MZ_ANTITHESIS_UPSTREAM_MYSQL_MZ_HOST": f"{MYSQL_CONTAINER}:3306",
+        "MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_URL": f"mssql://SA:{sa_password}@localhost:11433",
+        "MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_MZ_HOST": f"{SQL_SERVER_CONTAINER}:1433",
         "MZ_ANTITHESIS_KAFKA_BROKER": "localhost:19092",
         "MZ_ANTITHESIS_KAFKA_MZ_BROKER": f"{BROKER_CONTAINER}:9092",
         "ANTITHESIS_SDK_LOCAL_OUTPUT": str(output / "sdk.jsonl"),

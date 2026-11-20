@@ -67,7 +67,19 @@ def test_other_dependent_objects_errors_stay_violations():
             " (Local: Broker transport failure)",
             sql.Outcome.REJECTED,
         ),
+        (
+            "storage error: Input/output error: Input/output error:"
+            " Connection refused (os error 111)",
+            sql.Outcome.REJECTED,
+        ),
+        ("storage error: direct", sql.Outcome.REJECTED),
+        (
+            "storage error: failed to lookup address information:"
+            " Name or service not known",
+            sql.Outcome.REJECTED,
+        ),
         ("storage error: db error", sql.Outcome.VIOLATION),
+        ("storage error: directory", sql.Outcome.VIOLATION),
     ],
 )
 def test_upstream_transport_errors_are_rejections_only_for_rtr_reads(

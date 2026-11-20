@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SQL_PORT = 6875
+HTTP_PORT = 6876
 INTERNAL_SQL_PORT = 6877
 INTERNAL_HTTP_PORT = 6878
 

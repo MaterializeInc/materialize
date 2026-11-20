@@ -23,7 +23,8 @@ comparison with the Test Composer workload it replaced, are in
 | Contended counters (`counters.py`) | Read-then-write `UPDATE` and `INSERT ... SELECT` stay within the bounds of increments acknowledged and attempted |
 | Atomic commits (`atomic.py`) | No read sees part of a multi-table write transaction, or a rolled-back one |
 | IVM (`views.py`) | Twelve view kinds, each as an indexed view and a materialized view, equal a Python reference (`ivm_model.py`) on single reads and at every closed timestamp of a `SUBSCRIBE` |
-| Postgres source (`pg.py`) | Serial upstream transactions over three tables and a ledger, their unknown commits resolved upstream. One read of progress, ledger and exports: the ledger is a whole-transaction prefix of the commit order, consistent with the mapped LSN, and every export equals its table replayed to that prefix, also after upstream `ADD COLUMN`. Real-time recency reads see every transaction committed before them |
+| Postgres, MySQL and SQL Server sources (`cdc.py`, with `pg.py`, `mysql.py`, `sqlserver.py`) | Serial upstream transactions over three tables and a ledger. A lost COMMIT is resolved by ending its session and reading the ledger. One read of progress, ledger and exports: the ledger is a whole-transaction prefix of the commit order, consistent with the progress position (LSN or GTID), and every export equals its table replayed to that prefix, also after upstream `ADD COLUMN`. Real-time recency reads see every transaction committed (for SQL Server, captured) before them |
+| Webhooks (`webhook.py`) | Concurrent requests to a webhook source and a webhook table. No phantom, duplicate or altered rows, a read that shows a row shows every row acknowledged before it was sent, and after faults stop every acknowledged row is visible |
 | Kafka source (`kafka.py`) | Produces to a topic that a background consumer tails as the ground truth. The none and upsert envelope exports equal the topic below the mapped offsets, the offsets are monotone, acknowledged produces are in the topic |
 | Kafka sinks (`kafka.py`) | A Debezium sink of a view and an upsert sink of an aggregate, both tailed read-committed. Stream invariants of `sink_oracle.py`, consolidated output equals the view at a committed frontier, and after faults stop equals the model of acknowledged writes |
 | Disruptions (`disrupt.py`) | Replica changes, deletions of environmentd, clusterd and orchestratord pods, and 0dt rollouts, some manually promoted, with kills in a chosen phase. `activeGeneration` never decreases |
@@ -42,22 +43,24 @@ exit evidence, upstream TRUNCATE and DROP with their known-bug buckets, upsert
 decode-error recovery, read-only isolation, and the smaller families listed
 there.
 
-The Postgres source and the Kafka components run when the driver has an
-upstream Postgres URL (`MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL`) and a broker
-(`MZ_ANTITHESIS_KAFKA_BROKER`), as the manifests give it.
+Each source runs when the driver has its upstream:
+`MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL`, `MZ_ANTITHESIS_UPSTREAM_MYSQL_URL`,
+`MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_URL` and `MZ_ANTITHESIS_KAFKA_BROKER`, as
+the manifests give them. Webhooks always run.
 
 ## Running locally
 
 ```
-bin/pyactivate -m pip install -r misc/python/materialize/antithesis/requirements.txt
+bin/pyactivate -m pip install -r misc/python/materialize/antithesis/requirements.txt pymssql
 bin/pyactivate -m pytest -q misc/python/materialize/antithesis misc/python/materialize/antithesis_driver
 bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --duration 300 standalone
 bin/pyactivate -m materialize.antithesis_driver.local --output /tmp/driver --duration 300 kind
 ```
 
 `standalone` runs the driver on this machine against fresh
-`materialize/materialized`, Postgres and Redpanda containers on one Docker
-network. `kind` deploys these manifests into a kind cluster with a release's
+`materialize/materialized`, Postgres, MySQL, SQL Server and Redpanda
+containers on one Docker network. SQL Server has only an amd64 image, which
+runs under emulation on arm64. `kind` deploys these manifests into a kind cluster with a release's
 published environmentd, clusterd and orchestratord images and a locally built
 driver image, and needs `kind`,
 `kubectl`, `helm` and the license key (`MZ_CI_LICENSE_KEY` or
@@ -112,8 +115,9 @@ The Antithesis VM has about 10 GiB, and every pod shares it, including two
 environmentd generations and two sets of clusterd replicas during a rollout.
 environmentd is limited to 2 GiB (`environmentdResourceRequirements` in the
 CR), clusterd to 1 GiB per container (the `clusterd-memory` LimitRange, since
-replica sizes carry no memory limit), orchestratord to 512 MiB. The
-dependencies and the driver have no limit.
+replica sizes carry no memory limit), orchestratord to 512 MiB, and SQL Server
+caps itself at 2 GiB (`MSSQL_MEMORY_LIMIT_MB`). The other dependencies and the
+driver have no limit.
 
 A kill for memory exits like a crash. A panic reports `Materialize process
 panicked` from inside the process. An OOM kill or an eviction is a SIGKILL

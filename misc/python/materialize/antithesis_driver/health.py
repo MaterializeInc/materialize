@@ -208,7 +208,8 @@ def sources_progress(ctx: Context, deadline: float) -> None:
             system,
             "SELECT s.name, st.status FROM mz_catalog.mz_sources s"
             " JOIN mz_internal.mz_source_statuses st ON s.id = st.id"
-            " WHERE s.id LIKE 'u%' AND s.type IN ('postgres', 'kafka')",
+            " WHERE s.id LIKE 'u%'"
+            " AND s.type IN ('postgres', 'mysql', 'sql-server', 'kafka')",
         )
         stalled = sorted(
             f"{name}: {status}" for name, status in rows if status != "running"

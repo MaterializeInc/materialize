@@ -28,7 +28,6 @@ import time
 import uuid
 import zlib
 from collections import Counter
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -47,8 +46,8 @@ from materialize.antithesis_driver.client import (
     Outcome,
     Status,
     Target,
+    Worker,
     connect,
-    report_driver_error,
 )
 from materialize.antithesis_driver.context import RULE_WAIT_SECONDS, Context, log
 from materialize.antithesis_driver.draw import Draw
@@ -248,35 +247,6 @@ class Tailer:
             time.sleep(0.2)
 
 
-class Worker:
-    """One background thread for Kafka work that a rule must not wait on."""
-
-    def __init__(self, name: str) -> None:
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
-        self._busy: Future[None] | None = None
-        self._lock = threading.Lock()
-        self.name = name
-
-    def run(self, action: Any) -> Status:
-        with self._lock:
-            if self._busy is not None and not self._busy.done():
-                return Status.NOT_SENT
-
-            def guarded() -> None:
-                try:
-                    action()
-                except Exception as e:
-                    report_driver_error(self.name, e)
-
-            future = self._pool.submit(guarded)
-            self._busy = future
-        try:
-            future.result(timeout=RULE_WAIT_SECONDS)
-            return Status.DONE
-        except TimeoutError:
-            return Status.PENDING
-
-
 @dataclass
 class Produced:
     key: str
@@ -385,7 +355,7 @@ class KafkaSource:
                     except BufferError:
                         time.sleep(0.5)
 
-        return self.worker.run(action)
+        return self.worker.run(action, RULE_WAIT_SECONDS)
 
     def _read_op(self, done: list[bool]) -> Op:
         query = (
@@ -955,7 +925,7 @@ class KafkaSink:
             if view_rows is not None:
                 self._compare_views(messages, frontiers, view_rows)
 
-        return self.worker.run(action)
+        return self.worker.run(action, RULE_WAIT_SECONDS)
 
     def eventually(self, deadline: float) -> None:
         """After faults stop, both sinks reach past every acknowledged write

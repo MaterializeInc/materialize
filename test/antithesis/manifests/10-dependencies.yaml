@@ -303,3 +303,148 @@ spec:
   ports:
   - port: 5432
     targetPort: 5432
+---
+# Upstream for MySQL CDC sources, with the binlog settings the source needs.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-upstream
+  namespace: materialize
+spec:
+  serviceName: mysql-upstream
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-upstream
+  template:
+    metadata:
+      labels:
+        app: mysql-upstream
+    spec:
+      containers:
+      - name: mysql
+        image: ${MYSQL_IMAGE}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: mysqlpass
+        args:
+        - --log-bin=mysql-bin
+        - --gtid_mode=ON
+        - --enforce_gtid_consistency=ON
+        - --binlog-format=row
+        - --binlog-row-image=full
+        - --binlog-row-metadata=full
+        - --server-id=1
+        - --max-connections=1000
+        - --innodb-buffer-pool-size=64M
+        resources:
+          requests:
+            cpu: 10m
+            memory: 256Mi
+        readinessProbe:
+          exec:
+            command: [mysqladmin, ping, -h, 127.0.0.1, --password=mysqlpass]
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-upstream
+  namespace: materialize
+spec:
+  selector:
+    app: mysql-upstream
+  ports:
+  - port: 3306
+    targetPort: 3306
+---
+# Upstream for SQL Server CDC sources. CDC needs SQL Server Agent.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sql-server-upstream
+  namespace: materialize
+spec:
+  serviceName: sql-server-upstream
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sql-server-upstream
+  template:
+    metadata:
+      labels:
+        app: sql-server-upstream
+    spec:
+      containers:
+      - name: sql-server
+        image: ${SQL_SERVER_IMAGE}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 1433
+        env:
+        - name: ACCEPT_EULA
+          value: "Y"
+        - name: MSSQL_PID
+          value: Developer
+        - name: MSSQL_AGENT_ENABLED
+          value: "true"
+        - name: MSSQL_SA_PASSWORD
+          value: RPSsql12345
+        # SQL Server's documented minimum memory. Without a limit it takes
+        # 80% of the VM's memory, which every pod shares.
+        - name: MSSQL_MEMORY_LIMIT_MB
+          value: "2048"
+        resources:
+          requests:
+            cpu: 10m
+            memory: 512Mi
+        readinessProbe:
+          exec:
+            command:
+            - /opt/mssql-tools18/bin/sqlcmd
+            - -C
+            - -S
+            - localhost
+            - -U
+            - sa
+            - -P
+            - RPSsql12345
+            - -Q
+            - SELECT 1
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/opt/mssql
+      volumes:
+      # The image runs as a non-root user, and who owns a provisioned volume
+      # depends on the provisioner. The driver deletes only Materialize
+      # pods, so this pod lives as long as the timeline, and an emptyDir
+      # survives its container's restarts.
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-server-upstream
+  namespace: materialize
+spec:
+  selector:
+    app: sql-server-upstream
+  ports:
+  - port: 1433
+    targetPort: 1433

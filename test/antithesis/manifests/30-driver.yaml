@@ -63,6 +63,10 @@ spec:
       value: http://redpanda.materialize.svc.cluster.local:8081
     - name: MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL
       value: postgres://postgres:postgres@postgres-upstream.materialize.svc.cluster.local:5432/upstream
+    - name: MZ_ANTITHESIS_UPSTREAM_MYSQL_URL
+      value: mysql://root:mysqlpass@mysql-upstream.materialize.svc.cluster.local:3306
+    - name: MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_URL
+      value: mssql://SA:RPSsql12345@sql-server-upstream.materialize.svc.cluster.local:1433
     - name: MZ_ANTITHESIS_METADATA_POSTGRES_URL
       value: postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db
     - name: MZ_ANTITHESIS_STATE_DIR

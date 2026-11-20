@@ -32,6 +32,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Generic, TypeVar
@@ -412,3 +413,35 @@ class Pool:
             if not busy or time.monotonic() >= deadline:
                 return busy
             time.sleep(0.5)
+
+
+class Worker:
+    """One background thread for work that a rule must not wait on, such as
+    an upstream's single session or a broker client."""
+
+    def __init__(self, name: str) -> None:
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+        self._busy: Future[None] | None = None
+        self._lock = threading.Lock()
+        self.name = name
+
+    def run(self, action: Callable[[], None], wait: float) -> Status:
+        """Run `action` unless the previous one still runs, and wait up to
+        `wait` seconds for it."""
+        with self._lock:
+            if self._busy is not None and not self._busy.done():
+                return Status.NOT_SENT
+
+            def guarded() -> None:
+                try:
+                    action()
+                except Exception as e:
+                    report_driver_error(self.name, e)
+
+            future = self._pool.submit(guarded)
+            self._busy = future
+        try:
+            future.result(timeout=wait)
+            return Status.DONE
+        except TimeoutError:
+            return Status.PENDING

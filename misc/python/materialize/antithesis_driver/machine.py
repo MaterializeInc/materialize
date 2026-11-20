@@ -38,7 +38,15 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from hegel import generators as gs  # pyright: ignore[reportMissingModuleSource]
 
 from materialize.antithesis.ivm_model import SCHEMA as IVM_SCHEMA
-from materialize.antithesis_driver import atomic, health, pg
+from materialize.antithesis_driver import (
+    atomic,
+    health,
+    mysql,
+    pg,
+    sqlserver,
+    webhook,
+)
+from materialize.antithesis_driver.cdc import CdcSource
 from materialize.antithesis_driver.client import Status, report_driver_error
 from materialize.antithesis_driver.context import Config, Context, log
 from materialize.antithesis_driver.counters import SCHEMA as COUNTERS_SCHEMA
@@ -47,7 +55,6 @@ from materialize.antithesis_driver.disrupt import Disruptions
 from materialize.antithesis_driver.history import SCHEMA as HISTORY_SCHEMA
 from materialize.antithesis_driver.history import History, create_statements
 from materialize.antithesis_driver.kafka import KafkaSink, KafkaSource
-from materialize.antithesis_driver.pg import Postgres
 from materialize.antithesis_driver.views import Views
 from materialize.antithesis_driver.views import setup_statements as view_statements
 
@@ -91,15 +98,24 @@ class Components:
         self.views = Views(self.ctx)
         self.atomic = atomic.Atomic(self.ctx)
         self.disruptions = Disruptions(self.ctx)
-        self.pg = Postgres(self.ctx) if config.upstream_postgres_url else None
+        self.cdc: list[CdcSource] = [
+            s
+            for s in (
+                pg.create(self.ctx),
+                mysql.create(self.ctx),
+                sqlserver.create(self.ctx),
+            )
+            if s is not None
+        ]
+        self.webhooks = webhook.Webhooks(self.ctx)
         self.kafka_source = KafkaSource(self.ctx) if config.kafka_broker else None
         self.kafka_sink = KafkaSink(self.ctx) if config.kafka_broker else None
         self.last_progress = time.monotonic()
 
     def setup_upstreams(self) -> None:
         """Create what the sources read from, before their DDL."""
-        if self.pg is not None:
-            self.pg.setup_upstream()
+        for source in self.cdc:
+            source.setup_upstream()
         if self.kafka_source is not None:
             self.kafka_source.setup_upstream()
 
@@ -110,12 +126,16 @@ class Components:
         environment. In Antithesis every run starts from an empty one.
         """
         schemas = [HISTORY_SCHEMA, COUNTERS_SCHEMA, IVM_SCHEMA, atomic.SCHEMA]
-        schemas += [pg.SCHEMA, "kafkasrc", "snk"]
+        schemas += [pg.SCHEMA, mysql.SCHEMA, sqlserver.SCHEMA, webhook.SCHEMA]
+        schemas += ["kafkasrc", "snk"]
         statements = [f"DROP SCHEMA IF EXISTS {s} CASCADE" for s in schemas]
         statements += (
             create_statements(0) + view_statements() + atomic.setup_statements()
         )
-        for component in (self.pg, self.kafka_source, self.kafka_sink):
+        for source in self.cdc:
+            statements += source.setup_statements()
+        statements += self.webhooks.setup_statements()
+        for component in (self.kafka_source, self.kafka_sink):
             if component is not None:
                 statements += component.setup_statements()
         return statements
@@ -129,6 +149,8 @@ class Components:
             f" {len(epochs)} live epochs; counters generation"
             f" {g.number if g else None} with {g.ops if g else 0} ops;"
             f" ivm writes {len(self.views.writes)};"
+            f" cdc commits {[len(c.model.committed) for c in self.cdc]};"
+            f" webhook requests {len(self.webhooks.requests)};"
             f" busy sessions {len(self.ctx.sessions.busy())}"
         )
 
@@ -145,6 +167,18 @@ def components() -> Components:
 def _off(d: HegelDraw) -> Status:
     """The rule of a component this deployment does not run."""
     return Status.NOT_SENT
+
+
+class _NoCdc:
+    def write(self, d: HegelDraw) -> Status:
+        return Status.NOT_SENT
+
+    check = add_column = write
+
+
+def _cdc(d: HegelDraw) -> CdcSource | _NoCdc:
+    sources = components().cdc
+    return d.choice(sources) if sources else _NoCdc()
 
 
 def guarded(name: str, rule: Callable[[HegelDraw], Status], tc: hegel.TestCase) -> None:
@@ -211,8 +245,9 @@ def _eventually(c: Components) -> None:
         step("counters", lambda: c.counters.eventually(deadline))
         step("views", lambda: c.views.eventually(deadline))
         step("atomic", lambda: c.atomic.eventually(deadline))
-        if c.pg is not None:
-            step("postgres source", lambda: c.pg.eventually(deadline) if c.pg else None)
+        for source in c.cdc:
+            step(source.dialect.schema, lambda: source.eventually(deadline))
+        step("webhooks", lambda: c.webhooks.eventually(deadline))
         if c.kafka_source is not None:
             step(
                 "kafka source",
@@ -223,7 +258,7 @@ def _eventually(c: Components) -> None:
                 "kafka sink",
                 lambda: c.kafka_sink.eventually(deadline) if c.kafka_sink else None,
             )
-    if serving and (c.pg is not None or c.kafka_source is not None):
+    if serving and (c.cdc or c.kafka_source is not None):
         step("sources", lambda: health.sources_progress(c.ctx, deadline))
     kube = c.disruptions.kube
     if kube is not None:
@@ -242,8 +277,9 @@ class Driver(hegel.StateMachine):
         c.views.configure(d)
         c.atomic.configure(d)
         c.disruptions.configure(d)
-        if c.pg is not None:
-            c.pg.configure(d)
+        for source in c.cdc:
+            source.configure(d)
+        c.webhooks.configure(d)
         for kafka in (c.kafka_source, c.kafka_sink):
             if kafka is not None:
                 kafka.configure(d)
@@ -315,20 +351,25 @@ class Driver(hegel.StateMachine):
     def atomic_prune(self, tc: hegel.TestCase) -> None:
         guarded("atomic prune", components().atomic.prune, tc)
 
-    @hegel.rule(weight=4)
-    def pg_write(self, tc: hegel.TestCase) -> None:
-        pg_ = components().pg
-        guarded("postgres write", pg_.write if pg_ else _off, tc)
+    @hegel.rule(weight=6)
+    def cdc_write(self, tc: hegel.TestCase) -> None:
+        guarded("cdc write", lambda d: _cdc(d).write(d), tc)
+
+    @hegel.rule(weight=3)
+    def cdc_check(self, tc: hegel.TestCase) -> None:
+        guarded("cdc check", lambda d: _cdc(d).check(d), tc)
+
+    @hegel.rule(weight=0.3)
+    def cdc_add_column(self, tc: hegel.TestCase) -> None:
+        guarded("cdc add column", lambda d: _cdc(d).add_column(d), tc)
 
     @hegel.rule(weight=2)
-    def pg_check(self, tc: hegel.TestCase) -> None:
-        pg_ = components().pg
-        guarded("postgres check", pg_.check if pg_ else _off, tc)
+    def webhook_post(self, tc: hegel.TestCase) -> None:
+        guarded("webhook post", components().webhooks.post, tc)
 
-    @hegel.rule(weight=0.2)
-    def pg_add_column(self, tc: hegel.TestCase) -> None:
-        pg_ = components().pg
-        guarded("postgres add column", pg_.add_column if pg_ else _off, tc)
+    @hegel.rule()
+    def webhook_check(self, tc: hegel.TestCase) -> None:
+        guarded("webhook check", components().webhooks.check, tc)
 
     @hegel.rule(weight=3)
     def kafka_produce(self, tc: hegel.TestCase) -> None:
