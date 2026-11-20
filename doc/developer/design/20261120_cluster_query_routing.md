@@ -208,9 +208,12 @@ which shows the distribution. Whether the setting needs a column in
   explicit replica targets, and unmanaged clusters.
 - Parser test cases.
 - Property tests for the catalog migration.
-- TODO(author): a test that counts per-replica peeks under `BALANCED`, in
-  the style of the targeting test in #38857, and a test that drops a replica
-  during fast-path reads.
+- An integration test that issues untargeted reads on a 2-replica
+  `BALANCED` cluster and checks each replica's peek count in
+  `mz_peek_durations_histogram_raw`. Each read must be recorded on exactly
+  one replica.
+- An integration test that holds a fast-path read pending on one replica,
+  drops that replica, and checks that the read still returns its result.
 
 ## Minimal Viable Prototype
 
