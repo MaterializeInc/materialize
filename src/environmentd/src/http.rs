@@ -702,9 +702,15 @@ impl HttpServer {
             _ => {}
         }
 
+        let conn_protocol = if tls_enabled {
+            ConnProtocol::Https
+        } else {
+            ConnProtocol::Http
+        };
         router = router
             .merge(base_router)
-            .apply_default_layers(source, metrics);
+            .apply_default_layers(source, metrics)
+            .layer(Extension(conn_protocol));
 
         HttpServer { tls, router }
     }
@@ -731,20 +737,18 @@ impl Server for HttpServer {
                 .map(|a| a.source)
                 .unwrap_or(direct_peer_addr);
 
-            let (conn, conn_protocol) = match tls_context {
+            let conn = match tls_context {
                 Some(tls_context) => {
                     let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
                     if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                         let _ = ssl_stream.get_mut().inner_mut().shutdown().await;
                         return Err(e.into());
                     }
-                    (MaybeHttpsStream::Https(ssl_stream), ConnProtocol::Https)
+                    MaybeHttpsStream::Https(ssl_stream)
                 }
-                _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
+                None => MaybeHttpsStream::Http(conn),
             };
-            let mut make_tower_svc = router
-                .layer(Extension(conn_protocol))
-                .into_make_service_with_connect_info::<SocketAddr>();
+            let mut make_tower_svc = router.into_make_service_with_connect_info::<SocketAddr>();
             let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
             let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
             let http = hyper::server::conn::http1::Builder::new();
