@@ -2232,7 +2232,7 @@ feature_flags!(
     },
     {
         name: enable_network_types,
-        desc: "the inet and cidr types",
+        desc: "network address type support",
         default: false,
         enable_for_item_parsing: true,
     },

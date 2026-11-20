@@ -1077,19 +1077,13 @@ mod arbitrary {
         type Strategy = BoxedStrategy<Inet>;
 
         fn arbitrary_with(_: ()) -> Self::Strategy {
-            prop_oneof![
-                (any::<u32>(), 0u8..=32).prop_map(|(a, m)| Inet::new(
-                    IpAddr::V4(Ipv4Addr::from(a)),
-                    m
-                )
-                .unwrap()),
-                (any::<u128>(), 0u8..=128).prop_map(|(a, m)| Inet::new(
-                    IpAddr::V6(Ipv6Addr::from(a)),
-                    m
-                )
-                .unwrap()),
-            ]
-            .boxed()
+            let v4 = (any::<u32>(), 0u8..=32)
+                .prop_map(|(a, m)| Inet::new(Ipv4Addr::from(a).into(), m).expect("valid masklen"))
+                .boxed();
+            let v6 = (any::<u128>(), 0u8..=128)
+                .prop_map(|(a, m)| Inet::new(Ipv6Addr::from(a).into(), m).expect("valid masklen"))
+                .boxed();
+            proptest::strategy::Union::new([v4, v6]).boxed()
         }
     }
 }
