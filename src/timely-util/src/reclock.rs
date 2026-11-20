@@ -547,12 +547,12 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
 /// have changed (for example UUIDs of GTID set that are no longer written to). Historically,
 /// this memory intensive approach was dropped.
 struct RemapTrace<FromTime, IntoTime> {
-    /// When non-empty, this equals `keyframes[0].0`. It becomes empty after the remap input
-    /// closes. `keyframes[0].0` can't show that, because `advance_by` with an empty frontier
+    /// When non-empty, this equals `keyframes[0].time`. It becomes empty after the remap input
+    /// closes. `keyframes[0].time` can't show that, because `advance_by` with an empty frontier
     /// leaves a time unchanged.
     since: Antichain<IntoTime>,
     /// In strictly increasing time order. Never empty, and the first is the binding at the since.
-    keyframes: VecDeque<(IntoTime, Antichain<FromTime>)>,
+    keyframes: VecDeque<Keyframe<FromTime, IntoTime>>,
     /// The updates between keyframes and after the last one, in time order. Updates at a
     /// keyframe's time are applied to that keyframe and not stored here.
     updates: VecDeque<(FromTime, IntoTime, i64)>,
@@ -561,6 +561,14 @@ struct RemapTrace<FromTime, IntoTime> {
     run: usize,
     /// Working space for [`updated`]. It keeps its buffers between uses.
     scratch: MutableAntichain<FromTime>,
+}
+
+/// A binding that a [`RemapTrace`] stores whole.
+#[derive(Debug, Clone, PartialEq)]
+struct Keyframe<FromTime, IntoTime> {
+    time: IntoTime,
+    /// The frontier of the remap collection at `time`.
+    frontier: Antichain<FromTime>,
 }
 
 /// Returns the frontier that `frontier` becomes when `updates` are applied to it. `scratch` may
@@ -616,7 +624,10 @@ where
         time.advance_by(since.borrow());
         Self {
             since,
-            keyframes: VecDeque::from([(time, Antichain::new())]),
+            keyframes: VecDeque::from([Keyframe {
+                time,
+                frontier: Antichain::new(),
+            }]),
             updates: VecDeque::new(),
             run: 0,
             scratch: MutableAntichain::new(),
@@ -630,7 +641,10 @@ where
     /// Applies the updates of time `into`. Every time must be pushed once, with all its updates,
     /// in time order and not before the since.
     fn push(&mut self, into: IntoTime, updates: impl IntoIterator<Item = (FromTime, i64)>) {
-        let (key_time, key_frontier) = self
+        let Keyframe {
+            time: key_time,
+            frontier: key_frontier,
+        } = self
             .keyframes
             .back()
             .expect("the trace holds the binding at the since");
@@ -649,7 +663,10 @@ where
         let mut count = 0;
         let updates = updates.into_iter().inspect(|_| count += 1);
         if *key_time == into {
-            let (_, key_frontier) = self
+            let Keyframe {
+                frontier: key_frontier,
+                ..
+            } = self
                 .keyframes
                 .back_mut()
                 .expect("the trace holds the binding at the since");
@@ -677,7 +694,10 @@ where
                     .map(|(from, _, diff)| (from.clone(), *diff))
                     .chain(updates),
             );
-            self.keyframes.push_back((into, frontier));
+            self.keyframes.push_back(Keyframe {
+                time: into,
+                frontier,
+            });
             self.run = 0;
         } else {
             self.updates
@@ -694,11 +714,14 @@ where
         while self
             .keyframes
             .get(1)
-            .is_some_and(|(time, _)| !since.less_than(time))
+            .is_some_and(|keyframe| !since.less_than(&keyframe.time))
         {
             self.keyframes.pop_front();
         }
-        let (key_time, key_frontier) = self
+        let Keyframe {
+            time: key_time,
+            frontier: key_frontier,
+        } = self
             .keyframes
             .front_mut()
             .expect("the trace holds the binding at the since");
@@ -774,8 +797,9 @@ where
         // `pred`. If none does, `found_pos` is one past the last keyframe. The binding sought is
         // either that keyframe or lies between it and the keyframe before it.
         let found_pos = match keyframes.get(start_pos) {
-            Some((next_time, frontier)) if !pred(frontier.borrow()) => keyframes
-                .partition_point(|(time, frontier)| time <= next_time || !pred(frontier.borrow())),
+            Some(next) if !pred(next.frontier.borrow()) => keyframes.partition_point(|keyframe| {
+                keyframe.time <= next.time || !pred(keyframe.frontier.borrow())
+            }),
             _ => start_pos,
         };
         // Jump to the keyframe before `found_pos` and step forward from there, stopping at
@@ -785,7 +809,7 @@ where
                 .keyframe_pos
                 .is_none_or(|keyframe_pos| keyframe_pos < prev_pos)
         {
-            let (time, _) = &keyframes[prev_pos];
+            let time = &keyframes[prev_pos].time;
             self.keyframe_pos = Some(prev_pos);
             self.update_pos = updates.partition_point(|(_, t, _)| t <= time);
         }
@@ -811,7 +835,7 @@ where
         };
         let next_keyframe_pos = keyframes.get(keyframe_pos + 1);
         match updates.get(self.update_pos) {
-            Some((_, time, _)) if next_keyframe_pos.is_none_or(|(next, _)| time < next) => {
+            Some((_, time, _)) if next_keyframe_pos.is_none_or(|next| time < &next.time) => {
                 let end = self.update_pos
                     + updates
                         .range(self.update_pos..)
@@ -825,8 +849,11 @@ where
                 } else {
                     // The cursor leaves its keyframe. Seeding the frontier with the keyframe's
                     // elements in the same call as the updates works it out once.
-                    let (_, frontier) = &keyframes[keyframe_pos];
-                    let seed = frontier.iter().cloned().map(|from| (from, 1));
+                    let seed = keyframes[keyframe_pos]
+                        .frontier
+                        .iter()
+                        .cloned()
+                        .map(|from| (from, 1));
                     self.frontier.clear();
                     self.frontier.update_iter(seed.chain(tick));
                 }
@@ -865,7 +892,7 @@ where
         //
         // The times cannot be equal. The updates at a keyframe's time are part of the keyframe
         // and never appear in `updates`.
-        updates[update_pos].1 > keyframes[keyframe_pos].0
+        updates[update_pos].1 > keyframes[keyframe_pos].time
     }
 
     /// Returns the time and frontier at the cursor, which must not be before the since.
@@ -878,7 +905,7 @@ where
             let (_, time, _) = &updates[self.update_pos - 1];
             (time, self.frontier.frontier())
         } else {
-            let (time, frontier) = &keyframes[keyframe_pos];
+            let Keyframe { time, frontier } = &keyframes[keyframe_pos];
             (time, frontier.borrow())
         }
     }
