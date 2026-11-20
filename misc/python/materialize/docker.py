@@ -15,7 +15,7 @@ import time
 
 import requests
 
-from materialize import ui
+from materialize import git, ui
 from materialize.mz_version import MzVersion
 
 CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
@@ -117,7 +117,30 @@ def mz_image_tag_exists_ghcr(image_name: str, image_tag: str) -> bool:
         return mz_image_tag_exists_cmdline(image_name)
 
 
+def _internal_image_exists(image_name: str) -> bool:
+    cache = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK
+    if image_name in cache:
+        return cache[image_name]
+    return mz_image_tag_exists_cmdline(image_name)
+
+
+def mz_image(name: str, tag: str | MzVersion) -> str:
+    """The reference to pull the Materialize image `name` at `tag` from.
+
+    Releases exist only under the plain name, also for the internal repository.
+    """
+    internal = f"materialize/{name}{image_suffix()}:{tag}"
+    if image_suffix() and _internal_image_exists(internal):
+        return internal
+    return f"{image_registry()}/{name}:{tag}"
+
+
 def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
+    if image_suffix() and _internal_image_exists(
+        f"materialize/materialized{image_suffix()}:{image_tag}"
+    ):
+        return True
+
     image_name = f"{image_registry()}/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
@@ -303,7 +326,16 @@ def _select_image_name_from_candidates(
     return image_name_candidates[0]
 
 
+def image_suffix() -> str:
+    """`-internal` in the internal repository, whose images are private and
+    only on Docker Hub, and empty otherwise."""
+    internal = f"{git.DEFAULT_GITHUB_REPO}-internal".lower()
+    return "-internal" if git.get_github_repo().lower() == internal else ""
+
+
 def image_registry() -> str:
+    if image_suffix():
+        return "materialize"
     return (
         "ghcr.io/materializeinc/materialize"
         if ui.env_is_truthy("MZ_GHCR", "1")

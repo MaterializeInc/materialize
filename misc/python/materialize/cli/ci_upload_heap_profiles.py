@@ -17,6 +17,8 @@ import sys
 import time
 from threading import Thread
 
+from materialize.docker import image_suffix
+
 CLUSTERD_COMMAND_RE = re.compile(
     r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--log-prefix=(?P<logprefix>[^ ]*)"
 )
@@ -74,6 +76,7 @@ def main() -> int:
         ghcr_prefix = "ghcr.io/materializeinc/"
         if image.startswith(ghcr_prefix):
             image = image.removeprefix(ghcr_prefix)
+        image = image.removesuffix(image_suffix())
         if image == "materialize/clusterd":
             threads.append(
                 Thread(

@@ -15,7 +15,7 @@ operational after an upgrade. See also the newer platform-checks' upgrade scenar
 import random
 
 from materialize import buildkite
-from materialize.docker import image_of_release_version_exists, image_registry
+from materialize.docker import image_of_release_version_exists, mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -199,7 +199,7 @@ def test_upgrade_from_version(
         )
         mz_from = Materialized(
             name=mz_service,
-            image=f"{image_registry()}/materialized:{from_version}",
+            image=mz_image("materialized", from_version),
             options=[
                 opt
                 for start_version, opt in mz_options.items()
@@ -271,7 +271,7 @@ def test_upgrade_from_version(
             with c.override(
                 Materialized(
                     name=mz_service,
-                    image=f"{image_registry()}/materialized:{version}",
+                    image=mz_image("materialized", version),
                     options=[
                         opt
                         for start_version, opt in mz_options.items()

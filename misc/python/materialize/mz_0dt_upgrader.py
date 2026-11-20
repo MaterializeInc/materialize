@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from random import Random
 from typing import TypedDict
 
+from materialize.docker import mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
@@ -53,7 +54,7 @@ def generate_materialized_upgrade_args(
 
     return [
         MaterializedUpgradeArgs(
-            image=f"materialize/materialized:{version}" if version else None,
+            image=mz_image("materialized", version) if version else None,
             # Cycle through mz_1 and mz_2 for upgrades since spinning up services have a cost.
             name=f"mz_{(i % 2) + 1}",
             # Generation number for the service. Required to start services in read only mode.
