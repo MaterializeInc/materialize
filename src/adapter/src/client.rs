@@ -826,6 +826,9 @@ impl SessionClient {
             .execute_attempts(portal_name, &mut logging, cancel_future)
             .await;
 
+        // The statement may have changed what other portals' descriptions depend on.
+        self.session().advance_state_revision();
+
         logging.retire(&result);
 
         result.map(|response| (response, execute_started))

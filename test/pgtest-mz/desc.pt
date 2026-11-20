@@ -79,3 +79,78 @@ ReadyForQuery
 BindComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
 ReadyForQuery {"status":"I"}
+
+# A statement that runs between a portal's Bind and Execute can change the
+# portal's result type.
+send
+Query {"query": "CREATE SCHEMA a"}
+Query {"query": "CREATE SCHEMA b"}
+Query {"query": "CREATE TABLE a.u (x INT)"}
+Query {"query": "CREATE TABLE b.u (y TEXT, z INT)"}
+Query {"query": "BEGIN"}
+Query {"query": "SET search_path = a"}
+Parse {"name": "set", "query": "SET search_path = b"}
+Parse {"name": "sel", "query": "SELECT * FROM u"}
+Bind {"statement": "set", "portal": "p1"}
+Bind {"statement": "sel", "portal": "p2"}
+Describe {"variant": "P", "name": "p2"}
+Execute {"portal": "p1"}
+Execute {"portal": "p2"}
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE SCHEMA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ParseComplete
+BindComplete
+BindComplete
+RowDescription {"fields":[{"name":"x"}]}
+CommandComplete {"tag":"SET"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# So can a Parse that replaces the prepared statement an EXECUTE refers to.
+send
+Parse {"name": "target", "query": "SELECT 1"}
+Parse {"name": "caller", "query": "EXECUTE target"}
+Bind {"statement": "caller", "portal": "p"}
+Describe {"variant": "P", "name": "p"}
+Parse {"name": "target", "query": "SELECT 'a', 2"}
+Execute {"portal": "p"}
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+ParseComplete
+BindComplete
+RowDescription {"fields":[{"name":"?column?"}]}
+ParseComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cached plan must not change result type"}]}
+ReadyForQuery {"status":"I"}
