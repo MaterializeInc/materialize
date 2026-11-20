@@ -157,15 +157,17 @@ impl StorageMetrics {
     /// Get an `KafkaSourceMetrics` for the given configuration.
     pub(crate) fn get_kafka_source_metrics(
         &self,
-        ids: Vec<i32>,
         topic: String,
         source_id: GlobalId,
+        worker_id: usize,
+        client: source::kafka::KafkaSourceClient,
     ) -> source::kafka::KafkaSourceMetrics {
         source::kafka::KafkaSourceMetrics::new(
             &self.source_defs.kafka_source_defs,
-            ids,
             topic,
             source_id,
+            worker_id,
+            client,
         )
     }
 

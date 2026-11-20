@@ -29,6 +29,7 @@ num_cpus.workspace = true
 openssl.workspace = true
 rand.workspace = true
 rdkafka.workspace = true
+rdkafka-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

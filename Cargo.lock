@@ -7606,6 +7606,7 @@ dependencies = [
  "prost-build",
  "rand 0.10.3",
  "rdkafka",
+ "rdkafka-sys",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

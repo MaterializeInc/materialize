@@ -4107,6 +4107,102 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/source.rs
   visibility: internal
+- name: mz_source_rdkafka_broker_rtt_requests_total
+  help: The total number of requests a broker has responded to.
+  labels:
+  - broker
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_broker_rtt_seconds_total
+  help: The total round-trip time of the requests a broker has responded to, in seconds.
+  labels:
+  - broker
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_connects
+  help: >-
+    The number of connection attempts, including successful and failed attempts,
+    and name resolution failures across all brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_disconnects
+  help: >-
+    The number of disconnections, whether triggered by the broker, the network, the
+    load balancer, or something else across all brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_outbuf_cnt
+  help: The number of requests awaiting transmission across all brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_req_timeouts
+  help: The total number of requests that timed out across all brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_rx
+  help: The total number of responses received from brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_rx_bytes
+  help: The total number of bytes received from brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_tx
+  help: The total number of requests sent to brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_txretries
+  help: The total number of request retries across all brokers.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
+- name: mz_source_rdkafka_waitresp_cnt
+  help: >-
+    The number of requests in-flight across all brokers that are awaiting a
+    response.
+  labels:
+  - client
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source/kafka.rs
+  visibility: internal
 - name: mz_source_records_indexed
   help: >-
     The number of records in the source envelope state. This will be specific to
