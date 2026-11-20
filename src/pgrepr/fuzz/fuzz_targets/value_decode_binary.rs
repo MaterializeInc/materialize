@@ -93,8 +93,7 @@ fn gen_numeric_type(u: &mut Unstructured) -> arbitrary::Result<Type> {
 /// `f64` and past numeric's 39-digit precision (`NumberParser` funnels every
 /// number through `strconv::parse_numeric`), `\u` escapes and lone surrogates,
 /// and the `$serde_json::private::Number` magic key with which serde_json spells
-/// an arbitrary-precision number, so that a one-key map of it is parsed as a
-/// *number* rather than as a map.
+/// an arbitrary-precision number, and which must still be parsed as a map key.
 fn push_json_scalar(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
     match u.int_in_range(0u8..=7)? {
         0 => out.push_str("null"),
@@ -126,8 +125,6 @@ fn push_json_scalar(u: &mut Unstructured, out: &mut String) -> arbitrary::Result
         ])?),
         6 => {
             out.push_str(r#"{"$serde_json::private::Number":"#);
-            // Only a numeric string packs. The others reach `NumberParser`'s
-            // error paths (unparseable number, non-string payload).
             out.push_str(*u.choose(&[
                 r#""1""#,
                 r#""NaN""#,
@@ -168,9 +165,7 @@ fn push_json(u: &mut Unstructured, out: &mut String, depth: u8) -> arbitrary::Re
             }
             // Keys come from a small pool so duplicates (which the packer must
             // dedup) come up often, and so the magic key also appears alongside
-            // other keys, where it is a plain map key rather than a number. An
-            // escaped key cannot be borrowed out of the input, which takes
-            // `KeyClassifier`'s owned branch instead of its borrowed one.
+            // other keys. An escaped key cannot be borrowed out of the input.
             out.push_str(*u.choose(&[
                 r#""a""#,
                 r#""b""#,

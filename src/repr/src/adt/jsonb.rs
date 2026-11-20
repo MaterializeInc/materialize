@@ -80,6 +80,7 @@ use std::str::{self, FromStr};
 use std::{fmt, io};
 
 use dec::OrderedDecimal;
+use serde::Deserialize;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Serializer};
 
@@ -304,7 +305,7 @@ impl<'de> DeserializeSeed<'de> for KeyClassifier {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_str(self)
+        deserializer.deserialize_option(self)
     }
 }
 
@@ -324,13 +325,17 @@ impl<'de> Visitor<'de> for KeyClassifier {
     }
 
     #[inline]
-    fn visit_str<E>(self, key: &str) -> Result<Self::Value, E> {
-        match key {
-            SERDE_JSON_NUMBER_TOKEN => Ok(KeyClass::Number),
-            _ => Ok(KeyClass::MapKey(Cow::Owned(key.to_owned()))),
-        }
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        MapKey::deserialize(deserializer).map(|key| KeyClass::MapKey(key.0))
     }
 }
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct MapKey<'a>(#[serde(borrow)] Cow<'a, str>);
 
 pub(crate) struct NumberParser;
 
