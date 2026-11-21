@@ -116,9 +116,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         let outer_scope = ok_input.scope();
         let bundle = outer_scope.clone().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
-            let mut err_collection = err_input.enter_region(inner);
+            let err_input = err_input.enter_region(inner);
+            let mut errors = Vec::new();
 
-            // Determine if there should be errors due to limit evaluation; update `err_collection`.
+            // Determine if there should be errors due to limit evaluation; push them onto `errors`.
             // TODO(vmarcos): We evaluate the limit expression below for each input update. There
             // is an opportunity to do so for every group key instead if the error handling is
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
@@ -140,7 +141,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // only runs for column or otherwise fallible limits. It reads datums
                     // off the borrowed column, so no owned `Row` is built, and it emits
                     // errors only.
-                    let (_, errors) = flat_map_datums::<
+                    let (_, limit_errs) = flat_map_datums::<
                         _,
                         CapacityContainerBuilder<Vec<(Row, T, Diff)>>,
                         _,
@@ -171,7 +172,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                             }
                         },
                     );
-                    err_collection = err_collection.concat(errors.as_collection());
+                    errors.push(limit_errs.as_collection());
                 }
             }
 
@@ -182,21 +183,21 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     arity,
                     must_consolidate,
                 }) => {
-                    let (arrangement, errs) = self.render_top1_monotonic(
+                    let arrangement = self.render_top1_monotonic(
                         ok_input,
                         group_key.clone(),
                         order_key,
                         arity,
                         must_consolidate,
+                        &mut errors,
                     );
-                    err_collection = err_collection.concat(errs);
 
                     // Lowering advertises this group-key arrangement (see the
                     // `MirRelationExpr::TopK` arm in `lowering.rs`), so deliver it alone,
                     // mirroring `render_reduce_plan`'s `ArrangementFlavor::Local`. A consumer
                     // that needs the raw collection reconstructs it from the arrangement via
                     // the advertised permutation, exactly as for an index arrangement.
-                    let errs: KeyCollection<_, _, _> = err_collection.clone().into();
+                    let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
                     let err_arrangement =
                         errs.mz_arrange::<ErrBatcher<_, _>, _>("Arrange bundle err");
                     CollectionBundle::from_columns(
@@ -241,7 +242,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowErrorSer::from(EvalError::Internal(m)), Diff::ONE)
                     });
-                    err_collection = err_collection.concat(errs);
+                    errors.push(errs);
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -283,20 +284,27 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // intra-ts thinning. The maximum number of records per timestamp is
                     // (num_workers * limit), which we expect to be a small number and so we render
                     // a single topk stage.
-                    let (result, errs) =
-                        self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
+                    let result = self.build_topk_stage(
+                        thinned,
+                        order_key,
+                        1u64,
+                        0,
+                        limit,
+                        arity,
+                        false,
+                        &mut errors,
+                    );
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
                     let result = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(
                         result,
                         "Monotonic TopK final consolidate",
                     );
                     retractions_var.set(collection.concat(result.clone().negate()));
-                    soft_assert_or_log!(
-                        errs.is_none(),
-                        "requested no validation, but received error collection"
-                    );
 
-                    CollectionBundle::from_edge(topk_result_to_columnar(result), err_collection)
+                    CollectionBundle::from_edge(
+                        topk_result_to_columnar(result),
+                        err_input.concatenate(errors),
+                    )
                 }
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
@@ -315,11 +323,17 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         expr.permute_map(&map);
                     }
 
-                    let (oks, errs) = self.build_topk(
-                        ok_input, group_key, order_key, offset, limit, arity, buckets,
+                    let oks = self.build_topk(
+                        ok_input,
+                        group_key,
+                        order_key,
+                        offset,
+                        limit,
+                        arity,
+                        buckets,
+                        &mut errors,
                     );
-                    err_collection = err_collection.concat(errs);
-                    CollectionBundle::from_edge(oks, err_collection)
+                    CollectionBundle::from_edge(oks, err_input.concatenate(errors))
                 }
             };
 
@@ -340,10 +354,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         limit: Option<LirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
-    ) -> (
-        ColCollection<'s, T>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> ColCollection<'s, T> {
         let pairer = Pairer::new(1);
         let mut collection = map_topk_key(collection, "TopK input", move |datums, row| {
             let row_hash = row.hashed();
@@ -352,7 +364,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         });
 
         let mut validating = true;
-        let mut err_collection: Option<VecCollection<'s, T, _, _>> = None;
 
         if let Some(mut limit) = limit.clone() {
             // We may need a new `limit` that reflects the addition of `offset`.
@@ -386,7 +397,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 // here we do not apply `offset`, but instead restrict ourself with a limit
                 // that includes the offset. We cannot apply `offset` until we perform the
                 // final, complete reduction.
-                let (oks, errs) = self.build_topk_stage(
+                collection = self.build_topk_stage(
                     collection,
                     order_key.clone(),
                     bucket,
@@ -394,34 +405,24 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     Some(limit.clone()),
                     arity,
                     validating,
+                    errors,
                 );
-                collection = oks;
-                if validating {
-                    err_collection = errs;
-                    validating = false;
-                }
+                validating = false;
             }
         }
 
         // We do a final step, both to make sure that we complete the reduction, and to correctly
         // apply `offset` to the final group, as we have not yet been applying it to the partially
         // formed groups.
-        let (oks, errs) = self.build_topk_stage(
-            collection, order_key, 1u64, offset, limit, arity, validating,
+        let oks = self.build_topk_stage(
+            collection, order_key, 1u64, offset, limit, arity, validating, errors,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
         let oks = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(
             oks,
             "TopK final consolidate",
         );
-        collection = oks;
-        if validating {
-            err_collection = errs;
-        }
-        (
-            topk_result_to_columnar(collection),
-            err_collection.expect("at least one stage validated its inputs"),
-        )
+        topk_result_to_columnar(oks)
     }
 
     /// To provide a robust incremental orderby-limit experience, we want to avoid grouping *all*
@@ -437,7 +438,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     /// `hash_key`'s hash datum, an `offset` for returning results, and a `limit` to restrict the
     /// output size. `arity` represents the number of columns in the input data, and
     /// if `validating` is true, we check for negative multiplicities, which indicate
-    /// an error in the input data.
+    /// an error in the input data, and push the resulting errors onto `errors`.
     ///
     /// The output of this function is _not consolidated_.
     ///
@@ -465,10 +466,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         limit: Option<LirScalarExpr>,
         arity: usize,
         validating: bool,
-    ) -> (
-        VecCollection<'s, T, (Row, Row), Diff>,
-        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> VecCollection<'s, T, (Row, Row), Diff> {
         // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
         // applying `modulus`.
         let input = collection.map(move |(hash_key, row)| {
@@ -479,7 +478,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         });
 
         // If validating: demux errors, otherwise we cannot produce errors.
-        let (input, oks, errs) = if validating {
+        let (input, oks) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
             let (input, stage) = build_topk_negated_stage::<
                 T,
@@ -505,7 +504,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     Ok(t) => Ok((hk, t)),
                 },
             );
-            (input, oks, Some(errs))
+            errors.push(errs);
+            (input, oks)
         } else {
             // Build non-validating topk stage.
             let (input, stage) =
@@ -515,10 +515,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
 
-            (input, stage, None)
+            (input, stage)
         };
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        (oks.concat(input), errs)
+        oks.concat(input)
     }
 
     fn render_top1_monotonic<'s>(
@@ -528,10 +528,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         order_key: Vec<mz_expr::ColumnOrder>,
         arity: usize,
         must_consolidate: bool,
-    ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
-    ) {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>> {
         // The arrangement we build below is keyed by `group_key` and its value is the winning
         // row thinned to `thinning`, following the layout `permutation_for_arrangement`
         // dictates for `Reduce`-style group-key arrangements. A top-1 winner's group-key
@@ -566,6 +564,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             let m = "tried to build monotonic top-1 on non-monotonic input".into();
             (EvalError::Internal(m).into(), Diff::ONE)
         });
+        errors.push(errs);
         let partial: KeyCollection<_, _, _> = partial
             .explode_one(move |(group_key, row)| {
                 (
@@ -590,7 +589,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     output.push((value, Diff::ONE));
                 }
             });
-        (result, errs)
+        result
     }
 }
 
