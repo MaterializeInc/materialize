@@ -90,17 +90,21 @@ def exit_class(exit_code: int, reason: str | None, message: str | None = None) -
 
     `halt!` exits 166 and the panic hook aborts (134), 101 is an unwinding
     panic, 137 and 143 are SIGKILL and SIGTERM from outside. A designed halt
-    exits 143 too (`mz_ore::process::halt_exit_code`), and differs from a
-    SIGTERM by the halt record in its termination message.
+    or panic exits 143 too (`mz_ore::process::DESIGNED_EXIT_CODE`), and
+    differs from a SIGTERM by the record in its termination message.
     """
     if reason == "OOMKilled":
         return "oom"
     if exit_code == 0:
         return "clean"
-    if exit_code == 166 or (exit_code == 143 and _halt_recorded(message)):
+    if exit_code == 166 or (
+        exit_code == 143 and _recorded(message, halt_proof.HALT_CODE)
+    ):
         return "halt"
     if exit_code == READER_LEASE_EXPIRED_EXIT_CODE:
         return "reader_lease_expired"
+    if exit_code == 143 and _recorded(message, halt_proof.PANIC_CODE):
+        return "panic"
     if exit_code in (137, 143):
         return "killed"
     if exit_code in (101, 134):
@@ -108,9 +112,9 @@ def exit_class(exit_code: int, reason: str | None, message: str | None = None) -
     return "unknown"
 
 
-def _halt_recorded(message: str | None) -> bool:
+def _recorded(message: str | None, code: int) -> bool:
     try:
-        halt_proof.parse(message or "")
+        halt_proof.parse(message or "", code)
     except ValueError:
         return False
     return True

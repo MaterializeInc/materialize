@@ -34,8 +34,6 @@ fn coverage_does_not_assert_product_failures() {
             concat!("probe per-site ", file!(), ":", line!()),
             &json!({})
         );
-        mz_ore::antithesis::expect_panic();
-        mz_ore::antithesis::panicked("probe.rs:1", "expected expired lease");
         mz_ore::antithesis::panicked("probe.rs:2", "unexpected panic");
         mz_ore::antithesis::halted(
             "probe.rs:3",
@@ -43,19 +41,35 @@ fn coverage_does_not_assert_product_failures() {
         );
         mz_ore::antithesis::halted("probe.rs:4", "an unreviewed halt reason");
         mz_ore::antithesis_always!(false, "probe product invariant", &json!({}));
+        // A designed panic ends the process, so it comes last.
+        mz_ore::antithesis::panicked(
+            "probe.rs:1",
+            "could not fetch batch part k: reader r1 has been expired out of state",
+        );
         return;
     }
 
     // The SDK selects its local output when the process initializes it.
     let directory = tempfile::tempdir().expect("create SDK output directory");
     let output = directory.path().join("events.jsonl");
+    let termination = directory.path().join("termination");
+    fs::write(&termination, b"").expect("create termination file");
     let result = Command::new(std::env::current_exe().expect("current test executable"))
         .args(["--exact", "coverage_does_not_assert_product_failures"])
         .env(CHILD, "1")
         .env("ANTITHESIS_SDK_LOCAL_OUTPUT", &output)
+        .env("MZ_ANTITHESIS_TERMINATION_LOG", &termination)
         .output()
         .expect("run SDK probe");
-    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.status.code(), Some(143), "{result:?}");
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("panicked at probe.rs:1:\ncould not"),
+        "{result:?}"
+    );
+    let record = fs::read_to_string(&termination).expect("read termination file");
+    if cfg!(target_os = "linux") {
+        assert!(record.starts_with("MZHALT1 0 134 "), "{record:?}");
+    }
 
     let events = fs::read_to_string(output)
         .expect("read SDK output")
@@ -129,16 +143,22 @@ fn halt_records_full_message_only_in_antithesis_builds() {
     }
 
     let directory = tempfile::tempdir().expect("create halt output directory");
-    for (mode, code) in [
-        ("designed", 166),
-        ("unknown", 166),
-        ("oversize", 166),
-        ("restart", 75),
-        ("lease", 168),
-        ("direct", 167),
-        ("absent", 166),
-        ("symlink", 166),
-        ("append", 166),
+    // A designed halt exits like a SIGTERM in the Antithesis flavor.
+    let designed = if cfg!(feature = "antithesis") {
+        143
+    } else {
+        166
+    };
+    for (mode, code, halts) in [
+        ("designed", designed, true),
+        ("unknown", 166, true),
+        ("oversize", 166, true),
+        ("restart", 75, false),
+        ("lease", 168, false),
+        ("direct", 167, false),
+        ("absent", designed, true),
+        ("symlink", designed, true),
+        ("append", designed, true),
     ] {
         let output = directory.path().join(format!("{mode}.termination"));
         let sdk = directory.path().join(format!("{mode}.sdk"));
@@ -183,7 +203,7 @@ fn halt_records_full_message_only_in_antithesis_builds() {
             }
             continue;
         }
-        if !cfg!(feature = "antithesis") || code != 166 {
+        if !cfg!(feature = "antithesis") || !halts {
             assert!(record.is_empty(), "unexpected termination I/O: {mode}");
             continue;
         }
@@ -251,4 +271,38 @@ fn halt_records_full_message_only_in_antithesis_builds() {
             );
         }
     }
+}
+
+#[cfg(all(feature = "antithesis", feature = "panic", target_os = "linux"))]
+#[mz_ore::test]
+fn designed_panic_exits_like_a_sigterm() {
+    const CHILD: &str = "MZ_ANTITHESIS_PANIC_PROBE";
+    if std::env::var_os(CHILD).is_some() {
+        mz_ore::antithesis::init();
+        mz_ore::panic::install_enhanced_handler();
+        panic!("boot: Durable(Fence(Epoch {{ current_epoch: 6, fence_epoch: 7 }}))");
+    }
+
+    let directory = tempfile::tempdir().expect("create panic output directory");
+    let output = directory.path().join("termination");
+    fs::write(&output, b"").expect("create termination file");
+    let result = Command::new(std::env::current_exe().expect("current test executable"))
+        .args(["--exact", "designed_panic_exits_like_a_sigterm"])
+        .env(CHILD, "1")
+        .env("MZ_ANTITHESIS_TERMINATION_LOG", &output)
+        .env(
+            "ANTITHESIS_SDK_LOCAL_OUTPUT",
+            directory.path().join("events.jsonl"),
+        )
+        .output()
+        .expect("run panic probe");
+    assert_eq!(result.status.code(), Some(143), "{result:?}");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("panicked at src/ore/tests/antithesis.rs:")
+            && stderr.contains("boot: Durable(Fence(Epoch { current_epoch: 6, fence_epoch: 7 }))"),
+        "{result:?}"
+    );
+    let record = fs::read_to_string(&output).expect("read termination file");
+    assert!(record.starts_with("MZHALT1 0 134 "), "{record:?}");
 }

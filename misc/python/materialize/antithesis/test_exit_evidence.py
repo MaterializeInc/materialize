@@ -20,7 +20,7 @@ from materialize.antithesis import exit_evidence as evidence
 from materialize.antithesis import halt_proof
 
 DESIGNED = "fenced out old deployment; rebooting as leader"
-RULES = (evidence.HaltRule((DESIGNED,), "a promoted generation reboots as leader"),)
+RULES = (evidence.DesignedExit((DESIGNED,), "a promoted generation reboots as leader"),)
 
 
 def prop(count: Any = 1, code: int = 166) -> dict[str, Any]:
@@ -481,8 +481,14 @@ def test_policy_reader_decodes_rust_escaped_newlines(tmp_path: Path) -> None:
         "];\n"
     )
     assert evidence.load_halt_rules(source) == (
-        evidence.HaltRule(("one", "two"), "first second"),
+        evidence.DesignedExit(("one", "two"), "first second"),
     )
+
+
+def test_panic_policy_uses_the_reviewed_sut_rules() -> None:
+    rules = evidence.load_panic_rules()
+    assert any(rule.matches == ("Fence(Epoch {",) for rule in rules)
+    assert not set(rules) & set(evidence.load_halt_rules())
 
 
 def test_termination_records_parse_only_under_their_own_code() -> None:

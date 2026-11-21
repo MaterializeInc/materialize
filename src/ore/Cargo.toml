@@ -117,7 +117,7 @@ tracing-subscriber.workspace = true
 default = ["tokio-console"]
 # Links the Antithesis SDK and coverage instrumentation. Only the Antithesis
 # build flavor enables this; see `mz_ore::antithesis`.
-antithesis = ["dep:antithesis-instrumentation", "dep:antithesis_sdk", "antithesis_sdk/full"]
+antithesis = ["dep:antithesis-instrumentation", "dep:antithesis_sdk", "antithesis_sdk/full", "process"]
 async = [
     "async-trait",
     "futures",

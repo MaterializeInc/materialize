@@ -117,7 +117,8 @@ subjects:
 ---
 # The resource kill check reads every pod, node conditions, and the eviction
 # and OOM events, which the kubelet records in whatever namespace the
-# involved object lives in (`default` for the node).
+# involved object lives in (`default` for the node). The driver's memory log
+# reads the kubelet's stats summary through the node proxy.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -126,6 +127,9 @@ rules:
 - apiGroups: [""]
   resources: [pods, nodes, events]
   verbs: [get, list]
+- apiGroups: [""]
+  resources: [nodes/proxy]
+  verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

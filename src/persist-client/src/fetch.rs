@@ -569,9 +569,6 @@ where
             // process.
             let diagnostics =
                 missing_blob_diagnostics(schema_cache.applier(), reader_id.clone()).await;
-            if matches!(diagnostics, MissingBlobDiagnosis::LeaseExpired { .. }) {
-                mz_ore::antithesis::expect_panic();
-            }
             panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
         }
     };

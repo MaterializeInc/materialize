@@ -78,6 +78,7 @@ def test_upgrade_base_patch_preserves_unrelated_release_code(tmp_path: Path) -> 
     assert "$crate::process::halt_exit_code(&message)" in release
     assert '&["code at version", "cannot read data with version"],' in recorder
     assert '&["fenced out old deployment; rebooting as leader"],' in recorder
+    assert '&["Fence(Epoch {"],' in recorder.split("pub fn panicked(", 1)[1]
     assert "antithesis_sdk" not in recorder
     assert "antithesis::" not in patched
     macro = patched.split("macro_rules! halt {", 1)[1].split("\n}", 1)[0]
@@ -121,7 +122,7 @@ def test_upgrade_base_patch_records_panics_after_their_location(
         )
         == original
     )
-    record = patched.index("crate::process::record_halt(134, &location, msg);")
+    record = patched.index("crate::process::panicked(&location, msg);")
     assert patched.index("let location =") < record < patched.index("eprintln!")
 
 

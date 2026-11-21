@@ -24,7 +24,9 @@ from materialize.antithesis import halt_proof
 
 
 @dataclass(frozen=True)
-class HaltRule:
+class DesignedExit:
+    """A reviewed halt or panic that a correct system produces."""
+
     matches: tuple[str, ...]
     reason: str
 
@@ -37,11 +39,6 @@ class ExitDisposition:
 
 
 _STRING = r'"(?:[^"\\]|\\.)*"'
-_RULE = re.compile(
-    r"\s*DesignedHalt\s*\{\s*matches\s*:\s*&\s*\[(?P<matches>.*?)\]"
-    rf"\s*,\s*reason\s*:\s*(?P<reason>{_STRING})\s*,?\s*\}}\s*,?",
-    re.DOTALL,
-)
 _EXIT_PROPERTY = re.compile(
     r"No unexpected container exits: container:\s*([^,]+),"
     r"\s*namespace:\s*([^,]+),\s*exit code:\s*(-?\d+)"
@@ -82,29 +79,44 @@ def _matches(source: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def load_halt_rules(source: Path | None = None) -> tuple[HaltRule, ...]:
-    """Read the reviewed SUT rules, rejecting unsupported source syntax."""
+def _load_rules(
+    table: str, entry: str, source: Path | None
+) -> tuple[DesignedExit, ...]:
     source = source or MZ_ROOT / "src" / "ore" / "src" / "antithesis.rs"
-    text = source.read_text()
-    table = re.search(
-        r"pub\s+const\s+DESIGNED_HALTS\s*:\s*&\s*\[\s*DesignedHalt\s*\]"
+    found = re.search(
+        rf"pub\s+const\s+{table}\s*:\s*&\s*\[\s*{entry}\s*\]"
         r"\s*=\s*&\s*\[(.*?)\n\s*\];",
-        text,
+        source.read_text(),
         re.DOTALL,
     )
-    if table is None:
-        raise ValueError("reviewed SUT halt table was not found")
-    remaining = table[1]
+    if found is None:
+        raise ValueError(f"reviewed SUT table {table} was not found")
+    rule = re.compile(
+        rf"\s*{entry}\s*\{{\s*matches\s*:\s*&\s*\[(?P<matches>.*?)\]"
+        rf"\s*,\s*reason\s*:\s*(?P<reason>{_STRING})\s*,?\s*\}}\s*,?",
+        re.DOTALL,
+    )
+    remaining = found[1]
     rules = []
     while remaining.strip():
-        entry = _RULE.match(remaining)
-        if entry is None:
-            raise ValueError("unsupported reviewed SUT halt table syntax")
-        rules.append(HaltRule(_matches(entry["matches"]), _string(entry["reason"])))
-        remaining = remaining[entry.end() :]
+        match = rule.match(remaining)
+        if match is None:
+            raise ValueError(f"unsupported reviewed SUT table {table} syntax")
+        rules.append(DesignedExit(_matches(match["matches"]), _string(match["reason"])))
+        remaining = remaining[match.end() :]
     if not rules:
-        raise ValueError("reviewed SUT halt table is empty")
+        raise ValueError(f"reviewed SUT table {table} is empty")
     return tuple(rules)
+
+
+def load_halt_rules(source: Path | None = None) -> tuple[DesignedExit, ...]:
+    """Read the reviewed designed halts, rejecting unsupported source syntax."""
+    return _load_rules("DESIGNED_HALTS", "DesignedHalt", source)
+
+
+def load_panic_rules(source: Path | None = None) -> tuple[DesignedExit, ...]:
+    """Read the reviewed designed panics, rejecting unsupported source syntax."""
+    return _load_rules("DESIGNED_PANICS", "DesignedPanic", source)
 
 
 def _timestamp_key(value: Any) -> tuple[datetime, int]:
@@ -154,7 +166,7 @@ def classify_exit_property(
     prop: Mapping[str, Any],
     occurrences: Sequence[Mapping[str, Any]],
     *,
-    policy: Sequence[HaltRule] | None = None,
+    policy: Sequence[DesignedExit] | None = None,
 ) -> ExitDisposition:
     """Classify a native halt property without accepting partial occurrence coverage.
 
@@ -181,7 +193,7 @@ def classify_exit_property(
     try:
         rules = tuple(policy) if policy is not None else load_halt_rules()
         if not rules or any(
-            not isinstance(rule, HaltRule)
+            not isinstance(rule, DesignedExit)
             or not rule.matches
             or any(not isinstance(part, str) or not part for part in rule.matches)
             or not rule.reason

@@ -18,11 +18,12 @@ The upgrade scenario also needs environmentd and clusterd at the release the
 environment starts on. The published release images seed AWS-LC from CPU
 jitter, which aborts on Antithesis's deterministic CPU, so `build_upgrade_base`
 rebuilds them from the release tag with `rustc_flags.antithesis_env`. A release
-cut before the Antithesis flavor existed gets only the halt recorder patched in
-and carries no coverage instrumentation. Its panic hook also records the panic
-through that recorder, since such a release cannot report panics to Antithesis
-itself. A later release builds its own Antithesis flavor, which records halts
-and reports panics itself.
+cut before the Antithesis flavor existed gets only the halt recorder and the
+exit code of designed halts and panics patched in, and carries no coverage
+instrumentation. Its panic hook also records the panic through that recorder,
+since such a release cannot report panics to Antithesis itself. A later release
+builds its own Antithesis flavor, which records halts and reports panics
+itself.
 
 `python -m materialize.antithesis.images --registry R --commit C` acquires the
 images, pushes them to `R/<name>:<target_tag(C)>`, and prints the references as
@@ -97,32 +98,63 @@ pub fn record_halt(code: i32, location: &str, message: &str) {
 }
 """
 
-# The release has no list of designed halts, so it gets the one of this
-# checkout, see `mz_ore::process::halt_exit_code`.
-UPGRADE_BASE_EXIT_CODE = """
+# The release has no lists of designed halts and panics, so it gets those of
+# this checkout, see `mz_ore::process::halt_exit_code` and
+# `mz_ore::process::exit_designed_panic`.
+UPGRADE_BASE_EXIT_CODE = r"""
+fn designed(rules: &[&[&str]], message: &str) -> bool {
+    rules
+        .iter()
+        .any(|parts| parts.iter().all(|part| message.contains(part)))
+}
+
 /// The exit code of a halt with this message: that of a SIGTERM for a
 /// designed halt, which Antithesis does not report as an unexpected exit.
 #[doc(hidden)]
 pub fn halt_exit_code(message: &str) -> i32 {
     const DESIGNED: &[&[&str]] = &[
 %s    ];
-    let designed = DESIGNED
-        .iter()
-        .any(|parts| parts.iter().all(|part| message.contains(part)));
-    if designed { 143 } else { HALT_EXIT_CODE }
+    if designed(DESIGNED, message) { 143 } else { HALT_EXIT_CODE }
+}
+
+/// Records a panic. A designed panic ends the process here with the exit code
+/// of a SIGTERM, since Antithesis reports the abort that follows any other
+/// panic as a crash.
+#[doc(hidden)]
+pub fn panicked(location: &str, message: &str) {
+    const DESIGNED: &[&[&str]] = &[
+%s    ];
+    record_halt(134, location, message);
+    if designed(DESIGNED, message) {
+        let thread = std::thread::current();
+        let text = format!(
+            "thread '{}' panicked at {location}:\n{message}\n\
+             note: designed panic, exiting with code 143\n",
+            thread.name().unwrap_or("<unnamed>"),
+        );
+        unsafe { libc::write(2, text.as_ptr().cast(), text.len()) };
+        unsafe { libc::_exit(143) };
+    }
 }
 """
 
 
-def upgrade_base_exit_code() -> str:
+def _designed_rows(rules: tuple[exit_evidence.DesignedExit, ...]) -> str:
     rows = []
-    for rule in exit_evidence.load_halt_rules():
+    for rule in rules:
         if not all(part.isascii() and part.isprintable() for part in rule.matches):
-            raise ValueError("a designed halt match is not printable ASCII")
+            raise ValueError("a designed exit match is not printable ASCII")
         # A JSON string of printable ASCII is also a Rust string literal.
         parts = ", ".join(json.dumps(part) for part in rule.matches)
         rows.append(f"        &[{parts}],\n")
-    return UPGRADE_BASE_EXIT_CODE % "".join(rows)
+    return "".join(rows)
+
+
+def upgrade_base_exit_code() -> str:
+    return UPGRADE_BASE_EXIT_CODE % (
+        _designed_rows(exit_evidence.load_halt_rules()),
+        _designed_rows(exit_evidence.load_panic_rules()),
+    )
 
 
 UPGRADE_BASE_ORIGINAL_PANIC = r"""        let location = if let Some(loc) = panic_info.location() {
@@ -133,7 +165,7 @@ UPGRADE_BASE_ORIGINAL_PANIC = r"""        let location = if let Some(loc) = pani
 """
 UPGRADE_BASE_RECORDED_PANIC = (
     UPGRADE_BASE_ORIGINAL_PANIC + r"""        #[cfg(feature = "process")]
-        crate::process::record_halt(134, &location, msg);
+        crate::process::panicked(&location, msg);
 """
 )
 
@@ -162,7 +194,7 @@ def _halt_macro_records(source: str) -> bool:
 
 def patch_upgrade_base_halt_proof(worktree: Path) -> bool:
     """Add only the halt recorder, its call from the panic hook, and the exit
-    code of designed halts to the freshly checked-out release source.
+    code of designed halts and panics to the freshly checked-out release source.
 
     Returns False, leaving the source unchanged, for a release whose `halt!`
     already records halts. Its recorder is active only in its own Antithesis

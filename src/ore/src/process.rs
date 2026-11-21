@@ -31,16 +31,20 @@ pub fn record_halt(code: i32, location: &str, message: &str) {
     let _ = (code, location, message);
 }
 
-/// The exit code of a designed [`halt!`](crate::halt) in the Antithesis build
-/// flavor: that of a process ended by SIGTERM.
-pub const DESIGNED_HALT_EXIT_CODE: i32 = 143;
+/// The exit code of a designed [`halt!`](crate::halt) or panic in the
+/// Antithesis build flavor: that of a process ended by SIGTERM.
+pub const DESIGNED_EXIT_CODE: i32 = 143;
+
+/// The code a panic is recorded under: the exit status of the abort that
+/// follows a panic.
+const PANIC_RECORD_CODE: i32 = 134;
 
 /// The exit code of a [`halt!`](crate::halt) with this message.
 ///
 /// Antithesis reports a container exit as a failed property unless its code
 /// is 0, 137 or 143. With the `antithesis` feature a halt that
 /// [`classify_halt`](crate::antithesis::classify_halt) finds designed
-/// therefore exits with [`DESIGNED_HALT_EXIT_CODE`], which leaves that
+/// therefore exits with [`DESIGNED_EXIT_CODE`], which leaves that
 /// property to the halts nobody reviewed. The halt record in the termination
 /// message still tells such an exit apart from a signal. It does not exit 0,
 /// after which the environmentd entrypoint sleeps forever.
@@ -51,11 +55,35 @@ pub fn halt_exit_code(message: &str) -> i32 {
         crate::antithesis::classify_halt(message),
         crate::antithesis::HaltClass::Designed(_)
     ) {
-        return DESIGNED_HALT_EXIT_CODE;
+        return DESIGNED_EXIT_CODE;
     }
     #[cfg(not(feature = "antithesis"))]
     let _ = message;
     HALT_EXIT_CODE
+}
+
+/// Ends the process after a panic that
+/// [`classify_panic`](crate::antithesis::classify_panic) finds designed, with
+/// [`DESIGNED_EXIT_CODE`].
+///
+/// Antithesis reports a process that dies from a signal as a failed property,
+/// which the abort of the panic hook would trigger. The panic record in the
+/// termination message tells this exit apart from a SIGTERM. The panic hook
+/// calls this before it prints, so the message is printed here.
+#[doc(hidden)]
+pub fn exit_designed_panic(location: &str, message: &str) -> ! {
+    record_halt(PANIC_RECORD_CODE, location, message);
+    let thread = std::thread::current();
+    let text = format!(
+        "thread '{}' panicked at {location}:\n{message}\n\
+         note: designed panic, exiting with code {DESIGNED_EXIT_CODE}\n",
+        thread.name().unwrap_or("<unnamed>"),
+    );
+    // SAFETY: the pointer and length describe `text`, which outlives the call.
+    // A raw write, since another thread may hold the lock of `std::io::stderr`
+    // and never release it.
+    unsafe { libc::write(2, text.as_ptr().cast(), text.len()) };
+    exit_thread_safe(DESIGNED_EXIT_CODE)
 }
 
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
@@ -212,7 +240,7 @@ mod tests {
     fn halt_exit_codes() {
         let designed = halt_exit_code("fenced out old deployment; rebooting as leader");
         #[cfg(feature = "antithesis")]
-        assert_eq!(designed, DESIGNED_HALT_EXIT_CODE);
+        assert_eq!(designed, DESIGNED_EXIT_CODE);
         #[cfg(not(feature = "antithesis"))]
         assert_eq!(designed, HALT_EXIT_CODE);
         assert_eq!(

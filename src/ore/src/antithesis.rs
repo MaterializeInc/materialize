@@ -21,8 +21,6 @@
 //! assertions are reported to Antithesis as failed properties, which turns the
 //! existing assertion corpus into test properties without per-site changes.
 
-use std::cell::Cell;
-
 #[cfg(all(feature = "antithesis", target_os = "linux"))]
 use antithesis_instrumentation as _;
 
@@ -30,10 +28,6 @@ use antithesis_instrumentation as _;
 #[doc(hidden)]
 #[cfg(feature = "antithesis")]
 pub use antithesis_sdk as sdk;
-
-std::thread_local! {
-    static PANIC_EXPECTED: Cell<bool> = const { Cell::new(false) };
-}
 
 #[doc(hidden)]
 #[cfg(feature = "antithesis")]
@@ -118,16 +112,6 @@ macro_rules! antithesis_unreachable {
     };
 }
 
-/// Marks the next panic on this thread as an outcome the system produces by
-/// design, so it is reported as reached rather than as a failure.
-///
-/// Call immediately before panicking on a path whose cause is outside the
-/// process's control, such as giving up after an expired lease. Every other
-/// panic is reported as a failed property.
-pub fn expect_panic() {
-    PANIC_EXPECTED.with(|expected| expected.set(true));
-}
-
 /// Initializes the SDK and registers product assertions and exploration guidance.
 pub fn init() {
     #[cfg(feature = "antithesis")]
@@ -159,25 +143,83 @@ pub fn observed<S: serde::Serialize + ?Sized>(condition: bool, message: &str, de
     }
 }
 
-/// Reports a panic that is about to take down the process.
+/// A panic the system produces by design: its cause is outside the panicking
+/// process, and a restart is the intended recovery.
+#[derive(Debug)]
+pub struct DesignedPanic {
+    /// Substrings that must all occur in the panic message.
+    pub matches: &'static [&'static str],
+    /// Why a correct system panics with this message.
+    pub reason: &'static str,
+}
+
+/// The reviewed list of designed panics, matched against the panic message.
+/// Every other panic is reported as a failed property.
+///
+/// [`DESIGNED_HALTS`] states what an entry must name, and what catches a
+/// designed exit that repeats.
+pub const DESIGNED_PANICS: &[DesignedPanic] = &[
+    DesignedPanic {
+        matches: &["Fence(Epoch {"],
+        reason: "another environmentd opened the durable catalog at a higher epoch, \
+                 which fences this one out",
+    },
+    DesignedPanic {
+        matches: &["current catalog epoch", "fenced by new catalog epoch"],
+        reason: "the same epoch fence, as environmentd prints it for a fatal error",
+    },
+    DesignedPanic {
+        matches: &[
+            "could not fetch batch part",
+            "has been expired out of state",
+        ],
+        reason: "a fetch found its blob deleted and refreshed state shows the leasing \
+                 reader expired",
+    },
+    DesignedPanic {
+        matches: &["not caught up within"],
+        reason: "the operator asked for a panic at the catch-up deadline with \
+                 `enable_0dt_deployment_panic_after_timeout`",
+    },
+];
+
+/// The reason of the [`DESIGNED_PANICS`] entry a panic message matches.
+pub fn classify_panic(message: &str) -> Option<&'static str> {
+    DESIGNED_PANICS
+        .iter()
+        .find(|designed| designed.matches.iter().all(|m| message.contains(m)))
+        .map(|designed| designed.reason)
+}
+
+/// Reports a panic that is about to take down the process, classified by
+/// [`classify_panic`].
+///
+/// With the `antithesis` feature a designed panic ends the process here and
+/// this function does not return, see
+/// [`exit_designed_panic`](crate::process::exit_designed_panic).
 pub fn panicked(location: &str, message: &str) {
-    let expected = PANIC_EXPECTED.with(|expected| expected.replace(false));
     #[cfg(feature = "antithesis")]
     {
         #[derive(serde::Serialize)]
         struct Details<'a> {
             location: &'a str,
             message: &'a str,
+            designed_reason: Option<&'a str>,
         }
-        let details = Details { location, message };
-        if expected {
+        let designed_reason = classify_panic(message);
+        let details = Details {
+            location,
+            message,
+            designed_reason,
+        };
+        if designed_reason.is_some() {
             crate::antithesis_reachable!("Materialize process panicked by design", &details);
-        } else {
-            antithesis_sdk::assert_unreachable!("Materialize process panicked", &details);
+            crate::process::exit_designed_panic(location, message);
         }
+        antithesis_sdk::assert_unreachable!("Materialize process panicked", &details);
     }
     #[cfg(not(feature = "antithesis"))]
-    let _ = (location, message, expected);
+    let _ = (location, message);
 }
 
 /// A `halt!` the system produces by design: its cause is outside the halting
@@ -421,6 +463,33 @@ mod tests {
         ];
         for message in unexpected {
             assert_eq!(classify_halt(message), HaltClass::Unexpected, "{message}");
+        }
+    }
+
+    /// One message per designed panic, formatted as its site formats it.
+    #[mz_ore::test]
+    fn panic_classification() {
+        let designed = [
+            "failed to initialize storage_controller: \
+             Durable(Fence(Epoch { current_epoch: 6, fence_epoch: 7 }))",
+            "environmentd: fatal: failed to open catalog: \
+             current catalog epoch 6 fenced by new catalog epoch 7",
+            "could not fetch batch part k: reader r1 has been expired out of state; \
+             the process likely failed to heartbeat it within the lease duration",
+            "not caught up within 600s",
+        ];
+        for message in designed {
+            assert!(classify_panic(message).is_some(), "{message}");
+        }
+        let unexpected = [
+            "txns shard should not be closed",
+            "environmentd: fatal: current catalog deployment generation 3 fenced by new \
+             catalog epoch 4",
+            "could not fetch batch part k: reader r1 is still present in state (Some(..)); \
+             a missing blob despite a live lease indicates a GC bug",
+        ];
+        for message in unexpected {
+            assert_eq!(classify_panic(message), None, "{message}");
         }
     }
 }
