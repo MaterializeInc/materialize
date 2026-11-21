@@ -350,6 +350,10 @@ contains:Cannot represent special numeric value
   WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
 contains:cannot represent decimal value
 
+! COPY (SELECT '1E+30'::numeric) TO 's3://copytos3/parquet_test/numeric_overflow'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet');
+contains:out of range for parquet
+
 > CREATE TABLE t2 (a NUMERIC, b NUMERIC(38, 15), c NUMERIC(38, 0), d NUMERIC(38, 5));
 > INSERT INTO t2 VALUES (1234, -1234, 1234, 1234);
 > INSERT INTO t2 VALUES (123456789.123456789, -123456789.12345678912345, 1234567890000, 123456789.12345);
