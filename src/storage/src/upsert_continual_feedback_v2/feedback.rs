@@ -69,7 +69,7 @@ pub fn upsert_value_to_row(value: &UpsertValue) -> Row {
     match value {
         Ok(ok) => {
             packer.push(Datum::UInt8(0));
-            packer.extend(ok.iter());
+            packer.extend_by_row(ok);
         }
         Err(err) => {
             packer.push(Datum::UInt8(1));
