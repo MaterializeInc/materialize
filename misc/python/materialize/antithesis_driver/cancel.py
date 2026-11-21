@@ -67,9 +67,12 @@ DELAYS = (0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3)
 """Seconds from sending a statement to requesting its cancel."""
 TIMEOUTS_MS = (1, 3, 10, 30, 100)
 SUBSCRIBE_SECONDS = (0.05, 0.3, 1.0)
-WATCHDOG_MARGIN_SECONDS = 50.0
-"""The pool cancels an operation that runs for a minute. That cancel is not
-one of this component's, so operations this long are left out of the count."""
+CANCEL_WINDOW_SECONDS = 120.0
+"""How long after it was sent a cancel request may still reach its session,
+where it then cancels a later statement."""
+FINAL_SECONDS = 120.0
+"""The least time the checks after faults stop get, whatever earlier checks
+left of the shared deadline."""
 CLUSTERS = ("quickstart", "driver")
 SETTINGS = {"transaction_isolation": "'strict serializable'"}
 _CANCELLED = re.compile(r"^canceling statement due to (user request|statement timeout)")
@@ -212,11 +215,9 @@ def run(
                 raise
     finally:
         canceller.finish()
+        if not (conn.broken or conn.closed):
+            _reset(conn, restore_timeout_ms if plan.mode == "timeout" else None)
     seconds = time.monotonic() - start
-    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
-        conn.rollback()
-    if plan.mode == "timeout":
-        conn.execute(f"SET statement_timeout = '{restore_timeout_ms}ms'".encode())
     observed = 1 if requested(error) else 0
     if plan.mode != "none":
         for _ in range(2):
@@ -228,6 +229,28 @@ def run(
     if follow_up is not None and cancelled(error):
         found = _follow_up(conn, follow_up)
     return Result(value, error, observed, seconds, found)
+
+
+def _reset(conn: psycopg.Connection, timeout_ms: int | None) -> None:
+    """Leave the session idle and, if `timeout_ms` is given, with that
+    `statement_timeout` again.
+
+    A session left with a timeout of milliseconds fails every later statement
+    of every component, so one that cannot be reset is closed.
+    """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        conn.rollback()
+    if timeout_ms is None:
+        return
+    for _ in range(3):
+        try:
+            conn.execute(f"SET statement_timeout = '{timeout_ms}ms'".encode())
+            return
+        except psycopg.Error:
+            if conn.broken or conn.closed:
+                raise
+    conn.close()
+    raise psycopg.OperationalError("could not restore statement_timeout")
 
 
 def _probe(conn: psycopg.Connection) -> str:
@@ -344,10 +367,14 @@ class Cancel:
         self._reads: dict[int, float] = {}
         """Reads in flight, each with a time no later than its start."""
         self._next_read = 0
-        self._attempts: dict[int, int] = {}
-        self._observed: dict[int, int] = {}
-        """Per session index: cancel requests sent, and statements answered
-        as cancelled by a request."""
+        self._requests: dict[int, list[float]] = {}
+        """Per session index: when each cancel request was sent that no
+        statement has been seen cancelled by yet, the pool's included."""
+        self._sql_requests: list[float] = []
+        """The same for `pg_cancel_backend`. It names a connection id, which
+        after a restart belongs to another connection, so such a request can
+        reach any session."""
+        self._pool_cancels: dict[int, int] = {}
         self.cancel_share = 0.7
         self.modes: tuple[str, ...] = ("protocol", "sql", "timeout")
 
@@ -403,18 +430,28 @@ class Cancel:
         """Account an operation's cancels and return its statement's error."""
         session = self.ctx.sessions.sessions[index % len(self.ctx.sessions.sessions)]
         result = outcome.value if outcome.ok else None
+        seen = result.observed if result else 0
+        now = time.monotonic()
         with self._lock:
-            sent = self._attempts.get(index, 0) + len(attempts)
-            seen = self._observed.get(index, 0) + (result.observed if result else 0)
-            self._attempts[index], self._observed[index] = sent, seen
+            own = self._requests.setdefault(index, [])
+            pooled = session.cancels - self._pool_cancels.get(index, 0)
+            self._pool_cancels[index] = session.cancels
+            own.extend([now] * pooled)
+            (self._sql_requests if plan.mode == "sql" else own).extend(attempts)
+            for requests in (own, self._sql_requests):
+                requests[:] = [t for t in requests if now - t <= CANCEL_WINDOW_SECONDS]
+            available = len(own) + len(self._sql_requests)
+            # Each cancelled statement used up one request, the oldest first.
+            taken = min(seen, len(own))
+            del own[:taken]
+            del self._sql_requests[: seen - taken]
         if result is None:
             return outcome.error
-        if result.seconds < WATCHDOG_MARGIN_SECONDS:
-            always(
-                seen <= sent + session.cancels,
-                "cancel: a session sees no more cancelled statements than cancel requests sent to it",
-                {"session": session.name, "sent": sent, "seen": seen},
-            )
+        always(
+            seen <= available,
+            "cancel: a session sees no more cancelled statements than cancel requests that can reach it",
+            {"session": session.name, "requests": available, "seen": seen},
+        )
         if result.error is None and attempts:
             reachable(
                 "cancel: a statement finished although its cancel was sent",
@@ -844,6 +881,7 @@ class Cancel:
         )
 
     def eventually(self, deadline: float) -> None:
+        deadline = max(deadline, time.monotonic() + FINAL_SECONDS)
         sessions = range(len(self.ctx.sessions.sessions))
         wrote: list[bool] = []
         read: list[bool] = []

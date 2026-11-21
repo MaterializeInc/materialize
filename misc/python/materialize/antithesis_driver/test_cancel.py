@@ -22,7 +22,7 @@ from materialize.antithesis_driver.client import Op, Outcome, Status
 from materialize.antithesis_driver.draw import SeededDraw
 
 NO_EFFECT = "cancel: a statement answered as cancelled or timed out took no effect"
-COUNT = "cancel: a session sees no more cancelled statements than cancel requests sent to it"
+COUNT = "cancel: a session sees no more cancelled statements than cancel requests that can reach it"
 CANCELLED = sql.Classified(
     sql.Outcome.INDETERMINATE, "57014", "canceling statement due to user request"
 )
@@ -204,6 +204,36 @@ def test_more_cancelled_statements_than_requests_is_a_violation(
     c.read(SeededDraw(2))
     # The statement and both probes were cancelled by at most one request.
     pool.ops[0].complete(answered(CANCELLED, observed=3))
+    assert recorder.failed == [COUNT]
+
+
+def test_requests_are_counted_per_session_except_pg_cancel_backend(
+    component: tuple[cancel.Cancel, Pool, Recorder],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c, pool, recorder = component
+    now = [1000.0]
+    monkeypatch.setattr(cancel.time, "monotonic", lambda: now[0])
+    late = Outcome(cancel.Result(None, None, 0, 0.1), None, 10.0, 11.0, "s0.1")
+    hit = Outcome(cancel.Result(None, CANCELLED, 2, 0.1), None, 10.0, 11.0, "s0.1")
+    # A request to session 0 that arrived after its statement can cancel a
+    # later statement of session 0, but none of session 1.
+    assert c._settle(0, cancel.Plan("protocol", 0.1), [now[0]], late) is None
+    assert c._settle(1, cancel.Plan("protocol", 0.1), [now[0]], hit) == CANCELLED
+    assert recorder.failed == [COUNT]
+    recorder.failed.clear()
+    assert c._settle(0, cancel.Plan("protocol", 0.1), [now[0]], hit) == CANCELLED
+    assert not recorder.failed
+    # After a restart `pg_cancel_backend` can name another session's
+    # connection, so its requests count for every session.
+    assert c._settle(0, cancel.Plan("sql", 0.1), [now[0]], late) is None
+    one = Outcome(cancel.Result(None, CANCELLED, 1, 0.1), None, 10.0, 11.0, "s0.1")
+    assert c._settle(1, cancel.Plan("none", 0.0), [], one) == CANCELLED
+    assert not recorder.failed
+    # A request older than the window no longer explains a cancellation.
+    assert c._settle(0, cancel.Plan("protocol", 0.1), [now[0]], late) is None
+    now[0] += cancel.CANCEL_WINDOW_SECONDS + 1
+    assert c._settle(0, cancel.Plan("none", 0.0), [], one) == CANCELLED
     assert recorder.failed == [COUNT]
 
 

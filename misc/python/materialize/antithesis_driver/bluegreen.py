@@ -62,6 +62,8 @@ MIN_ROWS = 150
 MAX_ROWS = 300
 BUCKETS = 8
 HYDRATION_WAIT_SECONDS = 30.0
+FINAL_SECONDS = 300.0
+"""The least time the deployment after faults stop gets."""
 """Below `client.CANCEL_AFTER_SECONDS`, which counts from the operation's start."""
 STRICT = "'strict serializable'"
 WRITE_SETTINGS = {"transaction_isolation": STRICT, "cluster": "quickstart"}
@@ -663,6 +665,9 @@ class BlueGreen:
     def eventually(self, deadline: float) -> None:
         """After faults stop, read the catalog, deploy once more, then read
         each object through the live names."""
+        # A deployment takes many steps, and earlier checks share `deadline`
+        # and may have used it up.
+        deadline = max(deadline, time.monotonic() + FINAL_SECONDS)
         resolved: list[bool] = []
         passed: list[str] = []
         target: int | None = None
