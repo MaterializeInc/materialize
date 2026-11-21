@@ -159,8 +159,9 @@ def no_crash_loops(kube: Any, deadline: float) -> None:
     fenced generation, or a process that lost its lease, halts once.
     """
     tracker = crash_loops.Tracker()
-    end = min(deadline, time.monotonic() + 2 * CRASHLOOP_WINDOW_S + CRASHLOOP_SAMPLE_S)
-    while time.monotonic() < end:
+    # Until the samples span both windows. A fixed end leaves the last sample
+    # short of them whenever sampling itself takes a moment.
+    while not tracker.covered(2 * CRASHLOOP_WINDOW_S) and time.monotonic() < deadline:
         try:
             tracker.observe(time.monotonic(), samples(kube))
         except Exception as e:
