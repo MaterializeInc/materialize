@@ -9,9 +9,10 @@
 
 //! Renders the operator that copies the initial snapshot of SQL Server tables.
 //!
-//! Each table is read at its own snapshot [`Lsn`] and emitted at [`Lsn::minimum`]. The operator
-//! then sends a [`RewindRequest`] per export, which tells the replication operator to retract
-//! the changes the snapshot already contains.
+//! The operator locks every table it snapshots at once, so that all of them are read at one
+//! snapshot [`Lsn`]. It emits the rows at [`Lsn::minimum`] and then sends a [`RewindRequest`] per
+//! export, which tells the replication operator to retract the changes the snapshot already
+//! contains.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,10 +24,12 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
-use mz_sql_server_util::cdc::Lsn;
+use mz_sql_server_util::cdc::{Lsn, SnapshotFence, SnapshotTransaction};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SqlServerSourceConnection;
-use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL};
+use mz_storage_types::sources::sql_server::{
+    MAX_LSN_WAIT, SNAPSHOT_LOCK_WAIT_TIMEOUT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
+};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
@@ -187,32 +190,51 @@ pub(crate) fn render<'scope>(
                 }
             }
 
-            let cdc_metrics = PrometheusSqlServerCdcMetrics { inner: &metrics };
-            let mut cdc_handle = client
-                .cdc(capture_instance_to_snapshot.keys().cloned(), cdc_metrics)
-                .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
-
-            // Before starting a transaction where the LSN will not advance, ensure
-            // the upstream DB is ready for CDC.
-            cdc_handle.wait_for_ready().await?;
+            // Before locking the tables, ensure the upstream DB is ready for CDC.
+            client
+                .cdc(capture_instance_to_snapshot.keys().cloned())
+                .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()))
+                .wait_for_ready()
+                .await?;
 
             // Intentionally logging this at info for debugging. This section won't get entered
             // often, but if there are problems here, it will be much easier to troubleshoot
             // knowing where stall/hang might be happening.
             tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
 
+            let mut fence_client = client.new_connection().await?;
+            let fence = SnapshotFence::acquire(
+                &mut fence_client,
+                &snapshot_tables,
+                SNAPSHOT_LOCK_WAIT_TIMEOUT.get(config.config.config_set()),
+                PrometheusSqlServerCdcMetrics { inner: &metrics },
+            )
+            .await?;
+            let snapshot_lsn = fence.lsn();
+            tracing::info!(%config.id, %snapshot_lsn, "timely-{worker_id} locked tables");
+
+            let mut rewind_requests = Vec::new();
+            for (output_index, initial_lsn) in capture_instance_to_snapshot.values().flatten() {
+                // An initial_lsn ahead of the snapshot_lsn would mean that we observed a
+                // SQL Server DB that appeared to go back in time.
+                assert!(
+                    *initial_lsn <= snapshot_lsn,
+                    "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
+                );
+                rewind_requests.push(RewindRequest {
+                    output_index: *output_index,
+                    snapshot_lsn,
+                });
+            }
+
+            let mut snapshot_txn = SnapshotTransaction::begin(&mut client).await?;
+            fence.release().await?;
+
             let report_interval =
                 SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
             let mut last_report = Instant::now();
-            let mut rewind_requests = Vec::new();
 
-            // Each table snapshot will have its own LSN captured at the moment of snapshotting.
-            for table in snapshot_tables {
-                // TODO(sql_server3): filter columns to only select columns required for Source.
-                let (snapshot_lsn, snapshot) = cdc_handle
-                    .snapshot(&table, config.worker_id, config.id)
-                    .await?;
-
+            for table in &snapshot_tables {
                 tracing::info!(
                     %config.id,
                     %table.name,
@@ -220,8 +242,6 @@ pub(crate) fn render<'scope>(
                     %snapshot_lsn,
                     "timely-{worker_id} snapshot start",
                 );
-
-                let mut snapshot = std::pin::pin!(snapshot);
 
                 let ci_name = &table.capture_instance.name;
                 let output_indexes =
@@ -236,19 +256,9 @@ pub(crate) fn render<'scope>(
                                 ci_name,
                             );
                         });
-                for (output_index, initial_lsn) in output_indexes {
-                    // An initial_lsn ahead of the snapshot_lsn would mean that we observed a
-                    // SQL Server DB that appeared to go back in time.
-                    assert!(
-                        *initial_lsn <= snapshot_lsn,
-                        "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
-                    );
-                    rewind_requests.push(RewindRequest {
-                        output_index: *output_index,
-                        snapshot_lsn,
-                    });
-                }
 
+                // TODO(sql_server3): filter columns to only select columns required for Source.
+                let mut snapshot = std::pin::pin!(snapshot_txn.read_table(table));
                 let mut snapshot_staged = 0;
                 while let Some(result) = snapshot.next().await {
                     let sql_server_row = result.map_err(TransientError::from)?;
@@ -297,6 +307,7 @@ pub(crate) fn render<'scope>(
                     export_stat.set_snapshot_records_known(snapshot_staged);
                 }
             }
+            snapshot_txn.rollback().await?;
 
             for request in rewind_requests {
                 rewinds_handle.give(&rewind_cap_set[0], request);

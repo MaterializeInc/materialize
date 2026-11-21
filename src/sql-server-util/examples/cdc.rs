@@ -35,12 +35,11 @@
 //!     ```
 //!   4. Watch CDC events come streaming in as you change the table!
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
-use mz_sql_server_util::cdc::CdcEvent;
+use mz_sql_server_util::cdc::{CdcEvent, SnapshotFence, SnapshotTransaction};
 use mz_sql_server_util::config::TunnelConfig;
 use mz_sql_server_util::{Client, Config, LoggingSqlServerCdcMetrics};
 use tracing_subscriber::EnvFilter;
@@ -68,10 +67,7 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("connection 1 successful!");
 
     let capture_instances = ["materialize_t1", "materialize_t2"];
-    let metrics = LoggingSqlServerCdcMetrics;
-    let mut cdc_handle = client_1.cdc(capture_instances, metrics);
-
-    cdc_handle.wait_for_ready().await?;
+    client_1.cdc(capture_instances).wait_for_ready().await?;
 
     // Open a second client that we can use to cleanup the underlying change tables.
     let mz_config = Config::new(config.clone(), tunnel, InTask::No);
@@ -83,29 +79,31 @@ async fn main() -> Result<(), anyhow::Error> {
         capture_instances,
     )
     .await?;
-    let mut instance_to_lsn = BTreeMap::new();
 
-    for table in tables {
-        // Get an initial snapshot of the table.
-        let (lsn, snapshot) = cdc_handle
-            .snapshot(&table, 1, mz_repr::GlobalId::User(1))
-            .await?;
-
-        instance_to_lsn.insert(Arc::clone(&table.capture_instance.name), lsn);
-
-        let mut snapshot = std::pin::pin!(snapshot);
+    // Get an initial snapshot of the tables, all at one LSN.
+    let mut fence_client = client_1.new_connection().await?;
+    let fence = SnapshotFence::acquire(
+        &mut fence_client,
+        &tables,
+        Duration::from_secs(60),
+        LoggingSqlServerCdcMetrics,
+    )
+    .await?;
+    let lsn = fence.lsn();
+    let mut snapshot_txn = SnapshotTransaction::begin(&mut client_1).await?;
+    fence.release().await?;
+    for table in &tables {
+        let mut snapshot = std::pin::pin!(snapshot_txn.read_table(table));
         while let Some(result) = snapshot.next().await {
             let row = result?;
             tracing::info!("snapshot: {} {row:?}", &table.capture_instance.name);
         }
     }
+    snapshot_txn.rollback().await?;
 
     // Initialize all capture instances at the LSN we just snapshotted.
+    let mut cdc_handle = client_1.cdc(capture_instances);
     for instance in capture_instances {
-        let lsn = instance_to_lsn
-            .remove(instance)
-            .expect("table must have instance");
-
         cdc_handle = cdc_handle.start_lsn(instance, lsn);
     }
     // Get a stream of changes from the table.

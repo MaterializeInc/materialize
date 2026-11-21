@@ -9,12 +9,14 @@
 
 //! Replicate a table from SQL Server using their Change-Data-Capture (CDC) primitives.
 //!
-//! This module provides a [`CdcStream`] type that provides the following API for
-//! replicating a table:
+//! This module provides the following API for replicating tables:
 //!
-//! 1. [`CdcStream::snapshot`] returns an initial snapshot of a table and the [`Lsn`] at
-//!    which the snapshot was taken.
-//! 2. [`CdcStream::into_stream`] returns a [`futures::Stream`] of [`CdcEvent`]s
+//! 1. [`SnapshotFence::acquire`] locks a set of tables against writes and returns the
+//!    [`Lsn`] that their snapshot represents.
+//! 2. [`SnapshotTransaction::begin`], called while the fence is held, opens a transaction
+//!    that reads every fenced table as of that [`Lsn`]. Several connections can each begin
+//!    one under the same fence.
+//! 3. [`CdcStream::into_stream`] returns a [`futures::Stream`] of [`CdcEvent`]s
 //!    optionally from the [`Lsn`] returned in step 1.
 //!
 //! The snapshot process is responsible for identifying an [`Lsn`] that corresponds to
@@ -41,22 +43,18 @@
 //! Creating a savepoint using [SAVE TRANSACTION](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/save-transaction-transact-sql?view=sql-server-ver17)
 //! is sufficient to generate an [`Lsn`] in this case.
 //!
-//! To ensure that the the point-in-time view is established atomically with
-//! collection of the [`Lsn`], we lock the tables to prevent writes from being
-//! interleaved between the 2 commands (read to establish `XSN` and creation of
-//! the savepoint).
+//! The fence ties the `XSN` to an [`Lsn`] by locking the tables, so that no write to them can
+//! commit between the creation of the savepoint and the read that establishes the `XSN`.
 //!
 //! SQL server supports table locks, but those will only be released
-//! once the outermost transaction completes. For this reason, this module
-//! uses two connections for the snapshot process. The first connection is used
-//! to initiate a transaction and lock the upstream tables under
-//! [`TransactionIsolationLevel::ReadCommitted`] isolation. While the first
-//! connection maintains the locks, the second connection starts a
-//! transaction with [`TransactionIsolationLevel::Snapshot`] isolation and
-//! creates a savepoint. Once the savepoint is created, SQL server has assigned
-//! an [`Lsn`] and the the first connection rolls back the transaction.
-//! The [`Lsn`] and snapshot are captured by the second connection within the
-//! existing transaction.
+//! once the outermost transaction completes. For this reason, the fence holds its locks in a
+//! [`TransactionIsolationLevel::ReadCommitted`] transaction on a connection of its own, and
+//! creates the savepoint there once every table is locked. Every write to a fenced table
+//! committed before the fence has an [`Lsn`] at or below the savepoint's, and every write
+//! committed after the fence has a greater one. While the fence holds its locks, each reader
+//! starts a transaction with [`TransactionIsolationLevel::Snapshot`] isolation on another
+//! connection and establishes its `XSN`. Once every reader has done so, the fence rolls back
+//! and releases the locks.
 //!
 //! After completing the snapshot we use [`crate::inspect::get_changes_asc`] which will return
 //! all changes between a `[lower, upper)` bound of [`Lsn`]s.
@@ -68,7 +66,6 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
-use mz_repr::GlobalId;
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -76,7 +73,7 @@ use tiberius::numeric::Numeric;
 
 use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
-use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
+use crate::{Client, SqlServerCdcMetrics, SqlServerError, Transaction, TransactionIsolationLevel};
 
 /// A stream of changes from a table in SQL Server that has CDC enabled.
 ///
@@ -84,7 +81,7 @@ use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLev
 /// poll the upstream source.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/change-data-capture-tables-transact-sql?view=sql-server-ver16>
-pub struct CdcStream<'a, M: SqlServerCdcMetrics> {
+pub struct CdcStream<'a> {
     /// Client we use for querying SQL Server.
     client: &'a mut Client,
     /// Upstream capture instances we'll list changes from.
@@ -98,22 +95,18 @@ pub struct CdcStream<'a, M: SqlServerCdcMetrics> {
     /// we'll wait this duration for SQL Server to report an [`Lsn`] and thus indicate CDC is
     /// ready to go.
     max_lsn_wait: Duration,
-    /// Metrics.
-    metrics: M,
 }
 
-impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
+impl<'a> CdcStream<'a> {
     pub(crate) fn new(
         client: &'a mut Client,
         capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
-        metrics: M,
     ) -> Self {
         CdcStream {
             client,
             capture_instances,
             poll_interval: Duration::from_secs(1),
             max_lsn_wait: Duration::from_secs(10),
-            metrics,
         }
     }
 
@@ -150,101 +143,8 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
         self
     }
 
-    /// Takes a snapshot of the upstream table that the specified `table` represents.
-    pub async fn snapshot<'b>(
-        &'b mut self,
-        table: &SqlServerTableRaw,
-        worker_id: usize,
-        source_id: GlobalId,
-    ) -> Result<
-        (
-            Lsn,
-            impl Stream<Item = Result<tiberius::Row, SqlServerError>>,
-        ),
-        SqlServerError,
-    > {
-        static SAVEPOINT_NAME: &str = "_mz_snap_";
-
-        // The client that will be used for fencing does not need any special isolation level
-        // as it will be just be locking the table(s).
-        let mut fencing_client = self.client.new_connection().await?;
-        let mut fence_txn = fencing_client.transaction().await?;
-        let qualified_table_name = format!(
-            "{schema_name}.{table_name}",
-            schema_name = table.schema_name,
-            table_name = table.name
-        );
-        self.metrics
-            .snapshot_table_lock_start(&qualified_table_name);
-        let result: Result<_, SqlServerError> = async {
-            fence_txn
-                .lock_table_shared(&table.schema_name, &table.name)
-                .await?;
-            tracing::info!(%source_id, %table.schema_name, %table.name, "timely-{worker_id} locked table");
-
-            self.client
-                .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
-                .await?;
-            let mut txn = self.client.transaction().await?;
-            // Creating a savepoint forces a write to the transaction log, which will
-            // assign an LSN, but it does not force a transaction sequence number to be
-            // assigned as far as I can tell.  I have not observed any entries added to
-            // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
-            // or when reading system views to retrieve the LSN.
-            //
-            // We choose cdc.change_tables because it is a system table that will exist
-            // when CDC is enabled, it has a well known schema, and as a CDC client,
-            // we should be able to read from it already.
-            let res = txn
-                .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
-                .await?;
-            if res.len() != 1 {
-                Err(SqlServerError::InvariantViolated(
-                    "No objects found in cdc.change_tables".into(),
-                ))?
-            }
-
-            // Because the table is locked, any write operation has either
-            // completed, or is blocked. The LSN and XSN acquired now will represent a
-            // consistent point-in-time view, such that any committed write will be
-            // visible to this snapshot and the LSN of such a write will be less than
-            // or equal to the LSN captured here. Creating the savepoint sets the LSN,
-            // we can read it after rolling back the locks.
-            txn.create_savepoint(SAVEPOINT_NAME).await?;
-            tracing::info!(%source_id, %table.schema_name, %table.name, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
-
-            // Once the savepoint is created (which establishes the XSN and captures the LSN),
-            // the table no longer needs to be locked. Any writes that happen to the upstream table
-            // will have an LSN higher than our captured LSN, and will be read from CDC.
-            fence_txn.rollback().await?;
-
-            Ok(txn)
-        }.await;
-        self.metrics.snapshot_table_lock_end(&qualified_table_name);
-        let mut txn = result?;
-        let lsn = txn.get_lsn().await?;
-
-        tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
-        let rows = async_stream::try_stream! {
-            {
-                let snapshot_stream = crate::inspect::snapshot(txn.client, table);
-                tokio::pin!(snapshot_stream);
-
-                while let Some(row) = snapshot_stream.next().await {
-                    yield row?;
-                }
-            }
-
-            txn.rollback().await?
-        };
-
-        Ok((lsn, rows))
-    }
-
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
-    pub fn into_stream(
-        mut self,
-    ) -> impl Stream<Item = Result<CdcEvent, SqlServerError>> + use<'a, M> {
+    pub fn into_stream(mut self) -> impl Stream<Item = Result<CdcEvent, SqlServerError>> + use<'a> {
         async_stream::try_stream! {
             // Initialize all of our start LSNs.
             self.initialize_start_lsns().await?;
@@ -415,8 +315,8 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
     /// entire database.
     ///
     /// This method runs a retry loop that waits for the upstream DB to report good
-    /// values. It should be called before taking the initial [`CdcStream::snapshot`]
-    /// to ensure the system is ready to proceed with CDC.
+    /// values. It should be called before acquiring a [`SnapshotFence`] to ensure the system
+    /// is ready to proceed with CDC.
     pub async fn wait_for_ready(&mut self) -> Result<(), SqlServerError> {
         // Ensure all of the capture instances are reporting an LSN.
         for instance in self.capture_instances.keys() {
@@ -427,6 +327,140 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
         crate::inspect::get_max_lsn_retry(self.client, self.max_lsn_wait).await?;
 
         Ok(())
+    }
+}
+
+/// Shared locks that block writes to a set of tables until they are released.
+///
+/// See the module documentation for why a [`SnapshotTransaction`] begun while the fence is held
+/// reads each fenced table as of [`SnapshotFence::lsn`].
+pub struct SnapshotFence<'a, M: SqlServerCdcMetrics> {
+    txn: Transaction<'a>,
+    lsn: Lsn,
+    gauges: LockGauges<M>,
+}
+
+impl<'a, M: SqlServerCdcMetrics> SnapshotFence<'a, M> {
+    /// Locks `tables` against writes in a transaction on `client` and returns once every lock
+    /// is held.
+    ///
+    /// Each lock waits at most `lock_timeout` for writers to finish, and the call fails if one
+    /// does not. If acquiring the locks deadlocks with another session, SQL Server cancels this
+    /// transaction and the call fails.
+    pub async fn acquire(
+        client: &'a mut Client,
+        tables: &[SqlServerTableRaw],
+        lock_timeout: Duration,
+        metrics: M,
+    ) -> Result<Self, SqlServerError> {
+        static SAVEPOINT_NAME: &str = "_mz_snap_";
+
+        // While a lock request waits, the locks already taken keep blocking writers to their
+        // tables, so the timeout also bounds how long those writers stall. `LOCK_TIMEOUT` takes
+        // milliseconds as an `int`.
+        let lock_timeout_ms = i32::try_from(lock_timeout.as_millis()).unwrap_or(i32::MAX);
+        client
+            .simple_query(format!(
+                "SET LOCK_TIMEOUT {lock_timeout_ms}; SET DEADLOCK_PRIORITY LOW;"
+            ))
+            .await?;
+
+        let mut gauges = LockGauges {
+            metrics,
+            tables: Vec::with_capacity(tables.len()),
+        };
+        let mut txn = client.transaction().await?;
+        for table in tables {
+            let qualified_table_name = format!("{}.{}", table.schema_name, table.name);
+            gauges
+                .metrics
+                .snapshot_table_lock_start(&qualified_table_name);
+            gauges.tables.push(qualified_table_name);
+            txn.lock_table_shared(&table.schema_name, &table.name)
+                .await?;
+        }
+        txn.create_savepoint(SAVEPOINT_NAME).await?;
+        let lsn = txn.get_lsn().await?;
+        Ok(SnapshotFence { txn, lsn, gauges })
+    }
+
+    /// The [`Lsn`] that a snapshot of the fenced tables represents.
+    pub fn lsn(&self) -> Lsn {
+        self.lsn
+    }
+
+    /// Releases the locks, unblocking writers to the fenced tables.
+    pub async fn release(self) -> Result<(), SqlServerError> {
+        let SnapshotFence {
+            txn,
+            lsn: _,
+            gauges,
+        } = self;
+        let result = txn.rollback().await;
+        drop(gauges);
+        result
+    }
+}
+
+/// Reports the end of each table lock that [`SnapshotFence::acquire`] started, on release and on
+/// every failure path.
+struct LockGauges<M: SqlServerCdcMetrics> {
+    metrics: M,
+    tables: Vec<String>,
+}
+
+impl<M: SqlServerCdcMetrics> Drop for LockGauges<M> {
+    fn drop(&mut self) {
+        for table in &self.tables {
+            self.metrics.snapshot_table_lock_end(table);
+        }
+    }
+}
+
+/// A [`TransactionIsolationLevel::Snapshot`] transaction whose view of the database is fixed.
+pub struct SnapshotTransaction<'a> {
+    txn: Transaction<'a>,
+}
+
+impl<'a> SnapshotTransaction<'a> {
+    /// Begins a transaction on `client` and fixes its view of the database before returning.
+    ///
+    /// Begun while a [`SnapshotFence`] is held, the transaction reads every fenced table as of
+    /// [`SnapshotFence::lsn`].
+    pub async fn begin(client: &'a mut Client) -> Result<Self, SqlServerError> {
+        client
+            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
+            .await?;
+        let mut txn = client.transaction().await?;
+        // The view is fixed by the transaction's first read. A savepoint does not fix it, and no
+        // entries have been observed in `sys.dm_tran_active_snapshot_database_transactions` after
+        // creating one.
+        //
+        // We choose cdc.change_tables because it is a system table that will exist
+        // when CDC is enabled, it has a well known schema, and as a CDC client,
+        // we should be able to read from it already.
+        let res = txn
+            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
+            .await?;
+        if res.len() != 1 {
+            Err(SqlServerError::InvariantViolated(
+                "No objects found in cdc.change_tables".into(),
+            ))?
+        }
+        Ok(SnapshotTransaction { txn })
+    }
+
+    /// Streams every row of `table` as the transaction sees it.
+    pub fn read_table<'c>(
+        &'c mut self,
+        table: &'c SqlServerTableRaw,
+    ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + 'c {
+        crate::inspect::snapshot(self.txn.client, table)
+    }
+
+    /// Ends the transaction.
+    pub async fn rollback(self) -> Result<(), SqlServerError> {
+        self.txn.rollback().await
     }
 }
 
