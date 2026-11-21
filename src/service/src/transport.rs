@@ -38,7 +38,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, info, info_span, trace, warn};
 
@@ -350,11 +350,13 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
-        mut writer: W,
+        writer: W,
         mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
+        let mut writer = BufWriter::new(writer);
+
         loop {
             let msg = tokio::select! {
                 // `mpsc::UnboundedReceiver::recv` is cancel safe.
@@ -372,7 +374,15 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                 },
             };
 
-            if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
+            let mut result = write_message(&mut writer, msg.as_ref()).await;
+            // Flush only once the queue is drained, so that messages enqueued in a burst share
+            // writes. The flush must happen before the task waits again, else this message sits
+            // in the buffer until the next message or keepalive.
+            if result.is_ok() && msg_rx.is_empty() {
+                result = writer.flush().await.map_err(Into::into);
+            }
+
+            if let Err(error) = result {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
                 break;

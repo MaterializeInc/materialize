@@ -3350,8 +3350,9 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_ingestion")
     assert count == 2, f"got {count}"
+    # The controller sends `AllowCompaction` only to announce a drop.
     count = metrics_u2.get_storage_commands_total("allow_compaction")
-    assert count > 0, f"got {count}"
+    assert count == 0, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_sink")
     assert count == 1, f"got {count}"
 
@@ -3370,7 +3371,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_storage_controller_history_command_count("hello")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
-    assert count > 0, f"got {count}"
+    assert count == 0, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("run_ingestion")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("run_sink")
@@ -3407,9 +3408,19 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_wallclock_lag_count(sink_id)
     assert count, f"got {count}"
 
-    # Drop the storage objects.
+    # Drop the storage objects. The sink goes first and alone, so that the
+    # `AllowCompaction` announcing its drop to the replica is counted apart from
+    # the source's.
+    c.sql("DROP SINK snk")
+    time.sleep(2)
+    sink_drop_count = (
+        fetch_metrics()
+        .for_instance("u2")
+        .get_storage_commands_total("allow_compaction")
+    )
+    assert sink_drop_count == 1, f"got {sink_drop_count}"
+
     c.sql("""
-        DROP sink snk;
         DROP SOURCE src CASCADE;
         DROP MATERIALIZED VIEW mv;
         DROP TABLE t;
@@ -3429,6 +3440,16 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert metrics_ux.get_wallclock_lag_count(mv_id) is None
     assert metrics_u2.get_wallclock_lag_count(source_id) is None
     assert metrics_u2.get_wallclock_lag_count(sink_id) is None
+
+    # The drop of the source was announced to the replica as well.
+    count = metrics_u2.get_storage_commands_total("allow_compaction")
+    assert count > sink_drop_count, f"got {count}"
+
+    # The definitions of the dropped objects have left the command history.
+    count = metrics_u2.get_storage_controller_history_command_count("run_ingestion")
+    assert count == 0, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("run_sink")
+    assert count == 0, f"got {count}"
 
 
 def workflow_test_optimizer_metrics(c: Composition) -> None:

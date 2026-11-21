@@ -1943,10 +1943,10 @@ impl Instance {
         let _ = collection.implied_read_hold.try_downgrade(new_since);
 
         // Report the frontier advancement.
-        self.deliver_response(ComputeControllerResponse::FrontierUpper {
+        self.deliver_response(ComputeControllerResponse::FrontierUppers(vec![(
             id,
-            upper: new_frontier,
-        });
+            new_frontier,
+        )]));
     }
 
     /// Apply a collection read hold change.
