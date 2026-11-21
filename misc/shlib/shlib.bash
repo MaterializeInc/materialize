@@ -248,6 +248,17 @@ in_ci() {
     return 0
 }
 
+# github_repo
+#
+# Prints the "owner/name" of the GitHub repository being built, usually
+# MaterializeInc/materialize.
+github_repo() {
+    local repo=${BUILDKITE_REPO:-}
+    repo=${repo%.git}
+    repo=${repo#*github.com[:/]}
+    echo "${repo:-MaterializeInc/materialize}"
+}
+
 # is_truthy VAR
 #
 # Returns 0 if the parameter is not one of: 0, '', no, false; and 1 otherwise
