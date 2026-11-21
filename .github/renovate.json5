@@ -262,6 +262,13 @@
       "groupName": "{{depName}}"
     },
     {
+      // ci/test/docs-widgets asserts that a widget's CDN imports match the
+      // versions in its package.json, so both must move in the same PR.
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["doc/user/layouts/shortcodes/plugins/**"],
+      "additionalBranchPrefix": "docs-widgets-"
+    },
+    {
       "matchManagers": ["custom.regex"],
       "matchPackageNames": ["@docsearch/css", "@docsearch/js"],
       "groupName": "docs DocSearch"
