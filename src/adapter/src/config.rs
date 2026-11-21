@@ -14,10 +14,10 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::metric;
-use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge};
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
-use prometheus::IntCounter;
+use prometheus::{IntCounter, IntGaugeVec};
 
 mod backend;
 mod frontend;
@@ -105,6 +105,8 @@ pub enum SystemParameterSyncClientConfig {
     File {
         // Path to a JSON config file that contains system parameters.
         path: PathBuf,
+        /// Function to return the current time.
+        now_fn: NowFn,
     },
     LaunchDarkly {
         /// The LaunchDarkly SDK key
@@ -152,6 +154,8 @@ pub(super) struct Metrics {
     pub last_cse_time_seconds: UIntGauge,
     pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
+    pub file_status: IntGaugeVec,
+    pub file_last_applied_time_seconds: UIntGauge,
 }
 
 impl Metrics {
@@ -168,6 +172,19 @@ impl Metrics {
             params_changed: registry.register(metric!(
                 name: "mz_parameter_frontend_params_changed",
                 help: "The number of parameter changes pulled from the LaunchDarkly frontend.",
+            )),
+            file_status: registry.register(metric!(
+                name: "mz_parameter_frontend_file_status",
+                help: "The outcome of the latest read of the system parameter sync file, as 1 for its status (ok, unreadable, invalid, release_mismatch) and 0 for the others. Absent before the first read.",
+                var_labels: ["status"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
+            )),
+            file_last_applied_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_file_last_applied_time_seconds",
+                help: "The last time a read of the system parameter sync file parsed and its values were applied (as unix timestamp).",
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
         }
     }
