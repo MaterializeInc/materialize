@@ -655,6 +655,7 @@ impl crate::coord::Coordinator {
         plan: PeekDataflowPlan,
         source_arity: usize,
         compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
     ) -> Result<
         (
             GlobalId,
@@ -692,9 +693,12 @@ impl crate::coord::Coordinator {
         );
         let mfp = mfp_to_safe_plan(mfp)?;
 
+        // Targeted at the same replica as the peek on it. The index's only reader is
+        // that peek, so installing it on every replica would be wasted work, and the
+        // controller asserts that the two targets match.
         self.controller
             .compute
-            .create_dataflow(compute_instance, dataflow, None)
+            .create_dataflow(compute_instance, dataflow, target_replica)
             .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)?;
         // The new collection's implied hold pins since at as_of until we can
         // acquire the peek's hold. Failed acquisition must drop that collection.
@@ -767,6 +771,7 @@ impl crate::coord::Coordinator {
                 dataflow_plan,
                 intermediate_result_type.arity(),
                 compute_instance,
+                target_replica,
             )?;
 
             // At this stage we don't know column names for the result because we

@@ -26,7 +26,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, QueryRouting, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -5182,6 +5182,7 @@ generate_extracted_config!(
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
+    (QueryRouting, mz_controller_types::QueryRouting),
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
     (Size, String),
@@ -5286,6 +5287,7 @@ pub fn plan_create_cluster_inner(
         introspection_debugging,
         introspection_interval,
         managed,
+        query_routing,
         replicas,
         replication_factor,
         seen: _,
@@ -5297,6 +5299,11 @@ pub fn plan_create_cluster_inner(
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
+
+    if query_routing.is_some() {
+        require_query_routing_feature(scx)?;
+    }
+    let query_routing = query_routing.unwrap_or_default();
 
     if !scx.catalog.active_role_id().is_system() {
         if !features.is_empty() {
@@ -5425,6 +5432,7 @@ pub fn plan_create_cluster_inner(
                 auto_scaling_strategy,
             }),
             workload_class,
+            query_routing,
             if_not_exists,
             query_policy,
         })
@@ -5474,10 +5482,20 @@ pub fn plan_create_cluster_inner(
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
             workload_class,
+            query_routing,
             if_not_exists,
             query_policy,
         })
     }
+}
+
+/// Requires the `QUERY ROUTING` feature flag, except for system roles. Only system roles can
+/// alter builtin clusters, so builtin clusters can always set it.
+fn require_query_routing_feature(scx: &StatementContext) -> Result<(), PlanError> {
+    if scx.catalog.active_role_id().is_system() {
+        return Ok(());
+    }
+    scx.require_feature_flag(&vars::ENABLE_CLUSTER_QUERY_ROUTING)
 }
 
 /// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
@@ -5492,6 +5510,7 @@ pub fn unplan_create_cluster(
         name,
         variant,
         workload_class,
+        query_routing,
         if_not_exists,
         query_policy,
     }: CreateClusterPlan,
@@ -5584,6 +5603,9 @@ pub fn unplan_create_cluster(
                 introspection_debugging: Some(introspection_debugging),
                 introspection_interval,
                 managed: Some(true),
+                // Only a non-default mode is rendered, so the statement still plans where the
+                // option's feature flag is off.
+                query_routing: (query_routing != QueryRouting::default()).then_some(query_routing),
                 replicas: None,
                 replication_factor,
                 size: Some(size),
@@ -6903,6 +6925,7 @@ pub fn plan_alter_cluster(
                 introspection_debugging,
                 introspection_interval,
                 managed,
+                query_routing,
                 replicas: replica_defs,
                 replication_factor,
                 seen: _,
@@ -6912,6 +6935,10 @@ pub fn plan_alter_cluster(
                 workload_class,
                 query_policy,
             }: ClusterOptionExtracted = set_options.try_into()?;
+
+            if query_routing.is_some() {
+                require_query_routing_feature(scx)?;
+            }
 
             if !scx.catalog.active_role_id().is_system() {
                 if workload_class.is_some() {
@@ -7155,6 +7182,9 @@ pub fn plan_alter_cluster(
                         .transpose()?,
                 );
             }
+            if let Some(query_routing) = query_routing {
+                options.query_routing = AlterOptionParameter::Set(query_routing);
+            }
         }
         AlterClusterAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;
@@ -7182,6 +7212,9 @@ pub fn plan_alter_cluster(
                     IntrospectionDebugging => options.introspection_debugging = Reset,
                     ExperimentalArrangementCompression => options.arrangement_compression = Reset,
                     Managed => options.managed = Reset,
+                    // Not feature-gated, so a cluster can always return to the default after a
+                    // flag rollback.
+                    QueryRouting => options.query_routing = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,

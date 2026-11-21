@@ -1,0 +1,151 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The QUERY ROUTING cluster option.
+
+mode cockroach
+
+reset-server
+
+# With the feature flag off, normal users cannot set the option.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_query_routing = false
+----
+COMPLETE 0
+
+statement error the QUERY ROUTING cluster option is not available
+CREATE CLUSTER qr (SIZE 'scale=1,workers=1', QUERY ROUTING BALANCED)
+
+statement ok
+CREATE CLUSTER qr (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+statement error the QUERY ROUTING cluster option is not available
+ALTER CLUSTER qr SET (QUERY ROUTING BALANCED)
+
+# Resetting is not gated, so a cluster can return to the default after a flag rollback.
+statement ok
+ALTER CLUSTER qr RESET (QUERY ROUTING)
+
+# System roles can set it regardless of the flag, so builtin clusters can use it.
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_catalog_server SET (QUERY ROUTING = BALANCED)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_catalog_server RESET (QUERY ROUTING)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_query_routing = true
+----
+COMPLETE 0
+
+statement error invalid QUERY ROUTING: expected BROADCAST or BALANCED
+ALTER CLUSTER qr SET (QUERY ROUTING = 'random')
+
+statement error must provide a QUERY ROUTING mode
+ALTER CLUSTER qr SET (QUERY ROUTING)
+
+statement ok
+ALTER CLUSTER qr SET (QUERY ROUTING = BALANCED)
+
+query TT
+SHOW CREATE CLUSTER qr
+----
+qr  CREATE␠CLUSTER␠"qr"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠QUERY␠ROUTING␠=␠'balanced',␠REPLICATION␠FACTOR␠=␠2,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+# Fast-path, slow-path, and indexed reads return the same results on a balanced cluster.
+
+statement ok
+CREATE TABLE t (a int, b text)
+
+statement ok
+INSERT INTO t SELECT g, g::text FROM generate_series(1, 100) g
+
+statement ok
+CREATE INDEX t_idx IN CLUSTER qr ON t (a)
+
+statement ok
+SET cluster = qr
+
+query IT
+SELECT * FROM t WHERE a = 42
+----
+42  42
+
+query II
+SELECT count(*), sum(a) FROM t
+----
+100  5050
+
+query IT
+SELECT a, b FROM t WHERE a < 4 ORDER BY a
+----
+1  1
+2  2
+3  3
+
+query I
+SELECT count(*) FROM t t1 JOIN t t2 ON t1.a = t2.a + 1
+----
+99
+
+# An explicit replica target still wins.
+
+statement ok
+SET cluster_replica = r2
+
+query II
+SELECT count(*), sum(a) FROM t
+----
+100  5050
+
+statement ok
+RESET cluster_replica
+
+# The default is BROADCAST and is not shown.
+
+statement ok
+ALTER CLUSTER qr SET (QUERY ROUTING = BROADCAST)
+
+query TT
+SHOW CREATE CLUSTER qr
+----
+qr  CREATE␠CLUSTER␠"qr"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠2,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+query II
+SELECT count(*), sum(a) FROM t
+----
+100  5050
+
+# Unmanaged clusters accept the option.
+
+statement ok
+CREATE CLUSTER qr_unmanaged (REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')), QUERY ROUTING = BALANCED)
+
+statement ok
+SET cluster = qr_unmanaged
+
+query II
+SELECT count(*), sum(a) FROM t
+----
+100  5050
+
+statement ok
+RESET cluster
+
+statement ok
+DROP CLUSTER qr_unmanaged
+
+statement ok
+DROP CLUSTER qr CASCADE

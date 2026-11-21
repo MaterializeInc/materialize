@@ -649,6 +649,7 @@ impl Coordinator {
                             mz_controller::clusters::ClusterConfig {
                                 arranged_logs,
                                 workload_class: cluster.config.workload_class.clone(),
+                                query_routing: cluster.config.query_routing,
                             },
                         )
                         .expect("creating cluster must not fail");
@@ -669,12 +670,18 @@ impl Coordinator {
                     // Replica adds/drops/renames from config changes arrive as
                     // separate AddClusterReplica/DroppedClusterReplica/
                     // AlterClusterReplica events, so the only cluster-level
-                    // side effect here is updating the workload class on the
-                    // controller when it changes.
+                    // side effects here are updating the workload class and the
+                    // query routing on the controller when they change.
                     if prev_cluster.config.workload_class != new_cluster.config.workload_class {
                         self.controller.update_cluster_workload_class(
                             cluster_id,
                             new_cluster.config.workload_class.clone(),
+                        );
+                    }
+                    if prev_cluster.config.query_routing != new_cluster.config.query_routing {
+                        self.controller.update_cluster_query_routing(
+                            cluster_id,
+                            new_cluster.config.query_routing,
                         );
                     }
                 }

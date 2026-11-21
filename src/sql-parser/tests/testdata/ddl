@@ -2460,6 +2460,41 @@ ALTER CLUSTER cluster SET (AVAILABILITY ZONES = ('a'), INTROSPECTION INTERVAL = 
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }], with_options: [] } })
 
 parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', QUERY ROUTING BALANCED)
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', QUERY ROUTING = balanced)
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: QueryRouting, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("balanced")]))) }], features: [], if_not_exists: false })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', QUERY ROUTING = 'broadcast')
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', QUERY ROUTING = 'broadcast')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: QueryRouting, value: Some(Value(String("broadcast"))) }], features: [], if_not_exists: false })
+
+parse-statement
+ALTER CLUSTER cluster SET (QUERY ROUTING = BALANCED)
+----
+ALTER CLUSTER cluster SET (QUERY ROUTING = balanced)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: QueryRouting, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("balanced")]))) }], with_options: [] } })
+
+parse-statement
+ALTER CLUSTER cluster RESET (QUERY ROUTING)
+----
+ALTER CLUSTER cluster RESET (QUERY ROUTING)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([QueryRouting]) })
+
+parse-statement
+CREATE CLUSTER cluster (QUERY BALANCED)
+----
+error: Expected one of POLICY or ROUTING, found identifier "balanced"
+CREATE CLUSTER cluster (QUERY BALANCED)
+                              ^
+
+parse-statement
 ALTER CLUSTER cluster SET (WORKLOAD CLASS 'production')
 ----
 ALTER CLUSTER cluster SET (WORKLOAD CLASS = 'production')

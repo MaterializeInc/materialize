@@ -24,6 +24,7 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_controller_types::QueryRouting;
 use mz_controller_types::dyncfgs::{
     ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
@@ -140,6 +141,12 @@ pub(super) struct Instance {
     ///
     /// This is currently only used to annotate metrics.
     workload_class: Option<String>,
+    /// How untargeted peeks and transient dataflows are spread across replicas.
+    ///
+    /// Maintained (non-transient) dataflows are installed on every replica in either mode.
+    query_routing: QueryRouting,
+    /// Round-robin position for choosing a replica under [`QueryRouting::Balanced`].
+    load_balance_cursor: usize,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
     /// Currently installed compute collections.
@@ -154,12 +161,11 @@ pub(super) struct Instance {
     log_sources: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     ///
-    /// New entries are added for all peeks initiated through [`Instance::peek`].
+    /// Entries are added by [`Instance::peek`] and removed by [`Instance::finish_peek`], which
+    /// runs on the first accepted response, on cancellation, or when the target replica is removed.
     ///
-    /// The entry for a peek is only removed once all replicas have responded to the peek. This is
-    /// currently required to ensure all replicas have stopped reading from the peeked collection's
-    /// inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
-    /// for the first peek response.
+    /// [`Instance::target_replica`] routes `Peek` commands through this map, so an entry must exist
+    /// for as long as its `Peek` command can be sent or replayed.
     peeks: BTreeMap<Uuid, PendingPeek>,
     /// Currently in-progress subscribes.
     ///
@@ -438,6 +444,44 @@ impl Instance {
     /// Returns whether the identified replica exists.
     fn replica_exists(&self, id: ReplicaId) -> bool {
         self.replicas.contains_key(&id)
+    }
+
+    /// Sets how untargeted peeks and transient dataflows are spread across replicas.
+    pub fn set_query_routing(&mut self, query_routing: QueryRouting) {
+        self.query_routing = query_routing;
+    }
+
+    /// Chooses one replica to serve a read of `ids` at `time`, round-robin.
+    ///
+    /// Prefers replicas whose write frontier for every one of `ids` is already past `time`, so
+    /// the read is not stuck behind a lagging or still-hydrating replica. Falls back to any
+    /// replica hosting all of `ids`, then to any replica.
+    fn choose_replica(&mut self, ids: &[GlobalId], time: &Timestamp) -> Option<ReplicaId> {
+        let hosting: Vec<&ReplicaState> = self
+            .replicas
+            .values()
+            .filter(|r| ids.iter().all(|id| r.collections.contains_key(id)))
+            .collect();
+        let ready: Vec<ReplicaId> = hosting
+            .iter()
+            .filter(|r| {
+                ids.iter()
+                    .all(|id| !r.collections[id].write_frontier.less_equal(time))
+            })
+            .map(|r| r.id)
+            .collect();
+        let candidates = if !ready.is_empty() {
+            ready
+        } else if !hosting.is_empty() {
+            hosting.iter().map(|r| r.id).collect()
+        } else {
+            self.replicas.keys().copied().collect()
+        };
+        if candidates.is_empty() {
+            return None;
+        }
+        self.load_balance_cursor = self.load_balance_cursor.wrapping_add(1);
+        Some(candidates[self.load_balance_cursor % candidates.len()])
     }
 
     /// Return the IDs of pending peeks targeting the specified replica.
@@ -877,6 +921,8 @@ impl Instance {
             initialized,
             read_only,
             workload_class,
+            query_routing,
+            load_balance_cursor: _,
             replicas,
             collections,
             log_sources: _,
@@ -920,6 +966,7 @@ impl Instance {
             "initialized": initialized,
             "read_only": read_only,
             "workload_class": workload_class,
+            "query_routing": query_routing.to_string(),
             "replicas": replicas,
             "collections": collections,
             "peeks": peeks,
@@ -982,6 +1029,8 @@ impl Instance {
             initialized: false,
             read_only,
             workload_class: None,
+            query_routing: QueryRouting::default(),
+            load_balance_cursor: 0,
             replicas: Default::default(),
             collections,
             log_sources,
@@ -1125,13 +1174,18 @@ impl Instance {
     /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
+        let target_replica = self.target_replica(&cmd);
+        self.send_to(cmd, target_replica);
+    }
+
+    /// Sends a command to the given replica of this instance, or to all replicas if
+    /// `target_replica` is `None`.
+    fn send_to(&mut self, cmd: ComputeCommand, target_replica: Option<ReplicaId>) {
         // Record the command so that new replicas can be brought up to speed.
         // We record the *base* (un-specialized) command, so that the per-replica
         // dyncfg overrides are re-applied at replay time in `add_replica` rather
         // than baked into the shared history.
         self.history.push(cmd.clone());
-
-        let target_replica = self.target_replica(&cmd);
 
         let dyncfg = &self.dyncfg;
         if let Some(rid) = target_replica {
@@ -1196,6 +1250,10 @@ impl Instance {
     /// collection named by the command, and returns the target replica if
     /// it is set, and None if not set, or the command doesn't name a collection.
     ///
+    /// For `Peek`, the target replica is resolved through the pending peek registered in
+    /// `self.peeks`, since the command doesn't otherwise name a collection. `CancelPeek` resolves
+    /// to `None`, because [`Self::finish_peek`] routes it explicitly after removing the entry.
+    ///
     /// Panics if a create-dataflow command names collections that have different
     /// target replicas. It is an error to construct such an object and would
     /// indicate a bug in [`Self::create_dataflow`].
@@ -1218,13 +1276,21 @@ impl Instance {
                 }
                 target_replica
             }
-            // Skip Peek as we don't allow replica-targeted indexes.
-            ComputeCommand::Peek(_)
+            // `Instance::peek` inserts the `PendingPeek` into `self.peeks` before calling `send`,
+            // and history reduction drops a finished peek's `Peek` before any replay, so a miss is
+            // a bug. Broadcasting on a miss would panic every replica without the peeked index.
+            ComputeCommand::Peek(peek) => match self.peeks.get(&peek.uuid) {
+                Some(pending) => pending.target_replica,
+                None => {
+                    soft_panic_or_log!("peek {} has no pending entry", peek.uuid);
+                    None
+                }
+            },
+            ComputeCommand::CancelPeek { .. }
             | ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
-            | ComputeCommand::UpdateConfiguration(_)
-            | ComputeCommand::CancelPeek { .. } => None,
+            | ComputeCommand::UpdateConfiguration(_) => None,
         }
     }
 
@@ -1266,7 +1332,7 @@ impl Instance {
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
-            // Skip `CreateDataflow` commands targeted at different replicas.
+            // Skip commands targeted at a different replica.
             if let Some(target_replica) = self.target_replica(command)
                 && target_replica != id
             {
@@ -1354,6 +1420,31 @@ impl Instance {
             self.deliver_response(response);
         }
 
+        // A balanced peek reads a collection every replica hosts, so it moves to another replica
+        // instead of failing.
+        let to_move: Vec<Uuid> = self
+            .peeks_targeting(id)
+            .filter(|(_, peek)| peek.command.is_some())
+            .map(|(uuid, _)| uuid)
+            .collect();
+        for uuid in to_move {
+            let command = self.peeks[&uuid].command.clone().expect("checked above");
+            let Some(new_target) = self.choose_replica(&[command.target.id()], &command.timestamp)
+            else {
+                continue;
+            };
+            self.peeks.get_mut(&uuid).expect("exists").target_replica = Some(new_target);
+            let dyncfg = &self.dyncfg;
+            if let Some(replica) = self.replicas.get_mut(&new_target) {
+                let cmd = Self::specialize_command_for_replica(
+                    ComputeCommand::Peek(command),
+                    &replica.dyncfg_override,
+                    dyncfg,
+                );
+                let _ = replica.client.send(cmd);
+            }
+        }
+
         // Peeks targeting this replica might not be served anymore (if the replica is dropped).
         // If the replica has failed it might come back and respond to the peek later, but it still
         // seems like a good idea to cancel the peek to inform the caller about the failure. This
@@ -1438,6 +1529,34 @@ impl Instance {
         if let Some(replica_id) = target_replica {
             if !self.replica_exists(replica_id) {
                 return Err(ReplicaMissing(replica_id));
+            }
+        }
+
+        // A transient dataflow (slow-path peek, subscribe, COPY TO) serves a single query, so a
+        // balanced instance runs it on one replica.
+        let mut target_replica = target_replica;
+        if target_replica.is_none()
+            && self.query_routing == QueryRouting::Balanced
+            && dataflow.export_ids().all(|id| id.is_transient())
+        {
+            if let Some(as_of) = dataflow.as_of.as_ref().and_then(|f| f.as_option()) {
+                let imports: Vec<GlobalId> = dataflow.index_imports.keys().copied().collect();
+                target_replica = self.choose_replica(&imports, as_of);
+            }
+        }
+
+        // A dataflow that reads an index absent from its own replica cannot be rendered there:
+        // the imported index's target replica must agree with the dataflow's own target. The
+        // adapter never constructs such a dataflow, so a mismatch here is a bug, not a runtime
+        // condition to recover from.
+        for &id in dataflow.index_imports.keys() {
+            if let Some(import_target) = self.expect_collection(id).target_replica {
+                assert_eq!(
+                    target_replica,
+                    Some(import_target),
+                    "dataflow imports index {id} targeted at replica {import_target}, \
+                     but the dataflow itself targets {target_replica:?}",
+                );
             }
         }
 
@@ -1798,6 +1917,40 @@ impl Instance {
             }
         }
 
+        // A peek on a replica-targeted collection can only be served by that replica. Otherwise a
+        // balanced instance sends the peek to a single replica, and keeps the command so it can be
+        // re-sent if that replica goes away.
+        let mut target_replica = target_replica;
+        let mut balanced = false;
+        if target_replica.is_none() && self.query_routing == QueryRouting::Balanced {
+            target_replica = match self
+                .collection(target_id)
+                .ok()
+                .and_then(|c| c.target_replica)
+            {
+                Some(replica) => Some(replica),
+                None => {
+                    balanced = true;
+                    self.choose_replica(&[target_id], &timestamp)
+                }
+            };
+        }
+
+        // Sending a peek for an index to a replica that does not host it panics that replica: the
+        // replica side (`handle_peek`) unwraps the trace lookup unconditionally. The adapter only
+        // targets a peek at the same replica as the transient index it reads, so a mismatch here
+        // is a programming error, not a user error.
+        if let PeekTarget::Index { id } = &peek_target {
+            if let Some(index_target) = self.expect_collection(*id).target_replica {
+                assert_eq!(
+                    target_replica,
+                    Some(index_target),
+                    "peek of index {id} targeted at replica {index_target}, \
+                     but the peek itself targets {target_replica:?}",
+                );
+            }
+        }
+
         let otel_ctx = OpenTelemetryContext::obtain();
 
         self.peeks.insert(
@@ -1812,6 +1965,7 @@ impl Instance {
                 lifecycle,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
+                command: None,
             },
         );
 
@@ -1827,7 +1981,11 @@ impl Instance {
             target: peek_target,
             result_desc,
         };
-        self.send(ComputeCommand::Peek(Box::new(peek)));
+        let peek = Box::new(peek);
+        if balanced {
+            self.peeks.get_mut(&uuid).expect("inserted above").command = Some(peek.clone());
+        }
+        self.send(ComputeCommand::Peek(peek));
 
         Ok(())
     }
@@ -2027,9 +2185,17 @@ impl Instance {
         // The recipient might not be interested in the peek response anymore, which is fine.
         let _ = peek.peek_response_tx.send(response);
 
+        // The peek is already removed from `self.peeks`, so `target_replica` can no longer
+        // resolve it. Capture the target here and route the cancellation explicitly.
+        let target_replica = peek.target_replica;
+
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
-        self.send(ComputeCommand::CancelPeek { uuid });
+        //
+        // If the target replica was just removed (`remove_replica` calls `finish_peek` for peeks
+        // targeting it), `send_to` finds no replica with that ID and sends nothing, which is fine
+        // since there is no replica left to cancel the peek on.
+        self.send_to(ComputeCommand::CancelPeek { uuid }, target_replica);
 
         drop(peek.read_hold);
     }
@@ -2150,9 +2316,15 @@ impl Instance {
             return;
         };
 
-        // If the peek is targeting a replica, ignore responses from other replicas.
+        // If the peek is targeting a replica, ignore responses from other replicas. `Peek` is
+        // only ever sent to its target replica (see `target_replica`), so a response from a
+        // different replica indicates a routing bug.
         let target_replica = peek.target_replica.unwrap_or(replica_id);
         if target_replica != replica_id {
+            soft_panic_or_log!(
+                "peek response from non-target replica (uuid={uuid}, replica_id={replica_id}, \
+                 target_replica={target_replica})"
+            );
             return;
         }
 
@@ -3096,9 +3268,10 @@ impl RefreshIntrospectionState {
 struct PendingPeek {
     /// Receives the peek's terminal notification. If `None`, the coordinator does.
     lifecycle: Option<Arc<PeekLifecycle>>,
-    /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
+    /// For replica-targeted peeks, this specifies the only replica the peek is sent to.
     ///
-    /// If this value is `None`, we pass on the first response.
+    /// If this value is `None`, the peek is broadcast to all replicas and the first response
+    /// wins.
     target_replica: Option<ReplicaId>,
     /// The OpenTelemetry context for this peek.
     otel_ctx: OpenTelemetryContext,
@@ -3114,6 +3287,9 @@ struct PendingPeek {
     limit: Option<usize>,
     /// The offset into the peek's result.
     offset: usize,
+    /// The peek command, kept for a peek whose replica was chosen by [`QueryRouting::Balanced`]
+    /// so it can be re-sent to another replica if that one goes away.
+    command: Option<Box<Peek>>,
 }
 
 #[derive(Debug, Clone)]
