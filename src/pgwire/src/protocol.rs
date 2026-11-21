@@ -3747,8 +3747,11 @@ impl CsvScanState {
                 .double_quote(double_quote)
                 .escape(escape)
                 .build(),
-            output: vec![0; 1],
-            ends: vec![0; 1],
+            // NOTE: csv-core's `read_record` returns once `output` or `ends`
+            // is full, so their lengths bound how much input one call can
+            // scan. The scanner never reads their contents.
+            output: vec![0; 64 * 1024],
+            ends: vec![0; 1024],
             skip_first_record: header,
         }
     }
