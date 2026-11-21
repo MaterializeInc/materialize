@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, builder::*};
 use arrow::datatypes::{
-    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Schema,
+    ArrowPrimitiveType, ByteArrayType, DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DataType, Field, Schema,
 };
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -268,6 +269,19 @@ impl ArrowBuilder {
 
     pub fn row_size_bytes(&self) -> usize {
         self.row_size_bytes
+    }
+
+    /// The size in bytes of the value and offset buffers filled so far, across all columns
+    /// and their nested children. Validity bitmaps are not counted.
+    ///
+    /// This can exceed [`Self::row_size_bytes`] by orders of magnitude. A null takes one byte
+    /// in a `Row`, but a value slot in every child of a null struct.
+    // NOTE: `&mut self` because `MapBuilder` only hands out its child builders mutably.
+    pub fn buffered_bytes(&mut self) -> usize {
+        self.columns
+            .iter_mut()
+            .map(|col| col.inner.buffered_bytes())
+            .sum()
     }
 }
 
@@ -791,6 +805,35 @@ impl ArrowColumn {
     }
 }
 
+/// The size in bytes of the value and offset buffers a non-nested builder has filled.
+trait BufferedBytes {
+    fn buffered_bytes(&self) -> usize;
+}
+
+impl<T: ArrowPrimitiveType> BufferedBytes for PrimitiveBuilder<T> {
+    fn buffered_bytes(&self) -> usize {
+        size_of_val(self.values_slice())
+    }
+}
+
+impl BufferedBytes for BooleanBuilder {
+    fn buffered_bytes(&self) -> usize {
+        size_of_val(self.values_slice())
+    }
+}
+
+impl BufferedBytes for FixedSizeBinaryBuilder {
+    fn buffered_bytes(&self) -> usize {
+        size_of_val(self.values_slice())
+    }
+}
+
+impl<T: ByteArrayType> BufferedBytes for GenericByteBuilder<T> {
+    fn buffered_bytes(&self) -> usize {
+        size_of_val(self.values_slice()) + size_of_val(self.offsets_slice())
+    }
+}
+
 macro_rules! make_col_builder {
     ($($x:ident), *) => {
         /// An enum wrapper for all arrow builder types that we support. Used to store
@@ -828,6 +871,30 @@ macro_rules! make_col_builder {
                         }
                         builder.append_null();
                     }
+                }
+            }
+
+            fn buffered_bytes(&mut self) -> usize {
+                match self {
+                    $(
+                        ColBuilder::$x(builder) => builder.buffered_bytes(),
+                    )*
+                    ColBuilder::ListBuilder(builder) => {
+                        size_of_val(builder.offsets_slice())
+                            + builder.values().inner.buffered_bytes()
+                    }
+                    ColBuilder::MapBuilder(builder) => {
+                        // `MapBuilder` does not expose its offsets, of which it has one per map.
+                        let offsets = builder.len() * size_of::<i32>();
+                        let (keys, values) = builder.entries();
+                        offsets + keys.buffered_bytes() + values.inner.buffered_bytes()
+                    }
+                    ColBuilder::StructBuilder(builder) => (0..builder.num_fields())
+                        .map(|i| {
+                            let field_builder: &mut ArrowColumn = builder.field_builder(i).unwrap();
+                            field_builder.inner.buffered_bytes()
+                        })
+                        .sum(),
                 }
             }
         }

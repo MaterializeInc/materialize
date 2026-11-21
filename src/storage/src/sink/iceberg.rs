@@ -166,11 +166,9 @@ use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
-/// The number of rows to buffer before writing them out as one record batch. Also the item
-/// capacity of the array builders inside the ArrowBuilder, so that buffering a full batch
-/// does not regrow them.
+/// The number of buffered rows at which they are written out as one record batch.
 const MAX_BUFFERED_ROWS: usize = 1024;
-/// The size of buffered rows, as estimated by [`ArrowBuilder::row_size_bytes`], at which they
+/// The size of buffered rows, as measured by [`ArrowBuilder::buffered_bytes`], at which they
 /// are written out early. Bounds the memory a batch of very wide rows can hold.
 const MAX_BUFFERED_BYTES: usize = 8 * 1024 * 1024;
 /// Set the default buffer capacity for the string and binary array builders inside the
@@ -220,23 +218,20 @@ trait EnvelopeHandler: Send {
 
     /// Create an empty [`RowBatchBuilder`] whose batches the writers from
     /// [`Self::create_writer`] accept.
-    fn new_row_batch(&self) -> anyhow::Result<RowBatchBuilder>;
+    fn new_row_batch(&self) -> RowBatchBuilder;
 }
 
-/// Buffers the rows of consecutive diff pairs, so that they reach the writer as one
-/// [`RecordBatch`]. The rows of a batch keep the order they were pushed in.
+/// Buffers the rows of consecutive diff pairs, so that they reach the writer in few
+/// [`RecordBatch`]es.
 struct RowBatchBuilder {
-    /// Schema of the row data alone, without the columns [`Self::take_batch`] appends.
-    row_schema: Arc<ArrowSchema>,
-    /// Schema of the produced batches: the row columns, then a diff column, then a
-    /// timestamp column if `timestamps` is tracked.
-    batch_schema: Arc<ArrowSchema>,
-    rows: ArrowBuilder,
-    /// Per buffered row, -1 for the `before` half of a diff pair and +1 for the `after` half.
-    diffs: Vec<i32>,
-    /// Per buffered row, the timestamp of its diff pair. `None` if `batch_schema` has no
-    /// timestamp column.
-    timestamps: Option<Vec<i64>>,
+    /// The buffered retractions, if they form a batch of their own that is written ahead of
+    /// `rows`.
+    retractions: Option<RowBatch>,
+    /// The buffered insertions. If `retractions` is `None`, also the retractions, in the
+    /// order the rows were pushed.
+    rows: RowBatch,
+    /// The key of the diff pair pushed last. Only tracked if `retractions` is `Some`.
+    last_key: Option<Row>,
 }
 
 impl RowBatchBuilder {
@@ -244,42 +239,104 @@ impl RowBatchBuilder {
         row_schema: Arc<ArrowSchema>,
         batch_schema: Arc<ArrowSchema>,
         with_timestamps: bool,
-    ) -> anyhow::Result<Self> {
-        let rows = Self::new_rows(&row_schema)?;
-        Ok(Self {
-            row_schema,
-            batch_schema,
-            rows,
+        retractions_first: bool,
+    ) -> Self {
+        let batch = || RowBatch {
+            row_schema: Arc::clone(&row_schema),
+            batch_schema: Arc::clone(&batch_schema),
+            rows: None,
             diffs: Vec::new(),
             timestamps: with_timestamps.then(Vec::new),
-        })
-    }
-
-    fn new_rows(row_schema: &Arc<ArrowSchema>) -> anyhow::Result<ArrowBuilder> {
-        ArrowBuilder::new_with_schema(
-            Arc::clone(row_schema),
-            MAX_BUFFERED_ROWS,
-            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-        )
-        .context("Failed to create builder")
-    }
-
-    /// Buffers the `before` half of `diff_pair` as a retraction, then its `after` half as an
-    /// insertion.
-    fn push(&mut self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<()> {
-        if let Some(before) = diff_pair.before {
-            self.push_row(&before, -1, ts)
-                .context("Failed to add before row to builder")?;
+        };
+        Self {
+            retractions: retractions_first.then(batch),
+            rows: batch(),
+            last_key: None,
         }
-        if let Some(after) = diff_pair.after {
-            self.push_row(&after, 1, ts)
-                .context("Failed to add after row to builder")?;
-        }
-        Ok(())
     }
 
-    fn push_row(&mut self, row: &Row, diff: i32, ts: Timestamp) -> anyhow::Result<()> {
-        self.rows.add_row(row)?;
+    /// Buffers the `before` half of `diff_pair` as a retraction and its `after` half as an
+    /// insertion, first writing the buffered rows to `writer` if `diff_pair` cannot join
+    /// them. Returns how many rows were written.
+    ///
+    /// All diff pairs of a `key` must be pushed consecutively.
+    async fn push(
+        &mut self,
+        key: &Option<Row>,
+        diff_pair: DiffPair<Row>,
+        ts: Timestamp,
+        writer: &mut Box<dyn IcebergWriter>,
+    ) -> anyhow::Result<u64> {
+        let mut must_flush = self.rows.is_full();
+        if let Some(retractions) = &mut self.retractions {
+            // Writing the retractions first moves the retraction of this diff pair ahead of
+            // the insertions buffered before it. A retraction written ahead of the insertion
+            // it retracts leaves that row in the table, so the two must not share a flush.
+            // They share a key, so it suffices to flush whenever the key repeats.
+            must_flush |= retractions.is_full() || self.last_key == *key;
+            self.last_key.clone_from(key);
+        }
+        let written = if must_flush {
+            self.flush(writer).await?
+        } else {
+            0
+        };
+
+        if let Some(before) = &diff_pair.before {
+            let retractions = self.retractions.as_mut().unwrap_or(&mut self.rows);
+            retractions.push(before, -1, ts)?;
+        }
+        if let Some(after) = &diff_pair.after {
+            self.rows.push(after, 1, ts)?;
+        }
+        Ok(written)
+    }
+
+    /// Writes the buffered rows to `writer`, returning how many there were.
+    async fn flush(&mut self, writer: &mut Box<dyn IcebergWriter>) -> anyhow::Result<u64> {
+        let mut written = 0;
+        if let Some(retractions) = &mut self.retractions {
+            written += retractions.flush(writer).await?;
+        }
+        written += self.rows.flush(writer).await?;
+        Ok(written)
+    }
+}
+
+/// The rows buffered for one [`RecordBatch`], in the order they were pushed.
+struct RowBatch {
+    /// Schema of the row data alone, without the columns [`Self::flush`] appends.
+    row_schema: Arc<ArrowSchema>,
+    /// Schema of the produced batch: the row columns, then a diff column, then a timestamp
+    /// column if `timestamps` is tracked.
+    batch_schema: Arc<ArrowSchema>,
+    /// `None` while no rows are buffered, so that an idle sink holds no column buffers.
+    rows: Option<ArrowBuilder>,
+    /// Per buffered row, -1 for a retraction and +1 for an insertion.
+    diffs: Vec<i32>,
+    /// Per buffered row, the timestamp of its diff pair. `None` if `batch_schema` has no
+    /// timestamp column.
+    timestamps: Option<Vec<i64>>,
+}
+
+impl RowBatch {
+    fn push(&mut self, row: &Row, diff: i32, ts: Timestamp) -> anyhow::Result<()> {
+        let rows = match &mut self.rows {
+            Some(rows) => rows,
+            None => self.rows.insert(
+                // A batch may end up with a single row, so the array builders start empty
+                // and grow with it. Preallocating `MAX_BUFFERED_ROWS` items was not
+                // measurably faster for full batches.
+                ArrowBuilder::new_with_schema(
+                    Arc::clone(&self.row_schema),
+                    0,
+                    DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+                )
+                .context("Failed to create builder")?,
+            ),
+        };
+        rows.add_row(row)
+            .context("failed to convert row to recordbatch")?;
         self.diffs.push(diff);
         if let Some(timestamps) = &mut self.timestamps {
             timestamps.push(i64::try_from(u64::from(ts)).unwrap_or(i64::MAX));
@@ -287,19 +344,19 @@ impl RowBatchBuilder {
         Ok(())
     }
 
-    fn is_empty(&self) -> bool {
-        self.diffs.is_empty()
+    /// Whether the buffered rows should be written out before buffering more.
+    fn is_full(&mut self) -> bool {
+        let Some(rows) = &mut self.rows else {
+            return false;
+        };
+        self.diffs.len() >= MAX_BUFFERED_ROWS || rows.buffered_bytes() >= MAX_BUFFERED_BYTES
     }
 
-    /// Whether the buffered rows should be written out before pushing another diff pair.
-    fn is_full(&self) -> bool {
-        // A diff pair holds up to two rows.
-        self.diffs.len() + 2 > MAX_BUFFERED_ROWS || self.rows.row_size_bytes() >= MAX_BUFFERED_BYTES
-    }
-
-    /// Returns the buffered rows as one batch, leaving the builder empty.
-    fn take_batch(&mut self) -> anyhow::Result<RecordBatch> {
-        let rows = std::mem::replace(&mut self.rows, Self::new_rows(&self.row_schema)?);
+    /// Writes the buffered rows to `writer` as one batch, returning how many there were.
+    async fn flush(&mut self, writer: &mut Box<dyn IcebergWriter>) -> anyhow::Result<u64> {
+        let Some(rows) = self.rows.take() else {
+            return Ok(0);
+        };
         let batch = rows
             .to_record_batch()
             .context("Failed to create record batch")?;
@@ -309,17 +366,9 @@ impl RowBatchBuilder {
         if let Some(timestamps) = &mut self.timestamps {
             columns.push(Arc::new(Int64Array::from(std::mem::take(timestamps))));
         }
+        let batch = RecordBatch::try_new(Arc::clone(&self.batch_schema), columns)
+            .context("Failed to append envelope columns to record batch")?;
 
-        RecordBatch::try_new(Arc::clone(&self.batch_schema), columns)
-            .context("Failed to append envelope columns to record batch")
-    }
-
-    /// Writes the buffered rows to `writer` as one batch, returning how many there were.
-    async fn flush(&mut self, writer: &mut Box<dyn IcebergWriter>) -> anyhow::Result<u64> {
-        if self.is_empty() {
-            return Ok(0);
-        }
-        let batch = self.take_batch()?;
         let num_rows = u64::cast_from(batch.num_rows());
         writer
             .write(batch)
@@ -469,11 +518,17 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
 
     /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
     /// which the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
-    fn new_row_batch(&self) -> anyhow::Result<RowBatchBuilder> {
+    fn new_row_batch(&self) -> RowBatchBuilder {
         RowBatchBuilder::new(
             Arc::clone(&self.ctx.arrow_schema),
             Arc::clone(&self.schema_with_op),
             false,
+            // The DeltaWriter hands each run of equal ops to its data or delete writers as a
+            // slice of the batch. A slice of a list or map column still references the
+            // elements of all rows of the batch, and the data writer counts the NaNs among
+            // all of them into the file's metrics, once per slice. Updates alternate ops,
+            // so only a batch of their own gives the retractions runs longer than a row.
+            true,
         )
     }
 }
@@ -527,11 +582,12 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
 
     /// Every change is written as a plain data row: the `before` half (if present) gets
     /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
-    fn new_row_batch(&self) -> anyhow::Result<RowBatchBuilder> {
+    fn new_row_batch(&self) -> RowBatchBuilder {
         RowBatchBuilder::new(
             Arc::clone(&self.user_schema_for_append),
             Arc::clone(&self.ctx.arrow_schema),
             true,
+            false,
         )
     }
 }
@@ -1900,7 +1956,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                 };
                 let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
                 // Empty between `write_rows` calls.
-                let mut row_batch = handler.new_row_batch()?;
+                let mut row_batch = handler.new_row_batch();
                 let mut pk_warner =
                     (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
 
@@ -2042,24 +2098,19 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     warner.observe(key, time);
                                 }
 
-                                row_batch
-                                    .push(diff_pair, time)
-                                    .context("failed to convert row to recordbatch")?;
-                                if row_batch.is_full() {
-                                    staged_messages_since_flush +=
-                                        row_batch.flush(batch_writer).await?;
-                                    if staged_messages_since_flush >= 10_000 {
-                                        statistics
-                                            .inc_messages_staged_by(staged_messages_since_flush);
-                                        staged_messages_since_flush = 0;
-                                    }
+                                staged_messages_since_flush +=
+                                    row_batch.push(key, diff_pair, time, batch_writer).await?;
+                                if staged_messages_since_flush >= 10_000 {
+                                    statistics.inc_messages_staged_by(staged_messages_since_flush);
+                                    staged_messages_since_flush = 0;
                                 }
                                 Ok(())
                             },
                         )
                         .await?;
                         // The next rows may belong to another writer, and the caller may
-                        // close this one as soon as we return.
+                        // close this one as soon as we return. The next span may also repeat
+                        // keys of this one, which `push` expects consecutively.
                         staged_messages_since_flush += row_batch.flush(batch_writer).await?;
                         // Flush after each batch so the final `(key, time)` group of the walk is
                         // resolved immediately — a PK violation in the last group is otherwise held
