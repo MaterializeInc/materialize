@@ -656,6 +656,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_coalesce_case_transform: Default::default(),
                 enable_will_distinct_propagation: Default::default(),
                 enable_fixed_correlated_cte_lowering: v.enable_fixed_correlated_cte_lowering,
+                enable_partial_literal_index_lookups: Default::default(),
             },
         })
     }
