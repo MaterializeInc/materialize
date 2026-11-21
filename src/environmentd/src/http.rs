@@ -68,7 +68,7 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Requ
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Extension, Json, Router, routing};
-use futures::future::{Shared, TryFutureExt};
+use futures::future::Shared;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -76,7 +76,7 @@ use http::uri::Scheme;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper_openssl::SslStream;
 use hyper_openssl::client::legacy::MaybeHttpsStream;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
@@ -321,7 +321,12 @@ impl HttpServer {
             base_router = base_router.merge(base_group);
 
             let mut ws_router = Router::new()
-                .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
+                // WebSockets arrive as a GET with the `Upgrade` header on
+                // HTTP/1.1 and as an extended CONNECT (RFC 8441) on HTTP/2.
+                .route(
+                    "/api/experimental/sql",
+                    routing::get(sql::handle_sql_ws).connect(sql::handle_sql_ws),
+                )
                 .with_state(WsState {
                     frontegg,
                     oidc_rx: oidc_rx.clone(),
@@ -747,11 +752,14 @@ impl Server for HttpServer {
                 .into_make_service_with_connect_info::<SocketAddr>();
             let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
             let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
-            let http = hyper::server::conn::http1::Builder::new();
-            http.serve_connection(conn, hyper_svc)
-                .with_upgrades()
-                .err_into()
+            // Serves HTTP/1.1 or HTTP/2, chosen by sniffing for the HTTP/2
+            // preface (ALPN is not consulted).
+            let mut http = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            // Advertise RFC 8441 extended CONNECT for WebSockets over HTTP/2.
+            http.http2().enable_connect_protocol();
+            http.serve_connection_with_upgrades(conn, hyper_svc)
                 .await
+                .map_err(|e| anyhow::anyhow!(e))
         })
     }
 }

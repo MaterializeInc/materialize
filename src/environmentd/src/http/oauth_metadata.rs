@@ -401,7 +401,8 @@ pub(crate) fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Optio
 /// Resolves the host string to embed in published absolute URLs.
 ///
 /// Prefers the operator-configured `http_host_name`; falls back to the
-/// request's `Host` header. **Never consults `X-Forwarded-*`**. See the
+/// request's `Host` header, then to the URI authority, which is where HTTP/2
+/// requests carry `:authority` instead of a `Host` header. **Never consults `X-Forwarded-*`**. See the
 /// module-level "Host derivation" notes.
 ///
 /// The returned value is parsed through [`http::uri::Authority`] before
@@ -425,7 +426,8 @@ fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-        })?;
+        })
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_string()))?;
     // Reject `user@host` explicitly. `Authority::as_str()` keeps userinfo,
     // so the round-trip below would pass it through, letting an attacker
     // poison the published URLs via a forged `Host: bobby@evil...`.
@@ -533,6 +535,18 @@ mod tests {
             resolve_host(&req, None).as_deref(),
             Some("honest.example.com"),
             "X-Forwarded-Host must not influence the resolved host",
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_resolve_host_falls_back_to_http2_authority() {
+        let req = Request::builder()
+            .uri("https://example.com:8080/.well-known/oauth-protected-resource")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            resolve_host(&req, None).as_deref(),
+            Some("example.com:8080"),
         );
     }
 

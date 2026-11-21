@@ -3399,6 +3399,7 @@ class FlipFlagsAction(Action):
             "balancerd_connection_high_watermark",
             "balancerd_connection_low_watermark",
             "balancerd_pre_resolved_timeout",
+            "balancerd_https_enable_http2_alpn",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
             "balancerd_log_filter_defaults",

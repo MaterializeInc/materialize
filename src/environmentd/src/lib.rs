@@ -395,7 +395,10 @@ impl Listeners {
 
         // Validate TLS configuration, if present.
         let tls_reloading_context = match config.tls {
-            Some(tls_config) => Some(tls_config.reloading_context(config.tls_reload_certs)?),
+            Some(tls_config) => {
+                let enable_http2_alpn = true;
+                Some(tls_config.reloading_context(config.tls_reload_certs, enable_http2_alpn)?)
+            }
             None => None,
         };
 
