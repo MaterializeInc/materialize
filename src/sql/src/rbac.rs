@@ -1532,6 +1532,7 @@ fn generate_rbac_requirements(
             assignments,
             kind,
             returning,
+            delete_rows: _,
         }) => {
             let acl_mode = match kind {
                 MutationKind::Insert => AclMode::INSERT,
