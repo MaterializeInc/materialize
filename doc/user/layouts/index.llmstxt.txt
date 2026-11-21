@@ -22,7 +22,9 @@
   resources.FromString, so that all of llms.txt is built in one place.
 
   Links point at each page's Markdown rendition rather than its HTML page, so a
-  consumer fetches prose instead of site chrome.
+  consumer fetches prose instead of site chrome. They use the copy at the page
+  URL, <baseURL>/<path>/index.md, which a consumer can map back to the page by
+  dropping "index.md".
 
   Only the HTML pass renders this file. config.skill.toml resets outputs.home to
   ["skill"], and the rightmost --config file wins, so the Markdown pass emits
@@ -110,7 +112,7 @@
 {{- with site.GetPage "/headless/materialize-intro/intro" -}}
   {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
 {{- end -}}
-{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`." -}}
+{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop the trailing `index.md`." -}}
 {{- $sections := slice -}}
 {{- $root := dict -}}
 {{- range $groups -}}
@@ -118,7 +120,7 @@
   {{- if $items -}}
     {{- $entries := slice -}}
     {{- range $items -}}
-      {{- $line := printf "- [%s](%s)" .Title (partial "markdown-url.html" (dict "page" . "absolute" true)) -}}
+      {{- $line := printf "- [%s](%s)" .Title (partial "markdown-url.html" (dict "page" . "absolute" true "atPage" true)) -}}
       {{- with .Description -}}{{- $d := trim (replaceRE `\s+` " " .) " " -}}{{- if $d -}}{{- $line = printf "%s: %s" $line $d -}}{{- end -}}{{- end -}}
       {{- $entries = $entries | append $line -}}
     {{- end -}}
