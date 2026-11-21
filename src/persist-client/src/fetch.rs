@@ -114,12 +114,27 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the consolidator (compaction and consolidating iteration) decodes
+/// hollow parts of structured-order runs in batches of
+/// [`PART_DECODE_BATCH_ROWS`] rows.
+pub(crate) const CONSOLIDATOR_DECODE_BATCHED: Config<bool> = Config::new(
+    "persist_consolidator_decode_batched",
+    true,
+    "\
+    Whether the consolidator decodes parts of structured-order runs in \
+    batches of persist_part_decode_batch_rows rows instead of whole.",
+    ParameterScope::Environment,
+);
+
 #[derive(Debug, Clone)]
 pub(crate) struct FetchConfig {
     pub(crate) validate_bounds_on_read: bool,
-    /// See [`PART_DECODE_BATCH_ROWS`]. Only consulted by readers that decode
-    /// through [`FetchedPart`].
+    /// See [`PART_DECODE_BATCH_ROWS`]. Consulted by readers that decode
+    /// through [`FetchedPart`], and by the consolidator when
+    /// [`FetchConfig::consolidator_decode_batched`] is set.
     pub(crate) part_decode_batch_rows: Option<usize>,
+    /// See [`CONSOLIDATOR_DECODE_BATCHED`].
+    pub(crate) consolidator_decode_batched: bool,
 }
 
 impl FetchConfig {
@@ -127,6 +142,7 @@ impl FetchConfig {
         Self {
             validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
             part_decode_batch_rows: PART_DECODE_BATCH_ROWS.get(cfg),
+            consolidator_decode_batched: CONSOLIDATOR_DECODE_BATCHED.get(cfg),
         }
     }
 }
@@ -136,6 +152,7 @@ pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
     pub(crate) validate_bounds_on_read: ConfigValHandle<bool>,
     pub(crate) part_decode_batch_rows: ConfigValHandle<Option<usize>>,
+    pub(crate) consolidator_decode_batched: ConfigValHandle<bool>,
 }
 
 impl BatchFetcherConfig {
@@ -144,6 +161,7 @@ impl BatchFetcherConfig {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
             validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.handle(value),
             part_decode_batch_rows: PART_DECODE_BATCH_ROWS.handle(value),
+            consolidator_decode_batched: CONSOLIDATOR_DECODE_BATCHED.handle(value),
         }
     }
 
@@ -156,6 +174,7 @@ impl BatchFetcherConfig {
         FetchConfig {
             validate_bounds_on_read: self.validate_bounds_on_read.get(),
             part_decode_batch_rows: self.part_decode_batch_rows.get(),
+            consolidator_decode_batched: self.consolidator_decode_batched.get(),
         }
     }
 }
@@ -1363,7 +1382,7 @@ impl<T: Timestamp + Lattice + Codec64> EncodedPartBatches<T> {
 
     /// Decodes and normalizes the next batch, or returns `None` once all rows
     /// have been returned.
-    fn next_updates(&mut self, metrics: &Metrics) -> Option<BlobTraceUpdates> {
+    pub(crate) fn next_updates(&mut self, metrics: &Metrics) -> Option<BlobTraceUpdates> {
         let start = Instant::now();
         let updates = self
             .reader
