@@ -14,7 +14,7 @@
 //! export, which tells the replication operator to retract the changes the snapshot already
 //! contains.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -65,8 +65,10 @@ pub(crate) fn render<'scope>(
     let op_name = format!("SqlServerSnapshotReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    // One data output port per source export, in output index order. Every port holds the
-    // minimum capability until the entire snapshot completes.
+    // One data output port per source export, in output index order. With concurrent
+    // replication each port is held at the minimum only while this operator still has snapshot
+    // data to emit for that export. Without it all ports are held until the entire snapshot
+    // completes. Every export then observes the same frontier.
     let export_count = config.source_exports.len();
     let mut data_outputs = Vec::with_capacity(export_count);
     let mut data_streams = Vec::with_capacity(export_count);
@@ -139,6 +141,22 @@ pub(crate) fn render<'scope>(
             }
             if !config.responsible_for(SNAPSHOT_READER) {
                 return Ok(());
+            }
+
+            // This operator only emits snapshot data for the exports it snapshots. With
+            // concurrent replication the ports of all other exports close up front. Their
+            // frontiers then follow the replication operator alone.
+            if concurrent_replication {
+                let snapshotting: BTreeSet<usize> = capture_instance_to_snapshot
+                    .values()
+                    .flatten()
+                    .map(|(output_index, _)| *output_index)
+                    .collect();
+                for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                    if !snapshotting.contains(&output_index) {
+                        *cap_set = CapabilitySet::new();
+                    }
+                }
             }
 
             let connection_config = source
@@ -331,6 +349,13 @@ pub(crate) fn render<'scope>(
                 for export_stat in stats {
                     export_stat.set_snapshot_records_staged(snapshot_staged);
                     export_stat.set_snapshot_records_known(snapshot_staged);
+                }
+                // A transient error above returns with the capabilities still held. That keeps a
+                // partially copied export from advancing.
+                if concurrent_replication {
+                    for (output_index, _) in output_indexes {
+                        data_cap_sets[*output_index] = CapabilitySet::new();
+                    }
                 }
             }
             snapshot_txn.rollback().await?;
