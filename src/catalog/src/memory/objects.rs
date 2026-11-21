@@ -23,7 +23,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::{DataflowDescription, LirDataflowDescription};
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, QueryRouting, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -469,6 +469,7 @@ impl Cluster {
             variant,
             workload_class,
             query_policy: self.config.query_policy,
+            query_routing: self.config.query_routing,
             // Nothing about `IF NOT EXISTS` is stored. It only ever affected how
             // the original statement handled a name collision, so the rebuilt
             // statement never shows it.
@@ -3573,6 +3574,7 @@ pub struct ClusterConfig {
     pub workload_class: Option<String>,
     #[serde(default)]
     pub query_policy: Option<QueryPolicyId>,
+    pub query_routing: QueryRouting,
 }
 
 impl ClusterConfig {
@@ -3590,6 +3592,7 @@ impl From<ClusterConfig> for durable::ClusterConfig {
             variant: config.variant.into(),
             workload_class: config.workload_class,
             query_policy: config.query_policy,
+            query_routing: config.query_routing,
         }
     }
 }
@@ -3600,6 +3603,7 @@ impl From<durable::ClusterConfig> for ClusterConfig {
             variant: config.variant.into(),
             workload_class: config.workload_class,
             query_policy: config.query_policy,
+            query_routing: config.query_routing,
         }
     }
 }

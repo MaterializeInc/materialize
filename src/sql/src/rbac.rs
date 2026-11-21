@@ -580,6 +580,7 @@ fn generate_rbac_requirements(
             name: _,
             variant: _,
             workload_class: _,
+            query_routing: _,
             if_not_exists: _,
             query_policy,
         }) => {
@@ -1212,6 +1213,7 @@ fn generate_rbac_requirements(
                     schedule: Unchanged,
                     workload_class: Unchanged,
                     auto_scaling_strategy: Unchanged,
+                    query_routing: Unchanged,
                     query_policy: Set(_) | Reset,
                 }
             );

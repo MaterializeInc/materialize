@@ -833,6 +833,15 @@
       "dyncfg": false
     },
     {
+      "name": "enable_cluster_query_routing",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether the QUERY ROUTING cluster option is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_cluster_reconfiguration_lag_gate",
       "typeName": "boolean",
       "default": "on",

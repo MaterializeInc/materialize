@@ -453,6 +453,7 @@ Trace {
                                 },
                             ),
                             query_policy: None,
+                            query_routing: Broadcast,
                         },
                     },
                 ),

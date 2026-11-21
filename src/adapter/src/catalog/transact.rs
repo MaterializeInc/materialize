@@ -4002,6 +4002,7 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let record = |status| ReconfigurationState {
             target: ReconfigurationTarget {
@@ -4105,11 +4106,13 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let unmanaged = ClusterConfig {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let record = |status| ReconfigurationState {
             target: ReconfigurationTarget {
@@ -4190,11 +4193,13 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let unmanaged = ClusterConfig {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let record = |steady_ready_at| BurstState {
             burst_size: "large".into(),
@@ -4363,6 +4368,7 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let record = || BurstState {
             burst_size: "large".into(),
@@ -4720,6 +4726,7 @@ mod tests {
                     variant: ClusterVariant::Unmanaged,
                     workload_class: None,
                     query_policy: None,
+                    query_routing: Default::default(),
                 },
             };
 

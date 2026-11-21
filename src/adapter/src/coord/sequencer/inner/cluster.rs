@@ -23,7 +23,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, QueryRouting, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
@@ -272,6 +272,12 @@ impl Coordinator {
         match &options.workload_class {
             Set(wc) => new_config.workload_class.clone_from(wc),
             Reset => new_config.workload_class = None,
+            Unchanged => {}
+        }
+
+        match options.query_routing {
+            Set(query_routing) => new_config.query_routing = query_routing,
+            Reset => new_config.query_routing = QueryRouting::default(),
             Unchanged => {}
         }
 
@@ -821,6 +827,7 @@ impl Coordinator {
             name,
             variant,
             workload_class,
+            query_routing,
             if_not_exists,
             query_policy,
         }: CreateClusterPlan,
@@ -863,6 +870,7 @@ impl Coordinator {
             variant: cluster_variant,
             workload_class,
             query_policy,
+            query_routing,
         };
         let ops = vec![catalog::Op::CreateCluster {
             id,
@@ -1913,6 +1921,7 @@ fn alter_changes_reconfiguration_target(options: &PlanClusterOption) -> bool {
         size,
         schedule: _,
         workload_class: _,
+        query_routing: _,
         auto_scaling_strategy: _,
         query_policy: _,
     } = options;

@@ -2041,6 +2041,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_cluster_query_routing,
+        desc: "the QUERY ROUTING cluster option",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_replica_targeted_materialized_views,
         desc: "replica-targeted materialized views",
         default: false,
