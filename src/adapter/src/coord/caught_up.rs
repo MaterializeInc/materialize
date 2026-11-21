@@ -123,10 +123,8 @@ pub struct CaughtUpCheckContext {
     /// A trigger that signals that all clusters/collections have been caught
     /// up.
     pub trigger: Trigger,
-    /// Collections to exclude from the caught up check.
-    ///
-    /// When a caught up check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
+    /// Collections to exclude from the caught up check, such as collections that can't advance
+    /// their write frontier in read-only mode during a 0dt upgrade.
     pub exclude_collections: BTreeSet<GlobalId>,
 }
 
@@ -147,6 +145,16 @@ struct CaughtUpCheck {
 
 struct LeaderSnapshot {
     frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    /// The leader's clock: the upper of `mz_cluster_replica_frontiers`, the collection that
+    /// `frontiers` is read from.
+    ///
+    /// The leader advances that upper to its wall clock every second, even when it has nothing to
+    /// write. A read-only process never advances it (see the storage controller's
+    /// `collection_mgmt`). So while the leader is down, this stays at the leader's last second.
+    ///
+    /// NOTE: the newest of `frontiers` is no substitute: a collection such as a `REFRESH` MV holds
+    /// its frontier at its next refresh, which can be far ahead of the leader's clock.
+    clock: Timestamp,
     hydration: LeaderHydration,
     unhydrated_collections: BTreeSet<GlobalId>,
     problematic_replicas: BTreeSet<ReplicaId>,
@@ -687,6 +695,12 @@ impl LeaderSnapshot {
             .snapshot_latest(replica_frontier_gid)
             .await
             .context("cannot read mz_cluster_replica_frontiers")?;
+        let clock = storage_collections
+            .collection_frontiers(replica_frontier_gid)
+            .context("cannot read the upper of mz_cluster_replica_frontiers")?
+            .write_frontier
+            .into_option()
+            .context("mz_cluster_replica_frontiers has an empty upper")?;
 
         let live_frontiers = live_frontiers
             .into_iter()
@@ -758,6 +772,7 @@ impl LeaderSnapshot {
         };
         Ok(Self {
             frontiers: live_collection_frontiers,
+            clock,
             hydration: leader_hydration,
             unhydrated_collections: leader_unhydrated_collections,
             problematic_replicas,
@@ -769,6 +784,7 @@ impl CaughtUpCheck {
     async fn run(mut self, leader: LeaderSnapshot) -> CaughtUpSnapshot {
         let LeaderSnapshot {
             frontiers,
+            clock,
             hydration,
             unhydrated_collections,
             problematic_replicas,
@@ -801,6 +817,7 @@ impl CaughtUpCheck {
                 allowed_lag.into(),
                 cutoff.into(),
                 now.into(),
+                clock,
                 &frontiers,
                 &unhydrated_collections,
                 &problematic_replicas,
@@ -880,7 +897,8 @@ impl CaughtUpCheck {
     ///      returned by [`LeaderHydration::collections_unhydrated_on_all_hosting_replicas`]),
     ///      and (b) its write frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
-    ///      environment.
+    ///      environment. For a collection without one, `leader_clock` stands in (see
+    ///      `LeaderSnapshot::clock`).
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
     ///      Such a collection is unhealthy in the leader environment, so we don't care about its
     ///      health in the read-only environment either.
@@ -896,6 +914,7 @@ impl CaughtUpCheck {
         allowed_lag: Timestamp,
         cutoff: Timestamp,
         now: Timestamp,
+        leader_clock: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         leader_unhydrated_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
@@ -910,6 +929,7 @@ impl CaughtUpCheck {
                         allowed_lag.clone(),
                         cutoff.clone(),
                         now.clone(),
+                        leader_clock,
                         live_frontiers,
                         leader_unhydrated_collections,
                         problematic_replicas,
@@ -946,6 +966,7 @@ impl CaughtUpCheck {
         allowed_lag: Timestamp,
         cutoff: Timestamp,
         now: Timestamp,
+        leader_clock: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         leader_unhydrated_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
@@ -1032,9 +1053,11 @@ impl CaughtUpCheck {
                     // sink reaches frontier 1 after one batch, which would otherwise look caught
                     // up mid-hydration and bring back the cut-over spike this gate prevents.
                     // Also require the frontier to be within the allowed lag, the bound the
-                    // live-frontier path applies, with `now` standing in for the missing live
-                    // frontier. Hydration is one-shot: a collection that hydrated and then stalled
-                    // would otherwise satisfy this branch forever.
+                    // live-frontier path applies, with `leader_clock` standing in for the missing
+                    // live frontier. Hydration is one-shot: a collection that hydrated and then
+                    // stalled would otherwise satisfy this branch forever. We don't compare
+                    // against `now`: a collection fed by inputs that only the leader advances,
+                    // such as the catalog shard, would then lag forever while the leader is down.
                     //
                     // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
                     // at the minimum is exactly what this gate must catch, so a collection stuck
@@ -1042,14 +1065,14 @@ impl CaughtUpCheck {
                     let readiness = CollectionReadiness::classify(
                         collection_hydrated,
                         write_frontier,
-                        Some((&Antichain::from_elem(now), allowed_lag)),
+                        Some((&Antichain::from_elem(leader_clock), allowed_lag)),
                     );
 
                     tracing::info!(
                         ?write_frontier,
                         ?readiness,
                         ?allowed_lag,
-                        ?now,
+                        ?leader_clock,
                         "collection {id} not in live frontiers"
                     );
                     if write_frontier.less_equal(&Timestamp::minimum())
@@ -1376,6 +1399,7 @@ mod tests {
                 0.into(),
                 1000.into(),
                 100.into(),
+                100.into(),
                 &frontiers,
                 &empty,
                 &problematic,
@@ -1426,6 +1450,7 @@ mod tests {
                 0.into(),
                 100.into(),
                 100.into(),
+                100.into(),
                 &BTreeMap::from([(id, Antichain::from_elem(0.into()))]),
                 &BTreeSet::new(),
                 &problematic,
@@ -1441,6 +1466,48 @@ mod tests {
                 ClusterCaughtUpStatus::Ignored
             };
             assert_eq!(status, expected);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn collection_without_live_frontier_is_compared_against_the_leader() {
+        use futures::FutureExt;
+
+        // The leader's clock stopped at 1_000, long before `now`, as when it is down.
+        let leader_clock = Timestamp::from(1_000);
+        let now = Timestamp::from(1_000_000);
+
+        for (write_frontier, caught_up) in [(950, true), (500, false)] {
+            let (_tx, rx) = oneshot::channel();
+            let mut cluster = ClusterSnapshot {
+                replicas: BTreeMap::from([(ReplicaId::System(1), ReplicaTarget::Ask)]),
+                ignored_compute_collections: BTreeSet::new(),
+                collections: vec![(
+                    GlobalId::System(1),
+                    Antichain::from_elem(write_frontier.into()),
+                    CollectionType::Storage { hydrated: true },
+                )],
+                compute_hydration: rx,
+            };
+            let status = CaughtUpCheck::collections_caught_up(
+                ClusterId::System(1),
+                &mut cluster,
+                100.into(),
+                now,
+                now,
+                leader_clock,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+            )
+            .now_or_never()
+            .expect("storage collections need no hydration reply")
+            .expect("classification succeeds");
+            assert_eq!(
+                matches!(status, ClusterCaughtUpStatus::CaughtUp { .. }),
+                caught_up,
+                "write frontier {write_frontier} against the leader's 1_000 with lag 100"
+            );
         }
     }
 

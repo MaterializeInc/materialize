@@ -25,6 +25,8 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
+from materialize.docker import image_registry
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.service import Service as DockerService
@@ -1843,6 +1845,25 @@ def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int
     return reused, replaced
 
 
+def await_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
+    """
+    Like `fetch_reconciliation_metrics`, but waits for up to 120 s until the
+    replica reports that it reconciled dataflows, and until two reads in a row
+    agree.
+
+    A leader reports `IsLeader` before it reconnects to its replicas, which is
+    when they reconcile, and that can take a while after a long catalog
+    migration. A read can also land in the middle of a reconciliation.
+    """
+    metrics = (0, 0)
+    for _ in range(120):
+        previous, metrics = metrics, fetch_reconciliation_metrics(c, process)
+        if sum(metrics) > 0 and metrics == previous:
+            break
+        time.sleep(1)
+    return metrics
+
+
 def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     """
     Verify builtin schema migrations by shard replacement.
@@ -1938,11 +1959,171 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
 
-        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        reused, replaced = await_reconciliation_metrics(c, "mz_new")
         assert reused > 0
         assert (
             replaced == 0
         ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+
+def workflow_new_builtins_survive_promotion(c: Composition) -> None:
+    """
+    Verify that builtin storage collections that are new in this version are
+    written before promotion and keep their dataflows across it.
+
+    The old generation runs pinned releases that we still support upgrading
+    from, each lacking some of the current version's builtin storage
+    collections. v26.17.1 has no builtin materialized views yet and lacks
+    tables and sources that have indexes on them. v26.47.1 already has builtin
+    materialized views, and in its run the old leader stops before the new
+    generation boots, as when a region is enabled again. That run does not
+    check the dataflows.
+    """
+    for from_version, leader_down in [("v26.17.1", False), ("v26.47.1", True)]:
+        check_new_builtins_survive_promotion(c, from_version, leader_down)
+
+
+def check_new_builtins_survive_promotion(
+    c: Composition, from_version: str, leader_down: bool
+) -> None:
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            name="mz_old",
+            image=f"{image_registry()}/materialized:{from_version}",
+            sanity_restart=False,
+            deploy_generation=0,
+            system_parameter_defaults=get_default_system_parameters(
+                version=MzVersion.parse_mz(from_version)
+            ),
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
+        ),
+    ):
+        c.up("mz_old")
+        old_collections = {
+            row[0]
+            for row in c.sql_query(
+                """
+                SELECT s.name || '.' || o.name
+                FROM mz_objects o JOIN mz_schemas s ON s.id = o.schema_id
+                WHERE o.id LIKE 's%' AND o.type IN ('table', 'source', 'materialized-view')
+                """,
+                service="mz_old",
+            )
+        }
+
+        if leader_down:
+            # The leader also records frontiers that lie in the future: a `REFRESH` MV's frontier
+            # sits at its next refresh. Such a frontier must not be taken for the leader's time
+            # once the leader is gone, or the new builtins would lag behind it for good.
+            c.sql(
+                """
+                CREATE TABLE refresh_input (a int);
+                CREATE MATERIALIZED VIEW refresh_mv WITH (REFRESH EVERY '1 day') AS
+                    SELECT count(*) AS n FROM refresh_input;
+                """,
+                service="mz_old",
+            )
+            for _ in range(120):
+                recorded = c.sql_query(
+                    """
+                    SELECT count(*) > 0
+                    FROM mz_cluster_replica_frontiers f
+                    JOIN mz_objects o ON o.id = f.object_id
+                    WHERE o.name = 'refresh_mv' AND f.write_frontier > mz_now()
+                    """,
+                    service="mz_old",
+                )
+                if recorded[0][0]:
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError(
+                    "leader never recorded the next refresh of refresh_mv"
+                )
+            c.kill("mz_old")
+            # Wait longer than `with_0dt_caught_up_check_allowed_lag` (60 s). After that, inputs
+            # that only the leader advances are too far behind the current time, so a check that
+            # compared against it would never pass.
+            time.sleep(75)
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        # Catalog relations on the read-only generation describe the leader's catalog, which does
+        # not have the new builtins yet, so take them from the lists built into this version.
+        def new_builtins(relation: str) -> set[str]:
+            rows = c.sql_query(
+                f"SELECT schema_name || '.' || name FROM mz_internal.{relation}",
+                service="mz_new",
+                reuse_connection=False,
+            )
+            return {row[0] for row in rows} - old_collections
+
+        written = new_builtins("mz_builtin_materialized_views") | new_builtins(
+            "mz_builtin_sources"
+        )
+        assert (
+            written
+        ), f"{from_version} has all current builtin materialized views and sources, pick an older pin"
+
+        # The collections that a read of `name` uses. Each one's `name` contains its global id.
+        def explain_sources(name: str) -> list[dict]:
+            explain = c.sql_query(
+                f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {name}",
+                service="mz_new",
+                user="mz_system",
+                port=6877,
+                reuse_connection=False,
+            )[0][0]
+            return json.loads(explain)["sources"]
+
+        # Only the read-only generation can have advanced these before promotion. A read would
+        # block on a collection that nobody writes, so check the write frontiers instead. A new
+        # table without rows stays at the minimum until something reads it (the read then writes
+        # an empty batch), so tables are only covered by the reconciliation check below.
+        read_only_ids = {}
+        for name in sorted(written):
+            sources = explain_sources(name)
+            frontiers = [source["write_frontier"] for source in sources]
+            assert all(
+                frontier and frontier[0] > 0 for frontier in frontiers
+            ), f"{name} was not written on the read-only generation: {frontiers}"
+            read_only_ids[name] = [source["name"] for source in sources]
+
+        c.promote_mz("mz_new", retire_mz_service=None if leader_down else "mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
+        reused, replaced = await_reconciliation_metrics(c, "mz_new")
+        assert reused > 0
+        # NOTE: with the old leader killed, a promotion can replace dataflows that have nothing to
+        # do with new builtins. The new leader starts from the since the old leader last persisted,
+        # which can be a second behind the since the read-only generation held, so some as-ofs go
+        # backwards.
+        if not leader_down:
+            assert (
+                replaced == 0
+            ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+        # A replica only counts a dataflow as reused or replaced if it had one with the same
+        # global ids before. A collection that came back under another id would be rebuilt
+        # without being counted, so also check that the ids did not change.
+        for name, ids in read_only_ids.items():
+            leader_ids = [source["name"] for source in explain_sources(name)]
+            assert (
+                leader_ids == ids
+            ), f"global ids changed across promotion for {name}: {ids} -> {leader_ids}"
 
 
 def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
@@ -2022,7 +2203,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         assert new_mz_tables_shard_id == mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
 
-        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        reused, replaced = await_reconciliation_metrics(c, "mz_new")
         assert reused > 0
         assert (
             replaced == 0
@@ -3549,9 +3730,9 @@ def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
     )
 
     # The leader must record a frontier for each new collection on every
-    # replica before it stops. A collection without one is compared against
-    # 'now' instead, with no cutoff, and its frozen inputs fall behind that
-    # comparison for good after `with_0dt_caught_up_check_allowed_lag`.
+    # replica before it stops. A collection without one is compared against the
+    # leader's clock instead, with no cutoff, so it would not take the
+    # ignored-past-cutoff path this test covers.
     for _ in range(120):
         recorded = c.sql_query(
             """

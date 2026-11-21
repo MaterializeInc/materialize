@@ -71,6 +71,7 @@ The general approach to shard replacement matches the existing implementation, b
 
 To support schema migration by shard replacement, we need a place to store new shard IDs across restarts, and we will keep using the migration shard for this.
 The migration shard contains entries of the form `(GlobalId, Version, DeployGeneration) -> ShardId`.
+Entries for collections that had no shard also carry the builtin's schema name, object name and type (see below).
 
 A read-only process performing shard replacement reads the migration shard to collect all existing entries at its version and deploy generation.
 Notably, it ignores any entries at different versions or deploy generations, to avoid any interference with concurrent in-progress upgrades.
@@ -85,6 +86,14 @@ The force-write is conditional on two things.
 First, the leader must be at v26.17 or later, because every builtin materialized view reads the catalog shard and only leaders from that version on keep its frontier advancing with the current time; against an older leader the dataflow would sit at a stale frontier.
 Second, the `enable_0dt_hydrate_migrated_builtin_mvs` feature flag must be on; it exists as a break-glass revert.
 When either condition does not hold, the migrated materialized views and their dependents are instead excluded from the 0dt caught-up check, which is the older behaviour: promotion proceeds without them and they hydrate at cut-over.
+
+Builtin storage collections that have no shard yet, in practice those added since the version being upgraded from, get their shards from the migration shard in the same way, without a migration step.
+Otherwise the read-only process would only have a shard in its uncommitted catalog savepoint, and the promoted leader would allocate a different one.
+The read-only process also allocates a new builtin's `GlobalId` only in that savepoint, and a later boot can give that `GlobalId` to another builtin, for example after another deploy generation was promoted.
+So their entries also record the builtin's schema name, object name and type, and are only reused for the same `GlobalId` and builtin.
+On a mismatch, a fresh shard is allocated.
+The read-only process writes new tables and sources as it writes `Replacement`-migrated ones, whether or not the two conditions above hold.
+When either does not hold, every new builtin and its dependents are excluded from the caught-up check, as are the migrated materialized views.
 
 A leader process performing shard replacement performs the same steps as in read-only mode.
 Additionally, it cleans up durable state written by earlier versions and/or deploy generations by:
