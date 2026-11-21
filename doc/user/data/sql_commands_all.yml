@@ -43,6 +43,11 @@ rows:
     labels:
       - "object"
       - "connection"
+  - command: "[`ALTER QUERY POLICY`](/sql/alter-query-policy)"
+    object: "Query Policy"
+    labels:
+      - "object"
+      - "owner"
   - command: "[`ALTER ROLE`](/sql/alter-role)"
     object: "Role"
     labels:
@@ -138,6 +143,10 @@ rows:
     object: "Network Policy"
     labels:
       - "object"
+  - command: "[`CREATE QUERY POLICY`](/sql/create-query-policy)"
+    object: "Query Policy"
+    labels:
+      - "object"
   - command: "[`CREATE ROLE`](/sql/create-role)"
     object: "Role"
     labels:
@@ -220,6 +229,10 @@ rows:
     labels:
       - "rbac"
       - "owner"
+  - command: "[`DROP QUERY POLICY`](/sql/drop-query-policy)"
+    object: "Query Policy"
+    labels:
+      - "object"
   - command: "[`DROP ROLE`](/sql/drop-role) <br>[`DROP USER`](/sql/drop-user)"
     object: "Role"
     labels:
@@ -388,6 +401,9 @@ rows:
     labels:
       - "show"
   - command: "[`SHOW PRIVILEGES`](/sql/show-privileges)"
+    labels:
+      - "show"
+  - command: "[`SHOW QUERY POLICIES`](/sql/show-query-policies)"
     labels:
       - "show"
   - command: "[`SHOW ROLE MEMBERSHIP`](/sql/show-role-membership)"

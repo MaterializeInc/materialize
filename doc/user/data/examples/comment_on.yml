@@ -15,6 +15,7 @@
         - `INDEX`
         - `MATERIALIZED VIEW`
         - `NETWORK POLICY`
+        - `QUERY POLICY`
         - `ROLE`
         - `SCHEMA`
         - `SECRET`
