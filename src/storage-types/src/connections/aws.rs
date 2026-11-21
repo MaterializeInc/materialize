@@ -9,6 +9,8 @@
 
 //! AWS configuration for sources and sinks.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, anyhow, bail};
@@ -164,6 +166,45 @@ impl AwsAssumeRole {
             sts_connect_timeout,
         )
         .await
+    }
+
+    /// Returns the process-wide caching credentials provider for this role,
+    /// from [`ConnectionContext::aws_credentials_cache`].
+    ///
+    /// No STS call happens here, so success does not mean the role can be
+    /// assumed.
+    async fn cached_credentials_provider(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let key = AwsCredentialsCacheKey {
+            connection_id,
+            role_arn: self.arn.clone(),
+            session_name: self.session_name.clone(),
+            external_id: self
+                .external_id(connection_context, connection_id)
+                .with_context(|| {
+                    format!(
+                        "failed to compute external ID for AWS AssumeRole connection {} \
+                         (role arn {})",
+                        connection_id, self.arn
+                    )
+                })?,
+            connection_role_arn: connection_context.aws_connection_role_arn.clone(),
+        };
+        if let Some(provider) = connection_context.aws_credentials_cache.get(&key) {
+            return Ok(provider);
+        }
+        let provider = self
+            .load_credentials_provider(connection_context, connection_id, None)
+            .await?;
+        let provider = SharedCredentialsProvider::new(LazyCredentialCache::new(
+            SharedCredentialsProvider::new(provider),
+        ));
+        Ok(connection_context
+            .aws_credentials_cache
+            .get_or_insert(key, provider))
     }
 
     /// Returns a provider that serves cached credentials for this role,
@@ -367,6 +408,48 @@ impl AwsConnection {
         in_task: InTask,
         enforce_external_addresses: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
+        self.load_sdk_config_inner(
+            connection_context,
+            connection_id,
+            in_task,
+            enforce_external_addresses,
+            false,
+        )
+        .await
+    }
+
+    /// Like [`AwsConnection::load_sdk_config`], but an `AssumeRole`
+    /// connection's credentials are cached and shared across this process.
+    ///
+    /// For callers that ask the credentials provider for credentials directly,
+    /// such as signing an Amazon RDS IAM authentication token. Those calls
+    /// bypass the identity cache of AWS SDK clients, so each one assumes the
+    /// role again, against an STS quota that AWS enforces per account.
+    pub async fn load_sdk_config_with_cached_credentials(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+        in_task: InTask,
+        enforce_external_addresses: bool,
+    ) -> Result<SdkConfig, anyhow::Error> {
+        self.load_sdk_config_inner(
+            connection_context,
+            connection_id,
+            in_task,
+            enforce_external_addresses,
+            true,
+        )
+        .await
+    }
+
+    async fn load_sdk_config_inner(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+        in_task: InTask,
+        enforce_external_addresses: bool,
+        cache_credentials: bool,
+    ) -> Result<SdkConfig, anyhow::Error> {
         let connection_context = connection_context.clone();
         let this = self.clone();
         // This entire block is wrapped in a `run_in_task_if`, so the inner futures are
@@ -384,6 +467,16 @@ impl AwsConnection {
                             )
                         })?,
                 ),
+                AwsAuth::AssumeRole(assume_role) if cache_credentials => assume_role
+                    .cached_credentials_provider(&connection_context, connection_id)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to initialize cached AssumeRole credential provider for \
+                             connection {} (role arn {})",
+                            connection_id, assume_role.arn
+                        )
+                    })?,
                 AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
                     assume_role
                         .load_credentials_provider(&connection_context, connection_id, None)
@@ -542,6 +635,120 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
             connection: r.resolve_connection(connection).unwrap_aws(),
             connection_id,
         }
+    }
+}
+
+/// A process-wide cache of caching credentials providers for `AssumeRole` AWS
+/// connections. See [`AwsConnection::load_sdk_config_with_cached_credentials`].
+///
+/// Entries are never removed. There is at most one for each distinct setting
+/// of each AWS connection this process has used.
+#[derive(Debug, Clone, Default)]
+pub struct AwsCredentialsCache {
+    providers: Arc<Mutex<BTreeMap<AwsCredentialsCacheKey, SharedCredentialsProvider>>>,
+}
+
+impl AwsCredentialsCache {
+    fn get(&self, key: &AwsCredentialsCacheKey) -> Option<SharedCredentialsProvider> {
+        self.providers
+            .lock()
+            .expect("lock poisoned")
+            .get(key)
+            .cloned()
+    }
+
+    /// Returns the provider under `key`, inserting `provider` if there is
+    /// none. Racing callers all get the one inserted first, so they share its
+    /// cached credentials.
+    fn get_or_insert(
+        &self,
+        key: AwsCredentialsCacheKey,
+        provider: SharedCredentialsProvider,
+    ) -> SharedCredentialsProvider {
+        self.providers
+            .lock()
+            .expect("lock poisoned")
+            .entry(key)
+            .or_insert(provider)
+            .clone()
+    }
+}
+
+/// Everything that determines which credentials an `AssumeRole` AWS connection
+/// receives. Altering any of it must not serve the old entry's credentials.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AwsCredentialsCacheKey {
+    connection_id: CatalogItemId,
+    role_arn: String,
+    session_name: Option<String>,
+    external_id: String,
+    connection_role_arn: Option<String>,
+}
+
+/// Cached credentials are not served once they are this close to expiry.
+///
+/// Callers sign with the credentials immediately, so this only has to cover
+/// clock skew and the time until the signature is checked. `AssumeRole`
+/// credentials last an hour by default.
+const CREDENTIAL_CACHE_EXPIRY_BUFFER: Duration = Duration::from_mins(5);
+
+/// A [`ProvideCredentials`] that fetches credentials from `inner` on demand
+/// and serves them from memory until [`CREDENTIAL_CACHE_EXPIRY_BUFFER`] before
+/// they expire.
+///
+/// It does no background work, so holding one costs no STS requests. A
+/// [`CredentialPrefetcher`] held for the life of a source would refresh for
+/// as long as the source runs.
+///
+/// A failed fetch is returned to the caller and is not cached. Credentials
+/// past the expiry buffer are never served, even if the fetch that would
+/// replace them fails.
+#[derive(Debug)]
+struct LazyCredentialCache {
+    inner: SharedCredentialsProvider,
+    // AWS's `Debug` impl for `Credentials` sanitizes secrets.
+    cached: tokio::sync::Mutex<Option<Credentials>>,
+}
+
+impl LazyCredentialCache {
+    fn new(inner: SharedCredentialsProvider) -> LazyCredentialCache {
+        LazyCredentialCache {
+            inner,
+            cached: tokio::sync::Mutex::new(None),
+        }
+    }
+}
+
+/// Reports whether `creds` can still be served at `now`. Credentials with no
+/// expiry are always fresh.
+fn credentials_are_fresh(creds: &Credentials, now: SystemTime) -> bool {
+    match creds.expiry() {
+        None => true,
+        Some(expiry) => now + CREDENTIAL_CACHE_EXPIRY_BUFFER < expiry,
+    }
+}
+
+impl ProvideCredentials for LazyCredentialCache {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(async move {
+            // Holding the lock across the fetch makes concurrent callers wait
+            // for it. Without that, each would start a fetch of its own.
+            let mut cached = self.cached.lock().await;
+            match cached.as_ref() {
+                Some(creds) if credentials_are_fresh(creds, SystemTime::now()) => {
+                    return Ok(creds.clone());
+                }
+                _ => {}
+            }
+            let creds = self.inner.provide_credentials().await?;
+            *cached = Some(creds.clone());
+            Ok(creds)
+        })
     }
 }
 
@@ -1024,5 +1231,143 @@ mod tests {
             next_refresh_wait(Some(&creds)),
             CREDENTIAL_MIN_REFRESH_INTERVAL
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_fetches_once_for_credentials_without_expiry() {
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let cache = LazyCredentialCache::new(inner);
+
+        for _ in 0..5 {
+            let creds = cache.provide_credentials().await.unwrap();
+            assert_eq!(creds.access_key_id(), "akid-1");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_does_not_fetch_until_asked() {
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let _cache = LazyCredentialCache::new(inner);
+        tokio::task::yield_now().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "building the cache must not fetch credentials"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_serves_credentials_that_expire_after_the_buffer() {
+        let ttl = CREDENTIAL_CACHE_EXPIRY_BUFFER.saturating_add(Duration::from_mins(30));
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, Some(ttl));
+        let cache = LazyCredentialCache::new(inner);
+
+        for _ in 0..3 {
+            let creds = cache.provide_credentials().await.unwrap();
+            assert_eq!(creds.access_key_id(), "akid-1");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_refetches_credentials_inside_the_buffer() {
+        // These credentials are unexpired, but expire sooner than the buffer
+        // allows, so every call must fetch a new set.
+        let ttl = CREDENTIAL_CACHE_EXPIRY_BUFFER / 2;
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, Some(ttl));
+        let cache = LazyCredentialCache::new(inner);
+
+        let first = cache.provide_credentials().await.unwrap();
+        let second = cache.provide_credentials().await.unwrap();
+        assert_eq!(first.access_key_id(), "akid-1");
+        assert_eq!(second.access_key_id(), "akid-2");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_does_not_serve_stale_credentials_when_refetch_fails() {
+        // The first fetch succeeds with credentials that are already inside
+        // the buffer. Every later fetch fails.
+        let (calls, inner) = CountingProvider::shared(0, 1, Some(Duration::ZERO));
+        let cache = LazyCredentialCache::new(inner);
+
+        let creds = cache.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+
+        let err = cache.provide_credentials().await.unwrap_err();
+        assert!(
+            format!("{}", err.display_with_causes()).contains("injected failure"),
+            "the caller must see the fetch failure: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_does_not_cache_failures() {
+        // Every fetch fails, and each call must try again.
+        let (calls, inner) = CountingProvider::shared(0, 0, None);
+        let cache = LazyCredentialCache::new(inner);
+
+        cache.provide_credentials().await.unwrap_err();
+        cache.provide_credentials().await.unwrap_err();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn lazy_cache_shares_one_fetch_between_concurrent_callers() {
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let cache = Arc::new(LazyCredentialCache::new(inner));
+
+        let (a, b, c) = tokio::join!(
+            cache.provide_credentials(),
+            cache.provide_credentials(),
+            cache.provide_credentials(),
+        );
+        for creds in [a.unwrap(), b.unwrap(), c.unwrap()] {
+            assert_eq!(creds.access_key_id(), "akid-1");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn cache_key(role_arn: &str) -> AwsCredentialsCacheKey {
+        AwsCredentialsCacheKey {
+            connection_id: CatalogItemId::User(1),
+            role_arn: role_arn.to_string(),
+            session_name: None,
+            external_id: "mz_prefix_u1".to_string(),
+            connection_role_arn: Some("arn:aws:iam::123456789000:role/Connection".to_string()),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn credentials_cache_shares_providers_by_key() {
+        let cache = AwsCredentialsCache::default();
+        assert!(cache.get(&cache_key("role-a")).is_none());
+
+        let (calls_a, provider_a) = CountingProvider::shared(0, usize::MAX, None);
+        let (calls_a2, provider_a2) = CountingProvider::shared(0, usize::MAX, None);
+        let (calls_b, provider_b) = CountingProvider::shared(0, usize::MAX, None);
+
+        // The second insert for the same key loses, and both callers get the
+        // first provider.
+        let first = cache.get_or_insert(cache_key("role-a"), provider_a);
+        let second = cache.get_or_insert(cache_key("role-a"), provider_a2);
+        first.provide_credentials().await.unwrap();
+        second.provide_credentials().await.unwrap();
+        cache
+            .get(&cache_key("role-a"))
+            .expect("inserted above")
+            .provide_credentials()
+            .await
+            .unwrap();
+        assert_eq!(calls_a.load(Ordering::SeqCst), 3);
+        assert_eq!(calls_a2.load(Ordering::SeqCst), 0);
+
+        // A different role is a different entry.
+        let other = cache.get_or_insert(cache_key("role-b"), provider_b);
+        other.provide_credentials().await.unwrap();
+        assert_eq!(calls_b.load(Ordering::SeqCst), 1);
+        assert_eq!(calls_a.load(Ordering::SeqCst), 3);
     }
 }
