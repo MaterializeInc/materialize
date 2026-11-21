@@ -566,7 +566,7 @@ fn build_success_response(
     }
 
     let mut returning_rows = Vec::new();
-    let arena = RowArena::new();
+    let mut arena = RowArena::new();
     // RETURNING expressions are evaluated row-by-row in this loop, so an
     // expression like `RETURNING repeat('x', 10_000_000)` will allocate
     // unbounded data unless we bail mid-loop. The post-loop
@@ -597,6 +597,7 @@ fn build_success_response(
                 Err(err) => return Err(err.into()),
             }
         }
+        arena.clear();
 
         let multiplicity = NonZeroUsize::try_from(
             NonZeroI64::try_from(diff.into_inner().abs()).expect("diff is non-zero"),
