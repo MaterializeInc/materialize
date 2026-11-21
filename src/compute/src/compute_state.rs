@@ -211,6 +211,8 @@ pub struct ComputeState {
     pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
+    /// The interval at which introspection updates are published.
+    pub logging_interval: Duration,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
@@ -333,6 +335,7 @@ impl ComputeState {
             pending_peeks: Default::default(),
             peek_stash_persist_location: None,
             compute_logger: None,
+            logging_interval: Duration::ZERO,
             persist_clients,
             persist_batches,
             txns_ctx,
@@ -988,6 +991,8 @@ impl<'a> ActiveComputeState<'a> {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
+
+        self.compute_state.logging_interval = config.interval;
 
         let LoggingTraces {
             traces,

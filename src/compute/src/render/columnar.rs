@@ -38,6 +38,7 @@ use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::Product;
 use timely::progress::Antichain;
+use timely::progress::operate::FrontierInterest;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
@@ -101,6 +102,7 @@ where
     let (err_output, err_stream) = builder.new_output();
     let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
     let mut input = builder.new_input(edge.inner, Pipeline);
+    builder.set_notify_for(0, FrontierInterest::Never);
     builder.build(move |_capabilities| {
         let mut datums = DatumVec::new();
         move |_frontiers| {

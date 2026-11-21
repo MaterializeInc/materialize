@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -85,6 +86,8 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub bindings: BTreeMap<Id, CollectionBundle<'scope, T>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
+    /// The interval at which introspection updates are published.
+    pub(super) logging_interval: Duration,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
@@ -130,6 +133,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             until,
             bindings: BTreeMap::new(),
             compute_logger,
+            logging_interval: compute_state.logging_interval,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
@@ -204,6 +208,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
             compute_logger: self.compute_logger.clone(),
+            logging_interval: self.logging_interval,
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
@@ -739,6 +744,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let (err_output, err_stream) = builder.new_output();
         let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
         let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        // The operator reschedules itself through its activator while it has work.
+        builder.set_notify_for(0, FrontierInterest::Never);
         let operator_info = builder.operator_info();
 
         builder.build(move |_capabilities| {
@@ -854,6 +861,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
         let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        // The operator reschedules itself through its activator while it has work.
+        builder.set_notify_for(0, FrontierInterest::Never);
         let operator_info = builder.operator_info();
 
         builder.build(move |_capabilities| {
