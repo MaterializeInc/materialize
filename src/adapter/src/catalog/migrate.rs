@@ -90,34 +90,6 @@ where
     Ok(())
 }
 
-fn rewrite_items<F>(
-    tx: &mut Transaction<'_>,
-    cat: &ConnCatalog<'_>,
-    mut f: F,
-) -> Result<(), anyhow::Error>
-where
-    F: for<'a> FnMut(
-        &'a mut Transaction<'_>,
-        &'a &ConnCatalog<'_>,
-        CatalogItemId,
-        &'a mut Statement<Raw>,
-    ) -> Result<(), anyhow::Error>,
-{
-    let mut updated_items = BTreeMap::new();
-    let items = tx.get_items();
-    for mut item in items {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-
-        f(tx, &cat, item.id, &mut stmt)?;
-
-        item.create_sql = stmt.to_ast_string_stable();
-
-        updated_items.insert(item.id, item);
-    }
-    tx.update_items(updated_items)?;
-    Ok(())
-}
-
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
@@ -205,32 +177,11 @@ pub(crate) async fn migrate(
 
     info!("migrating from catalog version {:?}", catalog_version);
 
-    let conn_cat = state.for_system_session();
-
     // Special block for `ast_rewrite_sources_to_tables` migration
     // since it requires a feature flag needs to update multiple AST items at once.
     if force_source_table_syntax {
-        rewrite_sources_to_tables(tx, &conn_cat)?;
+        rewrite_sources_to_tables(tx, &state.for_system_session())?;
     }
-
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
-        let _catalog_version = catalog_version.clone();
-        // Add per-item, post-planning AST migrations below. Most
-        // migrations should be in the above `rewrite_ast_items` block.
-        //
-        // Each migration should be a function that takes `item` (the AST
-        // representing the creation SQL for the item) as input. Any
-        // mutations to `item` will be staged for commit to the catalog.
-        //
-        // Be careful if you reference `conn_cat`. Doing so is *weird*,
-        // as you'll be rewriting the catalog while looking at it. If
-        // possible, make your migration independent of `conn_cat`, and only
-        // consider a single item at a time.
-        //
-        // Migration functions may also take `tx` as input to stage
-        // arbitrary changes to the catalog.
-        Ok(())
-    })?;
 
     if force_source_table_syntax {
         state
