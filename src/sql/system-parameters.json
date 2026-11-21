@@ -8,6 +8,9 @@
       "description": "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
       "scope": "environment",
       "userVisible": false,
+      "constraint": {
+        "kind": "nonZero"
+      },
       "dyncfg": true
     },
     {
@@ -3853,6 +3856,13 @@
       "description": "Sets the per-minute quota for privatelink vpc status updates to be written to the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
       "scope": "environment",
       "userVisible": false,
+      "constraint": {
+        "kind": "range",
+        "start": {
+          "value": "1",
+          "inclusive": true
+        }
+      },
       "dyncfg": false
     },
     {
@@ -4655,6 +4665,17 @@
       "description": "How often to check for DDL changes during zero-downtime deployment.",
       "scope": "environment",
       "userVisible": false,
+      "constraint": {
+        "kind": "range",
+        "start": {
+          "value": "1 ms",
+          "inclusive": true
+        },
+        "end": {
+          "value": "18446744073709551615 ms",
+          "inclusive": true
+        }
+      },
       "dyncfg": true
     },
     {

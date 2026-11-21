@@ -179,6 +179,29 @@ impl DomainConstraint for NonZeroDuration {
     }
 }
 
+impl DomainConstraint for RangeInclusive<Duration> {
+    type Value = Duration;
+
+    fn describe(&self) -> DomainDescription {
+        DomainDescription::range(self)
+    }
+
+    fn check(&self, var: &dyn Var, value: &Duration) -> Result<(), VarError> {
+        let reason = if value < self.start() {
+            format!("must be at least {}", self.start().format())
+        } else if value > self.end() {
+            format!("must be at most {}", self.end().format())
+        } else {
+            return Ok(());
+        };
+        Err(VarError::InvalidParameterValue {
+            name: var.name(),
+            invalid_values: vec![format!("{value:?}")],
+            reason,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NumericInRange<R>(pub R);
 

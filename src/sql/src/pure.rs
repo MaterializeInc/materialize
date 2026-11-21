@@ -82,7 +82,7 @@ use crate::names::{
     ResolvedItemName,
 };
 use crate::plan::error::PlanError;
-use crate::plan::statement::ddl::load_generator_ast_to_generator;
+use crate::plan::statement::ddl::plan_load_generator_source_connection;
 use crate::plan::{SourceReferences, StatementContext};
 use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
 use crate::pure::mysql::{ensure_binlog_full_metadata, is_binlog_full_metadata};
@@ -917,12 +917,16 @@ impl CreateSourcePreparation {
                 )
             }
             CreateSourceConnection::LoadGenerator { generator, options } => {
-                PreparedSourceConnection::LoadGenerator(load_generator_ast_to_generator(
+                let connection = plan_load_generator_source_connection(
                     &scx,
                     generator,
                     options,
                     &statement.include_metadata,
-                )?)
+                )?;
+                if connection.tick_micros.is_some_and(|micros| micros < 1_000) {
+                    sql_bail!("TICK INTERVAL must be at least 1 millisecond");
+                }
+                PreparedSourceConnection::LoadGenerator(connection.load_generator)
             }
         };
         let clock_as_of = match &statement.connection {

@@ -37,8 +37,8 @@ use mz_adapter::{
 };
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
-    WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    DDL_CHECK_INTERVAL_RANGE, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
 use mz_authenticator::GenericOidcAuthenticator;
@@ -620,7 +620,12 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_0dt_deployment_ddl_check_interval()
                 .await?;
-            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            // Preflight reads the mirrored value before the catalog validates its system parameters.
+            let computed = [ld, catalog, cli_default]
+                .into_iter()
+                .flatten()
+                .find(|period| DDL_CHECK_INTERVAL_RANGE.contains(period))
+                .unwrap_or(compiled_default);
             info!(
                 ?computed,
                 ?ld,

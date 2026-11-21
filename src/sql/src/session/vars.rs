@@ -76,6 +76,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
+use mz_adapter_types::dyncfgs::{
+    DDL_CHECK_INTERVAL_RANGE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
+};
 use mz_auth::user::ExternalUserMetadata;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal, ParameterScope};
@@ -1377,7 +1381,16 @@ impl SystemVars {
                         VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                     }
                     ConfigVal::Duration(default) => {
-                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                        let var =
+                            VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false);
+                        if cfg.name() == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                            var.with_constraint(&DDL_CHECK_INTERVAL_RANGE)
+                        } else if cfg.name() == WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.name()
+                        {
+                            var.with_constraint(&constraints::NON_ZERO_DURATION)
+                        } else {
+                            var
+                        }
                     }
                     ConfigVal::Json(default) => {
                         VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)

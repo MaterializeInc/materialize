@@ -1436,7 +1436,8 @@ pub static PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: VarDefinition = VarDefini
     "Sets the per-minute quota for privatelink vpc status updates to be written to \
         the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
     false,
-);
+)
+.with_constraint(&U32_AT_LEAST_1);
 
 pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_sample_rate",

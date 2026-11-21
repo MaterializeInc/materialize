@@ -20,6 +20,9 @@ use differential_dataflow::consolidation::consolidate_updates;
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::{
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
+};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
@@ -56,7 +59,7 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{VarError, VarInput};
+use mz_sql::session::vars::{PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
@@ -561,6 +564,18 @@ impl CatalogState {
                 kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
             }) => {
                 warn!(%name, "unknown system parameter from catalog storage");
+            }
+            // Older catalogs can contain values that predate these constraints.
+            Err(Error {
+                kind: ErrorKind::VarError(ref err @ VarError::InvalidParameterValue { name, .. }),
+            }) if [
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.name(),
+                PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE.name.as_str(),
+            ]
+            .contains(&name) =>
+            {
+                warn!(%err, "ignoring invalid system parameter from catalog storage");
             }
             Err(e) => panic!("unable to update system variable: {e:?}"),
         }

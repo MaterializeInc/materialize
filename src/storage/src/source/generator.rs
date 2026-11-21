@@ -343,7 +343,7 @@ fn render_simple_generator<'scope>(
                     .unwrap_or(0);
                 now_instant + Duration::from_millis(delay_millis)
             };
-            let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
+            let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000).max(1));
             let mut tick_interval = interval_at(start_instant, tick);
 
             let mut rows = generator.by_seed_for_worker(

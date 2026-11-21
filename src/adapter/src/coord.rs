@@ -1098,6 +1098,19 @@ pub struct Config {
     pub force_builtin_schema_migration: Option<String>,
 }
 
+impl Config {
+    /// Returns the positive number of whole milliseconds used by the storage usage scheduler.
+    pub fn storage_usage_interval_ms(interval: Duration) -> anyhow::Result<u64> {
+        let millis = u64::try_from(interval.as_millis())
+            .context("storage usage collection interval must fit in 64-bit milliseconds")?;
+        anyhow::ensure!(
+            millis > 0,
+            "storage usage collection interval must be at least 1 millisecond"
+        );
+        Ok(millis)
+    }
+}
+
 /// Metadata about an active connection.
 #[derive(Debug, Serialize)]
 pub struct ConnMeta {
@@ -1916,7 +1929,7 @@ pub struct Coordinator {
     /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
-    storage_usage_collection_interval: Duration,
+    storage_usage_collection_interval_ms: u64,
 
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
@@ -4712,6 +4725,8 @@ pub fn serve(
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
+        let storage_usage_collection_interval_ms =
+            Config::storage_usage_interval_ms(storage_usage_collection_interval)?;
         let coord_start = Instant::now();
         info!("startup: coordinator init: beginning");
         info!("startup: coordinator init: preamble beginning");
@@ -5089,7 +5104,7 @@ pub fn serve(
                     caching_secrets_reader,
                     cloud_resource_controller,
                     storage_usage_client,
-                    storage_usage_collection_interval,
+                    storage_usage_collection_interval_ms,
                     segment_client,
                     metrics,
                     catalog_info_metrics_registry: metrics_registry.clone(),

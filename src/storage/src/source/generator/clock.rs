@@ -26,7 +26,7 @@ impl Generator for Clock {
         _seed: Option<u64>,
         mut resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
-        let interval_ms = self.tick_ms;
+        let interval_ms = self.tick_ms.max(1);
         let floor = move |t| t / interval_ms * interval_ms;
         let first_tick = floor(self.as_of_ms);
         resume_offset = resume_offset.max(MzOffset::from(first_tick));
