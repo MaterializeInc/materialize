@@ -9,10 +9,13 @@
 
 //! Renders the operator that copies the initial snapshot of SQL Server tables.
 //!
-//! The operator locks every table it snapshots at once, so that all of them are read at one
-//! snapshot [`Lsn`]. It emits the rows at [`Lsn::minimum`] and then sends a [`RewindRequest`] per
-//! export, which tells the replication operator to retract the changes the snapshot already
-//! contains.
+//! A leader worker locks every table to snapshot at once and broadcasts the snapshot [`Lsn`]
+//! over a feedback edge. Each worker reads the tables of the capture instances it is responsible
+//! for, in a transaction it begins while the leader holds the locks, so that every table is read
+//! as of that one [`Lsn`]. The leader releases the locks once every worker has begun its
+//! transaction. Each worker emits its rows at [`Lsn::minimum`] and sends a [`RewindRequest`] per
+//! export it reads, which tells the replication operator to retract the changes the snapshot
+//! already contains.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -31,10 +34,13 @@ use mz_storage_types::sources::SqlServerSourceConnection;
 use mz_storage_types::sources::sql_server::{
     MAX_LSN_WAIT, SNAPSHOT_LOCK_WAIT_TIMEOUT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
 };
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{CapabilitySet, Concat};
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::vec::{Broadcast, Map};
+use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 
@@ -47,8 +53,8 @@ use crate::source::sql_server::{
 };
 use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 
-/// Used as a partition ID to determine the worker that is responsible for snapshotting.
-static SNAPSHOT_READER: &str = "snapshot_reader";
+/// Used as a partition ID to determine the worker that locks the tables and takes the snapshot LSN.
+static SNAPSHOT_LEADER: &str = "snapshot_leader";
 
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, Lsn>,
@@ -63,7 +69,9 @@ pub(crate) fn render<'scope>(
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerSnapshotReader({})", config.id);
-    let mut builder = AsyncOperatorBuilder::new(op_name, scope);
+    let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
+
+    let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
     // One data output port per source export, in output index order. With concurrent
     // replication each port is held at the minimum only while this operator still has snapshot
@@ -80,6 +88,14 @@ pub(crate) fn render<'scope>(
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+
+    // The leader broadcasts the snapshot LSN to this operator on every worker. The feedback input
+    // has no connection to the outputs, which would otherwise close a loop.
+    let mut snapshot_input = builder.new_disconnected_input(feedback_data, Pipeline);
+    snapshot.broadcast().connect_loop(feedback_handle);
+
+    let is_snapshot_leader = config.responsible_for(SNAPSHOT_LEADER);
 
     // Read at render time, matching the value the persist sink reads in the same dataflow build.
     // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
@@ -93,7 +109,8 @@ pub(crate) fn render<'scope>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (data_cap_sets, caps) = caps.split_at_mut(export_count);
-            let [rewind_cap_set, definite_error_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
+            let [rewind_cap_set, definite_error_cap_set, snapshot_cap_set]: &mut [_; 3] =
+                caps.try_into().unwrap();
             let mut data_outputs = SharedFuel::new(data_outputs);
             let worker_id = config.worker_id;
 
@@ -125,38 +142,56 @@ pub(crate) fn render<'scope>(
                     );
             }
 
-            // Eagerly emit an event if we have tables to snapshot.
             // A worker *must* emit a count even if not responsible for snapshotting a table
             // as statistic summarization will return null if any worker hasn't set a value.
             // This will also reset snapshot stats for any exports not snapshotting.
-            metrics
-                .snapshot_table_count
-                .set(u64::cast_from(capture_instance_to_snapshot.len()));
             if capture_instance_to_snapshot.is_empty() {
+                metrics.snapshot_table_count.set(0);
                 return Ok::<_, TransientError>(());
             }
             for stats in config.statistics.values() {
                 stats.set_snapshot_records_known(0);
                 stats.set_snapshot_records_staged(0);
             }
-            if !config.responsible_for(SNAPSHOT_READER) {
-                return Ok(());
-            }
+
+            // Each worker reads the tables of the capture instances it is responsible for.
+            let reader_instances: BTreeSet<Arc<str>> = capture_instance_to_snapshot
+                .keys()
+                .filter(|instance| config.responsible_for(&***instance))
+                .cloned()
+                .collect();
+            let reader_outputs: BTreeSet<usize> = reader_instances
+                .iter()
+                .flat_map(|instance| &capture_instance_to_snapshot[instance])
+                .map(|(output_index, _)| *output_index)
+                .collect();
+            metrics
+                .snapshot_table_count
+                .set(u64::cast_from(reader_instances.len()));
 
             // This operator only emits snapshot data for the exports it snapshots. With
             // concurrent replication the ports of all other exports close up front. Their
-            // frontiers then follow the replication operator alone.
+            // frontiers then follow the replication operator alone. The leader keeps the port of
+            // every snapshotted export until it has broadcast the snapshot LSN, since it reports
+            // a definite error on all of them.
             if concurrent_replication {
                 let snapshotting: BTreeSet<usize> = capture_instance_to_snapshot
                     .values()
                     .flatten()
                     .map(|(output_index, _)| *output_index)
                     .collect();
-                for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
-                    if !snapshotting.contains(&output_index) {
-                        *cap_set = CapabilitySet::new();
-                    }
-                }
+                let keep = if is_snapshot_leader {
+                    &snapshotting
+                } else {
+                    &reader_outputs
+                };
+                release_data_ports(data_cap_sets, keep);
+            }
+
+            // Returning releases this worker's snapshot capability, which the leader waits on
+            // before releasing the table locks.
+            if reader_instances.is_empty() && !is_snapshot_leader {
+                return Ok(());
             }
 
             let connection_config = source
@@ -169,32 +204,19 @@ pub(crate) fn render<'scope>(
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(connection_config).await?;
 
-            if let Some(definite_error) = validate_upstream(&mut client, &source, &config).await? {
-                return_definite_error(
-                    definite_error,
-                    capture_instance_to_snapshot
-                        .values()
-                        .flat_map(|outputs| outputs.iter().map(|(output_index, _)| *output_index)),
-                    &mut data_outputs,
-                    data_cap_sets,
-                    &definite_error_handle,
-                    definite_error_cap_set,
-                )
-                .await;
-                return Ok(());
-            }
-
+            // These queries run before the leader locks the tables, which keeps them out of the
+            // window in which upstream writers are blocked.
             // TODO (maz): we can avoid this query by using SourceOutputInfo
-            let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(
+            let reader_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(
                 &mut client,
-                capture_instance_to_snapshot.keys().map(|i| i.as_ref()),
+                reader_instances.iter().map(|i| i.as_ref()),
             )
             .await?;
 
             // We first calculate all the total rows we need to fetch across all tables. Since this
             // happens outside the snapshot transaction the totals might be off, so we won't assert
             // that we get exactly this many rows later.
-            for table in &snapshot_tables {
+            for table in &reader_tables {
                 let qualified_table_name = format!(
                     "{schema_name}.{table_name}",
                     schema_name = table.schema_name,
@@ -217,42 +239,113 @@ pub(crate) fn render<'scope>(
                 }
             }
 
-            // Before locking the tables, ensure the upstream DB is ready for CDC.
-            client
-                .cdc(capture_instance_to_snapshot.keys().cloned())
-                .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()))
-                .wait_for_ready()
+            // The leader locks every table that any worker snapshots and broadcasts the
+            // snapshot LSN. A transient error on the leader leaves the other workers waiting for
+            // the broadcast, with their capabilities held, until the dataflow restarts.
+            let mut fence_client = None;
+            let mut fence = None;
+            if is_snapshot_leader {
+                if let Some(definite_error) =
+                    validate_upstream(&mut client, &source, &config).await?
+                {
+                    return_definite_error(
+                        definite_error,
+                        capture_instance_to_snapshot
+                            .values()
+                            .flatten()
+                            .map(|(output_index, _)| *output_index),
+                        &mut data_outputs,
+                        data_cap_sets,
+                        &definite_error_handle,
+                        definite_error_cap_set,
+                    )
+                    .await;
+                    snapshot_handle.give(&snapshot_cap_set[0], None);
+                    return Ok(());
+                }
+
+                let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(
+                    &mut client,
+                    capture_instance_to_snapshot.keys().map(|i| i.as_ref()),
+                )
                 .await?;
 
-            // Intentionally logging this at info for debugging. This section won't get entered
-            // often, but if there are problems here, it will be much easier to troubleshoot
-            // knowing where stall/hang might be happening.
-            tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
+                // Before locking the tables, ensure the upstream DB is ready for CDC.
+                client
+                    .cdc(capture_instance_to_snapshot.keys().cloned())
+                    .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()))
+                    .wait_for_ready()
+                    .await?;
 
-            let mut fence_client = client.new_connection().await?;
-            let fence = SnapshotFence::acquire(
-                &mut fence_client,
-                &snapshot_tables,
-                SNAPSHOT_LOCK_WAIT_TIMEOUT.get(config.config.config_set()),
-                PrometheusSqlServerCdcMetrics { inner: &metrics },
-            )
-            .await?;
-            let snapshot_lsn = fence.lsn();
-            tracing::info!(%config.id, %snapshot_lsn, "timely-{worker_id} locked tables");
+                // Intentionally logging this at info for debugging. This section won't get
+                // entered often, but if there are problems here, it will be much easier to
+                // troubleshoot knowing where stall/hang might be happening.
+                tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
 
-            let mut rewind_requests = Vec::new();
-            for (output_index, initial_lsn) in capture_instance_to_snapshot.values().flatten() {
-                // An initial_lsn ahead of the snapshot_lsn would mean that we observed a
-                // SQL Server DB that appeared to go back in time.
-                assert!(
-                    *initial_lsn <= snapshot_lsn,
-                    "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
+                let fence_client = fence_client.insert(client.new_connection().await?);
+                let locked = fence.insert(
+                    SnapshotFence::acquire(
+                        fence_client,
+                        &snapshot_tables,
+                        SNAPSHOT_LOCK_WAIT_TIMEOUT.get(config.config.config_set()),
+                        PrometheusSqlServerCdcMetrics { inner: &metrics },
+                    )
+                    .await?,
                 );
-                rewind_requests.push(RewindRequest {
+                let snapshot_lsn = locked.lsn();
+                for (_, initial_lsn) in capture_instance_to_snapshot.values().flatten() {
+                    // An initial_lsn ahead of the snapshot_lsn would mean that we observed a
+                    // SQL Server DB that appeared to go back in time.
+                    assert!(
+                        *initial_lsn <= snapshot_lsn,
+                        "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
+                    );
+                }
+                tracing::info!(%config.id, %snapshot_lsn, "timely-{worker_id} locked tables");
+                snapshot_handle.give(&snapshot_cap_set[0], Some(snapshot_lsn));
+            }
+
+            // `None` means that the leader reported a definite error.
+            let snapshot_lsn = loop {
+                match snapshot_input.next().await {
+                    Some(AsyncEvent::Data(_, mut data)) => {
+                        if let Some(msg) = data.pop() {
+                            break msg;
+                        }
+                    }
+                    Some(AsyncEvent::Progress(_)) => continue,
+                    None => break None,
+                }
+            };
+            let Some(snapshot_lsn) = snapshot_lsn else {
+                return Ok(());
+            };
+            if concurrent_replication {
+                release_data_ports(data_cap_sets, &reader_outputs);
+            }
+
+            let snapshot_txn = if reader_tables.is_empty() {
+                None
+            } else {
+                Some(SnapshotTransaction::begin(&mut client).await?)
+            };
+            // Dropping the snapshot capability tells the leader that this worker's view is
+            // fixed. The leader releases the locks once every worker has done so.
+            *snapshot_cap_set = CapabilitySet::new();
+            if let Some(fence) = fence.take() {
+                while snapshot_input.next().await.is_some() {}
+                fence.release().await?;
+            }
+            drop(fence);
+            drop(fence_client);
+
+            let mut rewind_requests: Vec<_> = reader_outputs
+                .iter()
+                .map(|output_index| RewindRequest {
                     output_index: *output_index,
                     snapshot_lsn,
-                });
-            }
+                })
+                .collect();
 
             let emit_rewinds =
                 |requests: Vec<RewindRequest>, rewind_cap_set: &mut CapabilitySet<Lsn>| {
@@ -271,14 +364,15 @@ pub(crate) fn render<'scope>(
                 emit_rewinds(std::mem::take(&mut rewind_requests), rewind_cap_set);
             }
 
-            let mut snapshot_txn = SnapshotTransaction::begin(&mut client).await?;
-            fence.release().await?;
+            let Some(mut snapshot_txn) = snapshot_txn else {
+                return Ok(());
+            };
 
             let report_interval =
                 SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
             let mut last_report = Instant::now();
 
-            for table in &snapshot_tables {
+            for table in &reader_tables {
                 tracing::info!(
                     %config.id,
                     %table.name,
@@ -403,6 +497,15 @@ async fn sql_server_snapshot_failpoint_pause(table: &str) {
         match held {
             Some(true) => tokio::time::sleep(Duration::from_millis(100)).await,
             _ => break,
+        }
+    }
+}
+
+/// Drops the capabilities of every data port whose output index is not in `keep`.
+fn release_data_ports(data_cap_sets: &mut [CapabilitySet<Lsn>], keep: &BTreeSet<usize>) {
+    for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+        if !keep.contains(&output_index) {
+            *cap_set = CapabilitySet::new();
         }
     }
 }

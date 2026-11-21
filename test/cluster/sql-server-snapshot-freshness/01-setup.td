@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # Set up a SQL Server source with one hydrated table. The upstream tables that
-# are added to the source later already exist and have data. The snapshot reads
-# its tables in order of their qualified names, so `t_alongside` finishes its
-# read before the `sql_server_snapshot_pause` failpoint holds `t_paused`.
+# are added to the source later already exist and have data. Each worker reads
+# its tables in order of their qualified names. Even when one worker reads both,
+# `t_alongside` finishes its read before the `sql_server_snapshot_pause`
+# failpoint holds `t_paused`.
 #
 # A rewind resolves once the CDC max LSN passes the snapshot LSN. The
 # DummyTicker job keeps the max LSN advancing while the test is idle.
