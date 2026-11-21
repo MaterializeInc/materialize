@@ -355,6 +355,11 @@ resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str | None] = 
 def resolve_tag(
     tag: str, scenario_class: type[Scenario], scale: str | None
 ) -> str | None:
+    if tag == "current-source":
+        # The images of an unset 'this' tag, so both sides differ only in their
+        # parameters.
+        return None
+
     if tag == "common-ancestor":
         overrides = get_ancestor_overrides_for_performance_regressions(
             scenario_class, scale
@@ -486,7 +491,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         metavar="TAG",
         type=str,
         default=os.getenv("OTHER_TAG", str(get_latest_published_version())),
-        help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
+        help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used. "
+        "'common-ancestor' uses the merge base, and 'current-source' uses the same images as 'this', which isolates the effect of --this-params.",
     )
 
     parser.add_argument(
