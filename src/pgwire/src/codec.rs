@@ -533,8 +533,8 @@ impl Decoder for Codec {
                     if src.len() < frame_len {
                         return Ok(None);
                     }
-                    let buf = src.split_to(frame_len).freeze();
-                    let buf = Cursor::new(&buf);
+                    let frame = src.split_to(frame_len).freeze();
+                    let buf = Cursor::new(&frame);
                     let msg = match msg_type {
                         // Simple query flow.
                         b'Q' => decode_query(buf)?,
@@ -556,7 +556,7 @@ impl Decoder for Codec {
 
                         // Copy from flow.
                         b'f' => decode_copy_fail(buf)?,
-                        b'd' => decode_copy_data(buf, frame_len)?,
+                        b'd' => decode_copy_data(&frame)?,
                         b'c' => decode_copy_done(buf)?,
 
                         // Invalid.
@@ -913,12 +913,8 @@ fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Sync)
 }
 
-fn decode_copy_data(mut buf: Cursor, frame_len: usize) -> Result<FrontendMessage, io::Error> {
-    let mut data = Vec::with_capacity(frame_len);
-    for _ in 0..frame_len {
-        data.push(buf.read_byte()?);
-    }
-    Ok(FrontendMessage::CopyData(data))
+fn decode_copy_data(frame: &[u8]) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::CopyData(frame.to_vec()))
 }
 
 fn decode_copy_done(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
