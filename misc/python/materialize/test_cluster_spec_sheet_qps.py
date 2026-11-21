@@ -442,3 +442,66 @@ def test_logging_variants_are_uploaded_separately(monkeypatch, tmp_path):
             200,
         ),
     ]
+
+
+def test_cluster_plots_match_recorded_results(monkeypatch, tmp_path):
+    # The fixture is a slice of a real `.cluster.csv` run. It mixes `cc` and
+    # `M.1` sizes, has repetitions, and leaves `size_bytes` empty for
+    # materialized view scenarios.
+    monkeypatch.chdir(tmp_path)
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    monkeypatch.setattr(module, "MZ_ROOT", tmp_path)
+    monkeypatch.setattr(module, "upload_file", lambda paths, title: None)
+    saved = {}
+    save_plot = module.save_plot
+
+    def record(plot_dir, data_frame, title, slug):
+        saved[slug] = data_frame.copy()
+        save_plot(plot_dir, data_frame, title, slug)
+
+    monkeypatch.setattr(module, "save_plot", record)
+    path = tmp_path / "recorded.cluster.csv"
+    path.write_bytes(
+        (
+            MZ_ROOT / "misc/python/materialize/testdata/cluster_spec_sheet.cluster.csv"
+        ).read_bytes()
+    )
+    module.analyze_cluster_results_file(str(path))
+
+    # Recompute the expected minimum per plot cell without pandas.
+    expected: dict[str, dict[tuple[float, str], float]] = {}
+    with path.open() as f:
+        for row in csv.DictReader(f):
+            slug = f"{row['scenario']}_{row['category']}_{row['mode']}"
+            credits_per_h = module.extract_cluster_size(row["cluster_size"])
+            time_ms = float(row["time_ms"])
+            credit_time = credits_per_h / 3600 * 100 * time_ms / 1000
+            for suffix, value in (("time_ms", time_ms), ("credits", credit_time)):
+                cells = expected.setdefault(f"{slug}_{suffix}", {})
+                key = (credits_per_h, row["test_name"])
+                cells[key] = min(cells.get(key, value), value)
+
+    assert set(saved) == set(expected) | {f"{s}_normalized" for s in expected}
+    for slug, cells in expected.items():
+        frame = saved[slug]
+        assert list(frame.index) == sorted({c for c, _ in cells})
+        assert list(frame.columns) == sorted({t for _, t in cells})
+        actual = {
+            (credits_per_h, test_name): value
+            for credits_per_h, row in frame.iterrows()
+            for test_name, value in row.items()
+        }
+        assert actual == pytest.approx(cells)
+        normalized = saved[f"{slug}_normalized"]
+        assert list(normalized.iloc[0]) == pytest.approx([1.0] * len(frame.columns))
+        assert normalized.to_numpy() == pytest.approx(
+            (frame / frame.iloc[0]).to_numpy()
+        )
+
+    plot_dir = tmp_path / "test/cluster-spec-sheet/plots/recorded"
+    for slug in saved:
+        for ext in ("svg", "html"):
+            assert (plot_dir / f"{slug}.{ext}").stat().st_size > 0
