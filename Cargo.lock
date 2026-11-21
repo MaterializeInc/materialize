@@ -774,6 +774,7 @@ dependencies = [
  "http-body",
  "percent-encoding",
  "pin-project-lite",
+ "regex-lite",
  "tracing",
  "uuid",
 ]
