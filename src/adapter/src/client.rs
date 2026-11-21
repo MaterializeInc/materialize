@@ -1643,6 +1643,10 @@ impl SessionClient {
             return Err(requested.into());
         }
 
+        mz_ore::antithesis_reachable!(
+            "adapter: a cancel or timeout found its read-then-write submitted and waits for the write's result",
+            &serde_json::json!({})
+        );
         // A submitted write can already be durable. Await its definitive result
         // rather than reporting cancellation or timeout incorrectly.
         read_then_write.await

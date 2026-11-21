@@ -12,6 +12,7 @@
 /target
 /target-ra
 /target-xcompile
+/target-antithesis-upgrade-base
 /miri-target
 .mtrlz.log
 *.rs.bk

@@ -1,0 +1,85 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The driver pod. Its one process creates the Materialize CR,
+# waits for the environment to serve SQL, emits `setup_complete`, and runs the
+# state machine once the `first_start_workload` command creates
+# /workload-active. Launch with `--fault-exclusions '^driver$$'`.
+#
+# A bare pod with `restartPolicy: Never`: the driver ends a timeline after its
+# post-fault checks by exiting with status 0, and a restart would start a
+# second driver in a timeline whose faults have stopped.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: driver
+  namespace: materialize
+  labels:
+    app: driver
+spec:
+  serviceAccountName: workload
+  restartPolicy: Never
+  # Antithesis only pre-pulls images that appear in the manifests. The
+  # environmentd and clusterd images are referenced only through the
+  # Materialize CR, so these no-op init containers pull them.
+  initContainers:
+  - name: pull-environmentd
+    image: ${ENVIRONMENTD_IMAGE}
+    imagePullPolicy: IfNotPresent
+    command: [/busybox/true]
+  - name: pull-clusterd
+    image: ${CLUSTERD_IMAGE}
+    imagePullPolicy: IfNotPresent
+    command: [/busybox/true]
+  - name: pull-initial-environmentd
+    image: ${INITIAL_ENVIRONMENTD_IMAGE}
+    imagePullPolicy: IfNotPresent
+    command: [/busybox/true]
+  - name: pull-initial-clusterd
+    image: ${INITIAL_CLUSTERD_IMAGE}
+    imagePullPolicy: IfNotPresent
+    command: [/busybox/true]
+  containers:
+  - name: driver
+    image: ${WORKLOAD_IMAGE}
+    imagePullPolicy: IfNotPresent
+    env:
+    - name: MZ_ANTITHESIS_NAMESPACE
+      value: materialize-environment
+    - name: MZ_ANTITHESIS_OPERATOR_NAMESPACE
+      value: materialize
+    - name: MZ_ANTITHESIS_ENVIRONMENT
+      value: ${ENVIRONMENT_NAME}
+    - name: MZ_ANTITHESIS_KAFKA_BROKER
+      value: redpanda.materialize.svc.cluster.local:9092
+    - name: MZ_ANTITHESIS_SCHEMA_REGISTRY_URL
+      value: http://redpanda.materialize.svc.cluster.local:8081
+    - name: MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL
+      value: postgres://postgres:postgres@postgres-upstream.materialize.svc.cluster.local:5432/upstream
+    - name: MZ_ANTITHESIS_UPSTREAM_MYSQL_URL
+      value: mysql://root:mysqlpass@mysql-upstream.materialize.svc.cluster.local:3306
+    - name: MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_URL
+      value: mssql://SA:RPSsql12345@sql-server-upstream.materialize.svc.cluster.local:1433
+    - name: MZ_ANTITHESIS_METADATA_POSTGRES_URL
+      value: postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db
+    - name: MZ_ANTITHESIS_STATE_DIR
+      value: /var/lib/antithesis-driver
+    - name: MZ_ANTITHESIS_ENVIRONMENTD_IMAGE
+      value: ${ENVIRONMENTD_IMAGE}
+    - name: MZ_ANTITHESIS_INITIAL_ENVIRONMENTD_IMAGE
+      value: ${INITIAL_ENVIRONMENTD_IMAGE}
+    resources:
+      requests:
+        cpu: 20m
+        memory: 256Mi
+    readinessProbe:
+      exec:
+        command: [test, -f, /var/lib/antithesis-driver/setup-complete]
+      periodSeconds: 5

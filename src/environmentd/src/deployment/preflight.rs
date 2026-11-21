@@ -143,11 +143,19 @@ pub fn spawn_catchup(
                     biased;
 
                     () = &mut skip_catchup => {
+                        mz_ore::antithesis_reachable!(
+                            "0dt: a read-only generation skips catch-up on request",
+                            &serde_json::json!({})
+                        );
                         info!("skipping waiting for deployment to catch up due to administrator request");
                         should_skip_catchup = true;
                         break;
                     }
                     () = &mut caught_up_receiver => {
+                        mz_ore::antithesis_reachable!(
+                            "0dt: a read-only generation catches up",
+                            &serde_json::json!({})
+                        );
                         info!("deployment caught up");
                         break;
                     }
@@ -155,6 +163,10 @@ pub fn spawn_catchup(
                         if panic_after_timeout {
                             panic!("not caught up within {:?}", caught_up_max_wait);
                         }
+                        mz_ore::antithesis_reachable!(
+                            "0dt: a read-only generation stops waiting for catch-up at its deadline",
+                            &serde_json::json!({})
+                        );
                         info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
                         break;
                     }

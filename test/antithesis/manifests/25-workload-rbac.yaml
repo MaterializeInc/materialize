@@ -1,0 +1,145 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The service account of the workload pod and of the driver pod, and what it
+# may read and change in both namespaces.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload
+  namespace: materialize
+---
+# Drives rollouts and observes what orchestratord and environmentd create.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload
+  namespace: materialize-environment
+rules:
+- apiGroups: [materialize.cloud]
+  resources: [materializes, materializes/status]
+  verbs: [get, list, watch, create, patch, update]
+- apiGroups: [apps]
+  resources: [statefulsets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [pods]
+  # `patch` is for the annotation that makes the kubelet sync the
+  # system-params volume, see `configure.nudge_config_sync`.
+  verbs: [get, list, watch, delete, patch]
+- apiGroups: [""]
+  resources: [pods/log]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [services, events, secrets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, patch, update]
+- apiGroups: [events.k8s.io]
+  resources: [events]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload
+  namespace: materialize-environment
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workload
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# Reads the orchestratord leader Lease and pods in the operator namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-operator
+  namespace: materialize
+rules:
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list, watch, delete]
+- apiGroups: [""]
+  resources: [pods/log]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-operator
+  namespace: materialize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workload-operator
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# Waiting for the Materialize CRD to be established needs cluster scope.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-workload-crds
+rules:
+- apiGroups: [apiextensions.k8s.io]
+  resources: [customresourcedefinitions]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: materialize-workload-crds
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: materialize-workload-crds
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# The resource kill check reads every pod, node conditions, and the eviction
+# and OOM events, which the kubelet records in whatever namespace the
+# involved object lives in (`default` for the node). The driver's memory log
+# reads the kubelet's stats summary through the node proxy.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-workload-resource-kills
+rules:
+- apiGroups: [""]
+  resources: [pods, nodes, events]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [nodes/proxy]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: materialize-workload-resource-kills
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: materialize-workload-resource-kills
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize

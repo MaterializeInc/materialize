@@ -534,6 +534,10 @@ where
                         retry.next_sleep(),
                         err.display_with_causes()
                     );
+                    mz_ore::antithesis_reachable!(
+                        "persist: compare_and_append retries after an indeterminate consensus result",
+                        &serde_json::json!({"shard_id": self.shard_id().to_string()})
+                    );
                     if indeterminate.is_none() {
                         indeterminate = Some(err);
                     }
@@ -576,6 +580,10 @@ where
                     // Indeterminate error but was successful. Sanity check this
                     // and pass along the good news.
                     assert!(indeterminate.is_some());
+                    mz_ore::antithesis_reachable!(
+                        "persist: compare_and_append finds that an indeterminate attempt committed",
+                        &serde_json::json!({"shard_id": self.shard_id().to_string()})
+                    );
                     self.applier.metrics.cmds.compare_and_append_noop.inc();
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
