@@ -1124,6 +1124,24 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_policy: Option<QueryPolicyId>,
+    pub query_routing: QueryRouting,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum QueryRouting {
+    Broadcast,
+    Balanced,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
