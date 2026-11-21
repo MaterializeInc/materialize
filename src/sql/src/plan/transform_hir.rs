@@ -25,6 +25,7 @@ use crate::plan::hir::{
     AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
     ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };
+use crate::plan::with_options::WindowBucketWidth;
 use crate::plan::{AggregateExpr, WindowExprType};
 
 /// Rewrites predicates that contain subqueries so that the subqueries
@@ -655,6 +656,7 @@ pub fn fuse_window_functions(
         inner_order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
         ignore_nulls: bool,
+        bucket_width: Option<WindowBucketWidth>,
     }
     #[derive(PartialEq, Eq)]
     struct AggregateWindowFuncCallOptions {
@@ -663,6 +665,7 @@ pub fn fuse_window_functions(
         inner_order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
         distinct: bool,
+        bucket_width: Option<WindowBucketWidth>,
     }
 
     /// Helper function to extract the above options.
@@ -680,6 +683,7 @@ pub fn fuse_window_functions(
                         }),
                     partition_by,
                     order_by: outer_order_by,
+                    bucket_width,
                 },
                 _name,
             ) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
@@ -688,6 +692,7 @@ pub fn fuse_window_functions(
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 ignore_nulls: ignore_nulls.clone(),
+                bucket_width: bucket_width.clone(),
             }),
             HirScalarExpr::Windowing(
                 WindowExpr {
@@ -704,6 +709,7 @@ pub fn fuse_window_functions(
                         }),
                     partition_by,
                     order_by: outer_order_by,
+                    bucket_width,
                 },
                 _name,
             ) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
@@ -712,6 +718,7 @@ pub fn fuse_window_functions(
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 distinct: distinct.clone(),
+                bucket_width: bucket_width.clone(),
             }),
             _ => panic!(
                 "extract_options should only be called on value window functions or window aggregations"
@@ -752,6 +759,7 @@ pub fn fuse_window_functions(
                                         }),
                                     partition_by: _,
                                     order_by: _,
+                                    bucket_width: _,
                                 },
                                 _name,
                             ) = call
@@ -783,6 +791,7 @@ pub fn fuse_window_functions(
                         }),
                         partition_by: options.partition_by,
                         order_by: options.outer_order_by,
+                        bucket_width: options.bucket_width.clone(),
                     })
                 }
                 WindowFuncCallOptions::Agg(options) => {
@@ -805,6 +814,7 @@ pub fn fuse_window_functions(
                                         }),
                                     partition_by: _,
                                     order_by: _,
+                                    bucket_width: _,
                                 },
                                 _name,
                             ) = call
@@ -835,6 +845,7 @@ pub fn fuse_window_functions(
                         }),
                         partition_by: options.partition_by,
                         order_by: options.outer_order_by,
+                        bucket_width: options.bucket_width.clone(),
                     })
                 }
             };
@@ -1118,4 +1129,480 @@ mod tests {
             .join()
             .unwrap();
     }
+}
+
+/// Width of one bucket when the leading `ORDER BY` key is an integer, in key
+/// units.
+///
+/// NOTE: This and [`BUCKET_STRIDE_SECONDS`] are provisional, and are constants
+/// rather than tunables because the per-update cost is tolerant of the choice
+/// rather than sensitive to it. Over a simulated 8000-row partition, every
+/// width landing between 200 and 400 rows per bucket came within a factor of
+/// two of the best available, so being in the right neighbourhood is what
+/// matters. Erring wide is much safer than erring narrow, because the boundary
+/// level grows as buckets shrink and eventually dominates. Deriving the width
+/// from statistics or from a user hint is the open question recorded in
+/// `doc/developer/design/20260916_range_bucketed_window_functions.md`.
+const BUCKET_WIDTH_INT: i64 = 4096;
+
+/// Stride of one bucket when the leading `ORDER BY` key is a timestamp.
+const BUCKET_STRIDE_SECONDS: i64 = 3600;
+
+/// One `lag`/`lead` constituent of a window call that bucketing can handle.
+struct BucketableCall {
+    /// `Lag` or `Lead`.
+    func: ValueWindowFunc,
+    /// The original `row(value, offset, default)` argument record.
+    args: HirScalarExpr,
+    /// The `value` argument. Recognizing the rows that carry a bucket's
+    /// trailing non-nulls under `IGNORE NULLS` needs it.
+    value: HirScalarExpr,
+    /// The `offset` argument, which must be a literal so that the width of the
+    /// boundary region is known without looking at data.
+    offset: HirScalarExpr,
+    /// Whether `default` is the NULL literal. When it is, an `IGNORE NULLS`
+    /// call's own result already distinguishes "the lookback resolved" from
+    /// "it ran off the end of the bucket", and no separate marker is needed.
+    default_is_null: bool,
+}
+
+impl BucketableCall {
+    /// The direction a constituent's own lookback runs in.
+    fn same_direction(&self) -> ValueWindowFunc {
+        self.func.clone()
+    }
+
+    /// The opposite direction, which is where a bucket's summary rows sit: a
+    /// `lag` is resolved by rows before it, so the rows other buckets need from
+    /// this one are at its end, which is what a `lead` marker finds.
+    fn opposite_direction(&self) -> ValueWindowFunc {
+        match self.func {
+            ValueWindowFunc::Lag => ValueWindowFunc::Lead,
+            ValueWindowFunc::Lead => ValueWindowFunc::Lag,
+            _ => unreachable!("BucketableCall is only built for Lag and Lead"),
+        }
+    }
+}
+
+/// Whether `expr` is the NULL literal.
+fn is_null_literal(expr: &HirScalarExpr) -> bool {
+    match expr {
+        HirScalarExpr::Literal(row, _typ, _name) => row.unpack_first() == mz_repr::Datum::Null,
+        _ => false,
+    }
+}
+
+/// Whether any column reference in `expr` points outside it.
+///
+/// [`HirRelationExpr::is_correlated`] only reports references exactly one level
+/// up, which is not enough to make typing against an empty outer context safe.
+fn references_outer_columns(expr: &HirRelationExpr) -> bool {
+    let mut found = false;
+    #[allow(deprecated)]
+    expr.visit_columns(0, &mut |depth, col| {
+        if col.level > depth {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Whether any column reference in `expr` points outside the relation it is
+/// attached to. See [`references_outer_columns`].
+fn scalar_references_outer_columns(expr: &HirScalarExpr) -> bool {
+    let mut found = false;
+    #[allow(deprecated)]
+    expr.visit_columns(0, &mut |depth, col| {
+        if col.level > depth {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Builds `row(value, offset, NULL)`, the arguments of a marker call.
+///
+/// The default is always NULL so that an IS NULL test on the marker's result
+/// means "the lookback ran out of rows", whatever default the user's own call
+/// carries.
+fn marker_args(
+    value: HirScalarExpr,
+    offset: HirScalarExpr,
+    value_type: SqlScalarType,
+) -> HirScalarExpr {
+    HirScalarExpr::call_variadic(
+        RecordCreate {
+            field_names: iter::repeat(ColumnName::from("")).take(3).collect(),
+        },
+        vec![value, offset, HirScalarExpr::literal_null(value_type)],
+    )
+}
+
+/// A monotone, non-decreasing coarsening of `key`, or `None` for key types with
+/// no natural one.
+///
+/// Monotonicity is the whole contract: it is what makes each bucket a
+/// contiguous run of the sort order, which is what lets a bucket-local `lag`
+/// mean anything. Ties map to one bucket for free, since the coarsening is a
+/// function of the key.
+fn bucket_expr(
+    key: &HirScalarExpr,
+    key_type: &SqlScalarType,
+    hint: Option<&WindowBucketWidth>,
+) -> Option<HirScalarExpr> {
+    use mz_expr::func::{DateBinTimestamp, DateBinTimestampTz, DivInt16, DivInt32, DivInt64};
+    use mz_repr::Datum;
+    use mz_repr::adt::interval::Interval;
+
+    // Truncating division is monotone for a positive divisor. The bucket that
+    // straddles zero ends up twice as wide as the others, which costs nothing.
+    // A hint whose form does not match the key, or that works out to zero, is
+    // ignored rather than raising: this is a hint, and falling back to the
+    // default beats failing the query. An integer key takes a count of its own
+    // units and a temporal key a duration, since the two share no unit.
+    let int_width = match hint {
+        Some(WindowBucketWidth::Units(n)) => i64::try_from(*n).ok().filter(|n| *n > 0),
+        _ => None,
+    }
+    .unwrap_or(BUCKET_WIDTH_INT);
+    let stride_micros = match hint {
+        Some(WindowBucketWidth::Duration(d)) => {
+            i64::try_from(d.as_micros()).ok().filter(|m| *m > 0)
+        }
+        _ => None,
+    }
+    .unwrap_or(BUCKET_STRIDE_SECONDS.saturating_mul(1_000_000));
+
+    match key_type {
+        SqlScalarType::Int16 => Some(key.clone().call_binary(
+            HirScalarExpr::literal(
+                Datum::Int16(i16::try_from(int_width).ok()?),
+                SqlScalarType::Int16,
+            ),
+            DivInt16,
+        )),
+        SqlScalarType::Int32 => Some(key.clone().call_binary(
+            HirScalarExpr::literal(
+                Datum::Int32(i32::try_from(int_width).ok()?),
+                SqlScalarType::Int32,
+            ),
+            DivInt32,
+        )),
+        SqlScalarType::Int64 => Some(key.clone().call_binary(
+            HirScalarExpr::literal(Datum::Int64(int_width), SqlScalarType::Int64),
+            DivInt64,
+        )),
+        SqlScalarType::Timestamp { .. } | SqlScalarType::TimestampTz { .. } => {
+            let stride = HirScalarExpr::literal(
+                Datum::Interval(Interval::new(0, 0, stride_micros)),
+                SqlScalarType::Interval,
+            );
+            // `date_bin` takes the stride first and bins toward the origin, so
+            // it is monotone in the source.
+            if matches!(key_type, SqlScalarType::Timestamp { .. }) {
+                Some(stride.call_binary(key.clone(), DateBinTimestamp))
+            } else {
+                Some(stride.call_binary(key.clone(), DateBinTimestampTz))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Splits `args` into one `lag`/`lead` constituent, or returns `None` if the
+/// call is not one bucketing can handle.
+fn bucketable_call(func: &ValueWindowFunc, args: &HirScalarExpr) -> Option<BucketableCall> {
+    if !matches!(func, ValueWindowFunc::Lag | ValueWindowFunc::Lead) {
+        return None;
+    }
+    let HirScalarExpr::CallVariadic {
+        func: VariadicFunc::RecordCreate(_),
+        exprs,
+        ..
+    } = args
+    else {
+        return None;
+    };
+    let [value, offset, default] = &exprs[..] else {
+        return None;
+    };
+    // A non-literal offset leaves the width of the boundary region unknown, so
+    // there is no way to say which rows a bucket owes its neighbours.
+    if !matches!(offset, HirScalarExpr::Literal(..)) {
+        return None;
+    }
+    Some(BucketableCall {
+        func: func.clone(),
+        args: args.clone(),
+        value: value.clone(),
+        offset: offset.clone(),
+        default_is_null: is_null_literal(default),
+    })
+}
+
+/// Splits eligible `lag`/`lead` windows into a level bucketed by a monotone
+/// coarsening of the leading `ORDER BY` key, plus a level that resolves only the
+/// rows whose lookback crosses a bucket boundary.
+///
+/// A changed row otherwise costs a re-sort and re-walk of its whole partition,
+/// because the reduce closure is handed the partition's full contents on every
+/// invocation. Bucketing makes that a function of the bucket instead.
+///
+/// The two levels emit results for disjoint sets of rows, in the same shape, so
+/// they combine with a union rather than a join. See
+/// `doc/developer/design/20260916_range_bucketed_window_functions.md` for the
+/// argument that the boundary level sees every row it needs.
+pub fn bucket_window_functions(
+    root: &mut HirRelationExpr,
+    context: &crate::plan::lowering::Context,
+) -> Result<(), RecursionLimitError> {
+    if !context.config.enable_window_bucketing {
+        return Ok(());
+    }
+    root.try_visit_mut_post(&mut |rel_expr| {
+        if let HirRelationExpr::Map { input, scalars } = rel_expr {
+            if let Some(rewritten) = bucket_one_window(input, scalars) {
+                *rel_expr = rewritten;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Rewrites the first bucketable window call in a `Map`, or returns `None`.
+///
+/// Only the first call is rewritten, because the replacement contains window
+/// calls of its own and rewriting those in turn would not terminate. Fusion has
+/// already run by this point, so a `Map` holds at most one call per window.
+fn bucket_one_window(
+    input: &HirRelationExpr,
+    scalars: &[HirScalarExpr],
+) -> Option<HirRelationExpr> {
+    let n = input.arity();
+
+    let (idx_w, window) = scalars.iter().enumerate().find_map(|(idx, s)| match s {
+        HirScalarExpr::Windowing(w, _name) => Some((idx, w)),
+        _ => None,
+    })?;
+    let WindowExpr {
+        func: WindowExprType::Value(value_expr),
+        partition_by,
+        order_by,
+        bucket_width,
+    } = window
+    else {
+        return None;
+    };
+    let ValueWindowExpr {
+        func,
+        args,
+        order_by: inner_order_by,
+        window_frame,
+        ignore_nulls,
+    } = value_expr;
+
+    // The rewrite reads the ORDER BY key and the arguments out of the `Map`'s
+    // input, so the call must not reach into the `Map`'s own scalars.
+    if scalars[idx_w].support().iter().any(|c| *c >= n) {
+        return None;
+    }
+    // `lag`/`lead` ignore the frame, but a non-default one would be a sign that
+    // something else is going on.
+    if *window_frame != WindowFrame::default() {
+        return None;
+    }
+
+    // Typing the ORDER BY key and the call arguments below is only sound against
+    // an empty outer context, so both the call and the relation it reads have to
+    // stay inside themselves. A window function in a correlated subquery whose
+    // ORDER BY reaches the outer relation lands here.
+    //
+    // These two walk whole subtrees, so they come after the syntactic checks
+    // above rather than before: a `Map` with no window call in it should cost
+    // nothing.
+    if scalar_references_outer_columns(&scalars[idx_w]) || references_outer_columns(input) {
+        return None;
+    }
+
+    // Contiguity is decided by the primary sort key, which is whichever ORDER BY
+    // expression the `ColumnOrder` list puts first rather than the first one
+    // written. The planner happens to emit these in order, but reading the
+    // order through `inner_order_by` is what the rewrite actually needs.
+    let order_key = order_by.get(inner_order_by.first()?.column)?;
+    let input_typ = input.typ(&[], &NO_PARAMS);
+    let order_key_type = order_key.typ(&[], &input_typ, &NO_PARAMS).scalar_type;
+    // Bucketing on the primary key alone is enough however many ORDER BY
+    // expressions there are: the sort is lexicographic, so a coarsening of the
+    // first key still cuts the partition into contiguous runs. Its direction
+    // does not matter, since a monotone coarsening keeps runs contiguous
+    // whether the sort ascends or descends.
+    let bucket = bucket_expr(order_key, &order_key_type, bucket_width.as_ref())?;
+
+    // Treat a single call as a fused group of one, so the two are handled
+    // uniformly below.
+    let fused = matches!(func, ValueWindowFunc::Fused(_));
+    let (funcs, arg_exprs): (Vec<_>, Vec<_>) = match func {
+        ValueWindowFunc::Fused(funcs) => {
+            let HirScalarExpr::CallVariadic {
+                func: VariadicFunc::RecordCreate(_),
+                exprs,
+                ..
+            } = &**args
+            else {
+                return None;
+            };
+            if exprs.len() != funcs.len() {
+                return None;
+            }
+            (funcs.clone(), exprs.clone())
+        }
+        single => (vec![single.clone()], vec![(**args).clone()]),
+    };
+    let calls = funcs
+        .iter()
+        .zip_eq(arg_exprs.iter())
+        .map(|(f, a)| bucketable_call(f, a))
+        .collect::<Option<Vec<_>>>()?;
+    let m = calls.len();
+
+    // Every constituent has to look the same way along the order. The split
+    // relies on a bucket's unresolved rows forming a prefix and the rows it owes
+    // its neighbours forming a suffix, which is only true of one direction at a
+    // time. Mixing the two breaks it: a row can be a target because a `lag`
+    // constituent ran off the front of the bucket, and the boundary level then
+    // has to produce that row's `lead` as well, whose context is the rows
+    // immediately after it. Those are neither targets nor summaries, so the
+    // boundary level would not have them and would read past them to the next
+    // bucket.
+    if calls.iter().any(|c| c.func != calls[0].func) {
+        return None;
+    }
+
+    // Level 0 computes every original constituent plus, per constituent, the
+    // markers that say whether its lookback stayed inside the bucket and
+    // whether it is one of the rows a neighbouring bucket will need.
+    let mut l0_funcs: Vec<ValueWindowFunc> = calls.iter().map(|c| c.func.clone()).collect();
+    let mut l0_args: Vec<HirScalarExpr> = calls.iter().map(|c| c.args.clone()).collect();
+    let mut resolved_pos = Vec::with_capacity(m);
+    let mut summary_pos = Vec::with_capacity(m);
+    for (i, call) in calls.iter().enumerate() {
+        // Under IGNORE NULLS a marker has to watch the value's nullness, so it
+        // looks at the value itself. Under RESPECT NULLS resolution is purely
+        // positional, so a non-null constant suffices.
+        let (marker_value, marker_type) = if *ignore_nulls {
+            let value_type = call.value.typ(&[], &input_typ, &NO_PARAMS).scalar_type;
+            (call.value.clone(), value_type)
+        } else {
+            (
+                HirScalarExpr::literal(mz_repr::Datum::Int32(1), SqlScalarType::Int32),
+                SqlScalarType::Int32,
+            )
+        };
+        if *ignore_nulls && call.default_is_null {
+            // The call's own result is already an unambiguous marker.
+            resolved_pos.push(i);
+        } else {
+            l0_funcs.push(call.same_direction());
+            l0_args.push(marker_args(
+                marker_value.clone(),
+                call.offset.clone(),
+                marker_type.clone(),
+            ));
+            resolved_pos.push(l0_funcs.len() - 1);
+        }
+        l0_funcs.push(call.opposite_direction());
+        l0_args.push(marker_args(marker_value, call.offset.clone(), marker_type));
+        summary_pos.push(l0_funcs.len() - 1);
+    }
+
+    let record_fields = |len: usize| RecordCreate {
+        field_names: iter::repeat(ColumnName::from("")).take(len).collect(),
+    };
+    let l0_call = HirScalarExpr::windowing(WindowExpr {
+        func: WindowExprType::Value(ValueWindowExpr {
+            func: ValueWindowFunc::Fused(l0_funcs),
+            args: Box::new(HirScalarExpr::call_variadic(
+                record_fields(l0_args.len()),
+                l0_args,
+            )),
+            order_by: inner_order_by.clone(),
+            window_frame: window_frame.clone(),
+            ignore_nulls: *ignore_nulls,
+        }),
+        partition_by: partition_by
+            .iter()
+            .cloned()
+            .chain(iter::once(bucket))
+            .collect(),
+        order_by: order_by.clone(),
+        bucket_width: bucket_width.clone(),
+    });
+
+    // NOTE: The level 0 subtree is built twice, once per branch. `RelationCSE`
+    // factors the duplicate out later; without that the bucketed reduce would
+    // be maintained twice over.
+    let l0 = input.clone().map(vec![l0_call]);
+    let res = |pos: usize| {
+        HirScalarExpr::column(n).call_unary(UnaryFunc::RecordGet(mz_expr::func::RecordGet(pos)))
+    };
+
+    let all_resolved = resolved_pos
+        .iter()
+        .map(|p| res(*p).call_is_null().not())
+        .reduce(|a, b| a.and(b))
+        .expect("a window call has at least one constituent");
+    let any_summary = calls
+        .iter()
+        .zip_eq(summary_pos.iter())
+        .map(|(call, p)| {
+            let nothing_further = res(*p).call_is_null();
+            if *ignore_nulls {
+                // Only a bucket's trailing non-nulls are useful as context.
+                call.value.clone().call_is_null().not().and(nothing_further)
+            } else {
+                nothing_further
+            }
+        })
+        .reduce(|a, b| a.or(b))
+        .expect("a window call has at least one constituent");
+
+    // A row whose every constituent resolved inside its bucket is finished, and
+    // level 0 reassembles the original call's result shape for it.
+    let original_result = if fused {
+        HirScalarExpr::call_variadic(record_fields(m), (0..m).map(res).collect())
+    } else {
+        res(0)
+    };
+    let resolved_branch = l0
+        .clone()
+        .filter(vec![all_resolved.clone()])
+        .map(vec![original_result])
+        .project((0..n).chain(iter::once(n + 1)).collect());
+
+    // Everything else goes to level 0's boundary rows, which carry a flag
+    // saying whether they are there to be resolved or only as context.
+    let level1_input = l0
+        .filter(vec![all_resolved.clone().not().or(any_summary)])
+        .map(vec![all_resolved.not()])
+        .project((0..n).chain(iter::once(n + 1)).collect());
+    let target_branch = level1_input
+        .map(vec![scalars[idx_w].clone()])
+        .filter(vec![HirScalarExpr::column(n)])
+        .project((0..n).chain(iter::once(n + 1)).collect());
+
+    // Re-apply the `Map`'s own scalars on top of the union. Every column the
+    // `Map` produced shifts by one, because the window result now occupies
+    // column `n`, and the call itself becomes a reference to it.
+    let union = resolved_branch.union(target_branch);
+    let remap: BTreeMap<usize, usize> = (0..n)
+        .map(|c| (c, c))
+        .chain((0..scalars.len()).map(|j| (n + j, n + 1 + j)))
+        .collect();
+    let mut new_scalars: Vec<_> = scalars.iter().map(|s| s.clone().remap(&remap)).collect();
+    new_scalars[idx_w] = HirScalarExpr::column(n);
+    Some(
+        union
+            .map(new_scalars)
+            .project((0..n).chain(n + 1..n + 1 + scalars.len()).collect()),
+    )
 }
