@@ -171,7 +171,12 @@ export interface FreshnessParams {
  * "look at this". Replacing rather than pushing keeps dragging the threshold
  * from filling the back button with history.
  */
-export function useFreshnessParams(): FreshnessParams {
+export function useFreshnessParams({
+  defaultTimePeriodMinutes = DEFAULT_TIME_PERIOD_MINUTES,
+}: {
+  /** The time period when the URL names none the selector offers. */
+  defaultTimePeriodMinutes?: number;
+} = {}): FreshnessParams {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const clear = (key: string) =>
@@ -229,7 +234,7 @@ export function useFreshnessParams(): FreshnessParams {
       DEFAULT_THRESHOLD_MS,
     timePeriodMinutes:
       parseTimePeriod(searchParams.get(TIME_PERIOD_SEARCH_PARAM_KEY)) ??
-      DEFAULT_TIME_PERIOD_MINUTES,
+      defaultTimePeriodMinutes,
     predicate:
       parsePredicate(searchParams.get(PREDICATE_SEARCH_PARAM)) ?? "peak",
     objectTypes,
