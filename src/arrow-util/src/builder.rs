@@ -936,10 +936,12 @@ impl ArrowColumn {
             (ColBuilder::FixedSizeBinaryBuilder(builder), Datum::Uuid(val)) => {
                 builder.append_value(val.as_bytes())?
             }
-            (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
+            // The jsonb arms must precede the `Datum::String` arms, which would
+            // otherwise write JSON string scalars unquoted and unescaped.
             (ColBuilder::StringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }
+            (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::LargeStringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }

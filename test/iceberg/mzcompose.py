@@ -129,6 +129,7 @@ def workflow_smoke(c: Composition) -> None:
         "catalog.td",
         "nested-records.td",
         "uuid-column.td",
+        "jsonb-column.td",
         "key-validation.td",
         "duckdb-value-format.td",
     )
