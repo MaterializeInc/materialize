@@ -34,19 +34,18 @@ use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPO
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 
 use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -55,6 +54,12 @@ use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedColle
 /// replicate different tables, if we're using SQL Server's CDC features.
 static REPL_READER: &str = "reader";
 
+/// The data output ports of the operator, one per source export in output index order.
+type DataOutputs = SharedFuel<
+    Lsn,
+    CapacityContainerBuilder<Vec<(Result<SourceMessage, DataflowError>, Lsn, Diff)>>,
+>;
+
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, Lsn>,
     config: RawSourceCreationConfig,
@@ -62,14 +67,23 @@ pub(crate) fn render<'scope>(
     source: SqlServerSourceConnection,
     metrics: SqlServerSourceMetrics,
 ) -> (
-    StackedCollection<'scope, Lsn, (u64, Result<SourceMessage, DataflowError>)>,
+    Vec<StackedCollection<'scope, Lsn, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, Lsn, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
+    // One data output port per source export, in output index order. All ports advance in
+    // lockstep. Every export observes the same frontier.
+    let export_count = config.source_exports.len();
+    let mut data_outputs = Vec::with_capacity(export_count);
+    let mut data_streams = Vec::with_capacity(export_count);
+    for _ in 0..export_count {
+        let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        data_outputs.push(output);
+        data_streams.push(stream);
+    }
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -78,10 +92,9 @@ pub(crate) fn render<'scope>(
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
-            let [
-                data_cap_set,
-                definite_error_cap_set,
-            ]: &mut [_; 2] = caps.try_into().unwrap();
+            let (data_cap_sets, caps) = caps.split_at_mut(export_count);
+            let [definite_error_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
+            let mut data_outputs = SharedFuel::new(data_outputs);
 
             let connection_config = source
                 .connection
@@ -105,12 +118,12 @@ pub(crate) fn render<'scope>(
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
             // Maps the included columns for each output index so we can check
             // whether schema updates are valid on a per-output basis
-            let mut included_columns: HashMap<u64, Vec<Arc<str>>> = HashMap::new();
+            let mut included_columns: HashMap<usize, Vec<Arc<str>>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
-                let key = output.partition_index;
+                let key = output.output_index;
                 if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
-                    panic!("Multiple decoders for output index {}", output.partition_index);
+                    panic!("Multiple decoders for output index {}", output.output_index);
                 }
                 // Collect the included columns from decoder for schema
                 // change validation. The decoder serves as an effective
@@ -118,18 +131,18 @@ pub(crate) fn render<'scope>(
                 // only care about the columns that are being decoded and
                 // replicated
                 let included_cols = output.decoder.included_column_names();
-                included_columns.insert(output.partition_index, included_cols);
+                included_columns.insert(output.output_index, included_cols);
 
                 capture_instances
                     .entry(Arc::clone(&output.capture_instance))
                     .or_default()
-                    .push(output.partition_index);
+                    .push(output.output_index);
 
                 if *output.resume_upper == [Lsn::minimum()] {
                     capture_instance_to_snapshot
                         .entry(Arc::clone(&output.capture_instance))
                         .or_default()
-                        .push((output.partition_index, output.initial_lsn));
+                        .push((output.output_index, output.initial_lsn));
                 }
                 export_statistics.entry(Arc::clone(&output.capture_instance))
                     .or_default()
@@ -184,9 +197,9 @@ pub(crate) fn render<'scope>(
                     return_definite_error(
                             definite_error,
                             capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
-                            data_output,
-                            data_cap_set,
-                            definite_error_handle,
+                            &mut data_outputs,
+                            data_cap_sets,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         ).await;
                     return Ok(());
@@ -272,7 +285,7 @@ pub(crate) fn render<'scope>(
                     );
 
                     let ci_name = &table.capture_instance.name;
-                    let partition_indexes = capture_instance_to_snapshot
+                    let output_indexes = capture_instance_to_snapshot
                         .get(ci_name)
                         .unwrap_or_else(|| {
                             panic!(
@@ -302,13 +315,13 @@ pub(crate) fn render<'scope>(
                             }
                         }
 
-                        for (partition_idx, _) in partition_indexes {
+                        for (output_index, _) in output_indexes {
                             // Decode the SQL Server row into an MZ one.
                             let mut mz_row = Row::default();
                             let arena = RowArena::default();
 
                             let decoder = decoder_map
-                                .get(partition_idx)
+                                .get(output_index)
                                 .expect("decoder for output");
                             // Try to decode a row, returning a SourceError
                             // if it fails.
@@ -319,11 +332,12 @@ pub(crate) fn render<'scope>(
                                 &arena,
                                 None,
                             );
-                            let update =
-                                ((*partition_idx, message), Lsn::minimum(), Diff::ONE);
-                            let size = update.fuel_size();
-                            data_output
-                                .give_fueled(&data_cap_set[0], update, size)
+                            data_outputs
+                                .give(
+                                    *output_index,
+                                    &data_cap_sets[*output_index][0],
+                                    (message, Lsn::minimum(), Diff::ONE),
+                                )
                                 .await;
                         }
                         snapshot_staged += 1;
@@ -414,7 +428,7 @@ pub(crate) fn render<'scope>(
                 .into_stream();
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
-            let mut errored_partitions = BTreeSet::new();
+            let mut errored_outputs = BTreeSet::new();
 
             // TODO(sql_server2): We should emit `ProgressStatisticsUpdate::SteadyState` messages
             // here, when we receive progress events. What stops us from doing this now is our
@@ -455,7 +469,9 @@ pub(crate) fn render<'scope>(
                                 tracing::debug!("rewinds complete");
                                 log_rewinds_complete = false;
                             }
-                            data_cap_set.downgrade(Antichain::from_elem(next_lsn));
+                            for cap_set in data_cap_sets.iter_mut() {
+                                cap_set.downgrade([next_lsn]);
+                            }
                         } else {
                             tracing::debug!("rewinds remaining: {:?}", rewinds);
                         }
@@ -480,7 +496,7 @@ pub(crate) fn render<'scope>(
                         lsn,
                         changes,
                     } => {
-                        let Some(partition_indexes) =
+                        let Some(output_indexes) =
                             capture_instances.get(&capture_instance)
                         else {
                             let definite_error =
@@ -495,37 +511,37 @@ pub(crate) fn render<'scope>(
                                     .flat_map(|indexes| {
                                         indexes.iter().copied()
                                     }),
-                                data_output,
-                                data_cap_set,
-                                definite_error_handle,
+                                &mut data_outputs,
+                                data_cap_sets,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await;
                             return Ok(());
                         };
 
-                        let (valid_partitions, err_partitions) =
-                            partition_indexes
+                        let (valid_outputs, err_outputs) =
+                            output_indexes
                                 .iter()
-                                .partition::<Vec<u64>, _>(
-                                    |&partition_idx| {
-                                        !errored_partitions
-                                            .contains(partition_idx)
+                                .partition::<Vec<usize>, _>(
+                                    |&output_index| {
+                                        !errored_outputs
+                                            .contains(output_index)
                                     },
                                 );
 
-                        if err_partitions.len() > 0 {
+                        if err_outputs.len() > 0 {
                             metrics.ignored.inc_by(u64::cast_from(changes.len()));
                         }
 
                         handle_data_event(
                             changes,
-                            &valid_partitions,
+                            &valid_outputs,
                             &decoder_map,
                             lsn,
                             &rewinds,
-                            &data_output,
-                            data_cap_set,
+                            &mut data_outputs,
+                            data_cap_sets,
                             &metrics,
                             &mut deferred_updates,
                         ).await?
@@ -535,7 +551,7 @@ pub(crate) fn render<'scope>(
                         table,
                         ddl_event,
                     } => {
-                        let Some(partition_indexes) =
+                        let Some(output_indexes) =
                             capture_instances.get(&capture_instance)
                         else {
                             let definite_error =
@@ -550,9 +566,9 @@ pub(crate) fn render<'scope>(
                                     .flat_map(|indexes| {
                                         indexes.iter().copied()
                                     }),
-                                data_output,
-                                data_cap_set,
-                                definite_error_handle,
+                                &mut data_outputs,
+                                data_cap_sets,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await;
@@ -563,32 +579,32 @@ pub(crate) fn render<'scope>(
                                 capture_instance.to_string(),
                                 table.to_string(),
                             );
-                        for partition_idx in partition_indexes {
+                        for output_index in output_indexes {
                             let cols = included_columns
-                                .get(partition_idx)
+                                .get(output_index)
                                 .unwrap_or_else(|| {
                                     panic!(
-                                        "Partition index didn't \
-                                         exist: '{partition_idx}'"
+                                        "Output index didn't \
+                                         exist: '{output_index}'"
                                     )
                                 });
-                            if !errored_partitions
-                                .contains(partition_idx)
+                            if !errored_outputs
+                                .contains(output_index)
                                 && !ddl_event.is_compatible(cols)
                             {
-                                let msg = Err(
-                                    error.clone().into(),
-                                );
                                 let update = (
-                                    (*partition_idx, msg),
+                                    Err(error.clone().into()),
                                     ddl_event.lsn,
                                     Diff::ONE,
                                 );
-                                let size = update.fuel_size();
-                                data_output
-                                    .give_fueled(&data_cap_set[0], update, size)
+                                data_outputs
+                                    .give(
+                                        *output_index,
+                                        &data_cap_sets[*output_index][0],
+                                        update,
+                                    )
                                     .await;
-                                errored_partitions.insert(*partition_idx);
+                                errored_outputs.insert(*output_index);
                             }
                         }
                     }
@@ -600,21 +616,22 @@ pub(crate) fn render<'scope>(
 
     let error_stream = definite_errors.concat(transient_errors.map(ReplicationError::Transient));
 
-    (
-        data_stream.as_collection(),
-        error_stream,
-        button.press_on_drop(),
-    )
+    let data_collections = data_streams
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
+
+    (data_collections, error_stream, button.press_on_drop())
 }
 
 async fn handle_data_event(
     changes: Vec<CdcOperation>,
-    partition_indexes: &[u64],
-    decoder_map: &BTreeMap<u64, Arc<SqlServerRowDecoder>>,
+    output_indexes: &[usize],
+    decoder_map: &BTreeMap<usize, Arc<SqlServerRowDecoder>>,
     commit_lsn: Lsn,
-    rewinds: &BTreeMap<u64, (Lsn, Lsn)>,
-    data_output: &StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
-    data_cap_set: &CapabilitySet<Lsn>,
+    rewinds: &BTreeMap<usize, (Lsn, Lsn)>,
+    data_outputs: &mut DataOutputs,
+    data_cap_sets: &[CapabilitySet<Lsn>],
     metrics: &SqlServerSourceMetrics,
     deferred_updates: &mut BTreeMap<(Lsn, Lsn), CdcOperation>,
 ) -> Result<(), TransientError> {
@@ -669,10 +686,11 @@ async fn handle_data_event(
         };
 
         // Try to decode the input row for each output.
-        for partition_idx in partition_indexes {
-            let decoder = decoder_map.get(partition_idx).unwrap();
+        for &output_index in output_indexes {
+            let decoder = decoder_map.get(&output_index).unwrap();
+            let cap = &data_cap_sets[output_index][0];
 
-            let rewind = rewinds.get(partition_idx);
+            let rewind = rewinds.get(&output_index);
             // We must continue here to avoid decoding and emitting. We don't have to compare with
             // snapshot_lsn as we are guaranteed that initial_lsn <= snapshot_lsn.
             if rewind.is_some_and(|(initial_lsn, _)| commit_lsn <= *initial_lsn) {
@@ -688,21 +706,11 @@ async fn handle_data_event(
 
                 let update_old = decode(decoder, old_row, &mut mz_row, &arena, Some(new_row));
                 if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
-                    let update = (
-                        (*partition_idx, update_old.clone()),
-                        Lsn::minimum(),
-                        Diff::ONE,
-                    );
-                    let size = update.fuel_size();
-                    data_output
-                        .give_fueled(&data_cap_set[0], update, size)
-                        .await;
+                    let update = (update_old.clone(), Lsn::minimum(), Diff::ONE);
+                    data_outputs.give(output_index, cap, update).await;
                 }
-                let update = ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE);
-                let size = update.fuel_size();
-                data_output
-                    .give_fueled(&data_cap_set[0], update, size)
-                    .await;
+                let update = (update_old, commit_lsn, Diff::MINUS_ONE);
+                data_outputs.give(output_index, cap, update).await;
 
                 (
                     decode(decoder, new_row, &mut mz_row, &arena, None),
@@ -716,24 +724,15 @@ async fn handle_data_event(
             };
             assert_ne!(Diff::ZERO, diff);
             if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
-                let update = ((*partition_idx, message.clone()), Lsn::minimum(), -diff);
-                let size = update.fuel_size();
-                data_output
-                    .give_fueled(&data_cap_set[0], update, size)
-                    .await;
+                let update = (message.clone(), Lsn::minimum(), -diff);
+                data_outputs.give(output_index, cap, update).await;
             }
-            let update = ((*partition_idx, message), commit_lsn, diff);
-            let size = update.fuel_size();
-            data_output
-                .give_fueled(&data_cap_set[0], update, size)
-                .await;
+            let update = (message, commit_lsn, diff);
+            data_outputs.give(output_index, cap, update).await;
         }
     }
     Ok(())
 }
-
-type StackedAsyncOutputHandle<T, D> =
-    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 /// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)
 /// to a [`Row`]. This centralizes the decode and mapping to result.
@@ -765,15 +764,15 @@ fn decode(
 /// Helper method to return a "definite" error upstream.
 async fn return_definite_error(
     err: DefiniteError,
-    outputs: impl Iterator<Item = u64>,
-    data_handle: StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
-    data_capset: &CapabilitySet<Lsn>,
-    errs_handle: AsyncOutputHandle<Lsn, CapacityContainerBuilder<Vec<ReplicationError>>>,
+    outputs: impl Iterator<Item = usize>,
+    data_outputs: &mut DataOutputs,
+    data_cap_sets: &[CapabilitySet<Lsn>],
+    errs_handle: &AsyncOutputHandle<Lsn, CapacityContainerBuilder<Vec<ReplicationError>>>,
     errs_capset: &CapabilitySet<Lsn>,
 ) {
-    for output_idx in outputs {
+    for output_index in outputs {
         let update = (
-            (output_idx, Err(err.clone().into())),
+            Err(err.clone().into()),
             // Select an LSN that should not conflict with a previously observed LSN.  Ideally
             // we could identify the LSN that resulted in the definite error so that all replicas
             // would emit the same updates for the same times.
@@ -784,8 +783,9 @@ async fn return_definite_error(
             },
             Diff::ONE,
         );
-        let size = update.fuel_size();
-        data_handle.give_fueled(&data_capset[0], update, size).await;
+        data_outputs
+            .give(output_index, &data_cap_sets[output_index][0], update)
+            .await;
     }
     errs_handle.give(
         &errs_capset[0],
