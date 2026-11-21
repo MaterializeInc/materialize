@@ -276,7 +276,9 @@ impl ArrowBuilder {
     ///
     /// This can exceed [`Self::row_size_bytes`] by orders of magnitude. A null takes one byte
     /// in a `Row`, but a value slot in every child of a null struct.
-    // NOTE: `&mut self` because `MapBuilder` only hands out its child builders mutably.
+    ///
+    /// Meant to be called after every row. The values of lists and maps that have not grown
+    /// since the last call are not visited again.
     pub fn buffered_bytes(&mut self) -> usize {
         self.columns
             .iter_mut()
@@ -740,6 +742,9 @@ struct ArrowColumn {
     data_type: DataType,
     extension_type_name: String,
     inner: ColBuilder,
+    /// The length of `inner` at the last call to [`Self::values_buffered_bytes`], and its
+    /// result.
+    last_buffered_bytes: Option<(usize, usize)>,
 }
 
 impl From<&ArrowColumn> for Field {
@@ -801,7 +806,24 @@ impl ArrowColumn {
             nullable,
             data_type,
             extension_type_name,
+            last_buffered_bytes: None,
         })
+    }
+
+    /// Like [`ColBuilder::buffered_bytes`], for a column that holds the values of a list or
+    /// map. Unlike other columns, such a column does not grow with every row.
+    fn values_buffered_bytes(&mut self) -> usize {
+        let len = self.len();
+        match self.last_buffered_bytes {
+            // A builder's buffers only grow when its length does, so a column of unchanged
+            // length needs no visit of its children.
+            Some((last_len, bytes)) if last_len == len => bytes,
+            _ => {
+                let bytes = self.inner.buffered_bytes();
+                self.last_buffered_bytes = Some((len, bytes));
+                bytes
+            }
+        }
     }
 }
 
@@ -881,13 +903,13 @@ macro_rules! make_col_builder {
                     )*
                     ColBuilder::ListBuilder(builder) => {
                         size_of_val(builder.offsets_slice())
-                            + builder.values().inner.buffered_bytes()
+                            + builder.values().values_buffered_bytes()
                     }
                     ColBuilder::MapBuilder(builder) => {
                         // `MapBuilder` does not expose its offsets, of which it has one per map.
                         let offsets = builder.len() * size_of::<i32>();
                         let (keys, values) = builder.entries();
-                        offsets + keys.buffered_bytes() + values.inner.buffered_bytes()
+                        offsets + keys.buffered_bytes() + values.values_buffered_bytes()
                     }
                     ColBuilder::StructBuilder(builder) => (0..builder.num_fields())
                         .map(|i| {
@@ -915,6 +937,8 @@ macro_rules! make_col_builder {
                 }
             }
             fn finish(&mut self) -> ArrayRef {
+                // Finishing resets the builder, which can then reach the same length again.
+                self.last_buffered_bytes = None;
                 match &mut self.inner {
                     $(
                         ColBuilder::$x(builder) => Arc::new(builder.finish()),
