@@ -9,6 +9,9 @@
 
 import { Box, Tab, TabList, TabPanel, TabPanels, Tabs } from "@chakra-ui/react";
 import React from "react";
+import { useSearchParams } from "react-router-dom";
+
+import { MAINTAINED_OBJECT_TAB_PARAM } from "~/platform/routeHelpers";
 
 import { ObjectDetailsCard } from "./ObjectDetailsCard";
 import { ObjectFreshness } from "./ObjectFreshness";
@@ -26,13 +29,18 @@ export const ObjectDetailPanel = ({
   lookbackMinutes,
   setLookbackMinutes,
 }: ObjectDetailPanelProps) => {
+  const [searchParams] = useSearchParams();
+  const tabIndex =
+    searchParams.get(MAINTAINED_OBJECT_TAB_PARAM) === "freshness" ? 1 : 0;
   return (
     <Box p={4}>
       <ObjectDetailsCard
         item={item}
         freshnessLookbackMinutes={lookbackMinutes}
       />
-      <Tabs mt={6}>
+      {/* NOTE: `defaultIndex` is read on mount only, so the param picks the
+          tab a link opens on without pinning it there. */}
+      <Tabs mt={6} defaultIndex={tabIndex}>
         <TabList mb={6}>
           <Tab>Definition</Tab>
           <Tab>Freshness</Tab>

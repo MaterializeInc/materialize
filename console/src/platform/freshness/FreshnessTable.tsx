@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
+import { Box, Button, Text, useTheme, VStack } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
@@ -24,7 +24,10 @@ import {
   HYDRATION_LABELS,
   STATUS_COLOR_SCHEMES,
 } from "~/platform/maintained-objects/filters";
-import { objectExplorerObjectPath } from "~/platform/routeHelpers";
+import {
+  absoluteMaintainedObjectFreshnessPath,
+  objectExplorerObjectPath,
+} from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { kebabToTitleCase } from "~/util";
@@ -191,6 +194,25 @@ const PlacementCell = ({
   );
 };
 
+/** Opens the object's critical path, on Monitoring's Objects page. */
+const CriticalPathCell = ({ row }: { row: FreshnessRow }) => {
+  const regionSlug = useRegionSlug();
+  // Null only for a line whose object is no longer in the list, which the
+  // Objects page has no drawer for.
+  if (row.schemaName === null) return null;
+  return (
+    <Button
+      as={RouterLink}
+      to={absoluteMaintainedObjectFreshnessPath(regionSlug, row.key)}
+      size="sm"
+      variant="secondary"
+      aria-label={`Critical Path for ${row.objectName}`}
+    >
+      Critical Path
+    </Button>
+  );
+};
+
 const columnHelper = createColumnHelper<FreshnessRow>();
 
 const buildColumns = (scope: FreshnessScope, placementPathname?: string) => [
@@ -266,6 +288,11 @@ const buildColumns = (scope: FreshnessScope, placementPathname?: string) => [
     id: "hydration",
     header: "Hydration",
     cell: (info) => <HydrationCell row={info.row.original} />,
+  }),
+  columnHelper.display({
+    id: "criticalPath",
+    header: () => <Box aria-label="Critical path" />,
+    cell: (info) => <CriticalPathCell row={info.row.original} />,
   }),
 ];
 

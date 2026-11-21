@@ -69,6 +69,17 @@ const rows: FreshnessRow[] = [
 ];
 
 describe("FreshnessTable", () => {
+  it("links each object to its critical path on the Objects page", async () => {
+    await renderComponent(<FreshnessTable rows={rows} scope="cluster" />);
+
+    expect(
+      await screen.findByRole("link", { name: "Critical Path for orders_mv" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/maintained-objects\/u1\?tab=freshness$/),
+    );
+  });
+
   it("lists every object, over threshold or not", async () => {
     await renderComponent(<FreshnessTable rows={rows} scope="cluster" />);
 
@@ -288,7 +299,11 @@ describe("FreshnessTable placement column", () => {
     ]);
 
     const row = (await screen.findByText("orders")).closest("tr");
-    expect(within(row!).getAllByRole("link")).toHaveLength(1);
+    expect(
+      within(row!)
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("aria-label") ?? link.textContent),
+    ).toEqual(["orders", "Critical Path for orders"]);
     expect(within(row!).getAllByText("—").length).toBeGreaterThan(0);
   });
 });
