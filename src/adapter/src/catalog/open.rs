@@ -1060,6 +1060,7 @@ fn add_new_remove_old_builtin_clusters_migration(
                     }),
                     workload_class: None,
                     query_policy: None,
+                    query_routing: mz_controller_types::QueryRouting::Broadcast,
                 },
                 &HashSet::new(),
             )?;

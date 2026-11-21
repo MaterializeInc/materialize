@@ -37,7 +37,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, QueryRouting, ReplicaId};
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_persist_types::ShardId;
@@ -504,6 +504,7 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
     pub workload_class: Option<String>,
     pub query_policy: Option<QueryPolicyId>,
+    pub query_routing: QueryRouting,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]

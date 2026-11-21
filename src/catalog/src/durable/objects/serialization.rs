@@ -9,6 +9,7 @@
 
 //! This module is responsible for serializing catalog objects into Protobuf.
 
+use mz_controller_types::QueryRouting;
 use mz_ore::cast::CastFrom;
 use mz_proto::TryFromProtoError;
 use mz_repr::ColumnName;
@@ -67,6 +68,7 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
             variant: self.variant.into_proto(),
             workload_class: self.workload_class.clone(),
             query_policy: self.query_policy.into_proto(),
+            query_routing: self.query_routing.into_proto(),
         }
     }
 
@@ -75,6 +77,23 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
             variant: proto.variant.into_rust()?,
             workload_class: proto.workload_class,
             query_policy: proto.query_policy.into_rust()?,
+            query_routing: proto.query_routing.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::QueryRouting> for QueryRouting {
+    fn into_proto(&self) -> proto::QueryRouting {
+        match self {
+            QueryRouting::Broadcast => proto::QueryRouting::Broadcast,
+            QueryRouting::Balanced => proto::QueryRouting::Balanced,
+        }
+    }
+
+    fn from_proto(proto: proto::QueryRouting) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::QueryRouting::Broadcast => QueryRouting::Broadcast,
+            proto::QueryRouting::Balanced => QueryRouting::Balanced,
         })
     }
 }

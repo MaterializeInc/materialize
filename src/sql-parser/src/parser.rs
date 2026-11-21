@@ -4724,10 +4724,11 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(CLASS)?;
                 ClusterOptionName::WorkloadClass
             }
-            QUERY => {
-                self.expect_keyword(POLICY)?;
-                ClusterOptionName::QueryPolicy
-            }
+            QUERY => match self.expect_one_of_keywords(&[POLICY, ROUTING])? {
+                POLICY => ClusterOptionName::QueryPolicy,
+                ROUTING => ClusterOptionName::QueryRouting,
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         };
         Ok(name)

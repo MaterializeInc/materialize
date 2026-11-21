@@ -36,7 +36,7 @@ use enum_kinds::EnumKind;
 use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, QueryRouting, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -588,6 +588,7 @@ pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
+    pub query_routing: QueryRouting,
     pub if_not_exists: bool,
     pub query_policy: Option<QueryPolicyId>,
 }
@@ -2246,6 +2247,7 @@ pub struct PlanClusterOption {
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
+    pub query_routing: AlterOptionParameter<QueryRouting>,
     /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
     /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
     pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
@@ -2265,6 +2267,7 @@ impl Default for PlanClusterOption {
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
+            query_routing: AlterOptionParameter::Unchanged,
             auto_scaling_strategy: AlterOptionParameter::Unchanged,
             query_policy: AlterOptionParameter::Unchanged,
         }

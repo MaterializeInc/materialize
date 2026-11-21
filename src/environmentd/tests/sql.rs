@@ -5095,3 +5095,173 @@ fn test_cancel_select_during_optimization() {
     let rows = client.query("SELECT a + 1 FROM t", &[]).unwrap();
     assert_eq!(rows.len(), 1, "the session works after the cancel");
 }
+
+/// Creates an unmanaged two-replica cluster `balanced` with `QUERY ROUTING = BALANCED` and a
+/// one-row table `t`, and returns the current `mz_now()`.
+#[allow(clippy::disallowed_methods)]
+fn setup_balanced_cluster(client: &mut postgres::Client) -> u64 {
+    for statement in [
+        "CREATE CLUSTER balanced (
+             REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')),
+             QUERY ROUTING = BALANCED
+         )",
+        "CREATE TABLE t (a int)",
+        "INSERT INTO t VALUES (1)",
+    ] {
+        client.batch_execute(statement).unwrap();
+    }
+    mz_now(client)
+}
+
+#[allow(clippy::disallowed_methods)]
+fn mz_now(client: &mut postgres::Client) -> u64 {
+    let ts: String = client
+        .query_one("SELECT mz_now()::text", &[])
+        .unwrap()
+        .get(0);
+    ts.parse().unwrap()
+}
+
+/// Waits until every replica of `balanced` reports write frontiers past `ts` for all its
+/// collections, including its introspection logs.
+#[allow(clippy::disallowed_methods)]
+fn await_balanced_replica_frontiers(client: &mut postgres::Client, ts: u64) {
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let caught_up: bool = client
+                .query_one(
+                    "SELECT bool_and(f.write_frontier > $1::text::mz_timestamp)
+                     FROM mz_cluster_replicas r
+                     JOIN mz_cluster_replica_frontiers f ON r.id = f.replica_id
+                     JOIN mz_clusters c ON r.cluster_id = c.id
+                     WHERE c.name = 'balanced'",
+                    &[&ts.to_string()],
+                )
+                .unwrap()
+                .get(0);
+            if caught_up { Ok(()) } else { Err(()) }
+        })
+        .expect("replicas of `balanced` did not catch up");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_balanced_query_routing_sends_each_peek_to_one_replica() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_cluster_query_routing".into(), "true".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    setup_balanced_cluster(&mut client);
+
+    // `t` has no index, so each read is a persist fast-path peek, which the replica logs with
+    // `type = 'persist'`. The introspection queries below are index peeks, so they never add to
+    // the counts they read. No replica hosts `t`, so every read takes the last tier of replica
+    // choice and round-robin alternates strictly between the two replicas.
+    const READS: i64 = 10;
+    client.batch_execute("SET cluster = balanced").unwrap();
+    for _ in 0..READS {
+        let a: i32 = client
+            .query_one("SELECT a FROM t LIMIT 1", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(a, 1);
+    }
+    client.batch_execute("SET cluster = quickstart").unwrap();
+
+    // Introspection logs stamp events with the end of the logging interval they fall in, which
+    // defaults to 1 s, so wait past one more interval before reading the counts.
+    let ts = mz_now(&mut client) + 2_000;
+    await_balanced_replica_frontiers(&mut client, ts);
+
+    client.batch_execute("SET cluster = balanced").unwrap();
+    let mut counts = Vec::new();
+    for replica in ["r1", "r2"] {
+        client
+            .batch_execute(&format!("SET cluster_replica = {replica}"))
+            .unwrap();
+        let count: i64 = client
+            .query_one(
+                "SELECT count(*) FROM mz_introspection.mz_peek_durations_histogram_raw
+                 WHERE type = 'persist'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        counts.push(count);
+    }
+    // Broadcast routing would record every read on both replicas.
+    assert_eq!(
+        counts,
+        vec![READS / 2, READS / 2],
+        "persist peeks recorded on r1 and r2"
+    );
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_balanced_query_routing_moves_peeks_off_dropped_replica() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_cluster_query_routing".into(), "true".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let now = setup_balanced_cluster(&mut client);
+    client
+        .batch_execute("CREATE INDEX t_idx IN CLUSTER balanced ON t (a)")
+        .unwrap();
+    let index_id: String = client
+        .query_one("SELECT id FROM mz_indexes WHERE name = 't_idx'", &[])
+        .unwrap()
+        .get(0);
+
+    // A fast-path peek at a future timestamp stays pending on its replica until the index
+    // frontier passes that timestamp, without blocking the replica's workers.
+    let read_at = now + 15_000;
+    let reader = {
+        let mut reader = server.connect(postgres::NoTls).unwrap();
+        thread::spawn(move || {
+            reader.batch_execute("SET cluster = balanced").unwrap();
+            reader
+                .query_one(&format!("SELECT a FROM t WHERE a = 1 AS OF {read_at}"), &[])
+                .map(|row| row.get::<_, i32>(0))
+        })
+    };
+
+    // Find the replica the peek went to.
+    client.batch_execute("SET cluster = balanced").unwrap();
+    let holder = Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            for replica in ["r1", "r2"] {
+                client
+                    .batch_execute(&format!("SET cluster_replica = {replica}"))
+                    .unwrap();
+                let active: i64 = client
+                    .query_one(
+                        "SELECT count(*) FROM mz_introspection.mz_active_peeks
+                         WHERE object_id = $1",
+                        &[&index_id],
+                    )
+                    .unwrap()
+                    .get(0);
+                if active > 0 {
+                    return Ok(replica);
+                }
+            }
+            Err(())
+        })
+        .expect("the peek did not show up as active on any replica");
+    client.batch_execute("RESET cluster_replica").unwrap();
+    client.batch_execute("SET cluster = quickstart").unwrap();
+
+    client
+        .batch_execute(&format!("DROP CLUSTER REPLICA balanced.{holder}"))
+        .unwrap();
+
+    let result = reader.join().unwrap();
+    assert_eq!(
+        result.map_err(|e| e.to_string_with_causes()),
+        Ok(1),
+        "the read in flight on the dropped replica {holder}"
+    );
+}

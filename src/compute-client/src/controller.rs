@@ -45,6 +45,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
+use mz_controller_types::QueryRouting;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
@@ -636,6 +637,17 @@ impl ComputeController {
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
 
+        Ok(())
+    }
+
+    /// Sets how the instance spreads untargeted peeks and transient dataflows across replicas.
+    pub fn set_instance_query_routing(
+        &mut self,
+        id: ComputeInstanceId,
+        query_routing: QueryRouting,
+    ) -> Result<(), InstanceMissing> {
+        self.instance(id)?
+            .call(move |i| i.set_query_routing(query_routing));
         Ok(())
     }
 
