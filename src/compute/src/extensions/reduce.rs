@@ -16,10 +16,11 @@
 use columnation::Columnation;
 use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchVal, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace, TraceReader};
+use mz_timely_util::arrange_agent::{TraceAgent, reduce_trace_with};
 use mz_timely_util::columnation::ColumnationStack;
 use timely::Container;
 use timely::container::PushInto;
@@ -125,10 +126,34 @@ where
                 }
             };
 
-        // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement
-        // size logging.
+        // As differential's `Arranged::reduce_abelian`, which calls `reduce_core` with this
+        // wrapped logic, and `reduce_core` calls `reduce_trace`.
+        let mut logic = logic;
+        let abelian_logic =
+            move |key: KC::ReadItem<'_>,
+                  input: &[(BatchVal<'_, T1>, BatchDiff<T1>)],
+                  output: &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>,
+                  change: &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>| {
+                if !input.is_empty() {
+                    logic(key, input, change);
+                }
+                change.extend(output.drain(..).map(|(x, mut d)| {
+                    d.negate();
+                    (x, d)
+                }));
+                differential_dataflow::consolidation::consolidate(change);
+            };
+
+        // Allow access to `reduce_trace_with` since we're within Mz's wrapper and force
+        // arrangement size logging.
         #[allow(clippy::disallowed_methods)]
-        Arranged::<_>::reduce_abelian::<_, Bu, T2, KC, _>(self, name, logic, push_closure)
-            .log_arrangement_size()
+        reduce_trace_with::<_, Bu, _, KC, _, _, _>(
+            self,
+            name,
+            abelian_logic,
+            push_closure,
+            TraceAgent::<T2>::factory(),
+        )
+        .log_arrangement_size()
     }
 }
