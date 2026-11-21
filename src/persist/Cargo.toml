@@ -70,6 +70,7 @@ urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+aws-config = { workspace = true, features = ["test-util"] }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
 tempfile.workspace = true

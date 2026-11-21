@@ -22,7 +22,7 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::config::{AsyncSleep, RequestChecksumCalculation, Sleep};
+use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
@@ -264,12 +264,6 @@ impl S3BlobConfig {
                 .read_timeout(READ_TIMEOUT_MARKER)
                 .build(),
         );
-        // S3 rejects uploads to buckets with Object Lock retention unless they
-        // carry a checksum, so don't rely on the SDK default for it. The env var
-        // stays an escape hatch for S3-compatible stores that reject checksums.
-        if std::env::var_os("AWS_REQUEST_CHECKSUM_CALCULATION").is_none() {
-            loader = loader.request_checksum_calculation(RequestChecksumCalculation::WhenSupported);
-        }
 
         let client = mz_aws_util::s3::new_client(&loader.load().await);
         Ok(S3BlobConfig {
@@ -1340,6 +1334,28 @@ mod tests {
         );
         assert_eq!(remaining_ranges(8 * mib, 8 * mib), Vec::<Range<u64>>::new());
         assert_eq!(remaining_ranges(0, 10), vec![0..10]);
+    }
+
+    /// S3 rejects uploads to buckets with Object Lock retention unless they carry
+    /// a checksum. Persist relies on the SDK sending one when neither
+    /// `AWS_REQUEST_CHECKSUM_CALCULATION` nor the profile says otherwise.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    async fn s3_upload_checksums_on_by_default() {
+        use aws_sdk_s3::config::RequestChecksumCalculation;
+        use aws_types::os_shim_internal::{Env, Fs};
+
+        let sdk_config = mz_aws_util::defaults()
+            .env(Env::from_slice(&[]))
+            .fs(Fs::from_slice(&[]))
+            .region(Region::new("us-east-1"))
+            .load()
+            .await;
+        let client = mz_aws_util::s3::new_client(&sdk_config);
+        assert_eq!(
+            client.config().request_checksum_calculation(),
+            Some(&RequestChecksumCalculation::WhenSupported),
+        );
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
