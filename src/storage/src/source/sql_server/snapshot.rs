@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
@@ -301,6 +301,8 @@ pub(crate) fn render<'scope>(
                             );
                         });
 
+                sql_server_snapshot_failpoint_pause(&table.name).await;
+
                 // TODO(sql_server3): filter columns to only select columns required for Source.
                 let mut snapshot = std::pin::pin!(snapshot_txn.read_table(table));
                 let mut snapshot_staged = 0;
@@ -379,4 +381,28 @@ pub(crate) fn render<'scope>(
         definite_errors.concat(transient_errors.map(ReplicationError::Transient)),
         button.press_on_drop(),
     )
+}
+
+/// Test-only pause point, run before the operator reads any rows of `table`. Configuring the
+/// failpoint as `sql_server_snapshot_pause=return(<table name>)` holds the snapshot of that table
+/// until the failpoint is deactivated. `return(<table name>:<millis>)` holds it for that many
+/// milliseconds instead. The snapshot then completes in the same dataflow incarnation.
+async fn sql_server_snapshot_failpoint_pause(table: &str) {
+    let held_since = Instant::now();
+    loop {
+        let held = fail::eval("sql_server_snapshot_pause", |payload| {
+            let (paused_table, millis) = payload
+                .as_deref()
+                .map(|p| p.split_once(':').unwrap_or((p, "")))
+                .unwrap_or_default();
+            paused_table == table
+                && millis.parse::<u64>().map_or(true, |millis| {
+                    held_since.elapsed() < Duration::from_millis(millis)
+                })
+        });
+        match held {
+            Some(true) => tokio::time::sleep(Duration::from_millis(100)).await,
+            _ => break,
+        }
+    }
 }
