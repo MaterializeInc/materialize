@@ -198,13 +198,13 @@ offsets.topic.replication.factor are set to 1 on the broker"]}
 Common causes are the broker or Iceberg catalog becoming unreachable, a Kafka
 topic being deleted out from under the sink, or an Iceberg table's schema
 changing in a way the sink cannot reconcile with what it is writing.
-Materialize restarts the sink's dataflow to retry, so `stalled` alternates
-with `starting` and `running` in
+For most causes, Materialize restarts the sink's dataflow to retry, so
+`stalled` alternates with `starting` and `running` in
 [`mz_sink_status_history`](#reviewing-the-full-history) as it does. If the
 underlying cause has not cleared, the retry fails and the sink stalls again.
-A cause that will not clear on its own, such as an incompatible schema change
-on the Iceberg side, needs to be fixed in the external system before the sink
-can make progress again.
+
+When retrying is not expected to help the sink recover, Materialize may not
+retry, and the sink stays `stalled`.
 
 For Iceberg sinks specifically, an unreachable or unhealthy catalog is a
 common stall cause in practice. Iceberg tables need periodic maintenance
