@@ -183,6 +183,8 @@ class Op(Generic[T]):
     classify: Callable[[BaseException], sql.Classified] = classify
     """Widens `classify` for operations that may see more errors, such as
     reads `AS OF` an explicit timestamp."""
+    ddl: bool = False
+    """Whether it changes the catalog, see `Pool.on_ddl`."""
 
 
 @dataclass(frozen=True)
@@ -270,6 +272,7 @@ class Session:
         """How many connections this session opened, for exploration assertions."""
         self.cancels = 0
         """How many cancel requests `cancel` sent."""
+        self.before_ddl: Callable[[str], None] | None = None
         threading.Thread(target=self._loop, name=f"session-{name}", daemon=True).start()
 
     def submit(self, job: _Job) -> None:
@@ -336,6 +339,8 @@ class Session:
                 )
             return Outcome(None, classified, start, time.monotonic(), self._ident())
         try:
+            if op.ddl and self.before_ddl is not None:
+                self.before_ddl(op.name)
             start = time.monotonic()
             value = op.execute(conn)
             return Outcome(value, None, start, time.monotonic(), self._ident())
@@ -435,6 +440,13 @@ class Pool:
         job = _Job(op)
         session.submit(job)
         return Status.DONE if job.done.wait(wait) else Status.PENDING
+
+    def on_ddl(self, hook: Callable[[str], None]) -> None:
+        """Call `hook` with the operation's name on the session's thread,
+        right before the statements of an operation that changes the catalog
+        are sent."""
+        for session in self.sessions:
+            session.before_ddl = hook
 
     def busy(self) -> list[tuple[str, float]]:
         """Each busy session and how long its current operation has run."""

@@ -11,8 +11,9 @@
 
 Antithesis faults are untargeted. The driver adds the ones that need a role
 or a moment: deleting the active environmentd, a clusterd or an orchestratord
-pod; changing a cluster's replicas; and 0dt rollouts, followed one step per
-rule, which may kill a pod in a chosen rollout phase.
+pod, also right after a DDL operation is sent; changing a cluster's replicas;
+and 0dt rollouts, followed one step per rule, which may kill a pod in a chosen
+rollout phase.
 
 Each kind is paced by a cooldown drawn per timeline, not by rule weight: a
 rule that swarm testing leaves as the only enabled one would otherwise
@@ -65,6 +66,18 @@ SETTLED_PHASES = ("Applied", "WaitingForApproval")
 """Phases that end a request once the status records it as completed."""
 OBSERVE_SECONDS = 10.0
 ZERO_REPLICAS_SECONDS = 20.0
+DDL_KILL_DELAYS = (0.0, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0)
+"""Seconds from sending a DDL operation to deleting the pod. Locally a DDL
+statement takes 0.1 to 0.2 s, and the work that follows its catalog commit
+starts about 0.1 s in."""
+
+
+@dataclass(frozen=True)
+class ArmedKill:
+    target: str
+    grace: int | None
+    delay: float
+    pick: int
 
 
 @dataclass(frozen=True)
@@ -180,6 +193,7 @@ class Disruptions:
         self.patch_probability = 0.0
         self.claims = Claims()
         self._observed = float("-inf")
+        self._armed: ArmedKill | None = None
 
     def configure(self, d: Draw) -> None:
         self.cooldown = d.choice((15.0, 60.0, 180.0))
@@ -248,7 +262,7 @@ class Disruptions:
 
         return self.ctx.sessions.call(
             d.integer(0, len(self.ctx.sessions.sessions) - 1),
-            Op("alter replication factor", execute, complete),
+            Op("alter replication factor", execute, complete, ddl=True),
             RULE_WAIT_SECONDS,
         )
 
@@ -296,7 +310,7 @@ class Disruptions:
 
         return self.ctx.sessions.call(
             d.integer(0, len(self.ctx.sessions.sessions) - 1),
-            Op("alter cluster size", execute, complete),
+            Op("alter cluster size", execute, complete, ddl=True),
             RULE_WAIT_SECONDS,
         )
 
@@ -333,6 +347,64 @@ class Disruptions:
                 )
 
         return self._kube("kill pod", action)
+
+    def kill_after_ddl(self, d: Draw) -> Status:
+        """Arm a pod deletion for right after the next DDL operation is sent.
+
+        A catalog change is followed by work in other durable stores, such as
+        registering a table's new schema with its shard. A process that dies
+        in between leaves the two apart.
+        """
+        if self.kube is None or not self._due("kill_after_ddl"):
+            return Status.NOT_SENT
+        armed = ArmedKill(
+            target=d.choice(
+                ("environmentd", "environmentd", "environmentd", "clusterd")
+            ),
+            grace=d.choice(GRACE_MENU),
+            delay=d.choice(DDL_KILL_DELAYS),
+            pick=d.integer(0, 7),
+        )
+        with self._lock:
+            self._armed = armed
+        return Status.DONE
+
+    def ddl_sent(self, name: str) -> None:
+        """Runs on a session's thread, right before it sends a DDL operation."""
+        kube = self.kube
+        with self._lock:
+            armed, self._armed = self._armed, None
+        if armed is None or kube is None:
+            return
+
+        def run() -> None:
+            time.sleep(armed.delay)
+            if self.ctx.quiesced.is_set():
+                return
+            try:
+                pods = kube.pods(armed.target)
+                if not pods:
+                    return
+                pod = pods[armed.pick % len(pods)]
+                kube.delete(pod, armed.grace)
+            except Exception as e:
+                if _is_api_error(e):
+                    log(f"kill after ddl: {type(e).__name__}: {e}")
+                else:
+                    report_driver_error("kill after ddl", e)
+                return
+            log(
+                f"deleted {armed.target} pod {pod.metadata.name} {armed.delay}s"
+                f" after {name} was sent (grace {armed.grace})"
+            )
+            reachable(
+                "driver: a pod was deleted right after a DDL operation was sent",
+                {"op": name, "target": armed.target, "delay": armed.delay},
+            )
+
+        # Its own thread: the shared Kubernetes thread may be busy with a
+        # rollout step, and the deletion has to land within the delay.
+        threading.Thread(target=run, name="kill-after-ddl", daemon=True).start()
 
     def start_rollout(self, d: Draw) -> Status:
         kube = self.kube

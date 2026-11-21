@@ -470,7 +470,7 @@ class BlueGreen:
                 # the next one drops the staging names and starts over.
                 self.staging = "new" if outcome.ok else "dirty"
 
-        return Op("blue/green stage", execute, complete)
+        return Op("blue/green stage", execute, complete, ddl=True)
 
     def _swap_op(self, wait: bool, linger: float | None) -> Op | None:
         claim = self._claim("new")
@@ -517,7 +517,7 @@ class BlueGreen:
                     {"gen": gen, "unhydrated": unhydrated[0]},
                 )
 
-        return Op("blue/green swap", execute, complete, CATALOG_SETTINGS)
+        return Op("blue/green swap", execute, complete, CATALOG_SETTINGS, ddl=True)
 
     def _cleanup_op(self, cluster_first: bool) -> Op | None:
         if self._claim("old") is None:
@@ -553,7 +553,7 @@ class BlueGreen:
                 {},
             )
 
-        return Op("blue/green cleanup", execute, complete)
+        return Op("blue/green cleanup", execute, complete, ddl=True)
 
     def _resolve_op(self, done: list[bool]) -> Op | None:
         with self._lock:

@@ -368,7 +368,7 @@ class Counters:
 
         return self.ctx.sessions.call(
             self._session(d),
-            Op("counters rotate", execute, complete, SETTINGS),
+            Op("counters rotate", execute, complete, SETTINGS, ddl=True),
             RULE_WAIT_SECONDS,
         )
 

@@ -121,6 +121,7 @@ class Components:
         self.bluegreen = bluegreen.BlueGreen(self.ctx)
         self.flags = flags.Flags(self.ctx)
         self.disruptions = Disruptions(self.ctx)
+        self.ctx.sessions.on_ddl(self.disruptions.ddl_sent)
         kube = self.disruptions.kube
         if kube is not None:
             memory.start(kube.core)
@@ -265,7 +266,8 @@ def _eventually(c: Components) -> None:
     c.ctx.quiesced.set()
     log("eventually: stopping faults")
     stop_faults()
-    deadline = time.monotonic() + EVENTUALLY_SECONDS
+    stopped = time.monotonic()
+    deadline = stopped + EVENTUALLY_SECONDS
 
     def step(name: str, check: Callable[[], T]) -> T | None:
         # A driver bug in one check must not skip the others, nor escape
@@ -275,6 +277,8 @@ def _eventually(c: Components) -> None:
         except Exception as e:
             report_driver_error(f"eventually: {name}", e)
             return None
+        finally:
+            log(f"eventually: {name} took until {time.monotonic() - stopped:.0f}s")
 
     step("disruptions", lambda: c.disruptions.eventually(deadline))
     serving = step("health", lambda: health.eventually(c.ctx, deadline))
@@ -284,45 +288,54 @@ def _eventually(c: Components) -> None:
         "every SQL session's pending operation completes once faults stop",
         {"busy": busy},
     )
+    checks: list[tuple[str, Callable[[], object]]] = []
     if serving:
-        step("history", lambda: c.history.eventually(deadline))
-        step("counters", lambda: c.counters.eventually(deadline))
-        step("views", lambda: c.views.eventually(deadline))
-        step("atomic", lambda: c.atomic.eventually(deadline))
-        step("windows", lambda: c.windows.eventually(deadline))
-        step("aggregates", lambda: c.aggregates.eventually(deadline))
-        step("data types", lambda: c.datatypes.eventually(deadline))
-        step("copies", lambda: c.copies.eventually(deadline))
-        step("schema evolution", lambda: c.schema_evolution.eventually(deadline))
-        step("rebinding", lambda: c.rebinding.eventually(deadline))
-        step("cancel", lambda: c.cancel.eventually(deadline))
-        step("as of", lambda: c.asof.eventually(deadline))
-        step("blue/green", lambda: c.bluegreen.eventually(deadline))
-        for source in c.cdc:
-            step(source.dialect.schema, lambda: source.eventually(deadline))
-        step("webhooks", lambda: c.webhooks.eventually(deadline))
-        if c.kafka_source is not None:
-            step(
-                "kafka source",
-                lambda: c.kafka_source.eventually(deadline) if c.kafka_source else None,
+        checks += [
+            ("history", lambda: c.history.eventually(deadline)),
+            ("counters", lambda: c.counters.eventually(deadline)),
+            ("views", lambda: c.views.eventually(deadline)),
+            ("atomic", lambda: c.atomic.eventually(deadline)),
+            ("windows", lambda: c.windows.eventually(deadline)),
+            ("aggregates", lambda: c.aggregates.eventually(deadline)),
+            ("data types", lambda: c.datatypes.eventually(deadline)),
+            ("copies", lambda: c.copies.eventually(deadline)),
+            ("schema evolution", lambda: c.schema_evolution.eventually(deadline)),
+            ("rebinding", lambda: c.rebinding.eventually(deadline)),
+            ("cancel", lambda: c.cancel.eventually(deadline)),
+            ("as of", lambda: c.asof.eventually(deadline)),
+            ("blue/green", lambda: c.bluegreen.eventually(deadline)),
+            ("webhooks", lambda: c.webhooks.eventually(deadline)),
+        ]
+        checks += [
+            (source.dialect.schema, lambda source=source: source.eventually(deadline))
+            for source in c.cdc
+        ]
+        checks += [
+            (name, lambda k=k: k.eventually(deadline))
+            for name, k in (
+                ("kafka source", c.kafka_source),
+                ("kafka sink", c.kafka_sink),
+                ("kafka formats", c.kafka_formats),
             )
-        if c.kafka_sink is not None:
-            step(
-                "kafka sink",
-                lambda: c.kafka_sink.eventually(deadline) if c.kafka_sink else None,
-            )
-        if c.kafka_formats is not None:
-            step(
-                "kafka formats",
-                lambda: (
-                    c.kafka_formats.eventually(deadline) if c.kafka_formats else None
-                ),
-            )
-    if serving and (c.cdc or c.kafka_source is not None):
-        step("sources", lambda: health.sources_progress(c.ctx, deadline))
+            if k is not None
+        ]
+        if c.cdc or c.kafka_source is not None:
+            checks.append(("sources", lambda: health.sources_progress(c.ctx, deadline)))
     kube = c.disruptions.kube
     if kube is not None:
-        step("crash loops", lambda: health.no_crash_loops(kube, deadline))
+        checks.append(("crash loops", lambda: health.no_crash_loops(kube, deadline)))
+    # Side by side: a timeline seldom lives for minutes once faults stop, and
+    # one check after another left the last ones never evaluated in a 4 h run.
+    threads = [
+        threading.Thread(
+            target=step, args=(name, check), name=f"eventually-{name}", daemon=True
+        )
+        for name, check in checks
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
 
 
 class Driver(hegel.StateMachine):
@@ -637,6 +650,10 @@ class Driver(hegel.StateMachine):
     @hegel.rule()
     def kill_pod(self, tc: hegel.TestCase) -> None:
         guarded("kill pod", components().disruptions.kill_pod, tc)
+
+    @hegel.rule()
+    def kill_after_ddl(self, tc: hegel.TestCase) -> None:
+        guarded("kill after ddl", components().disruptions.kill_after_ddl, tc)
 
     @hegel.rule()
     def start_rollout(self, tc: hegel.TestCase) -> None:

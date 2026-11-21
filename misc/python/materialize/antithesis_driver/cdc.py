@@ -43,6 +43,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -60,6 +61,16 @@ CHECKPOINT_EVERY = 64
 DROP_COMMIT_RESPONSE_SHARE = 0.02
 MAX_ADDED_COLUMNS = 8
 TYPES_SHARE = 0.25
+EXPORT_BURST = 12
+EXPORT_BURST_PAUSE_SECONDS = 0.1
+"""Upstream transactions sent while an export is created, and the pause after
+each: locally the CREATE takes a few tenths of a second."""
+FRESH_READS = 6
+FRESH_READ_SECONDS = 5.0
+"""How many reads follow the creation of an export, and for how long. A
+Postgres export was read ahead of the others for about a second locally."""
+Fresh = tuple[float, list[tuple[Any, ...]]]
+"""When a read was sent, and its rows."""
 """How many of the writes and of the checks go to the `types` table."""
 SETTINGS = {"transaction_isolation": "'strict serializable'", "cluster": "quickstart"}
 INTERESTING_VALUES = ("", "NULL", "'", '"', "\\", "κλειδί", "x" * 3000)
@@ -551,6 +562,10 @@ class CdcSource:
             return self._write_types(d)
         plans = self._plans(d)
         drop_response = d.boolean(DROP_COMMIT_RESPONSE_SHARE)
+        return self.worker.run(self._txn(plans, drop_response), RULE_WAIT_SECONDS)
+
+    def _txn(self, plans: tuple[Plan, ...], drop_response: bool) -> Callable[[], None]:
+        """One upstream transaction, to run on the worker."""
         with self._lock:
             txn_id = self._next_txn
             self._next_txn += 1
@@ -609,7 +624,7 @@ class CdcSource:
                     elif phase == "commit":
                         self.unresolved = txn
 
-        return self.worker.run(action, RULE_WAIT_SECONDS)
+        return action
 
     def add_column(self, d: Draw) -> Status:
         """An upstream `ADD COLUMN`, which the exports ignore."""
@@ -635,6 +650,7 @@ class CdcSource:
         """Create a further export of one table while the source ingests, or
         drop the one there is."""
         s = self.dialect.schema
+        burst = [self._plans(d) for _ in range(EXPORT_BURST)]
         with self._lock:
             added = self.added
             if added is None:
@@ -654,11 +670,35 @@ class CdcSource:
             else:
                 return Status.NOT_SENT
         create = statement.startswith("CREATE")
+        query = self._query(added) if create else None
+        if create:
+            # Upstream commits while the export takes its snapshot are what a
+            # wrong handoff from snapshot to stream misplaces.
+            transactions = [self._txn(plans, False) for plans in burst]
 
-        def execute(conn: psycopg.Connection) -> None:
+            def writes() -> None:
+                for transaction in transactions:
+                    if self.ctx.quiesced.is_set():
+                        return
+                    transaction()
+                    time.sleep(EXPORT_BURST_PAUSE_SECONDS)
+
+            self.worker.run(writes, 0)
+
+        def execute(conn: psycopg.Connection) -> list[Fresh]:
             conn.execute(statement.encode())
+            reads: list[Fresh] = []
+            end = time.monotonic() + FRESH_READ_SECONDS
+            # Right after the CREATE returns the export's snapshot meets the
+            # stream the other exports are on, so these reads follow at once.
+            while query is not None and len(reads) < FRESH_READS:
+                start = time.monotonic()
+                if start >= end:
+                    break
+                reads.append((start, conn.execute(query.encode()).fetchall()))
+            return reads
 
-        def complete(outcome: Outcome[None]) -> None:
+        def complete(outcome: Outcome[list[Fresh]]) -> None:
             with self._lock:
                 if outcome.ok:
                     if create:
@@ -671,6 +711,8 @@ class CdcSource:
                     # Also a rejected drop, such as one a busy session never
                     # sent: the next attempt drops it if it exists.
                     added.state = "unknown"
+            for start, rows in outcome.value or []:
+                self._judge(rows, start, False, added.table)
 
         return self.ctx.sessions.call(
             d.integer(0, len(self.ctx.sessions.sessions) - 1),
@@ -680,23 +722,29 @@ class CdcSource:
                 complete,
                 SETTINGS,
                 classify=sql.classify_source_ddl,
+                ddl=True,
             ),
             RULE_WAIT_SECONDS,
         )
 
-    def _read_op(self, rtr: bool, done: list[Verdict], added: bool = True) -> Op:
+    def _query(self, added: Added | None) -> str:
         s = self.dialect.schema
         branches = [self.dialect.progress()]
         branches.append(f"SELECT 'l', txn::text, tbl::text FROM {s}.ledger")
         branches += [f"SELECT 't{j}', k::text, v FROM {s}.t{j}" for j in range(TABLES)]
+        if added is not None:
+            branches.append(f"SELECT 'x', k::text, v FROM {s}.x{added.n}")
+        return f"SELECT mz_now()::text, * FROM ({' UNION ALL '.join(branches)}) AS q"
+
+    def _read_op(self, rtr: bool, done: list[Verdict], added: bool = True) -> Op:
+        s = self.dialect.schema
         with self._lock:
             # A read of an export that is still taking its snapshot waits for
             # it, so only some checks include it.
             x = self.added if added else None
-            table = x.table if x is not None and x.state == "live" else None
-        if x is not None and table is not None:
-            branches.append(f"SELECT 'x', k::text, v FROM {s}.x{x.n}")
-        query = f"SELECT mz_now()::text, * FROM ({' UNION ALL '.join(branches)}) AS q"
+            x = x if x is not None and x.state == "live" else None
+        table = x.table if x is not None else None
+        query = self._query(x)
 
         def execute(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
             return conn.execute(query.encode()).fetchall()

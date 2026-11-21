@@ -524,7 +524,13 @@ class History:
 
         return self.ctx.sessions.call(
             d.integer(0, len(self.ctx.sessions.sessions) - 1),
-            Op("history rotate", execute, complete, {"cluster": PLAIN_CLUSTER}),
+            Op(
+                "history rotate",
+                execute,
+                complete,
+                {"cluster": PLAIN_CLUSTER},
+                ddl=True,
+            ),
             RULE_WAIT_SECONDS,
         )
 
@@ -583,7 +589,13 @@ class History:
 
         return self.ctx.sessions.call(
             session,
-            Op("history drop epoch", execute, complete, {"cluster": PLAIN_CLUSTER}),
+            Op(
+                "history drop epoch",
+                execute,
+                complete,
+                {"cluster": PLAIN_CLUSTER},
+                ddl=True,
+            ),
             RULE_WAIT_SECONDS,
         )
 

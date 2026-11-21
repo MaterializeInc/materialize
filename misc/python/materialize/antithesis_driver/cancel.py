@@ -877,7 +877,7 @@ class Cancel:
                 reachable("cancel: a DDL statement was answered as cancelled", details)
 
         return self.ctx.sessions.call(
-            index, Op("cancel ddl", execute, complete), RULE_WAIT_SECONDS
+            index, Op("cancel ddl", execute, complete, ddl=True), RULE_WAIT_SECONDS
         )
 
     def eventually(self, deadline: float) -> None:

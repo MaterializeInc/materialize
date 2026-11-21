@@ -243,6 +243,10 @@ class SchemaEvolution:
                     {"table": table.name, "column": column, "added": columns},
                 )
 
+        # Not marked as DDL: environmentd cannot boot after it dies between
+        # the catalog commit of an ADD COLUMN and the registration of the new
+        # schema with the shard (the panic of PER-59), so a pod deletion aimed at this
+        # statement ends the timeline for every other check.
         op = Op("schema evolution add column", execute, complete)
         return self._call(d, table, op)
 
@@ -439,7 +443,7 @@ class SchemaEvolution:
                 table.creating = False
                 dep.created = dep.created or outcome.ok
 
-        op = Op("schema evolution create dependent", execute, complete)
+        op = Op("schema evolution create dependent", execute, complete, ddl=True)
         return self._call(d, table, op)
 
     def _check_op(self, table: Table, done: list[bool]) -> Op:
@@ -572,7 +576,7 @@ class SchemaEvolution:
 
         return self.ctx.sessions.call(
             self._session(d),
-            Op("schema evolution rotate", execute, complete),
+            Op("schema evolution rotate", execute, complete, ddl=True),
             RULE_WAIT_SECONDS,
         )
 

@@ -76,7 +76,7 @@ checks what must hold afterwards and ends the timeline.
 | Stalls | per-command watchdog that exits the process | each SQL session on its own thread, a rule waits at most 1 s, a pending operation is checked when it completes, a watchdog cancels statements after 60 s |
 | Guarantees | `always_or_unreachable`, `findings.py` classifies | `always` |
 | Exploration | guidance events, never failing | `sometimes`, `reachable` |
-| After faults | `eventually_`/`finally_` commands, Test Composer stops faults | an eventually rule runs `$ANTITHESIS_STOP_FAULTS`, checks, exits 0 |
+| After faults | `eventually_`/`finally_` commands, Test Composer stops faults | an eventually rule runs `$ANTITHESIS_STOP_FAULTS`, runs the components' checks side by side, exits 0 |
 | setup complete | `setup.py` in the workload pod | the driver, before `/workload-active` |
 | Cataloged code | the whole library | the driver package |
 | Local loop | kind cluster plus a local scheduler | a standalone container, or kind with published release images, plus a would-fail report |
@@ -157,8 +157,9 @@ session rebinding models, `halt_proof.py`, `exit_evidence.py`,
 | Cancellation | none | new. One cancel per operation, by cancel request, `pg_cancel_backend` or `statement_timeout`, a drawn delay after the statement was sent. Batches of rows with a generation, so a statement answered as cancelled must have taken no effect, also for `CREATE` and `DROP` of indexes and materialized views, which a plain `DROP` afterwards decides |
 | Fixed timestamps, bounded `SUBSCRIBE` | none | new. Reads recorded with their `mz_now()` are repeated `AS OF` it from a table, an indexed view and a materialized view, on each replica, and replayed by `SUBSCRIBE ... AS OF ... UP TO`. The model is built from reads only |
 | Blue/green deployments | none | new. Staging schema and cluster, swapped in one transaction and dropped, under reads and subscriptions through the live names. After a swap whose COMMIT got no answer the order of generations is no longer judged, because the server can still apply it |
-| Exports added while a source ingests | none | new, part of `cdc.py`. The added export is read in the same `SELECT` as the others and judged at their ledger prefix. An export that equals its table at a later prefix has a property of its own |
+| Exports added while a source ingests | none | new, part of `cdc.py`. The export is created under a burst of upstream transactions and read at once, in the same `SELECT` as the others, and judged at their ledger prefix. An export that equals its table at a later prefix has a property of its own |
 | System parameter changes | none | new. No check of its own |
+| Pod deletion after DDL | none | new, part of `disrupt.py`. A rule arms one deletion of an environmentd or clusterd pod, which the next DDL operation triggers a drawn delay after it is sent. `ADD COLUMN` is left out while a death in that statement leaves environmentd unable to boot |
 
 ### Families still to port
 

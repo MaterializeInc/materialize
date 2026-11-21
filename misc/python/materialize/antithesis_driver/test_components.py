@@ -612,3 +612,148 @@ def test_an_added_export_is_judged_at_the_prefix_of_the_other_exports() -> None:
     assert wrong.added_mismatch is not None and wrong.added_ahead is None
     duplicate = read([(1, "a"), (1, "a")])
     assert duplicate.added_mismatch is not None and duplicate.added_ahead is None
+
+
+def test_a_ddl_operation_reports_itself_before_its_statements_are_sent() -> None:
+    class Conn:
+        closed = False
+        broken = False
+
+    session = client.Session.__new__(client.Session)
+    session.name = "s"
+    session.connections = 1
+    session._settings = {}
+    conn: Any = Conn()
+    session._conn = conn
+    order: list[str] = []
+    session.before_ddl = lambda name: order.append(f"before {name}")
+    for name, ddl in (("read", False), ("create", True)):
+        op = client.Op(
+            name, lambda c, name=name: order.append(name), lambda outcome: None, ddl=ddl
+        )
+        assert session._run(op).ok
+    assert order == ["read", "before create", "create"]
+
+
+def test_an_armed_kill_deletes_one_pod_after_the_next_ddl_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from types import SimpleNamespace
+
+    from materialize.antithesis_driver import disrupt
+    from materialize.antithesis_driver.draw import SeededDraw
+
+    class Kube:
+        def __init__(self) -> None:
+            self.deleted: list[tuple[str, int | None]] = []
+
+        def pods(self, target: str) -> list[Any]:
+            return [SimpleNamespace(metadata=SimpleNamespace(name=f"{target}-0"))]
+
+        def delete(self, pod: Any, grace: int | None) -> None:
+            self.deleted.append((pod.metadata.name, grace))
+
+    def settle() -> None:
+        for thread in threading.enumerate():
+            if thread.name == "kill-after-ddl":
+                thread.join()
+
+    monkeypatch.setattr(disrupt, "reachable", Recorder())
+    monkeypatch.setattr(disrupt, "DDL_KILL_DELAYS", (0.0,))
+    ctx: Any = SimpleNamespace(
+        config=SimpleNamespace(kubernetes=False),
+        quiesced=threading.Event(),
+        started=time.monotonic() - 1000,
+    )
+    d = disrupt.Disruptions(ctx)
+    kube = Kube()
+    d.kube = kube  # pyright: ignore[reportAttributeAccessIssue]
+
+    d.ddl_sent("create")
+    settle()
+    assert not kube.deleted
+
+    assert d.kill_after_ddl(SeededDraw(1)) is client.Status.DONE
+    # The cooldown lets the rule arm one deletion at a time.
+    assert d.kill_after_ddl(SeededDraw(1)) is client.Status.NOT_SENT
+    d.ddl_sent("create")
+    d.ddl_sent("drop")
+    settle()
+    assert len(kube.deleted) == 1
+
+    d.last.clear()
+    assert d.kill_after_ddl(SeededDraw(1)) is client.Status.DONE
+    ctx.quiesced.set()
+    d.ddl_sent("create")
+    settle()
+    assert len(kube.deleted) == 1
+
+
+def test_a_created_export_is_read_at_once_and_each_read_is_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from materialize.antithesis_driver import cdc
+    from materialize.antithesis_driver.draw import SeededDraw
+
+    judged: list[cdc.Verdict] = []
+
+    class Dialect:
+        schema = "pgsrc"
+        rtr_needs_capture = False
+
+        def reference(self, table: int) -> str:
+            return f"up.t{table}"
+
+        def progress(self) -> str:
+            return "SELECT 'p', NULL, NULL"
+
+        def parse_progress(self, rows: list[Any]) -> int | None:
+            return None
+
+        def report(self, r: cdc.Review) -> None:
+            pass
+
+        def report_added(self, v: cdc.Verdict, details: dict[str, Any]) -> None:
+            judged.append(v)
+
+    class Pool:
+        sessions = [object()]
+
+        def __init__(self) -> None:
+            self.ops: list[client.Op] = []
+
+        def call(self, index: int, op: client.Op, wait: float) -> client.Status:
+            self.ops.append(op)
+            return client.Status.PENDING
+
+    class Conn:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute(self, query: bytes) -> "Conn":
+            self.queries.append(query.decode())
+            return self
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return []
+
+    # The upstream burst needs an upstream.
+    monkeypatch.setattr(cdc, "EXPORT_BURST", 0)
+    pool = Pool()
+    dialect: Any = Dialect()
+    ctx: Any = SimpleNamespace(sessions=pool)
+    source = cdc.CdcSource(ctx, dialect)
+    source.export(SeededDraw(1))
+    (op,) = pool.ops
+    assert op.ddl
+    conn: Any = Conn()
+    reads = op.execute(conn)
+    assert conn.queries[0].startswith("CREATE TABLE pgsrc.x1 FROM SOURCE pgsrc.src")
+    assert len(conn.queries) == 1 + cdc.FRESH_READS
+    assert all("FROM pgsrc.x1" in q for q in conn.queries[1:])
+    op.complete(client.Outcome(reads, None, 1.0, 2.0, "s0.1"))
+    assert source.added is not None and source.added.state == "live"
+    assert len(judged) == cdc.FRESH_READS

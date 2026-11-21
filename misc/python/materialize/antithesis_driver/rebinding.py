@@ -295,7 +295,7 @@ class Rebinding:
 
         return self.pool.call(
             self._session(d),
-            Op("rebinding replace", execute, complete, SETTINGS),
+            Op("rebinding replace", execute, complete, SETTINGS, ddl=True),
             RULE_WAIT_SECONDS,
         )
 
