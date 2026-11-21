@@ -309,3 +309,75 @@ materialize.public.mv_empty_join:
 Target cluster: quickstart
 
 EOF
+
+# `WITH (schema)` prints the schema of the materialized view.
+statement ok
+CREATE TABLE schema_t (a int4, b text, c numeric)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_schema AS SELECT * FROM schema_t
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_schema
+----
+materialize.public.mv_schema:
+  ReadStorage materialize.public.schema_t
+
+Source materialize.public.schema_t
+
+Schema of materialize.public.mv_schema:
+  a integer,
+  b text,
+  c numeric
+
+Target cluster: quickstart
+
+EOF
+
+# Keys are not part of the printed schema.
+statement ok
+CREATE MATERIALIZED VIEW mv_schema_keyed AS SELECT a, count(*) AS n FROM schema_t GROUP BY a
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_schema_keyed
+----
+materialize.public.mv_schema_keyed:
+  Reduce group_by=[#0{a}] aggregates=[count(*)]
+    Project (#0{a})
+      ReadStorage materialize.public.schema_t
+
+Source materialize.public.schema_t
+
+Schema of materialize.public.mv_schema_keyed:
+  a integer,
+  n bigint NOT NULL
+
+Target cluster: quickstart
+
+EOF
+
+# Type modifiers are part of the printed schema.
+statement ok
+CREATE TABLE typed_t (amount numeric(10, 2), at timestamp(3), ats timestamptz(3), v varchar(5) list, n numeric(10, 2) list)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_typed AS SELECT * FROM typed_t
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_typed
+----
+materialize.public.mv_typed:
+  ReadStorage materialize.public.typed_t
+
+Source materialize.public.typed_t
+
+Schema of materialize.public.mv_typed:
+  amount numeric(39,2),
+  at timestamp(3),
+  ats timestamptz(3),
+  v varchar(5) list,
+  n numeric(39,2) list
+
+Target cluster: quickstart
+
+EOF
