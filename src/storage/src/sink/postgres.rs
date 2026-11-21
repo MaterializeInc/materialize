@@ -24,22 +24,30 @@
 //! the persist progress shard is only brought up to it afterwards.
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use bytes::Bytes;
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{Hashable, VecCollection};
+use futures::{SinkExt, StreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_pgcopy::{CopyFormatParams, encode_copy_format};
+use mz_pgrepr::TextEncodeSettings;
 use mz_postgres_util::{Client, Sql, batch_execute, query_one, query_opt, sql};
 use mz_repr::{
-    Diff, GlobalId, RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType, Timestamp,
+    Datum, Diff, GlobalId, RelationDesc, Row, SqlColumnType, SqlRelationType, SqlScalarType,
+    Timestamp,
 };
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -48,18 +56,23 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{PostgresSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{OperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Concatenate;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
+use tokio_postgres::CopyInSink;
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::render::sinks::{SinkBatchStream, SinkRender};
+use crate::render::sinks::{SinkBatchStream, SinkRender, SinkTrace};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
+
+type SinkBatch = <SinkTrace as TraceReader>::Batch;
+type SinkCursor = <SinkBatch as Navigable>::Cursor;
 
 /// One update, already encoded as a staging row in COPY BINARY format.
 ///
@@ -72,11 +85,21 @@ type EncodedRow = (Vec<u8>, Timestamp, Diff);
 const TIMESTAMP_COLUMN: &str = "mz_timestamp";
 /// Staging column holding `1` for an insertion or `-1` for a retraction.
 const DIFF_COLUMN: &str = "mz_diff";
+/// Session temporary table the writer stages each window in.
+const STAGE_TABLE: &str = "mz_sink_stage";
+
 /// Advisory lock key held while a sink creates its tables. Arbitrary, but
 /// fixed so that every Postgres sink setting up against one database takes
 /// the same lock.
 const SETUP_LOCK: i64 = 0x6d7a_7369_6e6b;
 
+/// Encoded bytes accumulated before a chunk is handed to the COPY stream.
+const COPY_CHUNK_BYTES: usize = 1 << 20;
+
+/// COPY BINARY stream header: the 11 byte signature, an i32 of flags (none
+/// set) and an i32 header extension length (zero). See the "Binary Format"
+/// section of the PostgreSQL `COPY` documentation.
+const COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0\0\0\0\0\0\0\0\0";
 impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
@@ -163,15 +186,65 @@ impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
 
 /// Encodes every update in `batches` as a staging row, on every worker.
 fn encode_collection<'scope>(
-    _name: String,
-    _batches: SinkBatchStream<'scope>,
-    _from_desc: RelationDesc,
+    name: String,
+    batches: SinkBatchStream<'scope>,
+    from_desc: RelationDesc,
 ) -> (
     StreamVec<'scope, Timestamp, EncodedRow>,
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    unimplemented!("Postgres sink encode operator")
+    let mut builder = OperatorBuilder::new(name, batches.scope());
+    let (output, encoded) = builder.new_output::<CapacityContainerBuilder<Vec<EncodedRow>>>();
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
+
+    let (button, errors) = builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+            let stage_typ = stage_relation_type(&from_desc)?;
+            // Output is given at the input's capabilities, so holding this
+            // one would only hold back the frontier the writer waits on.
+            *capset = CapabilitySet::new();
+            let mut row_buf = Row::default();
+            let mut times: Vec<(Timestamp, Diff)> = Vec::new();
+
+            while let Some(event) = input.next().await {
+                let Event::Data(cap, batches) = event else {
+                    continue;
+                };
+                for span in &batches {
+                    // A span with no updates carries no batch to encode.
+                    let Some(batch) = &span.inner else {
+                        continue;
+                    };
+                    let mut cursor = batch.cursor();
+                    while cursor.key_valid(batch) {
+                        while cursor.val_valid(batch) {
+                            times.clear();
+                            cursor.map_times(batch, |time, diff| {
+                                times.push((
+                                    SinkCursor::owned_time(time),
+                                    SinkCursor::owned_diff(diff),
+                                ));
+                            });
+                            let val = cursor.val(batch);
+                            for &(time, diff) in &times {
+                                let bytes =
+                                    encode_stage_row(&mut row_buf, val, &stage_typ, time, diff)?;
+                                output.give(&cap, (bytes, time, diff));
+                            }
+                            cursor.step_val(batch);
+                        }
+                        cursor.step_key(batch);
+                    }
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        })
+    });
+
+    (encoded, health_statuses(errors), button.press_on_drop())
 }
 
 /// Applies the encoded updates to the target database, one completed
@@ -183,7 +256,7 @@ fn write_collection<'scope>(
     connection: PostgresSinkConnection,
     storage_configuration: StorageConfiguration,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
-    _statistics: SinkStatistics,
+    statistics: SinkStatistics,
     _write_handle: impl Future<
         Output = Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>, anyhow::Error>,
     > + 'static,
@@ -196,7 +269,7 @@ fn write_collection<'scope>(
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
     let mut builder = OperatorBuilder::new(name.clone(), scope);
-    let _input = builder.new_disconnected_input(input, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(input, Exchange::new(move |_| hashed_id));
 
     let sink_version = sink.version;
     let from_desc = sink.from_desc.clone();
@@ -207,7 +280,7 @@ fn write_collection<'scope>(
                 // Leaving a frontier here would hold back what the controller
                 // sees for the whole sink.
                 write_frontier.borrow_mut().clear();
-                return Ok::<(), anyhow::Error>(());
+                return Ok(());
             }
 
             // Reject unsupported schemas before touching the target database.
@@ -233,12 +306,141 @@ fn write_collection<'scope>(
                 recorded.pretty()
             );
 
-            // TODO: Stage and apply the input.
-            unimplemented!("Postgres sink write loop")
+            // The loop below relies on `Timestamp` being totally ordered, so
+            // work with timestamps directly.
+            let Some(upper) = recorded.into_option() else {
+                write_frontier.borrow_mut().clear();
+                return Ok(());
+            };
+
+            let mut writer = Writer::new(&client, &statements, epoch).await?;
+
+            while let Some(event) = input.next().await {
+                match event {
+                    Event::Data(_cap, rows) => {
+                        for (bytes, time, diff) in rows {
+                            // Every time below `upper` is committed. An update
+                            // exactly at `upper` is the minimum pending time,
+                            // so it can go straight into the open window. That
+                            // is what streams a snapshot into the staging
+                            // table instead of buffering it in memory.
+                            match upper.cmp(&time) {
+                                Ordering::Less | Ordering::Equal => {
+                                    writer.begin(upper).await?;
+                                    writer.stage(&bytes, diff).await?;
+                                    statistics.inc_messages_staged_by(diff.unsigned_abs());
+                                    statistics.inc_bytes_staged_by(
+                                        u64::cast_from(bytes.len()) * diff.unsigned_abs(),
+                                    );
+                                }
+                                Ordering::Greater => continue,
+                            }
+                        }
+                    }
+                    Event::Progress(_progress) => {
+                        // TODO: Apply each completed window to the target table and
+                        // record the new frontier.
+                        unimplemented!("Postgres sink apply")
+                    }
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
         })
     });
 
     (health_statuses(errors), button.press_on_drop())
+}
+
+/// A claimed sink and its in-flight window on one connection.
+struct Writer<'a> {
+    client: &'a tokio_postgres::Client,
+    statements: &'a Statements,
+    /// The epoch this incarnation claimed. A window commits only while the
+    /// progress row still carries it.
+    epoch: i64,
+    copy: Option<Pin<Box<CopyInSink<Bytes>>>>,
+    buf: Vec<u8>,
+    /// Rows staged in the open window.
+    staged: u64,
+    in_transaction: bool,
+}
+
+impl<'a> Writer<'a> {
+    /// Creates the session's staging table.
+    async fn new(
+        client: &'a tokio_postgres::Client,
+        statements: &'a Statements,
+        epoch: i64,
+    ) -> Result<Self, anyhow::Error> {
+        batch_execute(client, statements.create_stage.clone()).await?;
+        Ok(Writer {
+            client,
+            statements,
+            epoch,
+            copy: None,
+            buf: Vec::new(),
+            staged: 0,
+            in_transaction: false,
+        })
+    }
+
+    /// Opens the window transaction for `[lower, ..)` unless it is open.
+    ///
+    /// Checks the progress row before any row is staged. The checks are
+    /// repeated by `commit`, so this one only fails fast.
+    async fn begin(&mut self, lower: Timestamp) -> Result<(), anyhow::Error> {
+        if self.in_transaction {
+            return Ok(());
+        }
+        batch_execute(self.client, sql!("BEGIN ISOLATION LEVEL SERIALIZABLE")).await?;
+        self.in_transaction = true;
+
+        let row = query_one(self.client, self.statements.read_progress.clone(), &[]).await?;
+        let (epoch, frontier): (i64, i64) = (row.get(0), row.get(1));
+        if epoch != self.epoch {
+            bail!(
+                "fenced off by a newer incarnation of the sink: ours={}, theirs={}",
+                self.epoch,
+                epoch
+            );
+        }
+        let lower = timestamp_to_i64(lower)?;
+        if frontier != lower {
+            bail!("sink progress changed underneath the sink: expected {lower}, found {frontier}");
+        }
+        Ok(())
+    }
+
+    /// Adds `|diff|` copies of an encoded row to the open window.
+    async fn stage(&mut self, bytes: &[u8], diff: Diff) -> Result<(), anyhow::Error> {
+        let n = diff.unsigned_abs();
+        for _ in 0..n {
+            self.buf.extend_from_slice(bytes);
+        }
+        self.staged += n;
+        if self.buf.len() >= COPY_CHUNK_BYTES {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Hands the buffered rows to the COPY in progress, opening one first if
+    /// there is none.
+    async fn flush(&mut self) -> Result<(), anyhow::Error> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        if self.copy.is_none() {
+            let mut copy = Box::pin(self.client.copy_in(self.statements.copy.as_str()).await?);
+            copy.send(Bytes::from_static(COPY_BINARY_HEADER)).await?;
+            self.copy = Some(copy);
+        }
+        let copy = self.copy.as_mut().expect("opened above");
+        copy.send(Bytes::from(std::mem::take(&mut self.buf)))
+            .await?;
+        Ok(())
+    }
 }
 
 /// Registers the sink in the progress table if needed and claims the row for
@@ -269,9 +471,14 @@ async fn claim_progress_row(
 struct Statements {
     /// Creates the progress table, the target table and the progress row.
     create_tables: Sql,
+    /// Creates the session temporary staging table.
+    create_stage: Sql,
     /// Claims the progress row for a new incarnation. Takes the sink version.
     claim_progress: Sql,
     read_version: Sql,
+    /// Reads the progress row's epoch and frontier.
+    read_progress: Sql,
+    copy: Sql,
 }
 
 impl Statements {
@@ -302,7 +509,14 @@ impl Statements {
         let schema_name = schema;
         let schema = Sql::ident(schema);
         let target = Sql::ident(table);
+        let stage = sql!("pg_temp.{}", Sql::ident(STAGE_TABLE));
         let sink_id = Sql::literal(&sink_id.to_string());
+        let timestamp = Sql::ident(TIMESTAMP_COLUMN);
+        let diff = Sql::ident(DIFF_COLUMN);
+        let columns = Sql::join(
+            from_desc.iter_names().map(|name| Sql::ident(name.as_str())),
+            ", ",
+        );
         let source_columns = || {
             from_desc
                 .iter()
@@ -377,8 +591,32 @@ impl Statements {
             ";\n",
         );
 
+        // `ON COMMIT DELETE ROWS` empties the staging table whenever a window
+        // commits, and a rollback discards what was staged. The table lives
+        // for the session, so it costs one catalog entry per connection.
+        let create_stage = sql!(
+            "CREATE TEMPORARY TABLE {} ({}) ON COMMIT DELETE ROWS",
+            Sql::ident(STAGE_TABLE),
+            Sql::join(
+                source_columns().chain([
+                    column_ddl(TIMESTAMP_COLUMN, &SqlScalarType::Int64, false),
+                    column_ddl(DIFF_COLUMN, &SqlScalarType::Int16, false),
+                ]),
+                ", ",
+            ),
+        );
+
+        let copy = sql!(
+            "COPY {} ({}, {}, {}) FROM STDIN (FORMAT BINARY)",
+            stage.clone(),
+            columns.clone(),
+            timestamp.clone(),
+            diff.clone(),
+        );
+
         Ok(Statements {
             create_tables,
+            create_stage,
             claim_progress: sql!(
                 "UPDATE {}.{} SET epoch = epoch + 1, sink_version = {} \
                  WHERE sink_id = {} AND sink_version <= {} RETURNING epoch, mz_frontier",
@@ -394,6 +632,13 @@ impl Statements {
                 progress.clone(),
                 sink_id.clone(),
             ),
+            read_progress: sql!(
+                "SELECT epoch, mz_frontier FROM {}.{} WHERE sink_id = {}",
+                mz_schema.clone(),
+                progress.clone(),
+                sink_id.clone(),
+            ),
+            copy,
         })
     }
 }
@@ -408,6 +653,34 @@ fn key_indices(connection: &PostgresSinkConnection) -> Option<&[usize]> {
         .as_ref()
         .map(|(_, indices)| indices.as_slice())
         .or(connection.relation_key_indices.as_deref())
+}
+
+/// Encodes `source` followed by `time` and the sign of `diff` as one COPY
+/// BINARY staging row, using `row_buf` as scratch space.
+fn encode_stage_row<'d>(
+    row_buf: &mut Row,
+    source: impl IntoIterator<Item = Datum<'d>>,
+    stage_typ: &SqlRelationType,
+    time: Timestamp,
+    diff: Diff,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let mut packer = row_buf.packer();
+    packer.extend(source);
+    packer.push(Datum::Int64(timestamp_to_i64(time)?));
+    packer.push(Datum::Int16(if diff.is_negative() { -1 } else { 1 }));
+    let mut bytes = Vec::new();
+    encode_copy_format(
+        &CopyFormatParams::Binary,
+        row_buf,
+        stage_typ,
+        &mut bytes,
+        TextEncodeSettings::STABLE,
+    )?;
+    Ok(bytes)
+}
+
+fn timestamp_to_i64(time: Timestamp) -> Result<i64, anyhow::Error> {
+    i64::try_from(u64::from(time)).context("timestamp does not fit in a bigint")
 }
 
 /// Gives `table` a replica identity when it would otherwise be undeletable.
