@@ -2660,6 +2660,7 @@ where
             ExecuteCount::Count(count) => count,
         };
 
+        let mut rows_buffered = false;
         // Send rows while the client still wants them and there are still rows to send.
         loop {
             // Fetch next batch of rows, waiting for a possible requested
@@ -2707,6 +2708,9 @@ where
                     _ = time::sleep_until(
                         deadline.unwrap_or_else(tokio::time::Instant::now),
                     ), if deadline.is_some() => FetchResult::Rows(None),
+                    // Flush buffered rows before waiting for the next batch. If EOF is
+                    // ready, the protocol can flush the final rows with the response.
+                    _ = std::future::ready(()), if rows_buffered => FetchResult::FlushRows,
                 }
             };
 
@@ -2750,6 +2754,7 @@ where
                         .take(want_rows);
                     self.send_all(messages).await?;
 
+                    rows_buffered |= sent_rows > 0;
                     total_sent_rows += sent_rows;
                     total_sent_bytes += sent_bytes;
                     want_rows -= sent_rows;
@@ -2762,12 +2767,15 @@ where
                         }
                         break;
                     }
-
+                }
+                FetchResult::FlushRows => {
                     self.conn.flush().await?;
+                    rows_buffered = false;
                 }
                 FetchResult::Notice(notice) => {
                     self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
+                    rows_buffered = false;
                 }
                 FetchResult::Error(err) => {
                     let text = err.message.clone();
@@ -3548,6 +3556,7 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 #[derive(Debug)]
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
+    FlushRows,
     Canceled,
     Error(ErrorResponse),
     Notice(AdapterNotice),
