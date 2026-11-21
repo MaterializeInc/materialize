@@ -1,0 +1,108 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# The diffs of `mz_dataflow_operator_reachability_raw` can accumulate negative.
+# The reachability views must aggregate it with an accumulable `count(*)`,
+# which accepts negative totals, even when a query ignores the `count` column.
+# A distinct over the raw relation errors on negative multiplicities.
+
+query T multiline
+EXPLAIN SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Map/Filter/Project
+          Project: ()
+            →Fused with Child Map/Filter/Project
+              Filter: (#5 != 0)
+                →Accumulable GroupAggregate
+                  Simple aggregates: count(*)
+                  Key:
+                    Project: #4, #0..=#3
+                  →One-Shot Delta Join [%0:mz_dataflow_operator_reachability_raw » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1{worker_id}, #2{address}]]
+                    →Unarranged Raw Stream
+                      →Arranged mz_introspection.mz_dataflow_operator_reachability_raw
+                    →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+                    →Arrange (#1{worker_id}, #2{address})
+                      →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+  →Return
+    →Union
+      →Unarranged Raw Stream
+        →Arranged l0
+      →Map/Filter/Project
+        Project: #0
+        Map: 0
+          →Consolidating Union
+            →Negate Diffs
+              →Fused with Child Map/Filter/Project
+                Project: ()
+                  →Arranged l0
+                    Key: ()
+            →Constant (1 row)
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_addresses_per_worker_u1_primary_idx (*** full scan ***, delta join lookup)
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Map/Filter/Project
+          Project: ()
+            →Distinct GroupAggregate
+              →Map/Filter/Project
+                Project: #0, #2..=#4
+                  →Fused with Child Map/Filter/Project
+                    Filter: (#5 != 0)
+                      →Accumulable GroupAggregate
+                        Simple aggregates: count(*)
+                        Key:
+                          Project: #4, #0..=#3
+                        →One-Shot Delta Join [%0:mz_dataflow_operator_reachability_raw » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1{worker_id}, #2{address}]]
+                          →Unarranged Raw Stream
+                            →Arranged mz_introspection.mz_dataflow_operator_reachability_raw
+                          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+                          →Arrange (#1{worker_id}, #2{address})
+                            →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+  →Return
+    →Union
+      →Unarranged Raw Stream
+        →Arranged l0
+      →Map/Filter/Project
+        Project: #0
+        Map: 0
+          →Consolidating Union
+            →Negate Diffs
+              →Fused with Child Map/Filter/Project
+                Project: ()
+                  →Arranged l0
+                    Key: ()
+            →Constant (1 row)
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_addresses_per_worker_u1_primary_idx (*** full scan ***, delta join lookup)
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF

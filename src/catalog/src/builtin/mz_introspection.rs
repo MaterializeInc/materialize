@@ -505,7 +505,10 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Reachability),
-        access: vec![PUBLIC_SELECT],
+        // The diff carries a timely pointstamp count, which can accumulate
+        // negative, so this is not a valid relation for direct queries. Builtin
+        // views read it as the owner.
+        access: vec![],
         ontology: None,
     });
 
@@ -1920,6 +1923,13 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: LazyLock<BuiltinView> =
             .with_key(vec![0, 1, 2, 3, 4])
             .finish(),
         column_comments: BTreeMap::new(),
+        // NOTE: The `count(*)` must stay an accumulable reduce, which accepts
+        // negative totals, because the diffs of the raw input can be negative.
+        // The `HAVING` clause references the aggregate so that projection
+        // pushdown cannot remove it when a query ignores `count`. Without an
+        // aggregate the reduce renders as a distinct, which errors on negative
+        // multiplicities. Groups with a zero total emit no row, so the filter
+        // does not change the result.
         sql: "SELECT
     addr2.id,
     reachability.worker_id,
@@ -1940,7 +1950,8 @@ WHERE
     AND addr1.id = reachability.id
     AND addr1.worker_id = reachability.worker_id
     AND addr2.worker_id = reachability.worker_id
-GROUP BY addr2.id, reachability.worker_id, port, update_type, time",
+GROUP BY addr2.id, reachability.worker_id, port, update_type, time
+HAVING pg_catalog.count(*) <> 0",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
