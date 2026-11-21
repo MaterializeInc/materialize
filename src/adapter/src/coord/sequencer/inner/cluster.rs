@@ -587,7 +587,7 @@ impl Coordinator {
         // fallen below the realized configuration's requirements.
         if cluster_id.is_user() && !cancels {
             self.validate_resource_limit(
-                0,
+                || 0,
                 i64::from(target.replication_factor),
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
@@ -603,7 +603,7 @@ impl Coordinator {
                 .credits_per_hour;
             let baseline_credits = credits_per_replica * Numeric::from(target.replication_factor);
             self.validate_resource_limit_numeric(
-                self.current_credit_consumption_rate(Some(cluster_id)),
+                || self.current_credit_consumption_rate(Some(cluster_id)),
                 baseline_credits,
                 |system_vars| {
                     self.license_key
@@ -948,7 +948,7 @@ impl Coordinator {
         // before allocating replica IDs. See database-issues#6046.
         if cluster_id.is_user() {
             self.validate_resource_limit(
-                0,
+                || 0,
                 i64::from(replication_factor),
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
@@ -1096,7 +1096,7 @@ impl Coordinator {
         // before allocating replica IDs. See database-issues#6046.
         if id.is_user() {
             self.validate_resource_limit(
-                0,
+                || 0,
                 i64::try_from(replicas.len()).unwrap_or(i64::MAX),
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
@@ -1561,7 +1561,7 @@ impl Coordinator {
         // See database-issues#6046.
         if new_replication_factor > replication_factor && cluster_id.is_user() {
             self.validate_resource_limit(
-                usize::cast_from(*replication_factor),
+                || usize::cast_from(*replication_factor),
                 i64::from(*new_replication_factor) - i64::from(*replication_factor),
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
@@ -1577,7 +1577,7 @@ impl Coordinator {
                 .credits_per_hour;
             let baseline_credits = credits_per_replica * Numeric::from(*new_replication_factor);
             self.validate_resource_limit_numeric(
-                self.current_credit_consumption_rate(Some(cluster_id)),
+                || self.current_credit_consumption_rate(Some(cluster_id)),
                 baseline_credits,
                 |system_vars| {
                     self.license_key

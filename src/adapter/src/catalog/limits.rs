@@ -275,92 +275,104 @@ impl CatalogState {
         let mut current_mysql_connections = 0;
         let mut current_sql_server_connections = 0;
         let mut current_kafka_connections = 0;
-        for c in self.user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
+        if [
+            new_aws_privatelink_connections,
+            new_postgres_connections,
+            new_mysql_connections,
+            new_sql_server_connections,
+            new_kafka_connections,
+        ]
+        .into_iter()
+        .any(|delta| delta > 0)
+        {
+            for c in self.user_connections() {
+                let connection = c
+                    .connection()
+                    .expect("`user_connections()` only returns connection objects");
 
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::GlueSchemaRegistry(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::Gcp(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
+                match connection.details {
+                    ConnectionDetails::AwsPrivatelink(_) => {
+                        current_aws_privatelink_connections += 1
+                    }
+                    ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
+                    ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                    ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
+                    ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
+                    ConnectionDetails::Csr(_)
+                    | ConnectionDetails::GlueSchemaRegistry(_)
+                    | ConnectionDetails::Ssh { .. }
+                    | ConnectionDetails::Aws(_)
+                    | ConnectionDetails::Gcp(_)
+                    | ConnectionDetails::IcebergCatalog(_) => {}
+                }
             }
         }
         self.validate_resource_limit(
-            current_kafka_connections,
+            || current_kafka_connections,
             new_kafka_connections,
             SystemVars::max_kafka_connections,
             "Kafka Connection",
             MAX_KAFKA_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_postgres_connections,
+            || current_postgres_connections,
             new_postgres_connections,
             SystemVars::max_postgres_connections,
             "PostgreSQL Connection",
             MAX_POSTGRES_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_mysql_connections,
+            || current_mysql_connections,
             new_mysql_connections,
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_sql_server_connections,
+            || current_sql_server_connections,
             new_sql_server_connections,
             SystemVars::max_sql_server_connections,
             "SQL Server Connection",
             MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_aws_privatelink_connections,
+            || current_aws_privatelink_connections,
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
             MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            self.user_tables().count(),
+            || self.user_tables().count(),
             new_tables,
             SystemVars::max_tables,
             "table",
             MAX_TABLES.name(),
         )?;
 
-        let current_sources: usize = self
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
         self.validate_resource_limit(
-            current_sources,
+            || {
+                self.user_sources()
+                    .filter_map(|source| source.source())
+                    .map(|source| source.user_controllable_persist_shard_count())
+                    .sum::<i64>()
+                    .try_into()
+                    .expect("non-negative sum of sources")
+            },
             new_sources,
             SystemVars::max_sources,
             "source",
             MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
-            self.user_sinks().count(),
+            || self.user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
             "sink",
             MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
-            self.user_materialized_views().count(),
+            || self.user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "materialized view",
@@ -372,20 +384,20 @@ impl CatalogState {
             //
             // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
             // and set a higher max cluster limit?
-            self.user_clusters().count(),
+            || self.user_clusters().count(),
             new_clusters,
             SystemVars::max_clusters,
             "cluster",
             MAX_CLUSTERS.name(),
         )?;
         for (cluster_id, new_replicas) in new_replicas_per_cluster {
-            // It's possible that the cluster hasn't been created yet.
-            let current_amount = self
-                .try_get_cluster(cluster_id)
-                .map(|instance| instance.user_replicas().count())
-                .unwrap_or(0);
             self.validate_resource_limit(
-                current_amount,
+                || {
+                    // It's possible that the cluster hasn't been created yet.
+                    self.try_get_cluster(cluster_id)
+                        .map(|instance| instance.user_replicas().count())
+                        .unwrap_or(0)
+                },
                 new_replicas,
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
@@ -393,7 +405,7 @@ impl CatalogState {
             )?;
         }
         self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(None),
+            || self.current_credit_consumption_rate(None),
             new_credit_consumption_rate,
             |system_vars| {
                 self.license_key
@@ -404,7 +416,7 @@ impl CatalogState {
             MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;
         self.validate_resource_limit(
-            self.databases().count(),
+            || self.databases().count(),
             new_databases,
             SystemVars::max_databases,
             "database",
@@ -412,7 +424,7 @@ impl CatalogState {
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
-                self.get_database(database_id).schemas_by_id.len(),
+                || self.get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
                 "schema",
@@ -420,14 +432,13 @@ impl CatalogState {
             )?;
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
-            // For temporary schemas that don't exist yet (lazy creation),
-            // treat them as having 0 items.
-            let current_items = self
-                .try_get_schema(&database_spec, &schema_spec, conn_id)
-                .map(|schema| schema.items.len())
-                .unwrap_or(0);
             self.validate_resource_limit(
-                current_items,
+                || {
+                    // A temporary schema may not exist yet.
+                    self.try_get_schema(&database_spec, &schema_spec, conn_id)
+                        .map(|schema| schema.items.len())
+                        .unwrap_or(0)
+                },
                 new_objects,
                 SystemVars::max_objects_per_schema,
                 "object",
@@ -435,28 +446,28 @@ impl CatalogState {
             )?;
         }
         self.validate_resource_limit(
-            self.user_secrets().count(),
+            || self.user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
             "secret",
             MAX_SECRETS.name(),
         )?;
         self.validate_resource_limit(
-            self.user_roles().count(),
+            || self.user_roles().count(),
             new_roles,
             SystemVars::max_roles,
             "role",
             MAX_ROLES.name(),
         )?;
         self.validate_resource_limit(
-            self.user_network_policies().count(),
+            || self.user_network_policies().count(),
             new_network_policies,
             SystemVars::max_network_policies,
             "network_policy",
             MAX_NETWORK_POLICIES.name(),
         )?;
         self.validate_resource_limit(
-            self.user_query_policies().count(),
+            || self.user_query_policies().count(),
             new_query_policies,
             SystemVars::max_query_policies,
             "query policy",
@@ -468,7 +479,7 @@ impl CatalogState {
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
     pub(crate) fn validate_resource_limit<F>(
         &self,
-        current_amount: usize,
+        current_amount: impl FnOnce() -> usize,
         new_instances: i64,
         resource_limit: F,
         resource_type: &str,
@@ -482,7 +493,7 @@ impl CatalogState {
         }
 
         let limit: i64 = resource_limit(self.system_config()).into();
-        let current_amount: Option<i64> = current_amount.try_into().ok();
+        let current_amount: Option<i64> = current_amount().try_into().ok();
         let desired =
             current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
 
@@ -516,7 +527,7 @@ impl CatalogState {
     /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
     pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
-        current_amount: Numeric,
+        current_amount: impl FnOnce() -> Numeric,
         new_amount: Numeric,
         resource_limit: F,
         resource_type: &str,
@@ -533,6 +544,7 @@ impl CatalogState {
         // Floats will overflow to infinity instead of panicking, which has the correct comparison
         // semantics.
         // NaN should be impossible here since both values are positive.
+        let current_amount = current_amount();
         let desired = current_amount + new_amount;
         if desired > limit {
             Err(AdapterError::ResourceExhaustion {
