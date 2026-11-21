@@ -19,15 +19,22 @@ show, never by the client's guess.
 
 The safety assertions keep the messages of the legacy Kafka source and sink
 drivers. The coverage and post-fault source ones are new.
+
+`KafkaSource` is the text-format source and the base of the other formats in
+`kafka_formats`. The sinks come in JSON and, with a schema registry, in Avro.
 """
 
 from __future__ import annotations
 
+import io
+import json
+import struct
 import threading
 import time
 import uuid
 import zlib
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -56,7 +63,15 @@ CLUSTER = "sources"
 VIEW_CLUSTER = "driver"
 PARTITIONS = 2
 ADMIN_TIMEOUT_S = 30.0
+REGISTRY_TIMEOUT_S = 10.0
 SETTINGS = {"transaction_isolation": "'strict serializable'", "cluster": "quickstart"}
+PROGRESS_COLUMNS = [
+    "lower(partition)::text",
+    "upper(partition)::text",
+    "lower_inc(partition)::text",
+    "upper_inc(partition)::text",
+    '"offset"::text',
+]
 
 
 def partition_for(key: str, partitions: int) -> int:
@@ -106,6 +121,80 @@ def create_topics(broker: str, topics: list[str], partitions: int) -> None:
         except KafkaException as e:
             if e.args[0].code() != KafkaError.TOPIC_ALREADY_EXISTS:
                 raise
+
+
+class Registry:
+    """The schema registry's REST API and its wire format: a zero byte, the
+    schema id as four big-endian bytes, then the Avro datum.
+
+    Requests raise `OSError` (`requests.RequestException`) while the registry
+    is unreachable. A schema, once seen, is kept: ids are immutable.
+    """
+
+    def __init__(self, url: str) -> None:
+        self.url = url.rstrip("/")
+        self._lock = threading.Lock()
+        self._schemas: dict[int, Any] = {}
+
+    def register(self, subject: str, schema: dict[str, Any]) -> int:
+        import fastavro
+        import requests
+
+        response = requests.post(
+            f"{self.url}/subjects/{subject}/versions",
+            json={"schema": json.dumps(schema)},
+            timeout=REGISTRY_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        schema_id = int(response.json()["id"])
+        with self._lock:
+            self._schemas[schema_id] = fastavro.parse_schema(schema)
+        return schema_id
+
+    def _schema(self, schema_id: int) -> Any:
+        import fastavro
+        import requests
+
+        with self._lock:
+            schema = self._schemas.get(schema_id)
+        if schema is None:
+            response = requests.get(
+                f"{self.url}/schemas/ids/{schema_id}", timeout=REGISTRY_TIMEOUT_S
+            )
+            response.raise_for_status()
+            try:
+                text = response.json()["schema"]
+            except (ValueError, KeyError, TypeError) as e:
+                # Not a verdict on the payload being decoded.
+                raise OSError(f"schema registry answer for id {schema_id}: {e}") from e
+            schema = fastavro.parse_schema(json.loads(text))
+            with self._lock:
+                self._schemas[schema_id] = schema
+        return schema
+
+    def encode(self, schema_id: int, datum: Any) -> bytes:
+        import fastavro
+
+        buffer = io.BytesIO()
+        buffer.write(b"\x00" + struct.pack(">I", schema_id))
+        fastavro.schemaless_writer(buffer, self._schema(schema_id), datum)
+        return buffer.getvalue()
+
+    def decode(self, payload: bytes) -> tuple[int, Any]:
+        """The schema id and the datum of `payload`. Raises `ValueError` for a
+        payload that is not in the wire format or does not decode."""
+        import fastavro
+
+        if len(payload) < 5 or payload[0] != 0:
+            raise ValueError("payload is not in the schema registry wire format")
+        schema_id = struct.unpack(">I", payload[1:5])[0]
+        schema = self._schema(schema_id)
+        try:
+            return schema_id, fastavro.schemaless_reader(
+                io.BytesIO(payload[5:]), schema
+            )
+        except Exception as e:
+            raise ValueError(f"Avro datum of schema {schema_id}: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -249,8 +338,8 @@ class Tailer:
 
 @dataclass
 class Produced:
-    key: str
-    value: str | None
+    key: bytes
+    value: bytes | None
     partition: int
     acked: tuple[int, int] | None = None
     """(partition, offset) once the broker acknowledged it."""
@@ -258,12 +347,24 @@ class Produced:
 
 
 class KafkaSource:
+    """A topic the driver produces to, its Kafka source, and exports of it.
+
+    This class is the text-format source. A subclass replaces what depends on
+    the format: the DDL, what a produce writes, which exports a check reads
+    and how it judges them.
+    """
+
+    KIND = "src"
+    """Names the topic and, in assertion details, the source."""
+    SOURCE = "kafkasrc.src"
+    """The Kafka source. Its relation is its progress collection."""
+
     def __init__(self, ctx: Context) -> None:
         self.ctx = ctx
         broker = ctx.config.kafka_broker
         assert broker is not None
         self.broker = broker
-        self.topic = f"drv_src_{uuid.uuid4().hex[:8]}"
+        self.topic = f"drv_{self.KIND}_{uuid.uuid4().hex[:8]}"
         self._lock = threading.Lock()
         self.produced: list[Produced] = []
         self.observed: list[tuple[int, dict[int, int]]] = []
@@ -271,7 +372,7 @@ class KafkaSource:
         self.tombstone_share = 0.05
         self._producer: Any = None
         self.tail: Tailer | None = None
-        self.worker = Worker("kafka-source")
+        self.worker = Worker(f"kafka-{self.KIND}")
 
     def configure(self, d: Draw) -> None:
         self.keyspace = d.choice((1, 2, 16, 256, 4096))
@@ -279,6 +380,26 @@ class KafkaSource:
 
     def setup_upstream(self) -> None:
         create_topics(self.broker, [self.topic], PARTITIONS)
+
+    def _source_statements(self) -> list[str]:
+        """The schema, the broker connection and the Kafka source of `SOURCE`."""
+        schema = self.SOURCE.split(".")[0]
+        mz_broker = self.ctx.config.kafka_mz_broker
+        return [
+            f"CREATE SCHEMA IF NOT EXISTS {schema}",
+            f"CREATE CONNECTION IF NOT EXISTS {schema}.conn TO KAFKA (BROKER '{mz_broker}',"
+            " SECURITY PROTOCOL PLAINTEXT)",
+            f"CREATE SOURCE IF NOT EXISTS {self.SOURCE} IN CLUSTER {CLUSTER}"
+            f" FROM KAFKA CONNECTION {schema}.conn (TOPIC '{self.topic}')",
+        ]
+
+    def _table(self, name: str, options: str) -> str:
+        """An export of the topic named `name`, in the source's schema."""
+        schema = self.SOURCE.split(".")[0]
+        return (
+            f"CREATE TABLE IF NOT EXISTS {schema}.{name} FROM SOURCE {self.SOURCE}"
+            f' (REFERENCE "{self.topic}") {options}'
+        )
 
     def setup_statements(self) -> list[str]:
         mz_broker = self.ctx.config.kafka_mz_broker
@@ -328,7 +449,15 @@ class KafkaSource:
             value = (
                 None if d.boolean(self.tombstone_share) else f"{d.integer(0, 2**48):x}"
             )
-            records.append(Produced(key, value, partition_for(key, PARTITIONS)))
+            records.append(self._record(key, None if value is None else value.encode()))
+        return self._send(records)
+
+    def _record(self, key: str, value: bytes | None) -> Produced:
+        return Produced(key.encode(), value, partition_for(key, PARTITIONS))
+
+    def _send(self, records: list[Produced]) -> Status:
+        """Produce `records` in order from the worker, recording each
+        acknowledgement when it arrives."""
 
         def action() -> None:
             for r in records:
@@ -346,8 +475,8 @@ class KafkaSource:
                     try:
                         self._producer.produce(
                             self.topic,
-                            key=r.key.encode(),
-                            value=None if r.value is None else r.value.encode(),
+                            key=r.key,
+                            value=r.value,
                             partition=r.partition,
                             on_delivery=delivered,
                         )
@@ -357,19 +486,32 @@ class KafkaSource:
 
         return self.worker.run(action, RULE_WAIT_SECONDS)
 
-    def _read_op(self, done: list[bool]) -> Op:
-        query = (
-            "SELECT mz_now()::text, * FROM ("
-            "SELECT 'p' AS tag, lower(partition)::text AS a, upper(partition)::text AS b,"
-            ' lower_inc(partition)::text AS c, upper_inc(partition)::text AS d, "offset"::text AS e'
-            " FROM kafkasrc.src"
-            " UNION ALL SELECT 'n', text, partition::text, \"offset\"::text, NULL, NULL"
-            " FROM kafkasrc.none"
-            " UNION ALL SELECT 'u', key, text, NULL, NULL, NULL FROM kafkasrc.upsert) AS q"
-        )
+    def _exports(self) -> list[tuple[str, list[str], str]]:
+        """What a check reads beside the progress: a tag, text-valued column
+        expressions, and the relation."""
+        return [
+            ("n", ["text", "partition::text", '"offset"::text'], "kafkasrc.none"),
+            ("u", ["key", "text"], "kafkasrc.upsert"),
+        ]
 
+    def _query(self) -> str:
+        """One statement over the progress and every export, so all rows
+        share a timestamp. Each row is the timestamp, a tag, then columns."""
+        branches = [("p", PROGRESS_COLUMNS, self.SOURCE), *self._exports()]
+        width = max(len(columns) for _, columns, _ in branches)
+        selects = []
+        for tag, columns, relation in branches:
+            padded = [*columns, *["NULL::text"] * (width - len(columns))]
+            named = ", ".join(f"{c} AS c{i}" for i, c in enumerate(padded))
+            selects.append(f"SELECT '{tag}' AS tag, {named} FROM {relation}")
+        return f"SELECT mz_now()::text, * FROM ({' UNION ALL '.join(selects)}) AS q"
+
+    def _read(self, conn: psycopg.Connection) -> list[tuple[Any, ...]]:
+        return conn.execute(self._query().encode()).fetchall()
+
+    def _read_op(self, done: list[bool]) -> Op:
         def execute(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
-            return conn.execute(query.encode()).fetchall()
+            return self._read(conn)
 
         def complete(outcome: Outcome[list[tuple[Any, ...]]]) -> None:
             if outcome.ok:
@@ -377,7 +519,7 @@ class KafkaSource:
                 if self._judge(outcome.value):
                     done.append(True)
 
-        return Op("kafka source check", execute, complete, SETTINGS)
+        return Op(f"kafka {self.KIND} check", execute, complete, SETTINGS)
 
     def _judge(self, rows: list[tuple[Any, ...]]) -> bool:
         """Returns whether the check compared, rather than waiting for the tail."""
@@ -389,7 +531,7 @@ class KafkaSource:
             if r[1] == "p"
         ]
         frontier, bad = partition_frontier(progress, PARTITIONS)
-        base = {"ts": ts, "frontier": frontier}
+        base = {"source": self.KIND, "ts": ts, "frontier": frontier}
         always(
             not bad,
             "kafka source: the progress collection maps each partition to exactly one offset",
@@ -433,15 +575,23 @@ class KafkaSource:
             and p.acked[1] < frontier.get(p.acked[0], 0)
             and (
                 (rec := by_offset.get(p.acked)) is None
-                or rec.key != p.key.encode()
-                or rec.value != (None if p.value is None else p.value.encode())
+                or rec.key != p.key
+                or rec.value != p.value
             )
         ]
         always(
             not lost,
             "kafka source: every acknowledged produce below the mapped offsets is in the topic as acknowledged",
-            {**base, "lost": lost[:10]},
+            {**base, "lost": [(repr(k), a) for k, a in lost[:10]]},
         )
+        self._judge_exports(base, below, rows)
+        return True
+
+    def _judge_exports(
+        self, base: dict[str, Any], below: list[Record], rows: list[tuple[Any, ...]]
+    ) -> None:
+        """Compare the exports in `rows` with `below`, the topic's records
+        below the mapped offsets."""
         expected_none = Counter(
             (r.value.decode(), str(r.partition), str(r.offset))
             for r in below
@@ -486,7 +636,6 @@ class KafkaSource:
             "kafka source: a check covered a tombstone",
             base,
         )
-        return True
 
     def check(self, d: Draw) -> Status:
         if self.tail is None:
@@ -517,13 +666,16 @@ class KafkaSource:
 
             def capture(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
                 result = conn.execute(
-                    b"SELECT lower(partition)::text, upper(partition)::text,"
-                    b' lower_inc(partition), upper_inc(partition), "offset"::text FROM kafkasrc.src'
+                    "SELECT lower(partition)::text, upper(partition)::text,"
+                    ' lower_inc(partition), upper_inc(partition), "offset"::text'
+                    f" FROM {self.SOURCE}".encode()
                 ).fetchall()
                 rows.extend(result)
                 return result
 
-            op = Op("kafka source progress", capture, lambda outcome: None, SETTINGS)
+            op = Op(
+                f"kafka {self.KIND} progress", capture, lambda outcome: None, SETTINGS
+            )
             self.ctx.sessions.call(0, op, 60.0)
             frontier, _ = partition_frontier(rows, PARTITIONS)
             if all(frontier.get(p, 0) > off for p, off in acked.items()):
@@ -534,7 +686,7 @@ class KafkaSource:
         always(
             reached,
             "kafka source: after faults stop the exports reach and match every acknowledged produce",
-            {"acked": acked},
+            {"source": self.KIND, "acked": acked},
         )
 
 
@@ -552,8 +704,19 @@ class SinkModel:
     busy: set[int] = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class SinkSpec:
+    name: str
+    """The sink's name in the `snk` schema."""
+    debezium: bool
+    """Debezium envelope of the row-for-row view, else upsert of the grouped one."""
+    avro: bool
+    topic: str
+
+
 class KafkaSink:
-    """A Debezium sink of a row-for-row view, and an upsert sink of a grouped one."""
+    """A Debezium sink of a row-for-row view, and an upsert sink of a grouped
+    one, each in JSON and, with a schema registry, in Avro."""
 
     COLUMNS = ("id", "grp", "val")
     AGG_COLUMNS = ("grp", "n", "total")
@@ -564,8 +727,17 @@ class KafkaSink:
         assert broker is not None
         self.broker = broker
         suffix = uuid.uuid4().hex[:8]
-        self.dbz_topic = f"drv_sink_dbz_{suffix}"
-        self.upsert_topic = f"drv_sink_upsert_{suffix}"
+        registry = ctx.config.schema_registry_url
+        self.registry = Registry(registry) if registry else None
+        self.sinks = [
+            SinkSpec("dbz", True, False, f"drv_sink_dbz_{suffix}"),
+            SinkSpec("ups", False, False, f"drv_sink_upsert_{suffix}"),
+        ]
+        if self.registry is not None:
+            self.sinks += [
+                SinkSpec("dbz_avro", True, True, f"drv_sink_dbz_avro_{suffix}"),
+                SinkSpec("ups_avro", False, True, f"drv_sink_upsert_avro_{suffix}"),
+            ]
         self.progress_topic = f"drv_sink_progress_{suffix}"
         self._lock = threading.Lock()
         self.model = SinkModel()
@@ -574,6 +746,8 @@ class KafkaSink:
         self.tail: Tailer | None = None
         self.progress_keys: dict[str, str] = {}
         """Sink name to its progress record key."""
+        self._decoded: dict[tuple[str, int, int], oracle.SinkMessage | str] = {}
+        """Committed records never change, so each is decoded once."""
         self.worker = Worker("kafka-sink")
 
     def configure(self, d: Draw) -> None:
@@ -583,7 +757,7 @@ class KafkaSink:
         mz_broker = self.ctx.config.kafka_mz_broker
         retain = "WITH (RETAIN HISTORY = FOR '10m')"
         topic = "TOPIC REPLICATION FACTOR 1, TOPIC PARTITION COUNT 2"
-        return [
+        statements = [
             "CREATE SCHEMA IF NOT EXISTS snk",
             f"CREATE CONNECTION IF NOT EXISTS snk.conn TO KAFKA (BROKER '{mz_broker}',"
             f" SECURITY PROTOCOL PLAINTEXT, PROGRESS TOPIC '{self.progress_topic}',"
@@ -593,18 +767,32 @@ class KafkaSink:
             " AS SELECT id, grp, val FROM snk.items",
             f"CREATE MATERIALIZED VIEW IF NOT EXISTS snk.agg_mv IN CLUSTER {VIEW_CLUSTER} {retain}"
             " AS SELECT grp, count(*)::bigint AS n, sum(val)::bigint AS total FROM snk.items GROUP BY grp",
-            f"CREATE SINK IF NOT EXISTS snk.dbz IN CLUSTER {CLUSTER} FROM snk.items_mv"
-            f" INTO KAFKA CONNECTION snk.conn (TOPIC '{self.dbz_topic}', {topic})"
-            " KEY (id) NOT ENFORCED FORMAT JSON ENVELOPE DEBEZIUM",
-            f"CREATE SINK IF NOT EXISTS snk.ups IN CLUSTER {CLUSTER} FROM snk.agg_mv"
-            f" INTO KAFKA CONNECTION snk.conn (TOPIC '{self.upsert_topic}', {topic})"
-            " KEY (grp) NOT ENFORCED FORMAT JSON ENVELOPE UPSERT",
         ]
+        if self.registry is not None:
+            statements.append(
+                "CREATE CONNECTION IF NOT EXISTS snk.csr TO CONFLUENT SCHEMA REGISTRY"
+                f" (URL '{self.ctx.config.schema_registry_mz_url}')"
+            )
+        for sink in self.sinks:
+            view, key = ("items_mv", "id") if sink.debezium else ("agg_mv", "grp")
+            format = (
+                "AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION snk.csr"
+                if sink.avro
+                else "JSON"
+            )
+            statements.append(
+                f"CREATE SINK IF NOT EXISTS snk.{sink.name} IN CLUSTER {CLUSTER}"
+                f" FROM snk.{view} INTO KAFKA CONNECTION snk.conn"
+                f" (TOPIC '{sink.topic}', {topic}) KEY ({key}) NOT ENFORCED"
+                f" FORMAT {format}"
+                f" ENVELOPE {'DEBEZIUM' if sink.debezium else 'UPSERT'}"
+            )
+        return statements
 
     def start(self) -> None:
         self.tail = Tailer(
             self.broker,
-            [self.dbz_topic, self.upsert_topic, self.progress_topic],
+            [*(sink.topic for sink in self.sinks), self.progress_topic],
             committed=True,
         )
 
@@ -681,12 +869,12 @@ class KafkaSink:
         )
 
     def _progress_keys(self) -> dict[str, str]:
-        if len(self.progress_keys) == 2:
+        if len(self.progress_keys) == len(self.sinks):
             return self.progress_keys
         with connect(
             Target(self.ctx.config.host, internal=True), "driver-sink"
         ) as conn:
-            for name in ("dbz", "ups"):
+            for name in (sink.name for sink in self.sinks):
                 row = conn.execute(
                     b"SELECT o.global_id FROM mz_internal.mz_object_global_ids o"
                     b" JOIN mz_catalog.mz_sinks s ON o.id = s.id"
@@ -707,21 +895,38 @@ class KafkaSink:
         list[str],
     ]:
         """Decoded committed messages per sink, progress per sink, and the data
-        and progress decode errors."""
+        and progress decode errors.
+
+        Raises `OSError` when an Avro sink's schema cannot be fetched from
+        the registry.
+        """
         assert self.tail is not None
         keys = self._progress_keys()
         errors: list[str] = []
         progress_errors: list[str] = []
-        messages: dict[str, list[oracle.SinkMessage]] = {"dbz": [], "ups": []}
-        for name, topic in (("dbz", self.dbz_topic), ("ups", self.upsert_topic)):
-            for p, records in self.tail.snapshot(topic).items():
+        messages: dict[str, list[oracle.SinkMessage]] = {
+            sink.name: [] for sink in self.sinks
+        }
+        for sink in self.sinks:
+            loads: Callable[[bytes], Any] = (
+                self._avro_loads if sink.avro else json.loads
+            )
+            for p, records in self.tail.snapshot(sink.topic).items():
                 for r in records:
-                    m = oracle.decode_message(p, r.offset, r.key, r.value, r.headers)
+                    cached = (sink.name, p, r.offset)
+                    m = self._decoded.get(cached)
+                    if m is None:
+                        m = oracle.decode_message(
+                            p, r.offset, r.key, r.value, r.headers, loads
+                        )
+                        self._decoded[cached] = m
                     if isinstance(m, str):
                         errors.append(m)
                     else:
-                        messages[name].append(m)
-        progress: dict[str, list[oracle.ProgressRecord]] = {"dbz": [], "ups": []}
+                        messages[sink.name].append(m)
+        progress: dict[str, list[oracle.ProgressRecord]] = {
+            sink.name: [] for sink in self.sinks
+        }
         by_key = {v: k for k, v in keys.items()}
         for records in self.tail.snapshot(self.progress_topic).values():
             for r in records:
@@ -734,6 +939,10 @@ class KafkaSink:
                 else:
                     progress[name].append(pr)
         return messages, progress, errors, progress_errors
+
+    def _avro_loads(self, payload: bytes) -> Any:
+        assert self.registry is not None
+        return self.registry.decode(payload)[1]
 
     def _check_streams(
         self,
@@ -750,9 +959,7 @@ class KafkaSink:
         if not self.tail.caught_up(self.progress_topic, 5.0):
             return None
         _, covered, _, _ = self._stream()
-        if not all(
-            self.tail.caught_up(t, 5.0) for t in (self.dbz_topic, self.upsert_topic)
-        ):
+        if not all(self.tail.caught_up(sink.topic, 5.0) for sink in self.sinks):
             return None
         messages, _, errors, _ = self._stream()
         if not self.tail.caught_up(self.progress_topic, 5.0):
@@ -763,8 +970,9 @@ class KafkaSink:
             ordered = sorted(records, key=lambda r: r.offset)
             return ordered[-1].frontier if ordered else 0
 
-        frontiers = {name: latest(progress[name]) for name in ("dbz", "ups")}
-        complete = {name: latest(covered[name]) for name in ("dbz", "ups")}
+        names = [sink.name for sink in self.sinks]
+        frontiers = {name: latest(progress[name]) for name in names}
+        complete = {name: latest(covered[name]) for name in names}
         details = {"frontiers": frontiers}
         always(
             not errors,
@@ -776,7 +984,7 @@ class KafkaSink:
             "kafka sink: every progress record decodes",
             {**details, "errors": progress_errors[:5]},
         )
-        for name in ("dbz", "ups"):
+        for name in names:
             always(
                 not oracle.duplicate_updates(messages[name]),
                 "kafka sink: no update (key, timestamp) is committed to the data topic twice",
@@ -817,26 +1025,19 @@ class KafkaSink:
                     "above": [(m.partition, m.offset, m.ts) for m in above[:5]],
                 },
             )
-        always(
-            not oracle.debezium_key_mismatches(messages["dbz"], ("id",)),
-            "kafka sink: every Debezium message key equals the row id in its before and after images",
-            {
-                **details,
-                "mismatches": oracle.debezium_key_mismatches(messages["dbz"], ("id",))[
-                    :5
-                ],
-            },
-        )
-        always(
-            not oracle.debezium_chain_breaks(messages["dbz"], self.COLUMNS),
-            "kafka sink: each Debezium before image equals the key's previous after image",
-            {
-                **details,
-                "breaks": oracle.debezium_chain_breaks(messages["dbz"], self.COLUMNS)[
-                    :5
-                ],
-            },
-        )
+        for name in (sink.name for sink in self.sinks if sink.debezium):
+            mismatches = oracle.debezium_key_mismatches(messages[name], ("id",))
+            always(
+                not mismatches,
+                "kafka sink: every Debezium message key equals the row id in its before and after images",
+                {**details, "sink": name, "mismatches": mismatches[:5]},
+            )
+            breaks = oracle.debezium_chain_breaks(messages[name], self.COLUMNS)
+            always(
+                not breaks,
+                "kafka sink: each Debezium before image equals the key's previous after image",
+                {**details, "sink": name, "breaks": breaks[:5]},
+            )
         return complete, messages
 
     def _compare_views(
@@ -845,66 +1046,88 @@ class KafkaSink:
         frontiers: dict[str, int | None],
         view_rows: dict[str, list[tuple[Any, ...]]],
     ) -> None:
-        dbz_frontier = frontiers["dbz"]
-        rows, negative = oracle.consolidate_debezium(
-            messages["dbz"], dbz_frontier, self.COLUMNS
-        )
-        expected = Counter(tuple(int(x) for x in r) for r in view_rows["dbz"])
-        always(
-            not negative and rows == expected,
-            "kafka sink: consolidated Debezium output at a committed progress frontier equals the sinked view at that time",
-            {
-                "frontier": dbz_frontier,
-                "negative": negative[:5],
-                **oracle.bag_diff(expected.elements(), rows.elements()),
-            },
-        )
-        ups = oracle.consolidate_upsert(
-            messages["ups"], frontiers["ups"], self.AGG_COLUMNS
-        )
-        expected_ups = {
-            oracle.freeze({"grp": int(r[0])}): tuple(int(x) for x in r)
-            for r in view_rows["ups"]
-        }
-        always(
-            ups == expected_ups,
-            "kafka sink: latest upsert value per key at a committed progress frontier equals the sinked view at that time",
-            {
-                "frontier": frontiers["ups"],
-                **oracle.bag_diff(expected_ups.values(), ups.values()),
-            },
-        )
-        sometimes(
-            sum(rows.values()) > 0 and rows == expected,
-            "kafka sink: a check matched a nonempty sink against its view",
-            {"rows": sum(rows.values())},
-        )
+        for sink in self.sinks:
+            if sink.name not in view_rows:
+                continue
+            frontier = frontiers[sink.name]
+            details = {"sink": sink.name, "frontier": frontier}
+            if sink.debezium:
+                rows, negative = oracle.consolidate_debezium(
+                    messages[sink.name], frontier, self.COLUMNS
+                )
+                expected = Counter(
+                    tuple(int(x) for x in r) for r in view_rows[sink.name]
+                )
+                always(
+                    not negative and rows == expected,
+                    "kafka sink: consolidated Debezium output at a committed progress frontier equals the sinked view at that time",
+                    {
+                        **details,
+                        "negative": negative[:5],
+                        **oracle.bag_diff(expected.elements(), rows.elements()),
+                    },
+                )
+                matched = sum(rows.values()) > 0 and rows == expected
+                sometimes(
+                    matched,
+                    "kafka sink: a check matched a nonempty sink against its view",
+                    {**details, "rows": sum(rows.values())},
+                )
+                sometimes(
+                    matched and sink.avro,
+                    "kafka sink: a check matched a nonempty Avro Debezium sink against its view",
+                    {**details, "rows": sum(rows.values())},
+                )
+            else:
+                ups = oracle.consolidate_upsert(
+                    messages[sink.name], frontier, self.AGG_COLUMNS
+                )
+                expected_ups = {
+                    oracle.freeze({"grp": int(r[0])}): tuple(int(x) for x in r)
+                    for r in view_rows[sink.name]
+                }
+                always(
+                    ups == expected_ups,
+                    "kafka sink: latest upsert value per key at a committed progress frontier equals the sinked view at that time",
+                    {
+                        **details,
+                        **oracle.bag_diff(expected_ups.values(), ups.values()),
+                    },
+                )
+                sometimes(
+                    sink.avro and len(ups) > 0 and ups == expected_ups,
+                    "kafka sink: a check matched a nonempty Avro upsert sink against its view",
+                    {**details, "keys": len(ups)},
+                )
 
     def _view_rows(
         self, frontiers: dict[str, int | None]
-    ) -> dict[str, list[tuple[Any, ...]]] | None:
+    ) -> dict[str, list[tuple[Any, ...]]]:
+        """Each sink's view as of its frontier, for the sinks that have one
+        and up to the first read that fails."""
         out: dict[str, list[tuple[Any, ...]]] = {}
-        for name, query in (
-            ("dbz", "SELECT id, grp, val FROM snk.items_mv"),
-            ("ups", "SELECT grp, n, total FROM snk.agg_mv"),
-        ):
-            frontier = frontiers[name]
-            if not frontier:
-                return None
-            try:
-                with connect(Target(self.ctx.config.host), "driver-sink") as conn:
-                    conn.execute(b"SET statement_timeout = '30s'")
-                    out[name] = conn.execute(
+        try:
+            with connect(Target(self.ctx.config.host), "driver-sink") as conn:
+                conn.execute(b"SET statement_timeout = '30s'")
+                for sink in self.sinks:
+                    frontier = frontiers[sink.name]
+                    if not frontier:
+                        continue
+                    query = (
+                        "SELECT id, grp, val FROM snk.items_mv"
+                        if sink.debezium
+                        else "SELECT grp, n, total FROM snk.agg_mv"
+                    )
+                    out[sink.name] = conn.execute(
                         f"{query} AS OF {frontier - 1}".encode()
                     ).fetchall()
-            except (psycopg.Error, OSError) as e:
-                c = sql.classify_as_of_read(e)
-                if c.outcome == sql.Outcome.VIOLATION:
-                    unreachable(
-                        "kafka sink: reads of the sinked views return only classified errors",
-                        {"sqlstate": c.sqlstate, "error": c.template},
-                    )
-                return None
+        except (psycopg.Error, OSError) as e:
+            c = sql.classify_as_of_read(e)
+            if c.outcome == sql.Outcome.VIOLATION:
+                unreachable(
+                    "kafka sink: reads of the sinked views return only classified errors",
+                    {"sqlstate": c.sqlstate, "error": c.template},
+                )
         return out
 
     def check(self, d: Draw) -> Status:
@@ -915,15 +1138,14 @@ class KafkaSink:
             try:
                 streams = self._check_streams()
             except (psycopg.Error, OSError) as e:
-                # Looking up the sinks' progress keys needs Materialize.
+                # Looking up the sinks' progress keys needs Materialize, and
+                # decoding an Avro sink needs the registry.
                 log(f"kafka sink: check skipped: {e}")
                 return
             if streams is None:
                 return
             frontiers, messages = streams
-            view_rows = self._view_rows(frontiers)
-            if view_rows is not None:
-                self._compare_views(messages, frontiers, view_rows)
+            self._compare_views(messages, frontiers, self._view_rows(frontiers))
 
         return self.worker.run(action, RULE_WAIT_SECONDS)
 
@@ -990,22 +1212,8 @@ class KafkaSink:
             # A write still running after the sessions went idle has an
             # outcome this comparison cannot know.
             uncertain = set(self.model.uncertain) | self.model.busy
-        observed, negative = oracle.consolidate_debezium(
-            messages["dbz"], frontiers["dbz"], self.COLUMNS
-        )
-        observed_certain = Counter(
-            {r: n for r, n in observed.items() if r[0] not in uncertain}
-        )
         expected = Counter(
             {(i, r.grp, r.val): 1 for i, r in rows.items() if i not in uncertain}
-        )
-        always(
-            not negative and observed_certain == expected,
-            "kafka sink: the Debezium sink at a frontier past every acknowledged write equals the acknowledged-write model",
-            {
-                "frontier": frontiers["dbz"],
-                **oracle.bag_diff(expected.elements(), observed_certain.elements()),
-            },
         )
         uncertain_groups = {rows[i].grp for i in uncertain if i in rows}
         groups: dict[int, list[int]] = {}
@@ -1016,15 +1224,37 @@ class KafkaSink:
             for g, vals in groups.items()
             if g not in uncertain_groups
         }
-        ups = oracle.consolidate_upsert(
-            messages["ups"], frontiers["ups"], self.AGG_COLUMNS
-        )
-        ups_certain = {k: v for k, v in ups.items() if v[0] not in uncertain_groups}
-        always(
-            ups_certain == expected_ups,
-            "kafka sink: the upsert sink at a frontier past every acknowledged write equals the model for groups without uncertain writes",
-            {
-                "frontier": frontiers["ups"],
-                **oracle.bag_diff(expected_ups.values(), ups_certain.values()),
-            },
-        )
+        for sink in self.sinks:
+            details = {"sink": sink.name, "frontier": frontiers[sink.name]}
+            if sink.debezium:
+                observed, negative = oracle.consolidate_debezium(
+                    messages[sink.name], frontiers[sink.name], self.COLUMNS
+                )
+                observed_certain = Counter(
+                    {r: n for r, n in observed.items() if r[0] not in uncertain}
+                )
+                always(
+                    not negative and observed_certain == expected,
+                    "kafka sink: the Debezium sink at a frontier past every acknowledged write equals the acknowledged-write model",
+                    {
+                        **details,
+                        **oracle.bag_diff(
+                            expected.elements(), observed_certain.elements()
+                        ),
+                    },
+                )
+            else:
+                ups = oracle.consolidate_upsert(
+                    messages[sink.name], frontiers[sink.name], self.AGG_COLUMNS
+                )
+                ups_certain = {
+                    k: v for k, v in ups.items() if v[0] not in uncertain_groups
+                }
+                always(
+                    ups_certain == expected_ups,
+                    "kafka sink: the upsert sink at a frontier past every acknowledged write equals the model for groups without uncertain writes",
+                    {
+                        **details,
+                        **oracle.bag_diff(expected_ups.values(), ups_certain.values()),
+                    },
+                )

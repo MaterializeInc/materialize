@@ -177,6 +177,11 @@ def admin_setup(config: Config, statements: list[str]) -> None:
             # their history retained. The Kubernetes ConfigMap does not sync
             # this flag, so `ALTER SYSTEM` holds there too.
             conn.execute(b"ALTER SYSTEM SET enable_logical_compaction_window = true")
+            # For the schema evolution checks. Also in the ConfigMap, and set
+            # here as well in case it is not synced either.
+            conn.execute(b"ALTER SYSTEM SET enable_alter_table_add_column = true")
+            # The blue/green deployments create and drop their own clusters.
+            conn.execute(b"GRANT CREATECLUSTER ON SYSTEM TO materialize")
             for cluster in (DERIVED_CLUSTER, SOURCE_CLUSTER):
                 exists = conn.execute(
                     b"SELECT 1 FROM mz_clusters WHERE name = %s", (cluster,)

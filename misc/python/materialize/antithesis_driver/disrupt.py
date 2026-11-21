@@ -22,12 +22,13 @@ thread, so a slow API server stalls none of the rules.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
@@ -37,6 +38,8 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
 )
 
+from materialize.antithesis import spec_model
+from materialize.antithesis_driver.claims import STATUS_SETTLE_SECONDS, Claims
 from materialize.antithesis_driver.client import (
     Op,
     Outcome,
@@ -54,7 +57,26 @@ StatefulSet then runs two incarnations of one pod at once."""
 ROLLOUT_STRATEGIES = ("WaitUntilReady", "ManuallyPromote")
 ROLLOUT_GIVE_UP_SECONDS = 20 * 60
 KILL_PHASES = ("Applying", "ReadyToPromote", "Promoting")
+PATCH_PHASES = ("Applying", "ReadyToPromote", "Promoting", "Applied")
+"""Phases in which the driver changes the spec of a rollout it follows.
+`WaitingForApproval` is reached only through such a change, and the next
+rollout request then acts in it."""
+SETTLED_PHASES = ("Applied", "WaitingForApproval")
+"""Phases that end a request once the status records it as completed."""
+OBSERVE_SECONDS = 10.0
 ZERO_REPLICAS_SECONDS = 20.0
+
+
+@dataclass(frozen=True)
+class SpecPatch:
+    """A spec change the driver makes once the rollout shows the cell's phase."""
+
+    cell: spec_model.Cell
+    seed: int
+    """Seeds the choices `spec_model.cell_changes` makes when the patch is
+    built, which is after the rule that drew it returned."""
+    serial: int
+    """Makes the UUIDs of this patch differ from every other one."""
 
 
 @dataclass
@@ -66,7 +88,11 @@ class Rollout:
     kill_target: str
     grace: int | None
     image: str | None
+    patch: SpecPatch | None = None
+    prior: dict[str, Any] = field(default_factory=dict)
+    """The spec before the rollout was requested, which a `revert` restores."""
     killed: bool = False
+    patched: bool = False
     promoted: bool = False
     phases: tuple[str, ...] = ()
 
@@ -151,11 +177,15 @@ class Disruptions:
         self._requests = 0
         self.kill_probability = 0.0
         self.manual_share = 0.0
+        self.patch_probability = 0.0
+        self.claims = Claims()
+        self._observed = float("-inf")
 
     def configure(self, d: Draw) -> None:
         self.cooldown = d.choice((15.0, 60.0, 180.0))
         self.kill_probability = d.choice((0.0, 0.3, 0.9))
         self.manual_share = d.choice((0.0, 0.5))
+        self.patch_probability = d.choice((0.0, 0.3, 0.6))
 
     def _due(self, name: str) -> bool:
         if self.ctx.quiesced.is_set():
@@ -315,8 +345,29 @@ class Disruptions:
         strategy = (
             "ManuallyPromote" if d.boolean(self.manual_share) else "WaitUntilReady"
         )
+        patch = None
+        if d.boolean(self.patch_probability):
+            changed = d.choice(spec_model.FIELDS)
+            self._requests += 1
+            patch = SpecPatch(
+                spec_model.Cell(
+                    changed,
+                    d.choice(PATCH_PHASES),
+                    d.choice(spec_model.request_modes(changed)),
+                    None,
+                ),
+                d.integer(0, 2**31 - 1),
+                self._requests,
+            )
+            if patch.cell.phase == "ReadyToPromote":
+                # The only strategy that stops there.
+                strategy = "ManuallyPromote"
         upgrade = kube.env.endpoints.upgrade_pending_image
-        image = upgrade if upgrade is not None and d.boolean(0.5) else None
+        # Not together with a patch: its `revert` restores the spec from
+        # before this request, which would undo the upgrade after it
+        # completed. The patch's own image changes never go back that far.
+        upgrade_now = upgrade is not None and patch is None and d.boolean(0.5)
+        image = upgrade if upgrade_now else None
         rollout = Rollout(
             request=request,
             strategy=strategy,
@@ -327,12 +378,14 @@ class Disruptions:
             kill_target=d.choice(("active", "candidate", "orchestratord")),
             grace=d.choice(GRACE_MENU),
             image=image,
+            patch=patch,
         )
 
         def action() -> None:
             spec: dict[str, Any] = {"rolloutStrategy": strategy}
             if image is not None:
                 spec["environmentdImageRef"] = image
+            rollout.prior = dict((kube.env.materialize.get() or {}).get("spec") or {})
             kube.env.materialize.request_rollout(spec, request)
             with self._lock:
                 self.rollout = rollout
@@ -341,17 +394,25 @@ class Disruptions:
         return self._kube("start rollout", action)
 
     def advance_rollout(self, d: Draw) -> Status:
-        """Observe the rollout in progress, promote it, or kill a pod in its phase."""
+        """Observe the CR and the rollout in progress: judge the status claim,
+        promote the rollout, change its spec or kill a pod in a chosen phase."""
         kube = self.kube
         rollout = self.rollout
-        if kube is None or rollout is None:
+        if kube is None:
             return Status.NOT_SENT
+        now = time.monotonic()
+        with self._lock:
+            # Without a rollout the CR changes rarely.
+            if rollout is None and now - self._observed < OBSERVE_SECONDS:
+                return Status.NOT_SENT
+            self._observed = now
 
         def action() -> None:
             mz = kube.env.materialize.get()
             if mz is None:
                 return
             status = mz.get("status") or {}
+            spec = mz.get("spec") or {}
             active = status.get("activeGeneration")
             if isinstance(active, int):
                 always(
@@ -360,6 +421,9 @@ class Disruptions:
                     {"active": active, "max": self.max_active_generation},
                 )
                 self.max_active_generation = max(self.max_active_generation, active)
+            self.claims.observe(kube.env.materialize, mz)
+            if rollout is None:
+                return
             condition = next(
                 (
                     c
@@ -377,37 +441,58 @@ class Disruptions:
             if phase is not None and phase not in rollout.phases:
                 rollout.phases += (phase,)
                 log(f"rollout {rollout.request}: {phase}, active generation {active}")
+            completed = status.get("lastCompletedRolloutRequest") == rollout.request
+            patch = rollout.patch
             if (
-                status.get("lastCompletedRolloutRequest") == rollout.request
-                and phase == "Applied"
+                patch is not None
+                and not rollout.patched
+                and phase == patch.cell.phase
+                and (phase != "Applied" or completed)
             ):
-                log(f"rollout {rollout.request} applied after {list(rollout.phases)}")
-                reachable(
-                    "driver: a requested rollout reached Applied",
-                    {
-                        "strategy": rollout.strategy,
-                        "phases": list(rollout.phases),
-                        "killed": rollout.killed,
-                    },
-                )
-                sometimes(
-                    rollout.killed,
-                    "driver: a rollout reached Applied after a pod was killed in one of its phases",
-                    {"phase": rollout.kill_phase, "target": rollout.kill_target},
-                )
+                # A failed request leaves `patched` unset, and the retry sends
+                # the same patch.
+                self._patch_spec(kube, rollout, patch, mz)
+                rollout.patched = True
+                # The next observation follows the changed spec.
+                return
+            if completed and phase in SETTLED_PHASES:
+                log(f"rollout {rollout.request} {phase} after {list(rollout.phases)}")
+                if phase == "Applied":
+                    reachable(
+                        "driver: a requested rollout reached Applied",
+                        {
+                            "strategy": rollout.strategy,
+                            "phases": list(rollout.phases),
+                            "killed": rollout.killed,
+                        },
+                    )
+                    sometimes(
+                        rollout.killed,
+                        "driver: a rollout reached Applied after a pod was killed in one of its phases",
+                        {"phase": rollout.kill_phase, "target": rollout.kill_target},
+                    )
+                else:
+                    reachable(
+                        "driver: a rollout settled in WaitingForApproval after a spec change without a new request",
+                        {"phases": list(rollout.phases)},
+                    )
                 self._finish(kube)
                 return
             if rollout.kill_phase == phase and not rollout.killed:
                 rollout.killed = True
                 self._kill_for_rollout(kube, rollout, status)
+            # Read from the spec: a patch may have changed the strategy or
+            # the request since the rollout began.
+            request = spec.get("requestRollout")
             if (
-                rollout.strategy == "ManuallyPromote"
+                spec.get("rolloutStrategy") == "ManuallyPromote"
                 and phase == "ReadyToPromote"
-                and not rollout.promoted
+                and spec.get("forcePromote") != request
             ):
-                kube.env.materialize.patch_spec({"forcePromote": rollout.request})
-                rollout.promoted = True
-                reachable("driver: a manually promoted rollout was promoted", {})
+                kube.env.materialize.patch_spec({"forcePromote": request})
+                if not rollout.promoted:
+                    rollout.promoted = True
+                    reachable("driver: a manually promoted rollout was promoted", {})
             if time.monotonic() - rollout.started > ROLLOUT_GIVE_UP_SECONDS:
                 log(f"rollout {rollout.request} still {phase}, giving up following it")
                 self._finish(kube)
@@ -438,9 +523,58 @@ class Disruptions:
             {"phase": rollout.kill_phase, "target": rollout.kill_target},
         )
 
+    def _patch_spec(
+        self, kube: Kube, rollout: Rollout, patch: SpecPatch, mz: dict[str, Any]
+    ) -> None:
+        """Change the spec of the rollout in progress, as `patch.cell` says."""
+        endpoints = kube.env.endpoints
+        status = mz.get("status") or {}
+        spec = mz.get("spec") or {}
+        rnd = random.Random(patch.seed)
+        changes = spec_model.cell_changes(
+            patch.cell,
+            rnd,
+            spec,
+            rollout.prior,
+            spec_model.Images(
+                endpoints.initial_environmentd_image,
+                endpoints.upgrade_pending_image,
+                status.get("lastCompletedRolloutEnvironmentdImageRef"),
+            ),
+            lambda: str(uuid.UUID(int=(patch.serial << 64) | rnd.getrandbits(64))),
+        )
+        cell = patch.cell
+        active = status.get("activeGeneration")
+        # Before the request: one whose response is lost may still apply.
+        if (
+            cell.phase == "Promoting"
+            and isinstance(active, int)
+            and spec_model.changes_deployed_fields(spec, changes)
+        ):
+            self.claims.patched_while_promoting(active + 1, cell.request_mode)
+        kube.env.materialize.patch_spec(changes)
+        if "requestRollout" in changes:
+            rollout.request = changes["requestRollout"]
+        details = {"field": cell.field, "request_mode": cell.request_mode}
+        log(f"rollout {rollout.request}: patched {cell.field} in {cell.phase}")
+        if cell.phase == "Applying":
+            reachable("driver: the spec was changed while the CR was Applying", details)
+        elif cell.phase == "ReadyToPromote":
+            reachable(
+                "driver: the spec was changed while the CR was ReadyToPromote", details
+            )
+        elif cell.phase == "Promoting":
+            reachable(
+                "driver: the spec was changed while the CR was Promoting", details
+            )
+        else:
+            reachable(
+                "driver: the spec was changed after its rollout was Applied", details
+            )
+
     def _finish(self, kube: Kube) -> None:
-        rollout = self.rollout
-        if rollout is not None and rollout.strategy != "WaitUntilReady":
+        spec = (kube.env.materialize.get() or {}).get("spec") or {}
+        if spec.get("rolloutStrategy") not in (None, "WaitUntilReady"):
             kube.env.materialize.patch_spec({"rolloutStrategy": "WaitUntilReady"})
         with self._lock:
             self.rollout = None
@@ -473,17 +607,35 @@ class Disruptions:
         if kube is None:
             return
         up_to_date = False
+        settle_until: float | None = None
         while time.monotonic() < deadline:
             try:
                 mz = kube.env.materialize
-                spec = (mz.get() or {}).get("spec") or {}
+                cr = mz.get() or {}
+                spec = cr.get("spec") or {}
+                status = cr.get("status") or {}
+                request = spec.get("requestRollout")
                 if spec.get("rolloutStrategy") not in (None, "WaitUntilReady"):
                     mz.patch_spec({"rolloutStrategy": "WaitUntilReady"})
-                if mz.phase() == "ReadyToPromote":
-                    mz.patch_spec({"forcePromote": spec.get("requestRollout")})
+                phase = mz.phase()
+                if phase == "ReadyToPromote":
+                    mz.patch_spec({"forcePromote": request})
+                # A spec change without a request waits for one.
+                if (
+                    phase == "WaitingForApproval"
+                    and status.get("lastCompletedRolloutRequest") == request
+                ):
+                    self._requests += 1
+                    mz.request_rollout(request_id=str(uuid.UUID(int=self._requests)))
+                if cr:
+                    self.claims.observe(mz, cr)
                 if mz.is_up_to_date():
                     up_to_date = True
-                    break
+                    # A violated claim is asserted by a second observation.
+                    if settle_until is None:
+                        settle_until = time.monotonic() + 2 * STATUS_SETTLE_SECONDS
+                    if not self.claims.pending or time.monotonic() >= settle_until:
+                        break
             except Exception as e:
                 if not _is_api_error(e):
                     raise

@@ -61,6 +61,11 @@ class Config:
     and sinks are off."""
     kafka_mz_broker: str | None
     """The same broker as Materialize reaches it."""
+    schema_registry_url: str | None
+    """The schema registry, as the driver reaches it. Without it, the Kafka
+    components use no format that needs one."""
+    schema_registry_mz_url: str | None
+    """The same registry as Materialize reaches it."""
 
     @staticmethod
     def from_env(host: str, kubernetes: bool) -> Config:
@@ -93,6 +98,11 @@ class Config:
             kafka_mz_broker=os.environ.get(
                 "MZ_ANTITHESIS_KAFKA_MZ_BROKER",
                 os.environ.get("MZ_ANTITHESIS_KAFKA_BROKER"),
+            ),
+            schema_registry_url=os.environ.get("MZ_ANTITHESIS_SCHEMA_REGISTRY_URL"),
+            schema_registry_mz_url=os.environ.get(
+                "MZ_ANTITHESIS_SCHEMA_REGISTRY_MZ_URL",
+                os.environ.get("MZ_ANTITHESIS_SCHEMA_REGISTRY_URL"),
             ),
         )
 

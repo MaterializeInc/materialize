@@ -39,12 +39,24 @@ from hegel import generators as gs  # pyright: ignore[reportMissingModuleSource]
 
 from materialize.antithesis.ivm_model import SCHEMA as IVM_SCHEMA
 from materialize.antithesis_driver import (
+    aggregates,
+    asof,
     atomic,
+    bluegreen,
+    cancel,
+    copies,
+    datatypes,
+    flags,
     health,
+    memory,
     mysql,
     pg,
+    read_only,
+    rebinding,
+    schema_evolution,
     sqlserver,
     webhook,
+    windows,
 )
 from materialize.antithesis_driver.cdc import CdcSource
 from materialize.antithesis_driver.client import Status, report_driver_error
@@ -55,6 +67,7 @@ from materialize.antithesis_driver.disrupt import Disruptions
 from materialize.antithesis_driver.history import SCHEMA as HISTORY_SCHEMA
 from materialize.antithesis_driver.history import History, create_statements
 from materialize.antithesis_driver.kafka import KafkaSink, KafkaSource
+from materialize.antithesis_driver.kafka_formats import KafkaFormats
 from materialize.antithesis_driver.views import Views
 from materialize.antithesis_driver.views import setup_statements as view_statements
 
@@ -97,7 +110,23 @@ class Components:
         self.counters = Counters(self.ctx)
         self.views = Views(self.ctx)
         self.atomic = atomic.Atomic(self.ctx)
+        self.windows = windows.Windows(self.ctx)
+        self.aggregates = aggregates.Aggregates(self.ctx)
+        self.datatypes = datatypes.DataTypes(self.ctx)
+        self.copies = copies.Copies(self.ctx)
+        self.schema_evolution = schema_evolution.SchemaEvolution(self.ctx)
+        self.rebinding = rebinding.Rebinding(self.ctx)
+        self.cancel = cancel.Cancel(self.ctx)
+        self.asof = asof.AsOf(self.ctx)
+        self.bluegreen = bluegreen.BlueGreen(self.ctx)
+        self.flags = flags.Flags(self.ctx)
         self.disruptions = Disruptions(self.ctx)
+        kube = self.disruptions.kube
+        if kube is not None:
+            memory.start(kube.core)
+        self.read_only = (
+            read_only.ReadOnly(self.ctx, kube) if kube is not None else None
+        )
         self.cdc: list[CdcSource] = [
             s
             for s in (
@@ -110,6 +139,7 @@ class Components:
         self.webhooks = webhook.Webhooks(self.ctx)
         self.kafka_source = KafkaSource(self.ctx) if config.kafka_broker else None
         self.kafka_sink = KafkaSink(self.ctx) if config.kafka_broker else None
+        self.kafka_formats = KafkaFormats(self.ctx) if config.kafka_broker else None
         self.last_progress = time.monotonic()
 
     def setup_upstreams(self) -> None:
@@ -118,6 +148,8 @@ class Components:
             source.setup_upstream()
         if self.kafka_source is not None:
             self.kafka_source.setup_upstream()
+        if self.kafka_formats is not None:
+            self.kafka_formats.setup_upstream()
 
     def setup_statements(self) -> list[str]:
         """DDL that every timeline starts from, run before setup completes.
@@ -127,15 +159,27 @@ class Components:
         """
         schemas = [HISTORY_SCHEMA, COUNTERS_SCHEMA, IVM_SCHEMA, atomic.SCHEMA]
         schemas += [pg.SCHEMA, mysql.SCHEMA, sqlserver.SCHEMA, webhook.SCHEMA]
-        schemas += ["kafkasrc", "snk"]
+        schemas += ["kafkasrc", "snk", read_only.SCHEMA]
+        schemas += [windows.SCHEMA, aggregates.SCHEMA, "kafkarec"]
+        schemas += [datatypes.SCHEMA, copies.SCHEMA]
+        schemas += [schema_evolution.SCHEMA, rebinding.SCHEMA]
+        schemas += [cancel.SCHEMA, asof.SCHEMA, bluegreen.SCHEMA]
         statements = [f"DROP SCHEMA IF EXISTS {s} CASCADE" for s in schemas]
         statements += (
             create_statements(0) + view_statements() + atomic.setup_statements()
         )
+        statements += windows.setup_statements() + aggregates.setup_statements()
+        statements += datatypes.setup_statements() + copies.setup_statements()
+        statements += schema_evolution.setup_statements()
+        statements += rebinding.setup_statements()
+        statements += cancel.setup_statements() + asof.setup_statements()
+        statements += self.bluegreen.setup_statements()
         for source in self.cdc:
             statements += source.setup_statements()
         statements += self.webhooks.setup_statements()
-        for component in (self.kafka_source, self.kafka_sink):
+        if self.read_only is not None:
+            statements += read_only.setup_statements()
+        for component in (self.kafka_source, self.kafka_sink, self.kafka_formats):
             if component is not None:
                 statements += component.setup_statements()
         return statements
@@ -173,7 +217,7 @@ class _NoCdc:
     def write(self, d: HegelDraw) -> Status:
         return Status.NOT_SENT
 
-    check = add_column = write
+    check = add_column = export = write
 
 
 def _cdc(d: HegelDraw) -> CdcSource | _NoCdc:
@@ -245,6 +289,15 @@ def _eventually(c: Components) -> None:
         step("counters", lambda: c.counters.eventually(deadline))
         step("views", lambda: c.views.eventually(deadline))
         step("atomic", lambda: c.atomic.eventually(deadline))
+        step("windows", lambda: c.windows.eventually(deadline))
+        step("aggregates", lambda: c.aggregates.eventually(deadline))
+        step("data types", lambda: c.datatypes.eventually(deadline))
+        step("copies", lambda: c.copies.eventually(deadline))
+        step("schema evolution", lambda: c.schema_evolution.eventually(deadline))
+        step("rebinding", lambda: c.rebinding.eventually(deadline))
+        step("cancel", lambda: c.cancel.eventually(deadline))
+        step("as of", lambda: c.asof.eventually(deadline))
+        step("blue/green", lambda: c.bluegreen.eventually(deadline))
         for source in c.cdc:
             step(source.dialect.schema, lambda: source.eventually(deadline))
         step("webhooks", lambda: c.webhooks.eventually(deadline))
@@ -257,6 +310,13 @@ def _eventually(c: Components) -> None:
             step(
                 "kafka sink",
                 lambda: c.kafka_sink.eventually(deadline) if c.kafka_sink else None,
+            )
+        if c.kafka_formats is not None:
+            step(
+                "kafka formats",
+                lambda: (
+                    c.kafka_formats.eventually(deadline) if c.kafka_formats else None
+                ),
             )
     if serving and (c.cdc or c.kafka_source is not None):
         step("sources", lambda: health.sources_progress(c.ctx, deadline))
@@ -276,11 +336,17 @@ class Driver(hegel.StateMachine):
         c.counters.configure(d)
         c.views.configure(d)
         c.atomic.configure(d)
+        c.windows.configure(d)
+        c.aggregates.configure(d)
+        c.cancel.configure(d)
+        c.asof.configure(d)
+        c.bluegreen.configure(d)
+        c.flags.configure(d)
         c.disruptions.configure(d)
         for source in c.cdc:
             source.configure(d)
         c.webhooks.configure(d)
-        for kafka in (c.kafka_source, c.kafka_sink):
+        for kafka in (c.kafka_source, c.kafka_sink, c.kafka_formats):
             if kafka is not None:
                 kafka.configure(d)
                 # Only once: hegel can start a machine more than once.
@@ -292,7 +358,9 @@ class Driver(hegel.StateMachine):
             f" rmw {c.history.rmw_share}, epoch {c.history.epoch_size};"
             f" counters keys {c.counters.keys};"
             f" disruption cooldown {c.disruptions.cooldown}s,"
-            f" rollout kill probability {c.disruptions.kill_probability}"
+            f" rollout kill probability {c.disruptions.kill_probability};"
+            f" cancel modes {c.cancel.modes} share {c.cancel.cancel_share};"
+            f" system parameter changes {c.flags.enabled}"
         )
 
     @hegel.rule(weight=6)
@@ -355,6 +423,150 @@ class Driver(hegel.StateMachine):
     def atomic_prune(self, tc: hegel.TestCase) -> None:
         guarded("atomic prune", components().atomic.prune, tc)
 
+    @hegel.rule(weight=3)
+    def windows_write(self, tc: hegel.TestCase) -> None:
+        guarded("windows write", components().windows.write, tc)
+
+    @hegel.rule()
+    def windows_check(self, tc: hegel.TestCase) -> None:
+        guarded("windows check", components().windows.check, tc)
+
+    @hegel.rule(weight=3)
+    def aggregates_write(self, tc: hegel.TestCase) -> None:
+        guarded("aggregates write", components().aggregates.write, tc)
+
+    @hegel.rule()
+    def aggregates_check(self, tc: hegel.TestCase) -> None:
+        guarded("aggregates check", components().aggregates.check, tc)
+
+    @hegel.rule(weight=3)
+    def datatypes_write(self, tc: hegel.TestCase) -> None:
+        guarded("data types write", components().datatypes.write, tc)
+
+    @hegel.rule()
+    def datatypes_check(self, tc: hegel.TestCase) -> None:
+        guarded("data types check", components().datatypes.check, tc)
+
+    @hegel.rule(weight=2)
+    def copy_in(self, tc: hegel.TestCase) -> None:
+        guarded("copy in", components().copies.copy_in, tc)
+
+    @hegel.rule()
+    def copy_check(self, tc: hegel.TestCase) -> None:
+        guarded("copy check", components().copies.check, tc)
+
+    @hegel.rule()
+    def copy_out(self, tc: hegel.TestCase) -> None:
+        guarded("copy out", components().copies.copy_out, tc)
+
+    @hegel.rule(weight=4)
+    def schema_insert(self, tc: hegel.TestCase) -> None:
+        guarded("schema insert", components().schema_evolution.insert, tc)
+
+    @hegel.rule(weight=2)
+    def schema_read(self, tc: hegel.TestCase) -> None:
+        guarded("schema read", components().schema_evolution.read, tc)
+
+    @hegel.rule(weight=2)
+    def schema_check(self, tc: hegel.TestCase) -> None:
+        guarded("schema check", components().schema_evolution.check, tc)
+
+    @hegel.rule()
+    def schema_add_column(self, tc: hegel.TestCase) -> None:
+        guarded("schema add column", components().schema_evolution.add_column, tc)
+
+    @hegel.rule(weight=0.5)
+    def schema_dependent(self, tc: hegel.TestCase) -> None:
+        guarded("schema dependent", components().schema_evolution.dependent, tc)
+
+    @hegel.rule(weight=0.5)
+    def schema_rotate(self, tc: hegel.TestCase) -> None:
+        guarded("schema rotate", components().schema_evolution.rotate, tc)
+
+    @hegel.rule(weight=3)
+    def rebinding_prepared(self, tc: hegel.TestCase) -> None:
+        guarded("rebinding prepared", components().rebinding.prepared, tc)
+
+    @hegel.rule(weight=3)
+    def rebinding_read(self, tc: hegel.TestCase) -> None:
+        guarded("rebinding read", components().rebinding.read, tc)
+
+    @hegel.rule(weight=2)
+    def rebinding_cursor(self, tc: hegel.TestCase) -> None:
+        guarded("rebinding cursor", components().rebinding.cursor, tc)
+
+    @hegel.rule()
+    def rebinding_replace(self, tc: hegel.TestCase) -> None:
+        guarded("rebinding replace", components().rebinding.replace, tc)
+
+    @hegel.rule()
+    def rebinding_temp(self, tc: hegel.TestCase) -> None:
+        guarded("rebinding temp", components().rebinding.temp, tc)
+
+    @hegel.rule(weight=3)
+    def cancel_write(self, tc: hegel.TestCase) -> None:
+        guarded("cancel write", components().cancel.write, tc)
+
+    @hegel.rule(weight=3)
+    def cancel_change(self, tc: hegel.TestCase) -> None:
+        guarded("cancel change", components().cancel.change, tc)
+
+    @hegel.rule(weight=3)
+    def cancel_read(self, tc: hegel.TestCase) -> None:
+        guarded("cancel read", components().cancel.read, tc)
+
+    @hegel.rule(weight=0.5)
+    def cancel_subscribe(self, tc: hegel.TestCase) -> None:
+        guarded("cancel subscribe", components().cancel.subscribe, tc)
+
+    @hegel.rule(weight=0.5)
+    def cancel_ddl(self, tc: hegel.TestCase) -> None:
+        guarded("cancel ddl", components().cancel.ddl, tc)
+
+    @hegel.rule(weight=3)
+    def asof_write(self, tc: hegel.TestCase) -> None:
+        guarded("as of write", components().asof.write, tc)
+
+    @hegel.rule()
+    def asof_observe(self, tc: hegel.TestCase) -> None:
+        guarded("as of observe", components().asof.observe, tc)
+
+    @hegel.rule(weight=2)
+    def asof_reread(self, tc: hegel.TestCase) -> None:
+        guarded("as of reread", components().asof.reread, tc)
+
+    @hegel.rule(weight=0.5)
+    def asof_subscribe(self, tc: hegel.TestCase) -> None:
+        guarded("as of subscribe", components().asof.subscribe, tc)
+
+    @hegel.rule(weight=3)
+    def bluegreen_write(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green write", components().bluegreen.write, tc)
+
+    @hegel.rule(weight=4)
+    def bluegreen_read(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green read", components().bluegreen.read, tc)
+
+    @hegel.rule(weight=0.3)
+    def bluegreen_subscribe(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green subscribe", components().bluegreen.subscribe, tc)
+
+    @hegel.rule(weight=0.3)
+    def bluegreen_stage(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green stage", components().bluegreen.stage, tc)
+
+    @hegel.rule(weight=0.3)
+    def bluegreen_swap(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green swap", components().bluegreen.swap, tc)
+
+    @hegel.rule(weight=0.3)
+    def bluegreen_cleanup(self, tc: hegel.TestCase) -> None:
+        guarded("blue/green cleanup", components().bluegreen.cleanup, tc)
+
+    @hegel.rule(weight=0.5)
+    def flip_parameter(self, tc: hegel.TestCase) -> None:
+        guarded("flip system parameter", components().flags.flip, tc)
+
     @hegel.rule(weight=6)
     def cdc_write(self, tc: hegel.TestCase) -> None:
         guarded("cdc write", lambda d: _cdc(d).write(d), tc)
@@ -366,6 +578,10 @@ class Driver(hegel.StateMachine):
     @hegel.rule(weight=0.3)
     def cdc_add_column(self, tc: hegel.TestCase) -> None:
         guarded("cdc add column", lambda d: _cdc(d).add_column(d), tc)
+
+    @hegel.rule(weight=0.5)
+    def cdc_export(self, tc: hegel.TestCase) -> None:
+        guarded("cdc export", lambda d: _cdc(d).export(d), tc)
 
     @hegel.rule(weight=2)
     def webhook_post(self, tc: hegel.TestCase) -> None:
@@ -384,6 +600,21 @@ class Driver(hegel.StateMachine):
     def kafka_check(self, tc: hegel.TestCase) -> None:
         k = components().kafka_source
         guarded("kafka source check", k.check if k else _off, tc)
+
+    @hegel.rule(weight=4)
+    def kafka_formats_produce(self, tc: hegel.TestCase) -> None:
+        k = components().kafka_formats
+        guarded("kafka formats produce", k.produce if k else _off, tc)
+
+    @hegel.rule(weight=3)
+    def kafka_formats_check(self, tc: hegel.TestCase) -> None:
+        k = components().kafka_formats
+        guarded("kafka formats check", k.check if k else _off, tc)
+
+    @hegel.rule(weight=0.3)
+    def kafka_formats_evolve(self, tc: hegel.TestCase) -> None:
+        k = components().kafka_formats
+        guarded("kafka formats evolve", k.evolve if k else _off, tc)
 
     @hegel.rule(weight=3)
     def sink_write(self, tc: hegel.TestCase) -> None:
@@ -414,6 +645,21 @@ class Driver(hegel.StateMachine):
     @hegel.rule(weight=2)
     def advance_rollout(self, tc: hegel.TestCase) -> None:
         guarded("advance rollout", components().disruptions.advance_rollout, tc)
+
+    @hegel.rule()
+    def read_only_probe_write(self, tc: hegel.TestCase) -> None:
+        r = components().read_only
+        guarded("read-only probe write", r.probe_write if r else _off, tc)
+
+    @hegel.rule()
+    def read_only_walsenders(self, tc: hegel.TestCase) -> None:
+        r = components().read_only
+        guarded("read-only walsenders", r.walsenders if r else _off, tc)
+
+    @hegel.rule()
+    def timestamp_oracle(self, tc: hegel.TestCase) -> None:
+        r = components().read_only
+        guarded("timestamp oracle", r.oracle if r else _off, tc)
 
     @hegel.rule()
     def eventually(self, tc: hegel.TestCase) -> None:

@@ -24,10 +24,11 @@ from urllib.parse import unquote, urlparse
 import psycopg
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always,
+    always_or_unreachable,
     sometimes,
 )
 
-from materialize.antithesis_driver import cdc
+from materialize.antithesis_driver import cdc, cdc_types
 from materialize.antithesis_driver.client import RolledBack, Upstream, connect
 from materialize.antithesis_driver.context import Context
 
@@ -49,6 +50,8 @@ class Postgres:
     ledger = f"{UPSTREAM_SCHEMA}.ledger"
     errors = (psycopg.Error, OSError, RolledBack)
     rtr_needs_capture = False
+    types = cdc_types.POSTGRES
+    types_table = f"{UPSTREAM_SCHEMA}.types"
 
     def __init__(self, url: str, mz_host: str | None) -> None:
         self.url = url
@@ -79,6 +82,22 @@ class Postgres:
                 " (txn bigint, tbl int, PRIMARY KEY (txn, tbl))".encode()
             )
             conn.execute(f"ALTER TABLE {self.ledger} REPLICA IDENTITY FULL".encode())
+            values = ", ".join(f"'{v}'" for v in cdc_types.ENUM_VALUES)
+            conn.execute(
+                f"CREATE TYPE {cdc_types.POSTGRES_ENUM} AS ENUM ({values})".encode()
+            )
+            t = self.types_table
+            conn.execute(cdc_types.create_table(t, self.types).encode())
+            conn.execute(f"ALTER TABLE {t} REPLICA IDENTITY FULL".encode())
+            for c in self.types:
+                if c.big is not None:
+                    # Out of line whatever the value compresses to, so an
+                    # update that leaves it untouched sends no value for it.
+                    conn.execute(
+                        f"ALTER TABLE {t} ALTER COLUMN {c.name} SET STORAGE EXTERNAL".encode()
+                    )
+            for statement, params in cdc_types.sweep(t, self.types):
+                conn.execute(statement.encode(), params)
             conn.execute(
                 f"CREATE PUBLICATION {PUBLICATION} FOR TABLES IN SCHEMA {UPSTREAM_SCHEMA}".encode()
             )
@@ -106,6 +125,8 @@ class Postgres:
                 f" (REFERENCE {UPSTREAM_SCHEMA}.t{j})"
                 for j in range(cdc.TABLES)
             ),
+            f"CREATE TABLE IF NOT EXISTS {SCHEMA}.types FROM SOURCE {SCHEMA}.src"
+            f" (REFERENCE {self.types_table}){cdc_types.text_columns(self.types)}",
         ]
 
     def session(self, cur: Any) -> Any:
@@ -156,6 +177,9 @@ class Postgres:
         return (
             f"ALTER TABLE {UPSTREAM_SCHEMA}.t{table} ADD COLUMN c{n} text DEFAULT 'c'"
         )
+
+    def reference(self, table: int) -> str:
+        return f"{UPSTREAM_SCHEMA}.t{table}"
 
     def progress(self) -> str:
         return f"SELECT 'p', lsn::text, NULL::text FROM {SCHEMA}.src"
@@ -250,6 +274,61 @@ class Postgres:
         always(
             caught_up,
             "postgres source: after faults stop the source reflects every committed upstream transaction",
+            details,
+        )
+
+    def report_added(self, v: cdc.Verdict, details: dict[str, Any]) -> None:
+        if v.prefix is not None:
+            # Reported apart from the check below, so that an export that is
+            # only ahead does not hide one that is wrong.
+            always_or_unreachable(
+                v.added_ahead is None,
+                "postgres source: an export added while the source ingests is never read ahead of the other exports",
+                {**details, "ahead": v.added_ahead, "mismatch": v.added_mismatch},
+            )
+            always_or_unreachable(
+                v.added_mismatch is None or v.added_ahead is not None,
+                "postgres source: an export added while the source ingests equals its upstream table at the same prefix as the other exports",
+                {**details, "mismatch": v.added_mismatch},
+            )
+        sometimes(
+            v.prefix is not None and bool(v.added_rows),
+            "postgres source: a check compared a nonempty export added while the source ingests",
+            details,
+        )
+
+    def report_types(self, v: cdc_types.Verdict, details: dict[str, Any]) -> None:
+        always(
+            not v.mismatches,
+            "postgres source: every column of a visible types row holds the value its seed determines",
+            {**details, "mismatches": v.mismatches},
+        )
+        always(
+            not v.duplicates,
+            "postgres source: the types export holds at most one row per upstream primary key",
+            {**details, "duplicates": v.duplicates},
+        )
+        matched = v.rows > 0 and not v.mismatches
+        sometimes(
+            matched and v.snapshot_rows == cdc_types.SWEEP,
+            "postgres source: a types check matched a row for every sample value of every column",
+            {**details, "nulls": v.nulls},
+        )
+        sometimes(
+            matched and v.snapshot_rows > 0 and v.workload_rows > 0,
+            "postgres source: a types check matched rows that arrived by snapshot and by replication",
+            {**details, "snapshot": v.snapshot_rows, "replication": v.workload_rows},
+        )
+        sometimes(
+            matched and v.untouched_rows > 0,
+            "postgres source: a types check matched a row whose large columns an update left untouched",
+            {**details, "untouched": v.untouched_rows},
+        )
+
+    def report_types_caught_up(self, equal: bool, details: dict[str, Any]) -> None:
+        always(
+            equal,
+            "postgres source: after faults stop the types export equals the upstream types table",
             details,
         )
 

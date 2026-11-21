@@ -15,6 +15,7 @@ import json
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 
@@ -27,14 +28,33 @@ class Record:
 
 
 def canonical(value: str) -> str:
+    """One text per JSON value, or `ValueError` for text that is not JSON.
+
+    Numbers compare by value, as in `jsonb`, which stores them as `numeric`:
+    `1e2`, `100` and `100.0` are one value, and so are `0` and `-0.0`. A
+    repeated key keeps its last value.
+    """
+
     def invalid(token: str) -> None:
         raise ValueError(f"invalid JSON constant: {token}")
 
-    return json.dumps(
-        json.loads(value, parse_constant=invalid),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
+    def text(node: Any) -> str:
+        if isinstance(node, dict):
+            members = (
+                f"{json.dumps(k, ensure_ascii=False)}:{text(node[k])}"
+                for k in sorted(node)
+            )
+            return "{" + ",".join(members) + "}"
+        if isinstance(node, list):
+            return "[" + ",".join(text(item) for item in node) + "]"
+        if isinstance(node, Decimal):
+            return format(node.normalize(), "f") if node else "0"
+        return json.dumps(node, ensure_ascii=False)
+
+    return text(
+        json.loads(
+            value, parse_constant=invalid, parse_float=Decimal, parse_int=Decimal
+        )
     )
 
 
@@ -89,6 +109,43 @@ def validate(
             f"latest acknowledged values differ: expected={wanted}, actual={actual}"
         ]
     return []
+
+
+def validate_inline(
+    records: Sequence[Record], rows: Sequence[Sequence[Any]]
+) -> list[str]:
+    """Judge a read of an export that reports value decode errors inline.
+
+    Each row is the key, the value's text or None, and the error or None. A
+    key whose latest value does not decode must show an error and no value,
+    every other key its latest value and no error.
+    """
+    wanted, errors = expected(records)
+    seen: dict[str, tuple[Any, Any]] = {}
+    for row in rows:
+        if len(row) != 3 or not isinstance(row[0], str):
+            return ["malformed inline-error row"]
+        if row[0] in seen:
+            return [f"key {row[0]!r} has more than one row"]
+        seen[row[0]] = (row[1], row[2])
+    problems = []
+    for key in sorted(errors):
+        value, error = seen.pop(key, (None, None))
+        if error is None or value is not None:
+            problems.append(f"key {key!r} shows value {value!r} and error {error!r}")
+    for key, document in sorted(wanted):
+        value, error = seen.pop(key, (None, None))
+        try:
+            same = error is None and value is not None and canonical(value) == document
+        except ValueError:
+            same = False
+        if not same:
+            problems.append(
+                f"key {key!r} shows value {value!r} and error {error!r},"
+                f" expected {document!r}"
+            )
+    problems.extend(f"unexpected key {key!r}" for key in sorted(seen))
+    return problems
 
 
 def offsets(records: Sequence[Record]) -> dict[int, int]:

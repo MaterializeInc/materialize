@@ -530,3 +530,85 @@ def test_webhook_malformed_body_must_not_be_accepted(
     assert r.acked_at is None
     message = "webhook: a request whose body is not JSON is never accepted"
     assert (message in recorder.failed()) == accepted
+
+
+def test_a_designed_exit_differs_from_a_sigterm_by_its_record() -> None:
+    from materialize.antithesis_driver import health
+
+    def record(code: int) -> str:
+        loc, msg = b"src/x.rs:1:2", b"boom"
+        return (
+            f"MZHALT1 0 {code} 1794126164332733492 {len(loc)} {len(msg)}"
+            f" {loc.hex()} {msg.hex()} END\n"
+        )
+
+    assert health.exit_class(143, None, record(166)) == "halt"
+    assert health.exit_class(143, None, record(134)) == "panic"
+    assert health.exit_class(143, None, None) == "killed"
+    assert health.exit_class(143, None, record(166)[:-5]) == "killed"
+
+
+def test_memory_log_names_the_pods_that_hold_the_memory() -> None:
+    from materialize.antithesis_driver import memory
+
+    def pod(name: str, mib: int) -> dict[str, Any]:
+        return {
+            "podRef": {"name": name},
+            "memory": {"workingSetBytes": mib * memory.MIB},
+        }
+
+    pods = [pod(f"clusterd-{i}", 100 + i) for i in range(memory.TOP_PODS)]
+    # A pod the kubelet has no reading for yet.
+    pods += [pod("environmentd-0", 2000), {"podRef": {"name": "starting"}}]
+    share, line = memory.describe(
+        {
+            "node": {
+                "memory": {
+                    "workingSetBytes": 9000 * memory.MIB,
+                    "availableBytes": 1000 * memory.MIB,
+                }
+            },
+            "pods": pods,
+        }
+    )
+    assert share == 0.9
+    in_pods = 2000 + sum(100 + i for i in range(memory.TOP_PODS))
+    assert line.startswith(
+        "memory: 90% of 10000 MiB in use by 16 pods,"
+        " MiB per pod: environmentd-0 2000, clusterd-13 113,"
+    )
+    assert line.endswith(f", other pods 100, outside pods {9000 - in_pods}")
+
+
+def test_an_added_export_is_judged_at_the_prefix_of_the_other_exports() -> None:
+    from materialize.antithesis_driver import cdc
+
+    model = cdc.Model()
+    plans = [
+        (cdc.Plan(0, "upsert", 1, "a"),),
+        (cdc.Plan(0, "upsert", 2, "b"),),
+        (cdc.Plan(0, "update", 1, "c"),),
+    ]
+    for i, p in enumerate(plans, start=1):
+        model.commit(cdc.Txn(i, p, begun=100 * i, acked_at=None))
+
+    def read(added: list[tuple[int, str | None]]) -> cdc.Verdict:
+        # The ledger and the other exports show the first transaction only.
+        snap = cdc.Snapshot(1, None, 0, [(1, 0)], [[(1, "a")], [], []], (0, added))
+        return cdc.judge(model, snap)
+
+    equal = read([(1, "a")])
+    assert equal.prefix == 1 and equal.added_rows == 1
+    assert equal.added_mismatch is None and equal.added_ahead is None
+
+    # The table as it is after the third transaction.
+    ahead = read([(1, "c"), (2, "b")])
+    assert ahead.added_ahead == 3 and ahead.added_mismatch is not None
+    assert ahead.added_mismatch["extra"] == [2]
+    assert ahead.added_mismatch["changed"] == [1]
+
+    # No prefix of the commit order gives these rows.
+    wrong = read([(2, "b")])
+    assert wrong.added_mismatch is not None and wrong.added_ahead is None
+    duplicate = read([(1, "a"), (1, "a")])
+    assert duplicate.added_mismatch is not None and duplicate.added_ahead is None

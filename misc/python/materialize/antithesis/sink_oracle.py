@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -74,15 +74,20 @@ def decode_message(
     key: bytes | None,
     value: bytes | None,
     headers: Sequence[tuple[str, bytes | None]],
+    loads: Callable[[bytes], Any] = json.loads,
 ) -> SinkMessage | str:
-    """Decode a JSON-format sink message, or describe why it does not decode."""
+    """Decode a sink message, or describe why it does not decode.
+
+    `loads` decodes a key or value payload and raises `ValueError` for one it
+    cannot decode. The default reads the JSON format.
+    """
     ts_raw = [v for k, v in headers if k == TIMESTAMP_HEADER]
     if len(ts_raw) != 1 or ts_raw[0] is None:
         return f"{partition}@{offset}: {len(ts_raw)} timestamp headers"
     try:
         ts = int(ts_raw[0].decode())
-        k = freeze(json.loads(key)) if key is not None else None
-        v = json.loads(value) if value is not None else None
+        k = freeze(loads(key)) if key is not None else None
+        v = loads(value) if value is not None else None
     except (ValueError, UnicodeDecodeError) as e:
         return f"{partition}@{offset}: {e}"
     if v is not None and not isinstance(v, dict):

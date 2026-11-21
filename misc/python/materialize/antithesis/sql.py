@@ -304,6 +304,42 @@ def classify_kafka_ddl(error: BaseException) -> Classified:
     return c
 
 
+# `PlanError::{Postgres,MySql,SqlServer}ConnectionErr`, and what the
+# connection's `validate` passes on unstructured from the upstream's client.
+# Observed with a stopped upstream whose name no longer resolved. The other
+# alternatives are the transport errors of `_RTR_UPSTREAM_TEMPLATE`.
+_SOURCE_DDL_UPSTREAM_TEMPLATE = re.compile(
+    r"^(storage error: )?(failed to connect to (PostgreSQL|MySQL|SQL Server) database"
+    r"|failed to lookup address information: .*"
+    r"|error communicating with the server|error connecting to server"
+    r"|connection closed|timeout waiting for server|Input/output error: .*|direct"
+    r"|An error occured during the attempt of performing I/O: .*"
+    r"|sql server client encountered I/O error: .*|Token error: .*)"
+)
+# A SQL Server capture instance keeps the columns its table had when it was
+# created, so a table that gained a column since cannot be exported again.
+_CAPTURE_INSTANCE_TEMPLATE = re.compile(
+    r"^SQL SERVER source validation: Capture instance \S+ has missing columns"
+)
+
+
+def classify_source_ddl(error: BaseException) -> Classified:
+    """`classify` for a `CREATE TABLE ... FROM SOURCE`.
+
+    Purification connects to the upstream before the statement is sequenced.
+    An upstream that is down or partitioned from environmentd fails it, and
+    nothing is created. No other statement of the driver contacts an upstream
+    this way, so for them the same error is a violation.
+    """
+    c = classify(error)
+    if c.sqlstate == "XX000" and (
+        _SOURCE_DDL_UPSTREAM_TEMPLATE.search(c.template)
+        or _CAPTURE_INSTANCE_TEMPLATE.search(c.template)
+    ):
+        return Classified(Outcome.REJECTED, c.sqlstate, c.template)
+    return c
+
+
 def connect(
     host: str,
     *,

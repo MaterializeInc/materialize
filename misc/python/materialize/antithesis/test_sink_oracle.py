@@ -278,3 +278,16 @@ def test_bag_diff() -> None:
     d = o.bag_diff([(1,), (1,), (2,)], [(1,), (3,)])
     assert d["missing_count"] == 2 and d["extra_count"] == 1
     assert d["missing"] == [[1], [2]] and d["extra"] == [[3]]
+
+
+def test_decode_message_with_another_payload_format() -> None:
+    def loads(payload: bytes) -> dict:
+        if not payload.startswith(b"\x00"):
+            raise ValueError("not in the wire format")
+        return {"id": payload[1]}
+
+    headers = [(o.TIMESTAMP_HEADER, b"7")]
+    m = o.decode_message(1, 2, b"\x00\x05", b"\x00\x09", headers, loads)
+    assert isinstance(m, o.SinkMessage)
+    assert (m.key, m.value, m.ts) == (o.freeze({"id": 5}), {"id": 9}, 7)
+    assert isinstance(o.decode_message(1, 2, b"{}", b"{}", headers, loads), str)

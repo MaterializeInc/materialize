@@ -42,3 +42,40 @@ def test_model_refuses_ambiguous_key_order_and_conflicting_acknowledgements():
         model.expected([model.Record(0, 0, "a", "1"), model.Record(1, 0, "a", "2")])
     with pytest.raises(ValueError, match="conflicting"):
         model.expected([model.Record(0, 0, "a", "1"), model.Record(0, 0, "a", "2")])
+
+
+def test_canonical_compares_numbers_by_value_and_keeps_the_last_duplicate_key():
+    same = [
+        ('{"n": 1e2, "f": 2.50}', '{"f":2.5,"n":100}'),
+        ("-0.0", "0"),
+        ("1E-7", "0.0000001"),
+        ("12345678901234567890123456789", "12345678901234567890123456789"),
+        ("1.2345678901234567890123", "1.2345678901234567890123"),
+        ('{"dup": 1, "dup": 2}', '{"dup":2}'),
+        ('"\\u00e9\\n"', '"é\\n"'),
+        ('[true, null, "1"]', '[true,null,"1"]'),
+    ]
+    for document, stored in same:
+        assert model.canonical(document) == model.canonical(stored), document
+    assert model.canonical("1") != model.canonical('"1"')
+    assert model.canonical("1.5") != model.canonical("1.50000000000000000001")
+    for invalid in ("NaN", '{"a": Infinity}', "01", "[1,]", "", "{'a': 1}"):
+        with pytest.raises(ValueError):
+            model.canonical(invalid)
+
+
+def test_inline_errors_show_each_key_as_its_value_or_its_error():
+    records = [
+        model.Record(0, 0, "a", '{"n": 1e0}'),
+        model.Record(0, 1, "b", "{"),
+        model.Record(0, 2, "c", "1"),
+        model.Record(0, 3, "c", None),
+    ]
+    good = [("a", '{"n":1}', None), ("b", None, '("Failed to decode JSON")')]
+    assert not model.validate_inline(records, good)
+    assert model.validate_inline(records, good[:1])
+    assert model.validate_inline(records, [good[0], ("b", "1", None)])
+    assert model.validate_inline(records, [good[0], ("b", "1", "error")])
+    assert model.validate_inline(records, [("a", '{"n":2}', None), good[1]])
+    assert model.validate_inline(records, [*good, ("c", "1", None)])
+    assert model.validate_inline(records, [*good, good[0]])

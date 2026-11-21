@@ -29,7 +29,7 @@ COPY misc/python /usr/local/share/materialize/misc/python
 RUN grep -v -e '\[' -e '^--' /usr/local/share/materialize/misc/python/requirements.txt > /tmp/constraints.txt \
     && pip install --no-cache-dir --only-binary=:all: --constraint /tmp/constraints.txt \
         --requirement /usr/local/share/materialize/misc/python/materialize/antithesis/requirements.txt \
-        boto3 confluent-kafka cryptography kubernetes psycopg psycopg-binary pymssql \
+        boto3 confluent-kafka cryptography fastavro kubernetes psycopg psycopg-binary pymssql \
         PyMySQL pyyaml requests \
     && rm /tmp/constraints.txt
 

@@ -22,10 +22,11 @@ from urllib.parse import unquote, urlparse
 
 from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource]
     always,
+    always_or_unreachable,
     sometimes,
 )
 
-from materialize.antithesis_driver import cdc
+from materialize.antithesis_driver import cdc, cdc_types
 from materialize.antithesis_driver.context import Context
 
 DATABASE = "drv"
@@ -50,6 +51,8 @@ class MySql:
     schema = SCHEMA
     ledger = f"{DATABASE}.ledger"
     rtr_needs_capture = False
+    types = cdc_types.MYSQL
+    types_table = f"{DATABASE}.types"
 
     def __init__(self, url: str, mz_host: str | None) -> None:
         import pymysql
@@ -78,6 +81,9 @@ class MySql:
             connect_timeout=10,
             read_timeout=30,
             write_timeout=30,
+            # `timestamp` literals are read in the session's time zone, and
+            # `cdc_types` gives them in UTC.
+            init_command="SET time_zone = '+00:00'",
         )
 
     def setup_upstream(self) -> None:
@@ -90,6 +96,9 @@ class MySql:
                 f"CREATE TABLE {self.ledger}"
                 " (txn bigint, tbl int, PRIMARY KEY (txn, tbl))"
             )
+            cur.execute(cdc_types.create_table(self.types_table, self.types))
+            for statement, params in cdc_types.sweep(self.types_table, self.types):
+                cur.execute(statement, params)
             cur.execute("SELECT @@server_uuid")
             self.server_uuid = cur.fetchone()[0]
 
@@ -110,6 +119,8 @@ class MySql:
                 f" (REFERENCE {DATABASE}.t{j})"
                 for j in range(cdc.TABLES)
             ),
+            f"CREATE TABLE IF NOT EXISTS {SCHEMA}.types FROM SOURCE {SCHEMA}.src"
+            f" (REFERENCE {self.types_table}){cdc_types.text_columns(self.types)}",
         ]
 
     def session(self, cur: Any) -> Any:
@@ -165,6 +176,9 @@ class MySql:
 
     def add_column(self, table: int, n: int) -> str:
         return f"ALTER TABLE {DATABASE}.t{table} ADD COLUMN c{n} varchar(8) DEFAULT 'c'"
+
+    def reference(self, table: int) -> str:
+        return f"{DATABASE}.t{table}"
 
     def progress(self) -> str:
         return (
@@ -268,6 +282,61 @@ class MySql:
         always(
             caught_up,
             "mysql source: after faults stop the source reflects every committed upstream transaction",
+            details,
+        )
+
+    def report_added(self, v: cdc.Verdict, details: dict[str, Any]) -> None:
+        if v.prefix is not None:
+            # Reported apart from the check below, so that an export that is
+            # only ahead does not hide one that is wrong.
+            always_or_unreachable(
+                v.added_ahead is None,
+                "mysql source: an export added while the source ingests is never read ahead of the other exports",
+                {**details, "ahead": v.added_ahead, "mismatch": v.added_mismatch},
+            )
+            always_or_unreachable(
+                v.added_mismatch is None or v.added_ahead is not None,
+                "mysql source: an export added while the source ingests equals its upstream table at the same prefix as the other exports",
+                {**details, "mismatch": v.added_mismatch},
+            )
+        sometimes(
+            v.prefix is not None and bool(v.added_rows),
+            "mysql source: a check compared a nonempty export added while the source ingests",
+            details,
+        )
+
+    def report_types(self, v: cdc_types.Verdict, details: dict[str, Any]) -> None:
+        always(
+            not v.mismatches,
+            "mysql source: every column of a visible types row holds the value its seed determines",
+            {**details, "mismatches": v.mismatches},
+        )
+        always(
+            not v.duplicates,
+            "mysql source: the types export holds at most one row per upstream primary key",
+            {**details, "duplicates": v.duplicates},
+        )
+        matched = v.rows > 0 and not v.mismatches
+        sometimes(
+            matched and v.snapshot_rows == cdc_types.SWEEP,
+            "mysql source: a types check matched a row for every sample value of every column",
+            {**details, "nulls": v.nulls},
+        )
+        sometimes(
+            matched and v.snapshot_rows > 0 and v.workload_rows > 0,
+            "mysql source: a types check matched rows that arrived by snapshot and by replication",
+            {**details, "snapshot": v.snapshot_rows, "replication": v.workload_rows},
+        )
+        sometimes(
+            matched and v.untouched_rows > 0,
+            "mysql source: a types check matched a row whose large columns an update left untouched",
+            {**details, "untouched": v.untouched_rows},
+        )
+
+    def report_types_caught_up(self, equal: bool, details: dict[str, Any]) -> None:
+        always(
+            equal,
+            "mysql source: after faults stop the types export equals the upstream types table",
             details,
         )
 

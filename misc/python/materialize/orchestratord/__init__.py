@@ -55,6 +55,11 @@ class EnvironmentdGeneration:
     image: str
     force: str | None
     """Value of the `materialize.cloud/force` annotation on the StatefulSet."""
+    args: tuple[str, ...] = ()
+    """The environmentd container's arguments."""
+    resources: dict[str, dict[str, str]] | None = None
+    """The environmentd container's resource requests and limits."""
+    deleting: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,15 +195,29 @@ class Materialize:
             template = sts.spec.template
             assert template.spec is not None
             annotations = sts.metadata.annotations or {}
-            image = template.spec.containers[0].image
-            assert image is not None
+            containers = template.spec.containers
+            container = next(
+                (c for c in containers if c.name == "environmentd"), containers[0]
+            )
+            assert container.image is not None
+            resources = container.resources
             result.append(
                 EnvironmentdGeneration(
                     generation=int(suffix),
                     statefulset_name=name,
                     statefulset_uid=sts.metadata.uid,
-                    image=image,
+                    image=container.image,
                     force=annotations.get("materialize.cloud/force"),
+                    args=tuple(container.args or ()),
+                    resources=(
+                        {
+                            "requests": dict(resources.requests or {}),
+                            "limits": dict(resources.limits or {}),
+                        }
+                        if resources is not None
+                        else None
+                    ),
+                    deleting=sts.metadata.deletion_timestamp is not None,
                 )
             )
         return sorted(result, key=lambda g: g.generation)

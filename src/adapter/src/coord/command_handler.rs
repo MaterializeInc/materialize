@@ -2023,6 +2023,10 @@ impl Coordinator {
             });
         self.pending_writes = kept;
         for pending in cancelled {
+            mz_ore::antithesis_reachable!(
+                "adapter: a cancel removed a pending write before it entered the committer",
+                &serde_json::json!({})
+            );
             match pending {
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),

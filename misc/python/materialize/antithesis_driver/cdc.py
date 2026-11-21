@@ -22,6 +22,17 @@ the commit order, each transaction whole, consistent with the progress
 position. Every export must equal its table replayed to that prefix, which
 also checks that transactions spanning tables arrive atomically.
 
+A share of the writes and checks goes to a fourth table, `types`, with one
+column per upstream type (`cdc_types`). Its rows say what they hold, so its
+check judges every value the export shows without the model, and the ledger
+does not cover it.
+
+A further export of one of the three tables is created and dropped while the
+source ingests. Its snapshot is taken at a later upstream position than the
+one the source resumes the other tables from, and the source rewinds it to
+that position, so at every timestamp it is readable it must equal its table
+at the same ledger prefix as the others.
+
 Each upstream is a `Dialect` (`pg.py`, `mysql.py`, `sqlserver.py`). It makes
 its own assertion calls, because the Antithesis catalog needs each message
 as a literal at its call site.
@@ -38,6 +49,7 @@ from typing import Any, Protocol
 import psycopg
 
 from materialize.antithesis import sql
+from materialize.antithesis_driver import cdc_types
 from materialize.antithesis_driver.client import Op, Outcome, Status, Worker
 from materialize.antithesis_driver.context import RULE_WAIT_SECONDS, Context, log
 from materialize.antithesis_driver.draw import Draw
@@ -47,6 +59,8 @@ TABLES = 3
 CHECKPOINT_EVERY = 64
 DROP_COMMIT_RESPONSE_SHARE = 0.02
 MAX_ADDED_COLUMNS = 8
+TYPES_SHARE = 0.25
+"""How many of the writes and of the checks go to the `types` table."""
 SETTINGS = {"transaction_isolation": "'strict serializable'", "cluster": "quickstart"}
 INTERESTING_VALUES = ("", "NULL", "'", '"', "\\", "κλειδί", "x" * 3000)
 
@@ -139,6 +153,9 @@ class Snapshot:
     position_rows: int
     ledger: list[tuple[int, int]]
     exports: list[list[tuple[int, str | None]]]
+    added: tuple[int, list[tuple[int, str | None]]] | None = None
+    """The upstream table of the export added to the running source and the
+    export's rows, if the check read it."""
 
 
 @dataclass
@@ -156,6 +173,12 @@ class Verdict:
     duplicate_keys: dict[int, list[int]] = field(default_factory=dict)
     mismatches: dict[int, dict[str, Any]] = field(default_factory=dict)
     compared_rows: int = 0
+    added_rows: int | None = None
+    """How many rows of the added export were compared, if it was read."""
+    added_mismatch: dict[str, Any] | None = None
+    added_ahead: int | None = None
+    """The later prefix at which the added export equals its table, if it
+    differs at the read's prefix and matches there."""
 
 
 def judge(model: Model, snap: Snapshot, pending: Txn | None = None) -> Verdict:
@@ -214,22 +237,39 @@ def judge(model: Model, snap: Snapshot, pending: Txn | None = None) -> Verdict:
             continue
         observed = dict(rows)
         if observed != expected[j]:
-            missing = sorted(set(expected[j]) - set(observed))
-            extra = sorted(set(observed) - set(expected[j]))
-            changed = sorted(
-                key
-                for key in set(observed) & set(expected[j])
-                if observed[key] != expected[j][key]
-            )
-            v.mismatches[j] = {
-                "missing": missing[:10],
-                "extra": extra[:10],
-                "changed": changed[:10],
-                "expected_rows": len(expected[j]),
-                "observed_rows": len(observed),
-            }
+            v.mismatches[j] = _difference(observed, expected[j])
         v.compared_rows += len(observed)
+    if snap.added is not None:
+        j, rows = snap.added
+        observed = dict(rows)
+        v.added_rows = len(rows)
+        if len(observed) != len(rows) or observed != expected[j]:
+            v.added_mismatch = {"table": j, **_difference(observed, expected[j])}
+            v.added_mismatch["observed_rows"] = len(rows)
+            later = [dict(table) for table in expected]
+            for n, txn in enumerate(committed[k:], start=k + 1):
+                for plan in txn.plans:
+                    apply(later, plan)
+                if len(observed) == len(rows) and later[j] == observed:
+                    v.added_ahead = n
+                    break
     return v
+
+
+def _difference(
+    observed: dict[int, str | None], expected: dict[int, str | None]
+) -> dict[str, Any]:
+    return {
+        "missing": sorted(set(expected) - set(observed))[:10],
+        "extra": sorted(set(observed) - set(expected))[:10],
+        "changed": sorted(
+            key
+            for key in set(observed) & set(expected)
+            if observed[key] != expected[key]
+        )[:10],
+        "expected_rows": len(expected),
+        "observed_rows": len(observed),
+    }
 
 
 @dataclass
@@ -301,6 +341,14 @@ class Dialect(Protocol):
 
     def add_column(self, table: int, n: int) -> str: ...
 
+    def reference(self, table: int) -> str:
+        """The upstream name of table `table`, as `REFERENCE` takes it."""
+        ...
+
+    types: tuple[cdc_types.Column, ...]
+    """The columns of the upstream `types` table, exported as `types`."""
+    types_table: str
+
     def progress(self) -> str:
         """A `SELECT` of `('p', a, b)` text rows from the source's progress."""
         ...
@@ -317,9 +365,29 @@ class Dialect(Protocol):
 
     def report_caught_up(self, caught_up: bool, details: dict[str, Any]) -> None: ...
 
+    def report_added(self, v: Verdict, details: dict[str, Any]) -> None:
+        """A check read the export added to the running source."""
+        ...
+
+    def report_types(self, v: cdc_types.Verdict, details: dict[str, Any]) -> None: ...
+
+    def report_types_caught_up(self, equal: bool, details: dict[str, Any]) -> None:
+        """After faults stop, whether the `types` export equals its table."""
+        ...
+
 
 class ResponseDropped(Exception):
     pass
+
+
+@dataclass
+class Added:
+    """The export created while the source ingests."""
+
+    n: int
+    table: int
+    state: str = "creating"
+    """`creating`, `live`, `dropping` or `unknown`."""
 
 
 class CdcSource:
@@ -342,6 +410,8 @@ class CdcSource:
         self.observed: list[tuple[int, int]] = []
         """(mz timestamp, position) of checks, for monotonicity."""
         self.added_columns = [0] * TABLES
+        self.added: Added | None = None
+        self._next_added = 1
         self.keyspace = 8
         self.ops_per_txn = 2
         self.rtr_share = 0.0
@@ -436,7 +506,49 @@ class CdcSource:
                 self.model.captured_at.update((txn, now) for txn in found)
         return True
 
+    def _write_types(self, d: Draw) -> Status:
+        """Change rows of the `types` table in a transaction of its own."""
+        table, columns = self.dialect.types_table, self.dialect.types
+
+        def seed() -> int:
+            if d.boolean(0.5):
+                return d.integer(0, cdc_types.SWEEP - 1)
+            return d.integer(cdc_types.SWEEP, cdc_types.UNTOUCHED - 1)
+
+        lo = cdc_types.SWEEP + d.integer(0, cdc_types.KEYSPACE - 1)
+        hi = min(lo + d.choice((0, 0, 2)), cdc_types.SWEEP + cdc_types.KEYSPACE - 1)
+        kind = d.choice(("insert", "insert", "insert", "update", "untouched", "delete"))
+        if kind == "insert":
+            statements = [cdc_types.delete(table, lo, hi)]
+            statements += [
+                cdc_types.insert(table, columns, k, seed(), seed())
+                for k in range(lo, hi + 1)
+            ]
+        elif kind == "update":
+            statements = [cdc_types.update(table, columns, lo, hi, seed(), seed())]
+        elif kind == "untouched":
+            untouched = d.integer(cdc_types.UNTOUCHED, 2 * cdc_types.UNTOUCHED - 1)
+            statements = [cdc_types.update(table, columns, lo, hi, untouched, None)]
+        else:
+            statements = [cdc_types.delete(table, lo, hi)]
+
+        def action() -> None:
+            try:
+                cur = self._cursor()
+                if not self._settle(cur):
+                    return
+                self.dialect.begin(cur)
+                for statement, params in statements:
+                    cur.execute(statement, params)
+                self.dialect.commit(cur)
+            except self.dialect.errors as e:
+                self._discard(e)
+
+        return self.worker.run(action, RULE_WAIT_SECONDS)
+
     def write(self, d: Draw) -> Status:
+        if d.boolean(TYPES_SHARE):
+            return self._write_types(d)
         plans = self._plans(d)
         drop_response = d.boolean(DROP_COMMIT_RESPONSE_SHARE)
         with self._lock:
@@ -519,11 +631,71 @@ class CdcSource:
 
         return self.worker.run(action, RULE_WAIT_SECONDS)
 
-    def _read_op(self, rtr: bool, done: list[Verdict]) -> Op:
+    def export(self, d: Draw) -> Status:
+        """Create a further export of one table while the source ingests, or
+        drop the one there is."""
+        s = self.dialect.schema
+        with self._lock:
+            added = self.added
+            if added is None:
+                added = Added(self._next_added, d.integer(0, TABLES - 1))
+                self._next_added += 1
+                self.added = added
+                statement = (
+                    f"CREATE TABLE {s}.x{added.n} FROM SOURCE {s}.src"
+                    f" (REFERENCE {self.dialect.reference(added.table)})"
+                )
+            elif added.state == "live" and d.boolean(0.3):
+                added.state = "dropping"
+                statement = f"DROP TABLE {s}.x{added.n}"
+            elif added.state == "unknown":
+                added.state = "dropping"
+                statement = f"DROP TABLE IF EXISTS {s}.x{added.n}"
+            else:
+                return Status.NOT_SENT
+        create = statement.startswith("CREATE")
+
+        def execute(conn: psycopg.Connection) -> None:
+            conn.execute(statement.encode())
+
+        def complete(outcome: Outcome[None]) -> None:
+            with self._lock:
+                if outcome.ok:
+                    if create:
+                        added.state = "live"
+                    else:
+                        self.added = None
+                elif outcome.rejected and create:
+                    self.added = None
+                else:
+                    # Also a rejected drop, such as one a busy session never
+                    # sent: the next attempt drops it if it exists.
+                    added.state = "unknown"
+
+        return self.ctx.sessions.call(
+            d.integer(0, len(self.ctx.sessions.sessions) - 1),
+            Op(
+                f"{s} export",
+                execute,
+                complete,
+                SETTINGS,
+                classify=sql.classify_source_ddl,
+            ),
+            RULE_WAIT_SECONDS,
+        )
+
+    def _read_op(self, rtr: bool, done: list[Verdict], added: bool = True) -> Op:
         s = self.dialect.schema
         branches = [self.dialect.progress()]
         branches.append(f"SELECT 'l', txn::text, tbl::text FROM {s}.ledger")
         branches += [f"SELECT 't{j}', k::text, v FROM {s}.t{j}" for j in range(TABLES)]
+        with self._lock:
+            # A read of an export that is still taking its snapshot waits for
+            # it, so only some checks include it.
+            x = self.added if added else None
+            table = x.table if x is not None and x.state == "live" else None
+        if x is not None and table is not None:
+            branches.append(f"SELECT 'x', k::text, v FROM {s}.x{x.n}")
         query = f"SELECT mz_now()::text, * FROM ({' UNION ALL '.join(branches)}) AS q"
 
         def execute(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
@@ -533,7 +705,7 @@ class CdcSource:
             if not outcome.ok:
                 return
             assert outcome.value is not None
-            done.append(self._judge(outcome.value, outcome.start, rtr))
+            done.append(self._judge(outcome.value, outcome.start, rtr, table))
 
         settings = dict(SETTINGS)
         if rtr:
@@ -546,7 +718,13 @@ class CdcSource:
             classify=sql.classify_rtr_read if rtr else sql.classify,
         )
 
-    def _judge(self, rows: list[tuple[Any, ...]], start: float, rtr: bool) -> Verdict:
+    def _judge(
+        self,
+        rows: list[tuple[Any, ...]],
+        start: float,
+        rtr: bool,
+        added: int | None = None,
+    ) -> Verdict:
         progress = [(r[2], r[3]) for r in rows if r[1] == "p"]
         snap = Snapshot(
             ts=int(rows[0][0]) if rows else 0,
@@ -557,6 +735,11 @@ class CdcSource:
                 [(int(r[2]), r[3]) for r in rows if r[1] == f"t{j}"]
                 for j in range(TABLES)
             ],
+            added=(
+                None
+                if added is None
+                else (added, [(int(r[2]), r[3]) for r in rows if r[1] == "x"])
+            ),
         )
         with self._lock:
             pending = self.committing or self.unresolved
@@ -598,14 +781,37 @@ class CdcSource:
                 added_columns=sum(self.added_columns) > 0,
             )
         )
+        if v.added_rows is not None:
+            self.dialect.report_added(
+                v, {"ts": snap.ts, "position": snap.position, "prefix": v.prefix}
+            )
         return v
 
+    def _types_op(self, done: list[cdc_types.Verdict]) -> Op:
+        s = self.dialect.schema
+        query = cdc_types.select(f"{s}.types", self.dialect.types)
+
+        def execute(conn: psycopg.Connection) -> list[tuple[Any, ...]]:
+            return conn.execute(query.encode()).fetchall()
+
+        def complete(outcome: Outcome[list[tuple[Any, ...]]]) -> None:
+            if not outcome.ok:
+                return
+            assert outcome.value is not None
+            v = cdc_types.judge(self.dialect.types, outcome.value)
+            self.dialect.report_types(v, {"rows": v.rows})
+            done.append(v)
+
+        return Op(f"{s} types check", execute, complete, SETTINGS)
+
     def check(self, d: Draw) -> Status:
-        return self.ctx.sessions.call(
-            d.integer(0, len(self.ctx.sessions.sessions) - 1),
-            self._read_op(d.boolean(self.rtr_share), []),
-            RULE_WAIT_SECONDS,
-        )
+        session = d.integer(0, len(self.ctx.sessions.sessions) - 1)
+        if d.boolean(TYPES_SHARE):
+            return self.ctx.sessions.call(
+                session, self._types_op([]), RULE_WAIT_SECONDS
+            )
+        op = self._read_op(d.boolean(self.rtr_share), [], added=d.boolean())
+        return self.ctx.sessions.call(session, op, RULE_WAIT_SECONDS)
 
     def eventually(self, deadline: float) -> None:
         """After faults stop, the source catches up with every committed write.
@@ -651,15 +857,75 @@ class CdcSource:
         log(
             f"{self.dialect.schema}: caught up {caught_up}, prefix {prefix} of {committed}"
         )
-        if verdict is None:
-            # No read completed. The SQL and source progress checks report
-            # that, and there is nothing to judge here.
+        if verdict is not None:
+            self.dialect.report_caught_up(
+                caught_up,
+                {
+                    "committed": committed,
+                    "prefix": prefix,
+                    "settled": bool(settled),
+                },
+            )
+        # Otherwise no read completed. The SQL and source progress checks
+        # report that, and there is nothing to judge here.
+        self._types_eventually(deadline)
+
+    def _types_eventually(self, deadline: float) -> None:
+        """After faults stop, the `types` export equals the upstream table,
+        which no write changes any more."""
+        upstream: list[dict[int, tuple[int, int]]] = []
+
+        def read() -> None:
+            try:
+                cur = self._cursor()
+                # Ends the sessions that could still commit a change.
+                if not self._settle(cur):
+                    return
+                cur.execute(f"SELECT k, seed, tseed FROM {self.dialect.types_table}")
+                upstream.append(
+                    {int(k): (int(seed), int(tseed)) for k, seed, tseed in cur}
+                )
+            except self.dialect.errors as e:
+                self._discard(e)
+
+        while True:
+            self.worker.run(read, 60.0)
+            if upstream or time.monotonic() >= deadline:
+                break
+            time.sleep(1)
+        if not upstream:
             return
-        self.dialect.report_caught_up(
-            caught_up,
+        expected = upstream[0]
+        verdict: cdc_types.Verdict | None = None
+        while True:
+            done: list[cdc_types.Verdict] = []
+            for i in range(len(self.ctx.sessions.sessions)):
+                if (
+                    self.ctx.sessions.call(i, self._types_op(done), 60.0)
+                    != Status.NOT_SENT
+                ):
+                    break
+            if done:
+                verdict = done[0]
+            if (
+                verdict is not None and verdict.keys == expected
+            ) or time.monotonic() >= deadline:
+                break
+            time.sleep(2)
+        if verdict is None:
+            return
+        observed = verdict.keys
+        self.dialect.report_types_caught_up(
+            observed == expected,
             {
-                "committed": committed,
-                "prefix": prefix,
-                "settled": bool(settled),
+                "upstream_rows": len(expected),
+                "export_rows": verdict.rows,
+                "missing": sorted(set(expected) - set(observed))[:10],
+                "extra": sorted(set(observed) - set(expected))[:10],
+                "changed": sorted(
+                    k
+                    for k in set(observed) & set(expected)
+                    if observed[k] != expected[k]
+                )[:10],
             },
         )

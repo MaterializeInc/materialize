@@ -268,6 +268,8 @@ class Session:
         self._jobs: queue.SimpleQueue[_Job] = queue.SimpleQueue()
         self.connections = 0
         """How many connections this session opened, for exploration assertions."""
+        self.cancels = 0
+        """How many cancel requests `cancel` sent."""
         threading.Thread(target=self._loop, name=f"session-{name}", daemon=True).start()
 
     def submit(self, job: _Job) -> None:
@@ -277,6 +279,7 @@ class Session:
         """Ask the server to cancel the running statement. Thread safe."""
         conn = self._conn
         if conn is not None and not conn.closed:
+            self.cancels += 1
             try:
                 conn.cancel_safe(timeout=CONNECT_TIMEOUT_SECONDS)
             except (psycopg.Error, OSError):

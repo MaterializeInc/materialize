@@ -23,11 +23,24 @@ comparison with the Test Composer workload it replaced, are in
 | Contended counters (`counters.py`) | Read-then-write `UPDATE` and `INSERT ... SELECT` stay within the bounds of increments acknowledged and attempted |
 | Atomic commits (`atomic.py`) | No read sees part of a multi-table write transaction, or a rolled-back one |
 | IVM (`views.py`) | Twelve view kinds, each as an indexed view and a materialized view, equal a Python reference (`ivm_model.py`) on single reads and at every closed timestamp of a `SUBSCRIBE` |
-| Postgres, MySQL and SQL Server sources (`cdc.py`, with `pg.py`, `mysql.py`, `sqlserver.py`) | Serial upstream transactions over three tables and a ledger. A lost COMMIT is resolved by ending its session and reading the ledger. One read of progress, ledger and exports: the ledger is a whole-transaction prefix of the commit order, consistent with the progress position (LSN or GTID), and every export equals its table replayed to that prefix, also after upstream `ADD COLUMN`. Real-time recency reads see every transaction committed (for SQL Server, captured) before them |
+| Postgres, MySQL and SQL Server sources (`cdc.py`, with `pg.py`, `mysql.py`, `sqlserver.py`) | Serial upstream transactions over three tables and a ledger. A lost COMMIT is resolved by ending its session and reading the ledger. One read of progress, ledger and exports: the ledger is a whole-transaction prefix of the commit order, consistent with the progress position (LSN or GTID), and every export equals its table replayed to that prefix, also after upstream `ADD COLUMN`. A further export of one table is created and dropped while the source ingests, and must equal its table at the same prefix as the others (a new export that is only ahead of them has a property of its own). Real-time recency reads see every transaction committed (for SQL Server, captured) before them. A fourth table, `types` (`cdc_types.py`), has one column per upstream type, 51 for Postgres, 41 for MySQL and 32 for SQL Server. A row's seed determines every other column, so each visible row is judged on its own |
 | Webhooks (`webhook.py`) | Concurrent requests to a webhook source and a webhook table. No phantom, duplicate or altered rows, a read that shows a row shows every row acknowledged before it was sent, and after faults stop every acknowledged row is visible |
 | Kafka source (`kafka.py`) | Produces to a topic that a background consumer tails as the ground truth. The none and upsert envelope exports equal the topic below the mapped offsets, the offsets are monotone, acknowledged produces are in the topic |
-| Kafka sinks (`kafka.py`) | A Debezium sink of a view and an upsert sink of an aggregate, both tailed read-committed. Stream invariants of `sink_oracle.py`, consolidated output equals the view at a committed frontier, and after faults stop equals the model of acknowledged writes |
-| Disruptions (`disrupt.py`) | Replica changes, deletions of environmentd, clusterd and orchestratord pods, and 0dt rollouts, some manually promoted, with kills in a chosen phase. `activeGeneration` never decreases |
+| Kafka formats (`kafka_formats.py`) | The same reasoning for a JSON source, an Avro source through the schema registry (none and upsert envelopes, a record of many field types whose values follow from its seed, one schema evolution), and a JSON upsert source that receives undecodable values and tombstones: a read fails exactly while a key's latest value is undecodable (`upsert_recovery_model.py`), a later document or tombstone heals it, and a second export reports the errors inline |
+| Kafka sinks (`kafka.py`) | A Debezium sink of a view and an upsert sink of an aggregate, each in JSON and in Avro, all tailed read-committed. Stream invariants of `sink_oracle.py`, consolidated output equals the view at a committed frontier, and after faults stop equals the model of acknowledged writes |
+| Window functions (`windows.py`) | Row numbers, ranks, `lag` and `lead` with per-row offsets, and framed aggregates, each as an indexed view and a materialized view, equal `window_retractions_model.py` evaluated on the base rows the same read returned, under updates that move rows between partitions |
+| Interval aggregates (`aggregates.py`) | Grouped interval sums equal `aggregate_retractions_model.py`. A group whose sum leaves a component's range makes the view fail to read, and deleting the cause makes it readable again |
+| Data types (`datatypes.py`) | One table with 49 typed columns (scalars, arrays, lists, maps, ranges), each value determined by the row's seed. The table, an indexed view, a materialized view, a view grouped by each column and one of each column's least and greatest value, read at one timestamp |
+| COPY (`copies.py`) | A `COPY FROM STDIN` batch in text or csv is visible whole and once or not at all, also when the client fails it or drops the connection, and carries every type. `COPY TO STDOUT` in text, csv and binary returns the rows of the same query in the same transaction |
+| Schema evolution (`schema_evolution.py`) | `ALTER TABLE ADD COLUMN` under concurrent inserts. Rows hold their written values and NULL or the default elsewhere (`schema_model.py`), `SELECT *` shows every acknowledged column, and dependents keep the columns they were defined over |
+| Session rebinding (`rebinding.py`) | A durable view replaced between two definitions, per-session temporary views that shadow it, prepared statements and cursors on sessions of their own. A read never returns a definition replaced before it began, and a cursor keeps its snapshot |
+| Cancellation (`cancel.py`) | A cancel request, `pg_cancel_backend` or a `statement_timeout` lands a drawn delay after a statement was sent: blind and read-then-write inserts, updates, deletes, `COMMIT`, `COPY FROM STDIN`, reads, subscriptions, and `CREATE` and `DROP` of indexes and materialized views. A statement answered as cancelled or timed out took no effect, batches stay whole, a session sees no more cancelled statements than cancel requests, and a cancel ends a subscription |
+| Fixed timestamps (`asof.py`) | What a read returned at a timestamp is what every later read `AS OF` that timestamp returns: from the table, an indexed view and a materialized view, on each replica, by `SELECT` and by `SUBSCRIBE ... AS OF ... UP TO`, until the retained history ends. A timestamp within half the retained history stays readable |
+| Blue/green deployments (`bluegreen.py`) | A staging schema and cluster are built, swapped with the live ones in one transaction and dropped, under reads and subscriptions through the live names. A read is answered by one generation, correct for it, shows every acknowledged row, never fails because a live name is missing, and never returns a generation older than one live before it began |
+| System parameters (`flags.py`) | In half the timelines, parameters that CI also varies (persist, compute and storage write, compaction, fetch and hand-over paths) change while the workload runs. It has no check of its own: every other check holds under each value |
+| Disruptions (`disrupt.py`) | Replica changes, deletions of environmentd, clusterd and orchestratord pods, and 0dt rollouts, some manually promoted, with kills in a chosen phase and a spec change (image, extra args, force, request, strategy, resources, or a revert) in a chosen phase. `activeGeneration` never decreases |
+| Status claims (`claims.py`) | An `Applied` status means the active StatefulSet runs the spec, and `WaitingForApproval` means it does not (`spec_model.py`). Violations that a spec change during `Promoting` explains (CLO-339) have messages of their own |
+| Read-only isolation (`read_only.py`) | A candidate generation acknowledges no write sent to its pod, holds no replication connection to the upstream Postgres (`isolation.py`), and the timestamp oracle never goes backwards |
 | After faults stop (`health.py`, each component's `eventually`) | The CR settles, SQL serves, replicas come online, every pending statement finishes, every component's final read succeeds and passes its checks, sources catch up with every acknowledged upstream write, run, and advance, sinks run and reach every acknowledged write, no pod crash-loops |
 
 A guarantee is an `always`, which fails when a run never evaluates it, and a
@@ -38,10 +51,15 @@ so their properties keep their history. hegel reports the run's own verdict
 as `::materialize_driver passes properties`, which fails if the state machine
 raised.
 
-Not ported yet, in the order the design doc gives: the rollout status claims,
-exit evidence, upstream TRUNCATE and DROP with their known-bug buckets, upsert
-decode-error recovery, read-only isolation, and the smaller families listed
-there.
+Not ported yet, in the order the design doc gives: the remaining rollout
+observer oracles (protected StatefulSets, leader fencing, the serving version),
+exit evidence, upstream TRUNCATE and DROP with their known-bug buckets, the
+persistcli shard audits and access control. `COPY` to and from object storage
+is not covered either.
+
+The Kubernetes-only components (`claims.py`, `read_only.py`, the spec changes
+and the memory log) have unit tests only: the `standalone` local loop does not
+run them.
 
 Each source runs when the driver has its upstream:
 `MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL`, `MZ_ANTITHESIS_UPSTREAM_MYSQL_URL`,
@@ -92,7 +110,8 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 `mz-ore/antithesis` feature, which links the Antithesis SDK and reports:
 
 - every process panic as the failed property `Materialize process panicked`,
-  except panics marked with `mz_ore::antithesis::expect_panic()`;
+  except panics on the reviewed `DESIGNED_PANICS` list
+  (`mz_ore::antithesis::classify_panic`), which are a structured observation;
 - every `halt!` as a per-site `process halted at <file>:<line>` event, plus a
   verdict from `mz_ore::antithesis::classify_halt`: a structured observation
   for messages on the reviewed `DESIGNED_HALTS` list, a dedicated failed
@@ -101,7 +120,11 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 - a designed halt as exit code 143 in place of 166
   (`mz_ore::process::halt_exit_code`), so the platform's `No unexpected
   container exits`, which skips 0, 137 and 143, fails only for the other
-  halts. The upgrade base gets the same exit code from its build patch
+  halts. A designed panic exits 143 too in place of the abort
+  (`mz_ore::process::exit_designed_panic`), which the platform's `No
+  unexpected crashes` would report. Both leave a record in the termination
+  message, by which the driver's crash-loop check tells them apart from a
+  SIGTERM. The upgrade base gets the same exit codes from its build patch
   (`images.upgrade_base_exit_code`);
 - every soft assertion that logs instead of panicking as
   `Materialize soft assertion failed`;
@@ -123,6 +146,11 @@ CR), clusterd to 1 GiB per container (the `clusterd-memory` LimitRange, since
 replica sizes carry no memory limit), orchestratord to 512 MiB, and SQL Server
 caps itself at 2 GiB (`MSSQL_MEMORY_LIMIT_MB`). The other dependencies and the
 driver have no limit.
+
+The platform's `Peak memory usage` fails above 95% and names no process. While
+the node is above 85%, the driver logs the working set of each pod every 5 s
+(`antithesis_driver/memory.py`), so the logs before a failing sample show who
+held the memory.
 
 A kill for memory exits like a crash. A panic reports `Materialize process
 panicked` from inside the process. An OOM kill or an eviction is a SIGKILL

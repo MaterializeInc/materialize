@@ -125,7 +125,7 @@ is `test/antithesis/manifests/30-driver.yaml`.
 The legacy workload is gone: its commands, image, templates, drivers, SQLite
 state, telemetry, findings classifier and local scheduler. Its pure models
 stay in `misc/python/materialize/antithesis/` with their tests, because the
-families still to port reuse them (`sink_oracle.py`, `upsert_recovery_model.py`,
+driver's components and the families still to port use them (`sink_oracle.py`, `upsert_recovery_model.py`,
 `spec_model.py`, `isolation.py`, `schema_model.py`, the retraction and
 session rebinding models, `halt_proof.py`, `exit_evidence.py`,
 `kube_watch.py`). The legacy implementation of each family, named by its
@@ -147,29 +147,37 @@ session rebinding models, `halt_proof.py`, `exit_evidence.py`,
 | Rollouts | `drivers/rollouts.py` | requests with both strategies, manual promotion, pod deletion in a drawn phase, `activeGeneration` monotonicity, settling after faults |
 | Pod restarts | `drivers/pod_restarts.py` | deletion of environmentd, clusterd and orchestratord pods with a UID precondition and the same grace menu |
 | Recovery | `drivers/recovery.py` | canary, replicas online, CR up to date, crash loops (`crash_loops.py`), plus every session draining and a `SUBSCRIBE` advancing |
+| Status claims and spec changes | `drivers/rollouts.py`, `drivers/spec_phase.py` | `spec_model.py` unchanged: the status claim judged against the active StatefulSet with the legacy messages and settle time, and the spec-field-by-phase cells as a patch the rollout rule makes when it observes the phase. Polled, not watched |
+| Read-only isolation | `drivers/read_only_isolation.py` | `isolation.py` unchanged: direct writes to a candidate, upstream replication connections and the timestamp oracle samples, with the legacy messages. Not the persist handle audit, which needs `persistcli` in the image |
+| Upsert decode-error recovery | `drivers/upsert_recovery.py` | `upsert_recovery_model.py`, judged against the topic prefix below the mapped offsets, plus an export with inline errors |
+| Window and aggregate retractions | `drivers/window_retractions.py`, `drivers/aggregate_retractions.py` | the models unchanged, on the consistent cut of one read as for IVM. Not their `SUBSCRIBE` checks |
+| Schema evolution, session rebinding | `drivers/schema_evolution.py`, `drivers/session_rebinding.py` | `schema_model.py` unchanged and the `Parameters` and `Cursor` of `session_rebinding_model.py`, with unknown outcomes allowed either way. Not the explicitly versioned dependents, nor catalog transactions with rename conflicts |
+| COPY | `copy_recovery.py` | batch atomicity of `COPY FROM STDIN` under client failures, plus `COPY TO STDOUT` against the same query |
+| Data types, CDC types, Kafka formats | none | new. Values that follow from a seed stored in the row, so every visible row is judged on its own: 49 column types in tables and COPY, the upstream types of the three CDC sources, and an Avro record. JSON and Avro sources and Avro sinks reuse the Kafka source and sink checks |
+| Cancellation | none | new. One cancel per operation, by cancel request, `pg_cancel_backend` or `statement_timeout`, a drawn delay after the statement was sent. Batches of rows with a generation, so a statement answered as cancelled must have taken no effect, also for `CREATE` and `DROP` of indexes and materialized views, which a plain `DROP` afterwards decides |
+| Fixed timestamps, bounded `SUBSCRIBE` | none | new. Reads recorded with their `mz_now()` are repeated `AS OF` it from a table, an indexed view and a materialized view, on each replica, and replayed by `SUBSCRIBE ... AS OF ... UP TO`. The model is built from reads only |
+| Blue/green deployments | none | new. Staging schema and cluster, swapped in one transaction and dropped, under reads and subscriptions through the live names. After a swap whose COMMIT got no answer the order of generations is no longer judged, because the server can still apply it |
+| Exports added while a source ingests | none | new, part of `cdc.py`. The added export is read in the same `SELECT` as the others and judged at their ledger prefix. An export that equals its table at a later prefix has a property of its own |
+| System parameter changes | none | new. No check of its own |
 
 ### Families still to port
 
 In the order the inventory suggests, by how central the guarantee is and how
 much of the port is mechanical:
 
-1. Rollout observer oracles: status claims (`spec_model.py`, pure), protected
-   StatefulSets, leader fencing, the SQL-serving version never going backwards.
-   A background CR watch thread should fire phase-targeted patches, so a
-   zero-delay patch still lands in a short Promoting window.
+1. Rollout observer oracles: protected StatefulSets, leader fencing, the
+   SQL-serving version never going backwards. A background CR watch thread
+   should fire the phase-targeted patches, which the rollout rule makes on
+   its next poll today, so a zero-delay patch still lands in a short
+   Promoting window.
 2. Exit evidence (`halt_proof.py` and `exit_evidence.py` are pure): every
    environmentd and clusterd exit explained by a designed halt.
 3. Upstream TRUNCATE, DROP and re-export for the Postgres source, with the
    legacy buckets for the known bugs after an ingestion restart, which need
-   restart detection. Upsert decode-error recovery (`upsert_recovery_model.py`
-   is pure). The persistcli shard audit.
-4. Read-only isolation (`isolation.py` is pure) and the timestamp oracle
-   samples.
-5. Bounded `SUBSCRIBE` and index handover, which, like the IVM subscriber,
-   need a long-lived subscription on a thread of its own. The IVM subscriber
-   still lacks the legacy `AS OF` resume and peek comparisons.
-6. Session rebinding, COPY and cancel recovery, schema evolution, window and
-   aggregate retractions, access control, object lifecycle, shard audit.
+   restart detection. The persistcli shard audit, and with it the persist
+   handle audit of the read-only isolation checks.
+4. The IVM subscriber's legacy `AS OF` resume and peek comparisons.
+5. Access control, the shard audit, and `COPY` to and from object storage.
 
 ## Minimal Viable Prototype
 

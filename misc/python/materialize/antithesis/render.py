@@ -80,6 +80,8 @@ BASE_SYSTEM_PARAMETERS: dict[str, str] = {
     # The production 5 min would give a failed cleanup of the previous
     # generation's replicas one retry per timeline.
     "controller_past_generation_replica_cleanup_retry_interval": "30s",
+    # Off by default. The schema evolution checks add columns to tables.
+    "enable_alter_table_add_column": "true",
 }
 
 

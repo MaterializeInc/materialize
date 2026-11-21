@@ -263,6 +263,8 @@ def standalone(args: argparse.Namespace) -> int:
             BROKER_CONTAINER,
             "-p",
             "19092:19092",
+            "-p",
+            "18081:8081",
             render.DEFAULT_IMAGES["REDPANDA_IMAGE"],
             "redpanda",
             "start",
@@ -274,6 +276,7 @@ def standalone(args: argparse.Namespace) -> int:
             "--check=false",
             "--kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092",
             f"--advertise-kafka-addr=internal://{BROKER_CONTAINER}:9092,external://localhost:19092",
+            "--schema-registry-addr=0.0.0.0:8081",
             "--set",
             "redpanda.enable_transactions=true",
             "--set",
@@ -341,6 +344,8 @@ def standalone(args: argparse.Namespace) -> int:
         "MZ_ANTITHESIS_UPSTREAM_SQL_SERVER_MZ_HOST": f"{SQL_SERVER_CONTAINER}:1433",
         "MZ_ANTITHESIS_KAFKA_BROKER": "localhost:19092",
         "MZ_ANTITHESIS_KAFKA_MZ_BROKER": f"{BROKER_CONTAINER}:9092",
+        "MZ_ANTITHESIS_SCHEMA_REGISTRY_URL": "http://localhost:18081",
+        "MZ_ANTITHESIS_SCHEMA_REGISTRY_MZ_URL": f"http://{BROKER_CONTAINER}:8081",
         "ANTITHESIS_SDK_LOCAL_OUTPUT": str(output / "sdk.jsonl"),
     }
     try:
