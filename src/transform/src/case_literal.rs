@@ -148,7 +148,7 @@ impl CaseLiteralTransform {
         column_types: &[ReprColumnType],
     ) -> Result<(), TransformError> {
         expr.try_visit_mut_post(&mut |node: &mut MirScalarExpr| {
-            try_fold_into_case_literal(node);
+            try_fold_into_case_literal(node, column_types);
             try_create_case_literal(node, column_types);
             Ok(())
         })
@@ -162,7 +162,7 @@ impl CaseLiteralTransform {
 /// Because we traverse bottom-up, the current If is an *earlier* arm than anything
 /// already in the CaseLiteral. For duplicates, the outer/earlier arm wins per SQL
 /// CASE semantics, so we overwrite the existing entry.
-fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
+fn try_fold_into_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
     let MirScalarExpr::If { cond, then, els } = expr else {
         return;
     };
@@ -181,6 +181,13 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
     if exprs[0] != *common_candidate {
         return;
     }
+
+    // Widen `return_type` to the type of the replaced If, else a nullable `then` would leave the
+    // CaseLiteral typed as non-nullable.
+    let return_type = ReprColumnType::from(&cl.return_type)
+        .union(&then.typ(column_types))
+        .expect("incompatible branch types");
+    cl.return_type = SqlColumnType::from_repr(&return_type);
 
     if let Some(existing_idx) = cl.get(literal_row) {
         // Duplicate literal: overwrite with the earlier arm's result (this If).
