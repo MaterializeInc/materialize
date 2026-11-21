@@ -13,6 +13,8 @@ priority: 80
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.version
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64-release
     concurrency: 1
     concurrency_group: deploy-mz/version
 
@@ -20,7 +22,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.linux
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-x86_64-release
     concurrency: 1
     concurrency_group: deploy-mz/linux/x86_64
 
@@ -28,7 +30,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.linux
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: linux-aarch64-release
     concurrency: 1
     concurrency_group: deploy-mz/linux/aarch64
 
@@ -38,7 +40,7 @@ steps:
       - linux-x86_64
       - linux-aarch64
     agents:
-      queue: linux-x86_64-small
+      queue: linux-x86_64-release
     concurrency: 1
     concurrency_group: deploy-mz/docker
 
