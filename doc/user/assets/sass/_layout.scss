@@ -132,6 +132,8 @@ table.inline-headings {
 
 .sidebar-wrapper {
     flex: 1;
+    // Follows <main> in the source (see baseof.html), but is shown before it.
+    order: -1;
 
     @media(max-width: 850px) {
         position: fixed;
@@ -153,12 +155,47 @@ table.inline-headings {
         &.shown {
             transform: none;
             visibility: visible;
+            // Only the slide animates on the way in, so the drawer is visible,
+            // and can take focus, as soon as it opens.
+            transition: transform .2s ease-out;
 
             .close-topics {
                 opacity: 1;
                 pointer-events: initial;
             }
         }
+    }
+}
+
+// Focus lands here from the skip link and when the drawer opens; Tab then
+// moves on to search.
+.sidebar:focus {
+    outline: none;
+}
+
+.skip-to-topics {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+
+    &:focus {
+        position: static;
+        display: inline-block;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        clip: auto;
+        margin-bottom: var(--xx-small);
+        // <main> is a flex column; keep the focus ring to the link's text.
+        align-self: flex-start;
+    }
+
+    // The drawer has its own "All Topics" button.
+    @media(max-width: 850px) {
+        display: none;
     }
 }
 
@@ -215,34 +252,37 @@ table.inline-headings {
             color: var(--highlight);
             text-decoration: none;
 
-            svg {
-                color: var(--divider-light);
-
-                .darker {
-                    color: var(--highlight);
-                }
+            .expander {
+                background-color: var(--highlight);
             }
         }
 
-        svg {
+        // A mask, not an inline <svg>, because the sidebar repeats this icon
+        // on every entry with children, on every page.
+        .expander {
             position: absolute;
             right: 6px;
             top: 50%;
+            width: 14px;
+            height: 34px;
             transform: translateY(-50%);
-            color: var(--divider-light);
+            background-color: var(--sub);
+            // White is opaque whether the mask is read by alpha or by luminance.
+            $icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -10 14 34' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 4L9 7L5 10'/%3E%3C/svg%3E");
+            -webkit-mask: $icon center / contain no-repeat;
+            mask: $icon center / contain no-repeat;
             transition: transform 0.2s ease-out;
 
-            .darker {
-                color: var(--sub);
-            }
-
-            &:hover {
-                stroke-width: 2;
+            // Forced colors repaint backgrounds as Canvas, which would hide
+            // the masked chevron.
+            @media (forced-colors: active) {
+                background-color: LinkText;
+                forced-color-adjust: none;
             }
         }
     }
 
-    li.open > a svg {
+    li.open > a .expander {
         transform: translateY(-50%) rotate(90deg);
     }
 
