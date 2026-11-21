@@ -904,17 +904,15 @@ fn handle_mutation_using_clause(
         let mut expr = plan_expr(ecx, &expr)?.type_as(ecx, &SqlScalarType::Bool)?;
 
         // Rewrite all column referring to the `FROM` section of `joined` (i.e.
-        // those to the right of `using_rel_expr`) to instead be correlated to
-        // the outer relation, i.e. `get`.
+        // those to the right of `using_rel_expr`), including those inside
+        // subqueries, to instead be correlated to the outer relation, i.e.
+        // `get`.
         let using_rel_arity = qcx.relation_type(&using_rel_expr).arity();
-        // local import to not get confused with `mz_sql_parser::ast::visit::Visit`
-        use mz_expr::visit::Visit;
-        expr.visit_mut_post(&mut |e| {
-            if let HirScalarExpr::Column(c, _name) = e {
-                if c.column >= using_rel_arity {
-                    c.level += 1;
-                    c.column -= using_rel_arity;
-                };
+        #[allow(deprecated)]
+        expr.visit_columns_mut(0, &mut |depth, c| {
+            if c.level == depth && c.column >= using_rel_arity {
+                c.level += 1;
+                c.column -= using_rel_arity;
             }
         });
 

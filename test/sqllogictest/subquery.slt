@@ -961,3 +961,30 @@ SELECT CASE WHEN x = 1 THEN 1 WHEN x = 2 THEN 2 WHEN x = 3 THEN 3 WHEN x = 4 THE
 131
 30
 NULL
+
+# Regression test for SQL-954
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+CREATE TABLE u (a int)
+
+statement ok
+CREATE TABLE v (x int)
+
+statement ok
+INSERT INTO t VALUES (1, 1), (2, 2)
+
+statement ok
+INSERT INTO u VALUES (1), (2)
+
+statement ok
+INSERT INTO v VALUES (1)
+
+statement ok
+DELETE FROM t USING u WHERE t.a = u.a AND t.b IN (SELECT x FROM v)
+
+query II
+SELECT * FROM t
+----
+2 2
