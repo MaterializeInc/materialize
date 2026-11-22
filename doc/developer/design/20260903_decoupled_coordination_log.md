@@ -6,8 +6,8 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** identify the optimizer rewrite that introduces an unguarded
-catalog decoder predicate, and verify the pending native catalog fixtures.
+**Next action:** verify the remaining Cargo and RF fixtures, then diagnose the
+fixed-refresh CREATE invalidation without reopening the deferred retry scope.
 Replica startup now returns typed removal.
 The follower suite passes after reducing the liveness fixture's debug stack frame
 and testing backoff with an ownership change rather than compatible frontier updates.
@@ -18,10 +18,12 @@ non-writing by policy. Durable ownership is checked before promotion, and SQL
 projections afterward. Both the captured failed diagnostic and successful run are
 cleaned up. Their measured output frontiers confirm progress resumes at promotion.
 
-The rebuilt argument-guarded builtin still fails unchanged `tables.td`. Its plan
-contains both guarded and unguarded decoder predicates. Both inline forms pass,
-so inline probes cannot validate this repair. The SQL change remains uncommitted
-and insufficient. No decoder relaxation is approved.
+The JSON-kind guard passes unchanged `tables.td`, including tombstone validation
+and final consistency checks, with matched debug binaries. Stored-view controls
+retain strict malformed-ID errors. Generated catalog plans pass verification and
+cover the missing derived views. The broader optimizer guard issue remains in
+followups. Native catalog fixtures and the branch-local v97 encoding snapshot
+also pass their targeted checks. Older encoding snapshots are unchanged.
 
 ## Live failures and constraints
 
@@ -29,11 +31,10 @@ and insufficient. No decoder relaxation is approved.
 runtime jobs and is now terminal with failures. The old image-publicity blocker
 is absent. Newly completed failures are being classified. Known failures include:
 
-- Catalog decoding in `tables.td`, replica availability after RF0 to RF1, and
-  sink-status history counts. Replica-removal and temporary-cleanup failures have
-  locally verified repairs that the completed CI build predates.
-- Missing catalog EXPLAIN coverage and an unsupported-upgrade skip that trips the
-  CI wrapper's empty-service-log check.
+- Replica availability after RF0 to RF1 and sink-status history counts remain
+  under investigation. Catalog decoding, EXPLAIN coverage, replica removal and
+  temporary cleanup have locally verified repairs that this CI build predates.
+- An unsupported-upgrade skip trips the CI wrapper's empty-service-log check.
 - Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
   have finished. Preserve the completed build's evidence when publishing fixes.
 
@@ -90,11 +91,17 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 recorded runtime source overlays.
 `/home/ubuntu/materialize-m3-fixture-checks` is the separate test worktree with the
 recorded decoder, follower and test patches. Preserve its work before reuse.
-`native-decoder-current/artifacts/` contains fresh debug binaries and a matched
-SLT/clusterd pair, with build provenance beside it. This build reproduces the
-decoder failure. Do not treat it as a verified repair or mix sibling binaries.
+`native-decoder-json-guard/artifacts/` contains the verified debug binaries and
+matched SLT/clusterd pair, with build provenance beside it. Its `testdrive-helper/`
+contains matching testdrive and `libduckdb.so`. Set its library path when mounting
+that helper. Cached testdrive v26.43 cannot read the v26.46 Persist state. Do not
+mix sibling binaries. `native-decoder-current/` is the earlier failing control.
 
 Essential evidence pointers:
+- `decoder-matched-testdrive-final.log`, `decoder-plan-checks.log`, and
+  `storage-shards-decoder-investigation.md`: complete guarded-view verification,
+  generated plan checks and stored-view controls. `native-catalog-fixture-checks.log`
+  and `v97-stability-{before,after}.log` cover the catalog fixtures and encodings.
 - `ci-144427/`: current annotations, job logs and failure inventory. Older
   `ci-144357-outcome.md` does not describe current CI blockers.
 - `final-native-{lifecycle,ddl,adapter-loss,subscriptions,four-index}-outcome.md`:
