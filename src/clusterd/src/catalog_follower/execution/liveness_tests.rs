@@ -71,6 +71,23 @@ async fn protection_publication_installation_and_supersession() {
     Box::pin(exercise_liveness()).await;
 }
 
+// Construct repeated publication futures outside the scenario's debug poll frame.
+fn publish<'a>(
+    driver: &'a mut ReplicaEnactment,
+    catalog: &'a mut Catalog,
+    effects: &'a mut ReplicaEffects,
+    cluster: ClusterId,
+    build: &'a str,
+    pending: bool,
+    metadata: Option<&'a storage_metadata::Resolution>,
+) -> impl std::future::Future<Output = anyhow::Result<PublicationOutcome>> + 'a {
+    Box::pin(async move {
+        driver
+            .publish(catalog, effects, cluster, build, pending, metadata)
+            .await
+    })
+}
+
 // Keep repeated catalog-control transactions out of the scenario's poll frame.
 fn set_publication_paused<'a>(
     driver: &'a mut ReplicaEnactment,
@@ -351,10 +368,17 @@ async fn exercise_liveness() {
     for metadata in [None, Some(&metadata)] {
         driver.publication_clock.as_mut().unwrap().due = Instant::now();
         assert_eq!(
-            driver
-                .publish(&mut catalog, &mut effects, cluster, &build, false, metadata)
-                .await
-                .unwrap(),
+            publish(
+                &mut driver,
+                &mut catalog,
+                &mut effects,
+                cluster,
+                &build,
+                false,
+                metadata
+            )
+            .await
+            .unwrap(),
             PublicationOutcome::Deferred
         );
         assert_eq!(
@@ -382,19 +406,33 @@ async fn exercise_liveness() {
             .catalog_read_protection_publish_interval(),
     );
     driver.publication_clock.as_mut().unwrap().due = deferred;
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
+    publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
         Timestamp::new(15_000)
     );
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
+    publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
         Timestamp::new(16_000)
@@ -429,10 +467,17 @@ async fn exercise_liveness() {
             .catalog_read_protection_publish_interval(),
     );
     driver.publication_clock.as_mut().unwrap().due = deferred;
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
+    publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
         Timestamp::new(15_000)
@@ -482,10 +527,17 @@ async fn exercise_liveness() {
     // and catch-up notifications cannot turn that into an inline write loop.
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
     assert!(super::is_catalog_conflict(
-        &driver
-            .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-            .await
-            .unwrap_err(),
+        &publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            true,
+            None
+        )
+        .await
+        .unwrap_err(),
     ));
     assert!(driver.publication_needs_refresh);
     let retry_after = driver.publication_retry_after.unwrap();
@@ -496,17 +548,17 @@ async fn exercise_liveness() {
     driver.io.idle(Duration::from_secs(3600)).await;
     for pending in [true, false] {
         assert_eq!(
-            driver
-                .publish(
-                    &mut catalog,
-                    &mut effects,
-                    cluster,
-                    &build,
-                    pending,
-                    Some(&metadata)
-                )
-                .await
-                .unwrap(),
+            publish(
+                &mut driver,
+                &mut catalog,
+                &mut effects,
+                cluster,
+                &build,
+                pending,
+                Some(&metadata)
+            )
+            .await
+            .unwrap(),
             PublicationOutcome::Deferred,
         );
     }
@@ -519,10 +571,17 @@ async fn exercise_liveness() {
         .await;
     // Catch-up must observe the peer's pause before preparing the retry.
     assert_eq!(
-        driver
-            .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-            .await
-            .unwrap(),
+        publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            true,
+            None
+        )
+        .await
+        .unwrap(),
         PublicationOutcome::Deferred
     );
     assert_eq!(
@@ -541,10 +600,17 @@ async fn exercise_liveness() {
     )
     .await;
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
+    publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
         Timestamp::new(17_000),
@@ -627,50 +693,54 @@ async fn exercise_liveness() {
             .catalog_read_protection_publish_interval(),
     );
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
-    driver
-        .publish(
-            &mut catalog,
-            &mut effects,
-            cluster,
-            &build,
-            true,
-            Some(&metadata),
-        )
-        .await
-        .unwrap();
+    publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        Some(&metadata),
+    )
+    .await
+    .unwrap();
     // Bounds stay due across the installation gate, even though the aggregate
-    // deadline moved forward. A peer adds historical protection between attempts,
-    // so conflict retry must derive new proposals instead of resubmitting ops.
+    // deadline moved forward. Execution replacement requires owner revalidation,
+    // unlike a frontier-only update that the transaction can absorb. The new
+    // peer then adds historical protection before the retry samples new bounds.
     driver.publication_clock.as_mut().unwrap().due = deferred;
     fixture.writer.sync_to_current_updates().await.unwrap();
     let ts = fixture.writer.current_upper().await;
-    fixture
+    let peer = fixture
         .writer
         .transact(
             None,
             None,
             ts,
             None,
-            vec![Op::UpdateClientReadRequirements {
-                incarnation: peer,
-                requirements: BTreeMap::from([(fixture.source, None)]),
+            vec![Op::CreateClientIncarnation {
+                realization: mz_catalog::durable::ClientRealization::Adapter(
+                    mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                ),
+                expected: Some(peer),
             }],
         )
         .await
-        .unwrap();
+        .unwrap()
+        .created_client_incarnations[0];
     let old_bound = catalog.state().collection_compaction_bounds()[&fixture.source].clone();
     assert!(super::is_catalog_conflict(
-        &driver
-            .publish(
-                &mut catalog,
-                &mut effects,
-                cluster,
-                &build,
-                false,
-                Some(&metadata)
-            )
-            .await
-            .unwrap_err(),
+        &publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            false,
+            Some(&metadata)
+        )
+        .await
+        .unwrap_err(),
     ));
     assert!(driver.publication_needs_refresh);
     assert_eq!(
@@ -696,17 +766,17 @@ async fn exercise_liveness() {
     driver.publication_retry_after = Some(Instant::now() + Duration::from_secs(3600));
     // A bounds conflict gates writes even when catch-up notifications wake us.
     assert_eq!(
-        driver
-            .publish(
-                &mut catalog,
-                &mut effects,
-                cluster,
-                &build,
-                false,
-                Some(&metadata)
-            )
-            .await
-            .unwrap(),
+        publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            false,
+            Some(&metadata)
+        )
+        .await
+        .unwrap(),
         PublicationOutcome::Deferred,
     );
     driver.publication_retry_after = Some(retry_after);
@@ -717,31 +787,31 @@ async fn exercise_liveness() {
         ))
         .await;
     assert_eq!(
-        driver
-            .publish(
-                &mut catalog,
-                &mut effects,
-                cluster,
-                &build,
-                false,
-                Some(&metadata)
-            )
-            .await
-            .unwrap(),
+        publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            false,
+            Some(&metadata)
+        )
+        .await
+        .unwrap(),
         PublicationOutcome::Deferred,
     );
     assert_eq!(
-        driver
-            .publish(
-                &mut catalog,
-                &mut effects,
-                cluster,
-                &build,
-                false,
-                Some(&metadata)
-            )
-            .await
-            .unwrap(),
+        publish(
+            &mut driver,
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            false,
+            Some(&metadata)
+        )
+        .await
+        .unwrap(),
         PublicationOutcome::Completed,
     );
     assert!(driver.recovery_holds.is_none());
@@ -765,10 +835,17 @@ async fn exercise_liveness() {
         )
         .await
         .unwrap();
-    let error = driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap_err();
+    let error = publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(
         error.to_string().contains("superseded or retired"),
         "{error:#}"
@@ -802,10 +879,17 @@ async fn exercise_liveness() {
         )
         .await
         .unwrap();
-    let error = driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap_err();
+    let error = publish(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(error.is::<super::super::ReplicaRemoved>(), "{error:#}");
     std::process::exit(0);
 }
