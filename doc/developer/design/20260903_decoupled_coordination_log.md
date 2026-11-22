@@ -117,10 +117,19 @@ multithread runtime, with unchanged assertions and passing tests/Clippy.
 ## Worker and evidence
 
 Worker `i-04aaff9ac16f9c30c`: 16 CPUs, 61 GiB RAM, 500 GiB disk. Automatic shutdown:
-2026-11-22 18:02:13 UTC. Deletion: 2026-11-23 19:02:53 UTC. Recheck access and expiry.
+2026-11-22 21:29:55 UTC (confirmed extension log). Deletion: 2026-11-23 19:02:53 UTC. Recheck access and expiry.
 Builds use one job, 4 CPUs, 32 GiB, no swap. Container runs use 40 GiB/eight CPUs
 aggregate. Direct native runs use 28 GiB/six CPUs plus 8 GiB/two CPUs for fixtures.
 Never overlap builds and runtimes. Keep 30 GiB disk reserve and local builds light.
+
+Scratch SSO expired before the corrected MV fixture transfer or build could start.
+Replay `fixed-refresh-pending-transfer.json` after reauthentication. Its expected
+prior hashes match the worker. The local `approved-repair-source-inputs.json` is
+already advanced, so do not regenerate the transfer from that manifest.
+Both local compile attempts reached the 4 GiB cgroup limit and stopped. The exact
+recheck is recorded in `fixed-refresh-local-recheck.log`. No limits were raised,
+and neither attempt is runtime proof.
+The worker's last runtime completed and cleaned up before access expired.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses the worker. Main scratch worktree:
@@ -135,6 +144,10 @@ that helper. Cached testdrive v26.43 cannot read the v26.46 Persist state. Do no
 mix sibling binaries. `native-decoder-current/` is the earlier failing control.
 
 Essential evidence pointers:
+- `catalog-plans-sink-fallback-rewrite-check.log`: supported plan regeneration
+  and complete fresh verification. The generated delta is only the sink fallback.
+- `controller-cold-start-attribution.md`: existing controller thread-CPU evidence,
+  current source boundaries and limits on reusing replica metadata-only startup.
 - `decoder-matched-testdrive-final.log`, `decoder-plan-checks.log`, and
   `storage-shards-decoder-investigation.md`: complete guarded-view verification,
   generated plan checks and stored-view controls. `native-catalog-fixture-checks.log`
