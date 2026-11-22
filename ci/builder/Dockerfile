@@ -102,7 +102,7 @@ ARG RUST_VERSION
 # renovate: datasource=github-releases depName=MaterializeInc/autouseradd
 ARG AUTOUSERADD_VERSION=1.3.0
 # renovate: datasource=github-releases depName=docker/compose
-ARG DOCKER_COMPOSE_VERSION=v5.7.1
+ARG DOCKER_COMPOSE_VERSION=v5.8.0
 # renovate: datasource=github-releases depName=christian-korneck/docker-pushrm
 ARG DOCKER_PUSHRM_VERSION=v1.9.0
 # renovate: datasource=github-releases depName=docker/buildx
@@ -620,7 +620,7 @@ RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/$
     | tar xz -C / --strip-components 1
 
 # renovate: datasource=github-releases depName=docker/compose
-ARG DOCKER_COMPOSE_VERSION=v5.7.1
+ARG DOCKER_COMPOSE_VERSION=v5.8.0
 # renovate: datasource=github-releases depName=docker/buildx
 ARG DOCKER_BUILDX_VERSION=v0.39.0
 

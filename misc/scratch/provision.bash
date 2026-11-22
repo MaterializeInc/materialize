@@ -22,7 +22,7 @@ ARCH_GO=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/")
 # renovate: datasource=github-releases depName=moby/moby
 DOCKER_VERSION=28.5.2
 # renovate: datasource=github-releases depName=docker/compose
-DOCKER_COMPOSE_VERSION=5.7.1
+DOCKER_COMPOSE_VERSION=5.8.0
 # renovate: datasource=node-version depName=node
 NODE_VERSION=24.22.3
 # renovate: datasource=github-releases depName=derailed/k9s
