@@ -2778,6 +2778,107 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn status_history_retention_keeps_latest_five_per_key() {
+        let (controller, collections, persist) = test_controller(false).await;
+        let mut parameters = controller.config.parameters.clone();
+        parameters.keep_n_source_status_history_entries = 5;
+        parameters.keep_n_sink_status_history_entries = 5;
+        for (id, introspection_type, desc, history_desc) in [
+            (
+                GlobalId::System(1),
+                IntrospectionType::SourceStatusHistory,
+                MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
+                source_status_history_desc(&parameters),
+            ),
+            (
+                GlobalId::System(2),
+                IntrospectionType::SinkStatusHistory,
+                MZ_SINK_STATUS_HISTORY_DESC.clone(),
+                sink_status_history_desc(&parameters),
+            ),
+        ] {
+            let shard = ShardId::new();
+            let metadata = StorageMetadata {
+                collection_metadata: [(id, shard)].into_iter().collect(),
+                compaction_bounds: [(id, frontier(0))].into_iter().collect(),
+                ..Default::default()
+            };
+            let mut description = CollectionDescription::for_other(desc.clone(), None);
+            description.data_source = DataSource::Introspection(introspection_type);
+            collections
+                .create_collections_for_bootstrap(
+                    &metadata,
+                    None,
+                    vec![(id, description)],
+                    &BTreeSet::new(),
+                )
+                .await
+                .unwrap();
+            let mut writer = persist
+                .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    Arc::new(desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            let mut rows = Vec::new();
+            let mut expected = Vec::new();
+            // Vary each key dimension independently, including shared provenance.
+            // Insert out of timestamp order so retaining any five rows is insufficient.
+            for object in ["u1", "u2"] {
+                for replica in [Datum::Null, Datum::String("u1"), Datum::String("u2")] {
+                    for generation in [Datum::Null, Datum::UInt64(0), Datum::UInt64(1)] {
+                        for seconds in [7, 1, 6, 2, 5, 3, 4] {
+                            let row = Row::pack_slice(&[
+                                Datum::TimestampTz(
+                                    DateTime::from_timestamp(seconds, 0)
+                                        .unwrap()
+                                        .try_into()
+                                        .unwrap(),
+                                ),
+                                Datum::String(object),
+                                Datum::String("running"),
+                                Datum::Null,
+                                Datum::Null,
+                                replica,
+                                generation,
+                            ]);
+                            if seconds >= 3 {
+                                expected.push(row.clone());
+                            }
+                            rows.push(((SourceData(Ok(row)), ()), Timestamp::MIN, 1));
+                        }
+                    }
+                }
+            }
+            writer
+                .compare_and_append(rows, frontier(0), frontier(1))
+                .await
+                .unwrap()
+                .unwrap();
+            // No publishers race this explicit prune. Advancing the upper proves
+            // the pass committed, rather than skipping a stale snapshot.
+            collection_mgmt::partially_truncate_status_history(
+                id,
+                introspection_type,
+                &mut writer,
+                history_desc,
+                SYSTEM_TIME.clone(),
+                &controller.storage_collections,
+            )
+            .await;
+            assert_eq!(writer.fetch_recent_upper().await, &frontier(2));
+            let mut actual = collections.snapshot_latest(id).await.unwrap();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected, "{introspection_type:?}");
+            writer.expire().await;
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn drop_tables_after_read_state_retired() {
         let (mut controller, collections, _) = test_controller(false).await;
         let table = GlobalId::User(1);

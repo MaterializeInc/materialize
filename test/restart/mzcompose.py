@@ -788,26 +788,38 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
             """),
     )
 
-    # Restart mz.
+    # Retention is checked without concurrent publishers by
+    # status_history_retention_keeps_latest_five_per_key in storage-controller.
+    # Here pruning may run before or after replica publication. Require the
+    # genuine restart transitions, not a total that depends on that ordering.
     c.kill("materialized")
+    # Containers share the host clock. Capture after shutdown so delayed events
+    # from the old execution cannot satisfy the restart assertions.
+    restart_after = datetime.now().astimezone().isoformat()
     c.up("materialized")
 
-    # Verify that we have fewer events now
-    # 14 resp. because the truncation default is 5, and the restarted
-    # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent("""
-            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
-            14
-            """),
-    )
-    # New sink execution contributes its starting/running rows after restart.
-    c.testdrive(
-        service="testdrive_no_reset",
-        input=dedent("""
-            > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
-            7
+        input=dedent(f"""
+            > SELECT DISTINCT o.name, h.status
+              FROM mz_internal.mz_source_status_history h
+              JOIN mz_objects o ON o.id = h.source_id
+              WHERE o.name IN ('kafka_source', 'kafka_source_tbl')
+                AND h.occurred_at > '{restart_after}'::timestamptz
+                AND h.status IN ('starting', 'running')
+            kafka_source running
+            kafka_source starting
+            kafka_source_tbl running
+            kafka_source_tbl starting
+
+            > SELECT DISTINCT o.name, h.status
+              FROM mz_internal.mz_sink_status_history h
+              JOIN mz_objects o ON o.id = h.sink_id
+              WHERE o.name = 'kafka_sink'
+                AND h.occurred_at > '{restart_after}'::timestamptz
+                AND h.status IN ('starting', 'running')
+            kafka_sink running
+            kafka_sink starting
             """),
     )
 
