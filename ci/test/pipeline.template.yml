@@ -663,6 +663,9 @@ steps:
   - id: upgrade-smoke-test
     topics: [0dt-migration, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel, upgrade]
     label: "0dt Upgrade Smoke Test"
+    # This scenario mixes a published pre-native image with the local native
+    # build. Native compatible-version promotion has its own acceptance job.
+    skip: "Unsupported: pre-native to native catalog conversion"
     depends_on: build-x86_64
     timeout_in_minutes: 30
     plugins:
