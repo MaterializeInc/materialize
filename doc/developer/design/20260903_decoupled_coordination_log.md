@@ -7,10 +7,10 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-**Next action:** after scratch reauthentication, inspect replacement worker
-`i-0622cbf6d7530a395` and its build cache. Its deletion deadline has passed.
-The debug build hit its one-hour limit while compiling `mz-compute`, so no
-final acceptance ran. Resume the same bounded build if its cache survives.
+**Next action:** collect the bounded debug build on `i-04aaff9ac16f9c30c`
+(`aj-final-native-build.service`). If it times out, inspect the result and resume
+the exact command on that worker, preserving compiled dependencies and all caps.
+The preceding worker and its disk were confirmed deleted after its build timeout.
 Run lifecycle, DDL, adapter loss, scheduled-refresh MV and the compatible-version
 walkthrough once on the final implementation. Keep the PR draft.
 
@@ -21,9 +21,10 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
 
 ## Live blockers and constraints
 
-- Scratch SSO expired again. The original timing worker was confirmed absent
-  before provisioning its replacement. Timing evidence is archived locally.
-  The replacement's current state is unverified. No heavy local builds.
+- Scratch access is restored. A clean replacement is building the final debug
+  implementation. No acceptance runtime overlaps it. Its scheduled shutdown
+  remains enabled, but disk deletion is later so an overnight interruption
+  need not discard the build cache. No heavy local builds.
 - [CI 144357](https://buildkite.com/materialize/test/builds/144357), at `f46813b3`,
   passes Linux/macOS Clippy, formatting, docs and dependency lint. It remains red:
   merge-skew encounters source conflicts, and the x86 build fails its image-publicity
@@ -70,8 +71,10 @@ arbitrary-release or migration coverage and needs current-head revalidation.
 
 ## Worker and evidence
 
-Replacement worker `i-0622cbf6d7530a395`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
-Scheduled shutdown: 2026-11-21 23:31:19 UTC. Deletion: 2026-11-22 00:27:20 UTC.
+Replacement worker `i-04aaff9ac16f9c30c`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
+Deletion: 2026-11-23 19:02:53 UTC. Automatic shutdown is scheduled separately
+on November 22. `worker.json` and `worker-extension-20261122.json` record its
+identity and cache-retention deadline.
 Recheck state and expiry before reuse. Extend within existing caps when needed.
 Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk reserve.
 Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
@@ -81,14 +84,17 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, provisioned clean at `8ef1fc1b`.
 Verify and preserve remote work before syncing an explicit revision to an idle,
-clean worker. `worker-recovery-20261121.json` records provisioning and resource caps.
-`build-final-native-driver.log` records the timeout, 31.5 GiB peak memory and no swap.
+clean worker. `build-final-native-20261122-attempt1.log` follows the current build.
+`build-final-native-driver.log` records the preceding timeout, 31.5 GiB peak memory
+and no swap. No completed final build is claimed yet.
 
 Do not assume the old timing binaries or any completed final artifacts survive.
 `final-acceptance/` contains locally prepared source receipts, pair-build and
 lifecycle harnesses. The versioned lifecycle preserves its predecessor assertions
-and adds the existing clean-controller-exit check. Container-driver repointing
-remains unverified. The baseline worktree expired.
+and adds the existing clean-controller-exit check. Container-driver copies pass
+syntax and normalized-AST comparisons, with only paths/revision changed. They
+have not run. `driver-repointing-checks.json` records those static checks.
+The baseline worktree expired.
 Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
 
