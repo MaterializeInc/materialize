@@ -319,6 +319,12 @@ pub(crate) async fn run(
     let incarnation = loop {
         let updates = catalog.sync_to_current_updates().await?;
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
+        anyhow::ensure!(
+            catalog
+                .try_get_cluster_replica(config.cluster_id, config.replica_id)
+                .is_some(),
+            ReplicaRemoved
+        );
         // Capture absence as well as identity. A conflicting startup cannot
         // refresh its expectation and supersede the execution that won.
         let predecessor = *expected.get_or_insert_with(|| {

@@ -53,6 +53,41 @@ use crate::catalog_follower as follower;
 use follower::tests::{debug_catalog, name, transact};
 
 #[mz_ore::test(tokio::test)]
+async fn startup_rejects_removed_replica() {
+    const CHILD: &str = "MZ_CLUSTERD_REMOVED_REPLICA_TEST_CHILD";
+    const TEST: &str = "catalog_follower::execution::tests::startup_rejects_removed_replica";
+    if !in_child(CHILD, TEST, Duration::from_secs(120)).await {
+        return;
+    }
+
+    let mut fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
+    transact(
+        &mut fixture.writer,
+        vec![Op::DropClusterReplicaRealization {
+            cluster_id: fixture.config.cluster_id,
+            replica_id: fixture.config.replica_id,
+        }],
+    )
+    .await;
+
+    // Startup must detect removal before it needs native runtime ingress.
+    let mut owner = follower::NativeOwner {
+        compute: None,
+        storage: None,
+        execution: None,
+    };
+    let error = follower::run(
+        fixture.config,
+        Arc::clone(&fixture.clients),
+        MetricsRegistry::new(),
+        &mut owner,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<follower::ReplicaRemoved>(), "{error:#}");
+}
+
+#[mz_ore::test(tokio::test)]
 async fn startup_rejects_mismatched_plan_versions() {
     let fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
     let config = &fixture.config;
