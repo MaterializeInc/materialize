@@ -2023,6 +2023,48 @@ async fn deployment_authority_filters_observations() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn sink_status_without_applicable_observation_is_created() {
+    use crate::builtin::MZ_SINK_STATUSES;
+    use mz_expr::MirRelationExpr;
+    use mz_repr::{Datum, Row};
+
+    Catalog::with_debug(|catalog| async move {
+        for (present, generation, status, replica, expected) in [
+            (false, 0, "running", true, "created"),
+            (true, 1, "running", true, "created"),
+            (true, 0, "running", true, "running"),
+            (true, 0, "unknown", true, "unknown"),
+            (false, 0, "running", false, "paused"),
+        ] {
+            let observations = format!(
+                "(SELECT 'u1' AS id, 'r1' AS replica_id, '2026-01-01 00:00:00+00'::timestamptz AS occurred_at,
+                    '{status}' AS status, NULL::text AS error, NULL::jsonb AS details,
+                    {generation}::uint8 AS deployment_generation, 7::uint8 AS client_incarnation
+                  WHERE {present})"
+            );
+            let replicas = format!("(SELECT 'r1' AS id, 'c1' AS cluster_id WHERE {replica})");
+            let sql = MZ_SINK_STATUSES.sql
+                .replace("mz_catalog.mz_sinks", "(SELECT 'u1' AS id, 'sink' AS name, 'kafka' AS type, 'c1' AS cluster_id) AS mz_sinks")
+                .replace("mz_internal.mz_storage_statuses_raw", &observations)
+                .replace("mz_catalog.mz_cluster_replicas", &replicas)
+                .replace("mz_internal.mz_catalog_deployment_authority", "(SELECT 0::uint8 AS active_deployment_generation) AS authority")
+                .replace("mz_internal.mz_catalog_shared", "(SELECT '{\"kind\":\"ClientIncarnation\",\"key\":{\"id\":7},\"value\":{\"realization\":{\"Replica\":{}}}}'::jsonb AS data) AS shared");
+            let item = catalog.state().deserialize_item(
+                GlobalId::User(42),
+                &format!("CREATE VIEW materialize.public.status_test AS SELECT status FROM ({sql}) AS statuses"),
+                &BTreeMap::new(), &mut LocalExpressionCache::Closed, None,
+            ).expect("plan sink status projection");
+            let CatalogItem::View(view) = item else { panic!("expected view") };
+            let MirRelationExpr::Constant { rows, .. } = view.optimized_expr().as_inner() else {
+                panic!("literal status projection did not evaluate");
+            };
+            assert_eq!(rows.as_ref().unwrap(), &vec![(Row::pack_slice(&[Datum::String(expected)]), mz_repr::Diff::ONE)]);
+        }
+        catalog.expire().await;
+    }).await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn verify_builtin_descs() {
     // Provide a full AWS context so the builtin AWS connection views resolve

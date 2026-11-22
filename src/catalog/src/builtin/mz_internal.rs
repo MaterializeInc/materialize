@@ -2783,7 +2783,7 @@ SELECT
     name,
     mz_sinks.type,
     occurred_at as last_status_change_at,
-    coalesce(status, 'unknown') as status,
+    coalesce(status, 'created') as status,
     error,
     details
 FROM mz_catalog.mz_sinks
