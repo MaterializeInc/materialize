@@ -3797,7 +3797,7 @@ mz_internal.mz_sink_statuses:
   →Return
     →Map/Filter/Project
       Project: #0..=#3, #7, #5, #6
-      Map: coalesce(#4{status}, "unknown")
+      Map: coalesce(#4{status}, "created")
         →Union
           →Map/Filter/Project
             Project: #0..=#6
