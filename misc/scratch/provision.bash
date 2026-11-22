@@ -26,7 +26,7 @@ DOCKER_COMPOSE_VERSION=5.8.0
 # renovate: datasource=node-version depName=node
 NODE_VERSION=24.22.3
 # renovate: datasource=github-releases depName=derailed/k9s
-K9S_VERSION=v0.50.18
+K9S_VERSION=v0.51.0
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL_VERSION=v1.34.10
 # renovate: datasource=github-releases depName=kubernetes-sigs/kind
