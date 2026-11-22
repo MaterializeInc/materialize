@@ -1989,31 +1989,28 @@ async fn deployment_authority_filters_observations() {
                 ('', NULL, NULL::uint8)
             ) AS observations(id, replica_id, deployment_generation)
         ) AS sources";
-        for (generation, enabled, expected) in [
-            ("NULL::uint8", false, "legacy"),
-            ("7::uint8", false, "legacy"),
-            ("NULL::uint8", true, "legacy"),
-            ("0::uint8", true, "zero"),
-            ("7::uint8", true, "seven"),
+        for (generation, expected) in [
+            ("NULL::uint8", vec![]),
+            ("0::uint8", vec!["zero"]),
+            ("7::uint8", vec!["seven"]),
         ] {
-            let authority = format!(
-                "(SELECT {generation} AS active_deployment_generation,
-                {enabled} AS catalog_read_protection_enabled) AS authority"
-            );
+            let authority =
+                format!("(SELECT {generation} AS active_deployment_generation) AS authority");
             let query = MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED
                 .sql
                 .replace("mz_internal.mz_catalog_deployment_authority", &authority)
                 .replace("mz_internal.mz_compute_error_counts_by_deployment", errors);
             assert_eq!(
                 evaluate(format!("SELECT object_id FROM ({query}) AS selected")),
-                [expected]
+                expected
             );
 
             let query = MZ_SOURCE_STATISTICS
                 .sql
                 .replace("mz_internal.mz_catalog_deployment_authority", &authority)
                 .replace("mz_internal.mz_source_statistics_with_history", sources);
-            let mut expected = vec![expected, "replica-less"];
+            let mut expected = expected;
+            expected.push("replica-less");
             expected.sort();
             assert_eq!(
                 evaluate(format!("SELECT id FROM ({query}) AS selected")),

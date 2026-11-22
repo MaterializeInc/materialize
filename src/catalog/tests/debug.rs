@@ -538,15 +538,37 @@ async fn test_debug_live_mutations(registered: bool, protected: bool) {
         generation
     );
 
-    // Force bypasses liveness only, not a subsequent epoch or generation fence.
-    let _replacement = builder
-        .clone()
-        .with_deploy_generation(if protected { 1 } else { 0 })
-        .unwrap_build()
-        .await
-        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
-        .await
-        .unwrap();
+    // Protected writers survive promotion, but force cannot bypass retirement.
+    // Unprotected writers retain their exclusive epoch fence.
+    let _replacement = if protected {
+        let next = builder.clone().with_deploy_generation(1);
+        let pending = next.clone().unwrap_build().await.admit().await.unwrap();
+        let mut promoted = next
+            .unwrap_build()
+            .await
+            .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        debug
+            .edit::<ConfigCollection>(key.clone(), edited.clone(), true)
+            .await
+            .unwrap();
+        debug
+            .delete::<ConfigCollection>(key.clone(), true)
+            .await
+            .unwrap();
+        assert!(promoted.retire_deployment(0).await.unwrap());
+        pending.expire().await;
+        promoted
+    } else {
+        builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+    };
     for err in [
         debug
             .edit::<ConfigCollection>(key.clone(), edited, true)
@@ -562,7 +584,7 @@ async fn test_debug_live_mutations(registered: bool, protected: bool) {
                 matches!(
                     err,
                     CatalogError::Durable(DurableCatalogError::Fence(
-                        FenceError::DeployGeneration { .. }
+                        FenceError::DeploymentRetired { generation: 0 }
                     ))
                 )
             } else {
@@ -945,20 +967,46 @@ async fn test_persist_bootstrap_identity_recovery() {
                     generation
                 );
                 diagnostic.expire().await;
-                // A later generation fence takes precedence over recovery.
-                let replacement = builder
-                    .with_deploy_generation(1)
-                    .unwrap_build()
-                    .await
-                    .open(SYSTEM_TIME().into(), &test_bootstrap_args())
-                    .await
-                    .unwrap();
-                assert!(matches!(
-                    state.sync_to_current_updates().await,
-                    Err(CatalogError::Durable(DurableCatalogError::Fence(
-                        FenceError::DeployGeneration { .. }
-                    )))
-                ));
+                // Retirement takes precedence over recovery while protection
+                // remains enabled. Disabling protection restores token fencing.
+                let next = builder.with_deploy_generation(1);
+                let replacement = if wal {
+                    let pending = next.clone().unwrap_build().await.admit().await.unwrap();
+                    let mut promoted = next
+                        .unwrap_build()
+                        .await
+                        .open_for_promotion(SYSTEM_TIME().into(), &test_bootstrap_args())
+                        .await
+                        .unwrap();
+                    assert!(promoted.retire_deployment(0).await.unwrap());
+                    pending.expire().await;
+                    promoted
+                } else {
+                    next.unwrap_build()
+                        .await
+                        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+                        .await
+                        .unwrap()
+                };
+                let error = state.sync_to_current_updates().await.unwrap_err();
+                assert!(
+                    if wal {
+                        matches!(
+                            error,
+                            CatalogError::Durable(DurableCatalogError::Fence(
+                                FenceError::DeploymentRetired { generation: 0 }
+                            ))
+                        )
+                    } else {
+                        matches!(
+                            error,
+                            CatalogError::Durable(DurableCatalogError::Fence(
+                                FenceError::DeployGeneration { .. }
+                            ))
+                        )
+                    },
+                    "{error:?}"
+                );
                 replacement.expire().await;
                 state.expire().await;
             }

@@ -1763,6 +1763,10 @@ async fn cluster_and_ephemeral_cleanup() {
     Owner::Ordinary.insert(&mut txn, 1000);
     let mut item = txn.get_item(&Owner::Ordinary.item_id(1000)).unwrap();
     item.ephemeral_owner_session = Some(uuid::Uuid::new_v4());
+    item.ephemeral_owner_incarnation = Some(
+        txn.create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+            .unwrap(),
+    );
     txn.update_item(item.id, item).unwrap();
     for owner in [Owner::Ordinary, Owner::Logging] {
         txn.set_collection_compaction_bound(owner.id(1000), Some(10.into()))
