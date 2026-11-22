@@ -6,9 +6,10 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** settle the remaining admission, status and fixture-contract
-decisions below, then finish their scoped repairs. Run final-head acceptance
-after the remaining repairs, not per change.
+**Next action:** settle fixed-refresh privilege revalidation and verify that repair.
+Meanwhile, attribute the controller's cold startup gap. Sink fallback, the history
+coverage split and SRF expectations are committed with targeted verification.
+Run final-head acceptance after the remaining repairs, not per change.
 
 Catalog decoding, plan coverage, native catalog fixtures, temporary cleanup and
 RF convergence coverage have local verification. CI remains red on the older
@@ -20,20 +21,33 @@ pushed head. Detailed outcomes and limitations are linked below.
 runtime jobs and is now terminal with failures. The old image-publicity blocker
 is absent. Newly completed failures are being classified. Known failures include:
 
-- Sink-status history counts and the imported Cockroach inventory fixture are open.
+- Fixed-refresh concurrency verification remains open. Sink fallback passes its
+  red/green boundary test. Strict retention and restart-event coverage both pass. The imported Cockroach
+  SRF fixture passes with its two approved expected rows and unchanged SQL.
   Catalog decoding, EXPLAIN coverage, replica removal, temporary cleanup and RF
-  coverage have locally verified repairs that this CI build predates.
+  coverage also have locally verified repairs that this CI build predates.
 - An unsupported-upgrade skip trips the CI wrapper's empty-service-log check.
 - Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
   have finished. Preserve the completed build's evidence when publishing fixes.
 
-Pending user decisions: restore the public sink-status `created` fallback, and
-test history retention at its snapshot independently of startup-event publication
-rather than impose a new ordering barrier. Neither status repair is implemented. History captures now establish that
-the five-row outcome can preserve both restart transitions. Proposed coverage
-separates exact retention from event delivery instead of fixing another count.
-Also awaiting permission to update only two expected Materialize catalog rows in
-the imported Cockroach SRF fixture, which the test guide says not to edit.
+The four scoped repairs are approved. One new decision remains: recheck CREATE
+and USAGE privileges after fixed-refresh catalog catch-up, rather than allowing
+concurrent revocation to pass the narrower dependency check. Recommendation: recheck.
+The implementation remains uncommitted. Review required target-namespace validation
+and stale-candidate rejection, now added. The post-acquisition revision check lives
+at the shared CREATE/EXPLAIN boundary. Runtime verification has not passed: the
+fixture lacked the RETAIN HISTORY feature flag, now fixed locally. It now uses
+AT CREATION so changed input contents detect accidental timestamp resampling.
+
+Strict latest-five retention passes through the real pruning API. The complete
+revised restart workflow independently verifies new starting/running events for
+the source, table and sink. No ordering barrier, count relaxation or production
+retention change was added. Evidence: `status-history-repaired-evidence.tar.gz`
+(project `aj-native-parallel-c09cb31b`) and `sink-status-red-green.log`.
+
+Current upstream main's command framework rechecks authorization but does not yet
+cover CREATE MATERIALIZED VIEW. A rebase is not recommended solely for this repair.
+No rebase or cherry-pick was performed. See `upstream-ddl-command-survey.md`.
 
 Do not weaken assertions, raise deadlines or resource limits, change Persist or
 the 60s publication default, or add unrelated optimizations. The retry-scheduling
@@ -62,8 +76,8 @@ A private debug probe deterministically rejects a fixed-refresh CREATE after
 unrelated CREATE SECRET commits during optimization completion. Both uncontended
 controls succeed. The finish-stage planning-revision guard returns 40001, not a
 timeout. This identifies a current path, not CI's exact conflicting transaction.
-No fixed-timestamp retry behavior changed. See `fixed-refresh-diagnostic.md` in the
-evidence directory.
+The uncommitted repair revalidates unchanged dependencies without repurifying the
+fixed timestamp. See `fixed-refresh-diagnostic.md` for the original reproduction.
 
 Typed replica removal, follower liveness, foreign temporary-owner cleanup and
 native catalog fixtures pass targeted checks. The JSON-kind decoder guard passes
@@ -74,7 +88,10 @@ successful read, without strengthening ALTER acknowledgment. Both testdrive and
 the remaining unified-cluster SLT pass. Targeted Rust checks now also pass for
 shared plan namespaces, rewrite conflicts/cancellation, pending-index isolation,
 webhook metrics, the native CLI and hydration-history isolation. Complete
-`catalog.td` and `cluster.slt` pass with native builtin inventory expectations.
+`catalog.td`, `cluster.slt` and `cockroach/srfs.slt` pass with native builtin
+inventory expectations. SRF verification is in `srfs-current-runtime-fixed-runner.log`.
+Targeted repair unit results are in `approved-native-repair-unit-recheck.log` and
+`approved-native-repair-validation-checks.log`.
 
 Runtime implementation `8ef1fc1b` passes the distinct-package-version walkthrough,
 unchanged scheduled-MV suites, full DDL/combined ingestion, adapter loss,
