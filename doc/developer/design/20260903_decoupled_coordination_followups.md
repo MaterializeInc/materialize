@@ -11,6 +11,21 @@ owns a fact. Reuse existing identities, catalog changes and Persist listeners.
 Do not introduce a designated maintenance adapter, another consensus protocol,
 or a general sampling framework.
 
+## Fallible catalog decoder guards
+
+Stored views are optimized before they are inlined and optimized again. A kind
+filter alone does not protect a decoder from other catalog record shapes. Point
+lookups on `mz_storage_shards` expose a bare decoder before the kind predicate on
+the unindexed replica path. An inline guarded query is not proof that the stored
+view preserves its guard through both passes.
+
+Investigate guard preservation in `canonicalize_equivalences`, `LiteralLifting`,
+and `try_localize_to_input_with_bound_expr`, plus source predicate ordering in
+`transform/src/dataflow.rs`. Keep this optimizer work separate from the bounded
+catalog SQL repair. Preserve strict decoding of malformed matching-kind records.
+Evidence: `native-ci-recovery/storage-shards-decoder-investigation.md` under the
+M3 evidence root.
+
 ## Startup activation ordering
 
 Source review found a pre-existing join race. `initialize_query_client` refreshes
@@ -59,6 +74,13 @@ A running former active replica keeps its granted Persist output permission
 after promotion. A restarted replica in that still-admitted deployment starts
 without it because `ReplicaEnactment::has_output_write_authority` checks the
 current active generation. SQL, DDL and table-write admission remains intact.
+
+The same gate keeps candidate Persist outputs non-writing before promotion.
+With the active deployment offline, current-time queries of builtin MVs such as
+`mz_tables` and `mz_views` can therefore wait indefinitely while raw catalog reads
+still work. The temporary-cleanup capture demonstrates this availability limit,
+not a reason to bypass output authority in the fixture. See
+`native-ci-recovery/stall-readonly-report.md` under the M3 evidence root.
 
 Clarify whether restart should recover prior output enablement or intentionally
 pause those maintained outputs. The design permits overlapping Persist writers

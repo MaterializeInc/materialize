@@ -6,15 +6,16 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** collect the corrected temporary-cleanup run, then run the decoder
-probes and verify the rebuilt builtin. Replica startup now returns typed removal.
+**Next action:** collect the decoder control/sibling probes and verify the rebuilt
+builtin. Replica startup now returns typed removal.
 The follower suite passes after reducing the liveness fixture's debug stack frame
 and testing backoff with an ownership change rather than compatible frontier updates.
 
-The first corrected temporary fixture blocked on a new pre-promotion SQL inventory
-assertion after killing the active deployment. Candidate Persist outputs are still
-non-writing by policy. Keep durable ownership checks before promotion and SQL
-projection checks afterward. The captured failed run was stopped and cleaned up.
+Temporary cleanup passes both protection modes, including foreign-owner retention
+through promotion and explicit retirement. Candidate Persist outputs remain
+non-writing by policy. Durable ownership is checked before promotion, and SQL
+projections afterward. Both the captured failed diagnostic and successful run are
+cleaned up. Their measured output frontiers confirm progress resumes at promotion.
 
 The unchanged `tables.td` reproduces the catalog JSON error. An inline argument
 guard passes, but the stored builtin takes an additional optimizer pass. Verify
@@ -26,10 +27,9 @@ the rebuilt view before accepting the SQL repair. No decoder relaxation is appro
 runtime jobs and is now terminal with failures. The old image-publicity blocker
 is absent. Newly completed failures are being classified. Known failures include:
 
-- Catalog decoding in `tables.td`, and catalog-confirmed replica removal during
-  clusterd startup incorrectly classified as fatal.
-- Replica availability after RF0 to RF1, sink-status history counts, and temporary
-  cleanup expecting retirement at promotion despite requesting no retirement.
+- Catalog decoding in `tables.td`, replica availability after RF0 to RF1, and
+  sink-status history counts. Replica-removal and temporary-cleanup failures have
+  locally verified repairs that the completed CI build predates.
 - Missing catalog EXPLAIN coverage and an unsupported-upgrade skip that trips the
   CI wrapper's empty-service-log check.
 - Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
@@ -99,7 +99,7 @@ Essential evidence pointers:
 - `final-cdc-evidence/`: completed live-reader handover/reconnect captures.
 - `tables-repro-run.log`: reproduced unchanged CI failure. `final-acceptance/`
   contains private bounded drivers, including decoder probes and the exact
-  helper-only temporary-cleanup overlay. The latter remains runtime-unverified.
+  helper-only temporary-cleanup overlay.
 - `replica-removal-before-bounded.log`, `replica-removal-after.log`, and
   `liveness-fixture-outcome.md`: typed-removal red/green evidence, measured stack
   repair and passing follower coverage.
@@ -107,7 +107,8 @@ Essential evidence pointers:
   additional Cargo fixtures and a fixed-refresh CREATE invalidation that needs
   diagnosis before reopening the deferred retry scope.
 - `stall-readonly-report.md`: pre-promotion inventory stall and its measured
-  frontiers. `temporary-cleanup-corrected.log` is the current targeted run.
+  frontiers. `temporary-cleanup-outcome.md` records the corrected passing fixture,
+  archive, provenance and cleanup evidence.
 - `ddl-version-observation-boundary.md`: private observer repair that retains the
   workflow's existing readiness wait and SQL-version assertions.
 - `replica-boundary-independent-review.md`, `replica-metadata-verification.md` and
