@@ -6,16 +6,21 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** collect the `tables.td` decoder-guard A/B reproduction, then verify
-the pending replica-removal startup repair on scratch. The unchanged tables file
-reproduces CI's catalog JSON error. Storage IDs are correctly encoded objects,
-while other catalog kinds contain numeric IDs. No decoder relaxation is approved.
-The startup repair and regression are uncommitted and unverified by compilation.
+**Next action:** finish diagnosing the follower liveness test's stack overflow,
+then run the prepared temporary-cleanup fixture and decoder probes on scratch.
+The replica-removal startup repair is committed in `33b5d51e`: its regression
+fails on the original error and passes with typed removal. Broader follower
+coverage has one stack-overflow failure during catalog initialization.
+
+The unchanged `tables.td` reproduces the catalog JSON error. An inline argument
+guard passes, but the stored builtin takes an additional optimizer pass. Verify
+the rebuilt view before accepting the SQL repair. No decoder relaxation is approved.
 
 ## Live failures and constraints
 
 [CI 144427](https://buildkite.com/materialize/test/builds/144427) now executes
-runtime jobs. The old image-publicity blocker is absent. Current failures include:
+runtime jobs and is now terminal with failures. The old image-publicity blocker
+is absent. Newly completed failures are being classified. Known failures include:
 
 - Catalog decoding in `tables.td`, and catalog-confirmed replica removal during
   clusterd startup incorrectly classified as fatal.
@@ -24,7 +29,11 @@ runtime jobs. The old image-publicity blocker is absent. Current failures includ
 - Missing catalog EXPLAIN coverage and an unsupported-upgrade skip that trips the
   CI wrapper's empty-service-log check.
 - Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
-  are still running. Preserve their verification when publishing fixes.
+  have finished. Preserve the completed build's evidence when publishing fixes.
+
+Pending user decisions: restore the public sink-status `created` fallback, and
+test history retention at its snapshot independently of startup-event publication
+rather than impose a new ordering barrier. Neither status repair is implemented.
 
 Do not weaken assertions, raise deadlines or resource limits, change Persist or
 the 60s publication default, or add unrelated optimizations. The retry-scheduling
@@ -85,7 +94,11 @@ Essential evidence pointers:
   independently reviewed runtime outcomes, archive paths and coverage limits.
 - `final-cdc-evidence/`: completed live-reader handover/reconnect captures.
 - `tables-repro-run.log`: reproduced unchanged CI failure. `final-acceptance/`
-  contains private bounded drivers, including the diagnostic shadow view.
+  contains private bounded drivers, including decoder probes and the exact
+  helper-only temporary-cleanup overlay. The latter remains runtime-unverified.
+- `replica-removal-before-bounded.log`, `replica-removal-after.log`, and
+  `replica-removal-suite.log`: typed-removal red/green evidence and the separate
+  liveness stack-overflow failure. The suite repeat is still running.
 - `ddl-version-observation-boundary.md`: private observer repair that retains the
   workflow's existing readiness wait and SQL-version assertions.
 - `replica-boundary-independent-review.md`, `replica-metadata-verification.md` and
