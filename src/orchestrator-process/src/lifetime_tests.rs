@@ -717,7 +717,8 @@ async fn exchange_echo(connection: &mut tokio::net::TcpStream) {
     .unwrap();
 }
 
-#[mz_ore::test(tokio::test)]
+// Image replacement's termination grace period uses block_in_place.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn image_replacement_retains_endpoints_and_ignores_arguments() {
     for wrapped in [false, true] {
         let mut fixture = Fixture::new(true);
