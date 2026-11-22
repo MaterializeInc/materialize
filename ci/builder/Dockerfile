@@ -290,7 +290,7 @@ RUN mkdir rust \
     && rm -rf rust.asc rust.tar.gz rust \
     && cargo install --root /usr/local --version "=0.9.3" --locked --features=cli cargo-about \
     && cargo install --root /usr/local --version "=3.8.0" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.20.2" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.21.0" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version "=0.9.152" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.9.1" --locked cargo-llvm-cov \
