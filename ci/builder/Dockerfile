@@ -383,9 +383,9 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
 # Install KinD, kubectl, helm & helm-docs
 
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
-ARG KIND_AMD64=v0.32.0@50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+ARG KIND_AMD64=v0.33.0@aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
-ARG KIND_ARM64=v0.32.0@b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d
+ARG KIND_ARM64=v0.33.0@20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2
 
 RUN KIND_VERSION=${KIND_AMD64%@*} \
     && curl -fsSL https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$ARCH_GO > /usr/local/bin/kind \
@@ -638,9 +638,9 @@ RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack 
     && corepack enable
 
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
-ARG KIND_AMD64=v0.32.0@50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+ARG KIND_AMD64=v0.33.0@aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
-ARG KIND_ARM64=v0.32.0@b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d
+ARG KIND_ARM64=v0.33.0@20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2
 
 RUN KIND_VERSION=${KIND_AMD64%@*} \
     && curl -fsSL https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$ARCH_GO > /usr/local/bin/kind \
