@@ -6,7 +6,7 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** verify the remaining Cargo and catalog-inventory fixtures, then
+**Next action:** verify the remaining catalog-inventory fixtures, then
 diagnose fixed-refresh CREATE invalidation without reopening the deferred retry
 scope. Run final-head acceptance after the remaining repairs, not per change.
 
@@ -56,7 +56,9 @@ unchanged `tables.td`, including tombstone validation and consistency checks.
 Generated catalog plans pass verification. The unreleased v97 snapshot is current,
 with older snapshots untouched. RF coverage polls membership and requires one
 successful read, without strengthening ALTER acknowledgment. Both testdrive and
-the remaining unified-cluster SLT pass.
+the remaining unified-cluster SLT pass. Targeted Rust checks now also pass for
+shared plan namespaces, rewrite conflicts/cancellation, pending-index isolation,
+webhook metrics, the native CLI and hydration-history isolation.
 
 Runtime implementation `8ef1fc1b` passes the distinct-package-version walkthrough,
 unchanged scheduled-MV suites, full DDL/combined ingestion, adapter loss,
@@ -104,6 +106,9 @@ Essential evidence pointers:
   `storage-shards-decoder-investigation.md`: complete guarded-view verification,
   generated plan checks and stored-view controls. `native-catalog-fixture-checks.log`
   and `v97-stability-{before,after}.log` cover the catalog fixtures and encodings.
+- `remaining-native-fixture-build-retry.log` and
+  `remaining-native-fixture-runtime.log`: compiled fixtures and targeted Rust
+  tests. The runtime used isolated metadata and the existing aggregate caps.
 - `native-unified-{rf,slt}-check.log`: complete RF testdrive and remaining SLT
   coverage. `catalog-decoder-and-rf-final.tar.gz` preserves runtime evidence.
 - `ci-144427/`: current annotations, job logs and failure inventory. Older
