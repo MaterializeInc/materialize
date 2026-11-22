@@ -169,12 +169,22 @@ reclamation distinct. Unrelated failures must not displace the current slice.
 
 Follow repository instructions and skills. Use one dedicated x86_64 scratch
 worker via bin/scratch and misc/scratch/decoupled-coordination.json:
-16 vCPUs, 64 GiB RAM and 500 GiB disk. Keep the shared editing VM lightweight.
+16 vCPUs, 64 GiB RAM and 500 GiB disk. Builds there may use every vCPU and
+default Cargo parallelism, with no build time limit, because builds and
+runtimes never overlap. Keep runtime and measurement limits fixed so numbers
+stay comparable.
 Reuse the worker and build caches, restarting it or extending expiry proactively
 without renewed approval. Record its ID and expiry and preserve useful evidence off-worker.
 Ask before increasing instance size, count or disk. SSO renewal requires
 Aljoscha to authenticate with bin/scratch login. Report that access blocker
-without treating it as a reason to replace the worker.
+without treating it as a reason to replace the worker or to stop working.
+
+The shared editing VM (16 cores, 18 GiB RAM) is a working machine, not only an
+editor. Use it whenever scratch is unavailable, and for quick checks when it is
+faster: compiles, Clippy, targeted tests and the full bin/controllerd setup all
+run here. Apply no fixed memory cap. Limit Cargo jobs from observed memory
+pressure and leave a few GiB free for the editing sessions. Keep broad CI-style
+suites, large workloads and long measurement runs on scratch.
 
 Keep canonical edits here. Sync explicit Git revisions only to an idle, clean
 worker: bin/scratch push force-checks out the supplied revision. Do not overwrite
