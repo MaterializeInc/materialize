@@ -1360,8 +1360,8 @@ __metadata:
   linkType: hard
 
 "@hookform/resolvers@npm:^7.0.1":
-  version: 7.0.6
-  resolution: "@hookform/resolvers@npm:7.0.6"
+  version: 7.0.7
+  resolution: "@hookform/resolvers@npm:7.0.7"
   dependencies:
     "@standard-schema/utils": "npm:^0.3.0"
   peerDependencies:
@@ -1436,7 +1436,7 @@ __metadata:
       optional: true
     zod:
       optional: true
-  checksum: 10c0/9fafcfa47e7889da6504f34a1e296d8bcbbff6647268bde57ab02648da8937c5efb6857a582137b253aa2fbe4fafaa27768c1fe6d87c3925f1b84308ead3d769
+  checksum: 10c0/f69235bb799022452d114117378fc8cffece294e5c03511bb370cf10601b23a3d07f01ff783e01b45c1b0679b7867d3916dc0fcbb4c16e97203ccb1c33ce3a17
   languageName: node
   linkType: hard
 
