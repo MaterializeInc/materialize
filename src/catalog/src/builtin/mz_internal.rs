@@ -4595,10 +4595,12 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     column_comments: BTreeMap::new(),
     // Dropped collections can retain metadata while clients still need their
     // shards. Public mappings follow live objects, including retained versions.
+    // Keep the guard distinct from the indexed text predicate. Sharing that
+    // expression lets contextual simplification erase the decoder's guard.
     sql: "
 WITH mappings AS (
 SELECT
-    CASE WHEN c.data->>'kind' = 'StorageCollectionMetadata'
+    CASE WHEN c.data->'kind' = '\"StorageCollectionMetadata\"'::jsonb
          THEN mz_internal.parse_catalog_id(c.data->'key'->'id')
     END AS object_id,
     c.data->'value'->>'shard' AS shard_id

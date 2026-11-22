@@ -19,10 +19,17 @@ lookups on `mz_storage_shards` expose a bare decoder before the kind predicate o
 the unindexed replica path. An inline guarded query is not proof that the stored
 view preserves its guard through both passes.
 
-Investigate guard preservation in `canonicalize_equivalences`, `LiteralLifting`,
-and `try_localize_to_input_with_bound_expr`, plus source predicate ordering in
-`transform/src/dataflow.rs`. Keep this optimizer work separate from the bounded
-catalog SQL repair. Preserve strict decoding of malformed matching-kind records.
+Preserve guards indirectly as well as syntactically: CSE can lift a CASE condition
+into a Map column, contextual inference can replace that column with `true`, and
+later inlining can erase the guard. Source review identifies this path through
+EquivalencePropagation and predicate pushdown. An optimizer regression should
+exercise the lifted-column form across passes, not only an inline CASE.
+
+The bounded SQL workaround compares the JSON kind in the guard and retains the
+distinct text predicate for index lookup. Stored-view controls verify this shape
+and strict errors for malformed matching-kind IDs. Keep the general optimizer
+repair separate. Audit the related WrittenPlan guards in dependency and refresh
+views with matching materialized-view inputs, not empty table-ID probes.
 Evidence: `native-ci-recovery/storage-shards-decoder-investigation.md` under the
 M3 evidence root.
 
