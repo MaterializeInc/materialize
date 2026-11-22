@@ -6,9 +6,9 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** diagnose fixed-refresh CREATE invalidation without reopening
-the deferred retry scope. The imported Cockroach inventory edit still needs
-permission. Run final-head acceptance after the remaining repairs, not per change.
+**Next action:** collect sink-history row/timestamp evidence. Fixed-refresh
+revalidation and the imported Cockroach inventory edit await permission.
+Run final-head acceptance after the remaining repairs, not per change.
 
 Catalog decoding, plan coverage, native catalog fixtures, temporary cleanup and
 RF convergence coverage have local verification. CI remains red on the older
@@ -49,6 +49,13 @@ historical intermittent scheduled-MV failure has not been proven eliminated. Any
 recurrence needs diagnosis, not another rerun.
 
 ## Verified outcomes
+
+A private debug probe deterministically rejects a fixed-refresh CREATE after
+unrelated CREATE SECRET commits during optimization completion. Both uncontended
+controls succeed. The finish-stage planning-revision guard returns 40001, not a
+timeout. This identifies a current path, not CI's exact conflicting transaction.
+No fixed-timestamp retry behavior changed. See `fixed-refresh-diagnostic.md` in the
+evidence directory.
 
 Typed replica removal, follower liveness, foreign temporary-owner cleanup and
 native catalog fixtures pass targeted checks. The JSON-kind decoder guard passes
