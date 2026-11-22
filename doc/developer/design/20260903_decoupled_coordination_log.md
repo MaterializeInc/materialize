@@ -7,11 +7,11 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-**Next action:** collect `aj-current-frontier-pair-build.service` on
-`i-04aaff9ac16f9c30c` and verify its post-exit source restoration before running
-the distinct-version walkthrough. Final debug binaries are built and pinned.
-Both unchanged scheduled-MV suites pass. DDL, adapter loss, subscriptions and
-four-index progress still need final implementation runs. Keep the PR draft.
+**Next action:** collect the native DDL run on `i-04aaff9ac16f9c30c`, then run
+adapter loss, subscriptions and four-index progress with the prepared drivers.
+The distinct-version walkthrough and unchanged scheduled-MV suites pass on the
+final debug implementation. Combined-ingestion acceptance remains pending.
+Keep the PR draft.
 
 The bounded source audit found no further reachable monolithic alternative in
 local launch/deployment or storage/introspection publication. Retained serialized
@@ -20,8 +20,8 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
 
 ## Live blockers and constraints
 
-- Scratch access is restored. The compatible-version candidate is building.
-  No acceptance runtime overlaps it. Its scheduled shutdown
+- Scratch access is restored. Builds are finished and fixture images are ready.
+  Acceptance runs are serialized within existing caps. Scheduled shutdown
   remains enabled, but disk deletion is later so an overnight interruption
   need not discard the build cache. No heavy local builds.
 - [CI 144357](https://buildkite.com/materialize/test/builds/144357), at `f46813b3`,
@@ -29,13 +29,14 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   merge-skew encounters source conflicts, and the x86 build fails its image-publicity
   check because pubsubd is not public on DockerHub. Image-dependent runtime coverage
   is incomplete. Do not merge main or change registry permissions without approval.
-- Final-head lifecycle/progress, compatible-version and combined-ingestion acceptance
-  remain outstanding. Earlier successes do not certify the latest source.
+- Final DDL/ingestion, adapter-loss, subscription and four-index acceptance
+  remain outstanding. The versioned walkthrough does not test subscriptions.
+  An earlier resource-guard interruption remains unexplained: a separate metadata
+  probe demonstrates a guard weakness but does not identify the original PID.
+  The successful diagnostic rerun retained the same placement assertion.
 - The scheduled-MV admission suite passes on the final debug implementation.
   This does not establish that its historical intermittent failure is eliminated.
   Any recurrence requires diagnosis, not another rerun.
-  The process-orchestrator image-replacement fixture also previously logged background
-  panics despite reporting passes.
 - The retry cut is approved. Do not resume statement-by-statement scheduling
   conversions. `remaining-inline-owner-inventory.md` records deferred runtime/startup
   limitations. Promoted-adapter storage initialization can reject structural catch-up.
@@ -67,7 +68,15 @@ Earlier native workflows demonstrated ownership, temporary/subscription identiti
 compatible writers, promotion and explicit retirement. Optimized KafkaSources,
 backup/restore and the 60s four-index workflow passed. The 1s variant is stress only.
 The accepted 26.46/26.47 pair shares implementation and plan encoding. It is not
-arbitrary-release or migration coverage and needs current-head revalidation.
+arbitrary-release or migration coverage. Its final implementation walkthrough now
+passes with surviving warmed replicas, held snapshots, full writers across
+promotion and clean outgoing-controller exit on retirement. Independent evidence
+review found no unexpected panics in the archived top-level logs.
+
+The image-replacement fixture now uses the multithread runtime its cleanup needs.
+The prior hidden panics reproduce on unchanged source. After the test-only repair,
+the orchestrator suite and strict Clippy pass without panic markers. Native
+binaries remain pinned to implementation `8ef1fc1b`.
 
 ## Worker and evidence
 
@@ -84,7 +93,8 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, provisioned clean at `8ef1fc1b`.
 Verify and preserve remote work before syncing an explicit revision to an idle,
-clean worker. `final-version-pair-20261122.log` follows the current build.
+clean worker. `final-version-pair-20261122.log` records the completed pair build.
+Post-build source restoration is verified.
 `final-native-mv-outcome.md` records completed debug build and SQL acceptance,
 including its exact-command continuation after timeout and clean teardown.
 
@@ -94,12 +104,18 @@ Do not assume the old timing binaries survive. Current debug artifacts are in
 lifecycle harnesses. The versioned lifecycle preserves its predecessor assertions
 and adds the existing clean-controller-exit check. Container-driver copies pass
 syntax and normalized-AST comparisons, with only paths/revision changed. They
-have not run. `driver-repointing-checks.json` records those static checks.
+are undergoing acceptance. `driver-repointing-checks.json` records static checks.
+Container workflows use the existing aggregate 40 GiB/eight-CPU slice.
 The baseline worktree expired.
 Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
 
 Essential pointers under the evidence root:
+- `final-native-lifecycle-outcome.md`: independently audited walkthrough, evidence
+  archive and unresolved resource-guard limitation.
+- `orchestrator-fixture-runtime-repair.md`: causal test-runtime repair and checks.
+- `final-persistcli-pinning.log`, `final-mc-image-build.log` and
+  `final-fixture-image-pull.log`: prepared acceptance prerequisites.
 - `replica-metadata-verification.md`: schema contracts, source receipts and controls.
 - `replica-startup-comparison.md` and its evidence archive: matched phase/CPU/RSS
   measurements, successful teardown and pending data cleanup.
