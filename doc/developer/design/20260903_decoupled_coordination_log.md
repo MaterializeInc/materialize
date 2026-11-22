@@ -6,9 +6,9 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** collect sink-history row/timestamp evidence. Fixed-refresh
-revalidation and the imported Cockroach inventory edit await permission.
-Run final-head acceptance after the remaining repairs, not per change.
+**Next action:** settle the remaining admission, status and fixture-contract
+decisions below, then finish their scoped repairs. Run final-head acceptance
+after the remaining repairs, not per change.
 
 Catalog decoding, plan coverage, native catalog fixtures, temporary cleanup and
 RF convergence coverage have local verification. CI remains red on the older
@@ -29,7 +29,9 @@ is absent. Newly completed failures are being classified. Known failures include
 
 Pending user decisions: restore the public sink-status `created` fallback, and
 test history retention at its snapshot independently of startup-event publication
-rather than impose a new ordering barrier. Neither status repair is implemented.
+rather than impose a new ordering barrier. Neither status repair is implemented. History captures now establish that
+the five-row outcome can preserve both restart transitions. Proposed coverage
+separates exact retention from event delivery instead of fixing another count.
 Also awaiting permission to update only two expected Materialize catalog rows in
 the imported Cockroach SRF fixture, which the test guide says not to edit.
 
@@ -49,6 +51,12 @@ historical intermittent scheduled-MV failure has not been proven eliminated. Any
 recurrence needs diagnosis, not another rerun.
 
 ## Verified outcomes
+
+The history failure is diagnosed: a captured five-row retention result includes
+both new restart transitions and three older rows per key. A separate run retained
+five old rows plus the new pair. The fixture assumes a startup ordering that
+native publishers do not promise. No production change or count relaxation was
+made. See `status-history-diagnosis.md` and its row-level proof.
 
 A private debug probe deterministically rejects a fixed-refresh CREATE after
 unrelated CREATE SECRET commits during optimization completion. Both uncontended
