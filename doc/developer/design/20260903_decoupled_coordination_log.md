@@ -7,12 +7,11 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-**Next action:** collect the bounded debug build on `i-04aaff9ac16f9c30c`
-(`aj-final-native-build.service`). If it times out, inspect the result and resume
-the exact command on that worker, preserving compiled dependencies and all caps.
-The preceding worker and its disk were confirmed deleted after its build timeout.
-Run lifecycle, DDL, adapter loss, scheduled-refresh MV and the compatible-version
-walkthrough once on the final implementation. Keep the PR draft.
+**Next action:** collect `aj-current-frontier-pair-build.service` on
+`i-04aaff9ac16f9c30c` and verify its post-exit source restoration before running
+the distinct-version walkthrough. Final debug binaries are built and pinned.
+Both unchanged scheduled-MV suites pass. DDL, adapter loss, subscriptions and
+four-index progress still need final implementation runs. Keep the PR draft.
 
 The bounded source audit found no further reachable monolithic alternative in
 local launch/deployment or storage/introspection publication. Retained serialized
@@ -21,8 +20,8 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
 
 ## Live blockers and constraints
 
-- Scratch access is restored. A clean replacement is building the final debug
-  implementation. No acceptance runtime overlaps it. Its scheduled shutdown
+- Scratch access is restored. The compatible-version candidate is building.
+  No acceptance runtime overlaps it. Its scheduled shutdown
   remains enabled, but disk deletion is later so an overnight interruption
   need not discard the build cache. No heavy local builds.
 - [CI 144357](https://buildkite.com/materialize/test/builds/144357), at `f46813b3`,
@@ -32,8 +31,9 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   is incomplete. Do not merge main or change registry permissions without approval.
 - Final-head lifecycle/progress, compatible-version and combined-ingestion acceptance
   remain outstanding. Earlier successes do not certify the latest source.
-- The scheduled-MV admission suite previously failed intermittently after a fixed
-  compaction wait. Its next intermittent failure requires diagnosis, not another rerun.
+- The scheduled-MV admission suite passes on the final debug implementation.
+  This does not establish that its historical intermittent failure is eliminated.
+  Any recurrence requires diagnosis, not another rerun.
   The process-orchestrator image-replacement fixture also previously logged background
   panics despite reporting passes.
 - The retry cut is approved. Do not resume statement-by-statement scheduling
@@ -84,11 +84,12 @@ Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses scratch. Worktree:
 `/home/ubuntu/materialize-m3-controller-followups`, provisioned clean at `8ef1fc1b`.
 Verify and preserve remote work before syncing an explicit revision to an idle,
-clean worker. `build-final-native-20261122-attempt1.log` follows the current build.
-`build-final-native-driver.log` records the preceding timeout, 31.5 GiB peak memory
-and no swap. No completed final build is claimed yet.
+clean worker. `final-version-pair-20261122.log` follows the current build.
+`final-native-mv-outcome.md` records completed debug build and SQL acceptance,
+including its exact-command continuation after timeout and clean teardown.
 
-Do not assume the old timing binaries or any completed final artifacts survive.
+Do not assume the old timing binaries survive. Current debug artifacts are in
+`final-native-8ef1fc1b/artifacts`, with receipts in `final-pinning-20261122.log`.
 `final-acceptance/` contains locally prepared source receipts, pair-build and
 lifecycle harnesses. The versioned lifecycle preserves its predecessor assertions
 and adds the existing clean-controller-exit check. Container-driver copies pass
