@@ -6,11 +6,15 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** finish diagnosing the follower liveness test's stack overflow,
-then run the prepared temporary-cleanup fixture and decoder probes on scratch.
-The replica-removal startup repair is committed in `33b5d51e`: its regression
-fails on the original error and passes with typed removal. Broader follower
-coverage has one stack-overflow failure during catalog initialization.
+**Next action:** collect the corrected temporary-cleanup run, then run the decoder
+probes and verify the rebuilt builtin. Replica startup now returns typed removal.
+The follower suite passes after reducing the liveness fixture's debug stack frame
+and testing backoff with an ownership change rather than compatible frontier updates.
+
+The first corrected temporary fixture blocked on a new pre-promotion SQL inventory
+assertion after killing the active deployment. Candidate Persist outputs are still
+non-writing by policy. Keep durable ownership checks before promotion and SQL
+projection checks afterward. The captured failed run was stopped and cleaned up.
 
 The unchanged `tables.td` reproduces the catalog JSON error. An inline argument
 guard passes, but the stored builtin takes an additional optimizer pass. Verify
@@ -97,8 +101,13 @@ Essential evidence pointers:
   contains private bounded drivers, including decoder probes and the exact
   helper-only temporary-cleanup overlay. The latter remains runtime-unverified.
 - `replica-removal-before-bounded.log`, `replica-removal-after.log`, and
-  `replica-removal-suite.log`: typed-removal red/green evidence and the separate
-  liveness stack-overflow failure. The suite repeat is still running.
+  `liveness-fixture-outcome.md`: typed-removal red/green evidence, measured stack
+  repair and passing follower coverage.
+- `ci-144427/terminal-failures-research.md`: final failure inventory, including
+  additional Cargo fixtures and a fixed-refresh CREATE invalidation that needs
+  diagnosis before reopening the deferred retry scope.
+- `stall-readonly-report.md`: pre-promotion inventory stall and its measured
+  frontiers. `temporary-cleanup-corrected.log` is the current targeted run.
 - `ddl-version-observation-boundary.md`: private observer repair that retains the
   workflow's existing readiness wait and SQL-version assertions.
 - `replica-boundary-independent-review.md`, `replica-metadata-verification.md` and
