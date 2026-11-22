@@ -4,150 +4,96 @@
 
 Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.md).
 Preserve compatible full writers, explicit retirement, durable protection,
-adapter-owned policy, shared query transport and required formats. M2 and the
-60s publication default remain closed.
+adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** collect the 60s four-index run on `i-04aaff9ac16f9c30c`, then
-run the existing CDC handover fixtures. DDL/combined ingestion, adapter loss,
-subscriptions, the distinct-version walkthrough and unchanged scheduled-MV suites
-pass on the final debug implementation. Keep the PR draft.
+**Next action:** collect the `tables.td` decoder-guard A/B reproduction, then verify
+the pending replica-removal startup repair on scratch. The unchanged tables file
+reproduces CI's catalog JSON error. Storage IDs are correctly encoded objects,
+while other catalog kinds contain numeric IDs. No decoder relaxation is approved.
+The startup repair and regression are uncommitted and unverified by compilation.
 
-The bounded source audit found no further reachable monolithic alternative in
-local launch/deployment or storage/introspection publication. Retained serialized
-tags are not active publishers. Statistics and compute-introspection ownership
-remain explicitly deferred. See `native-final-bounded-audit.md`.
+## Live failures and constraints
 
-## Live blockers and constraints
+[CI 144427](https://buildkite.com/materialize/test/builds/144427) now executes
+runtime jobs. The old image-publicity blocker is absent. Current failures include:
 
-- Scratch access is restored. Builds are finished and fixture images are ready.
-  Acceptance runs are serialized within existing caps. Scheduled shutdown
-  remains enabled, but disk deletion is later so an overnight interruption
-  need not discard the build cache. No heavy local builds.
-- [CI 144357](https://buildkite.com/materialize/test/builds/144357), at `f46813b3`,
-  passes Linux/macOS Clippy, formatting, docs and dependency lint. It remains red:
-  merge-skew encounters source conflicts, and the x86 build fails its image-publicity
-  check because pubsubd is not public on DockerHub. Image-dependent runtime coverage
-  is incomplete. Do not merge main or change registry permissions without approval.
-- Final four-index acceptance and targeted CDC reader-cessation checks remain
-  outstanding. DDL proves ingestion continuity but does not isolate reader
-  cessation while both deployments remain alive.
-  An earlier resource-guard interruption remains unexplained: a separate metadata
-  probe demonstrates a guard weakness but does not identify the original PID.
-  The successful diagnostic rerun retained the same placement assertion.
-- The scheduled-MV admission suite passes on the final debug implementation.
-  This does not establish that its historical intermittent failure is eliminated.
-  Any recurrence requires diagnosis, not another rerun.
-- The retry cut is approved. Do not resume statement-by-statement scheduling
-  conversions. `remaining-inline-owner-inventory.md` records deferred runtime/startup
-  limitations. Promoted-adapter storage initialization can reject structural catch-up.
-  Preserve validation rather than removing its guard.
-- Kubernetes/operator/Terraform integration, positive builtin-schema migration and
-  pre-native conversion remain deferred. No Persist redesign, publication-cadence
-  changes, resource increases or unrelated optimization. Debug upsert OOM also
-  reproduces on the pinned upstream base.
+- Catalog decoding in `tables.td`, and catalog-confirmed replica removal during
+  clusterd startup incorrectly classified as fatal.
+- Replica availability after RF0 to RF1, sink-status history counts, and temporary
+  cleanup expecting retirement at promotion despite requesting no retirement.
+- Missing catalog EXPLAIN coverage and an unsupported-upgrade skip that trips the
+  CI wrapper's empty-service-log check.
+- Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
+  are still running. Preserve their verification when publishing fixes.
 
-## Completed outcomes
+Do not weaken assertions, raise deadlines or resource limits, change Persist or
+the 60s publication default, or add unrelated optimizations. The retry-scheduling
+cut remains approved. Positive builtin-schema migrations, pre-native conversion
+and Kubernetes/operator/Terraform integration remain deferred. Debug upsert OOM
+also reproduces on the pinned upstream base.
 
-Final DDL/combined-ingestion and subscription workflows pass. Both versions write
-across promotion, sink authority transfers, and explicit retirement fences the
-predecessor. Subscription identity collisions, joins, progress, survivor cleanup
-and predecessor session continuity are checked. Detailed assertion limits remain
-in the linked outcomes. These runs do not establish CDC reader cessation.
+The successful versioned walkthrough followed an earlier resource-guard interruption.
+A separate metadata probe demonstrates a guard weakness but does not identify the
+original PID. The successful diagnostic rerun retained the same assertion. The
+historical intermittent scheduled-MV failure has not been proven eliminated. Any
+recurrence needs diagnosis, not another rerun.
 
+## Verified outcomes
 
-Final debug adapter-loss acceptance passes with external replicas progressing
-without ingress, retained history, physical batch compaction after replacement,
-and replica reconstruction. The unchanged workflow covers unified replicas and
-bounded sink-result assertions, not prolonged outages or unrestricted exactly-once
-behavior. Project-scoped containers, volumes and networks are gone.
+Runtime implementation `8ef1fc1b` passes the distinct-package-version walkthrough,
+unchanged scheduled-MV suites, full DDL/combined ingestion, adapter loss,
+subscription identity and 60s four-index workflows. Independent evidence reviews
+confirm their assertions and document limits. The version pair shares source and
+plan encoding, not arbitrary release compatibility. PG/MySQL/SQL Server handover
+checks pass with live predecessors and forced reconnects. PG/MySQL use explicitly
+reduced input volume, not their default-volume performance workloads.
 
+Replica reconstruction defers builtin optimization outside required schema closures,
+preserving optimizer features and exact schemas. Matched debug startup CPU fell
+from 91.47 to 43.75 CPU-seconds, fresh serving from 54.63 to 50.51 seconds, with no RAM
+improvement established. These are same-source startup comparisons, not a final
+upstream steady-state benchmark. The source audit found no further reachable
+monolithic alternative in its inspected boundaries. Statistics and compute
+introspection ownership remain deferred.
 
-Replica reconstruction defers ordinary builtin-view optimization outside required
-schema dependency closures. It preserves original optimizer features and exact
-execution schemas. Schema/cache, enforced-key Avro, incremental replay, follower
-execution and negative-control checks pass. Full CI lint now passes too.
-Matched debug runs reduce replica startup CPU from 91.47 to 43.75 CPU-seconds and
-fresh serving from 54.63 to 50.51 seconds. Warm restart remains about 8.19 seconds.
-No RAM improvement is established. Controller initialization and the adapter's own
-reconstruction remain on the fresh-start path. This is a same-source control,
-not a new upstream comparison or final M3 acceptance.
-
-Native item admission requires protection and immutable plans. Shared dependency,
-refresh and shard rows derive from durable state. Startup pruning is conditional,
-and compute-free storage usage claims its interval before publication. Completed
-retry repairs preserve prepared work and protection while yielding at their owners.
-Further retry scheduling remains deferred rather than claimed cooperative.
-
-Earlier native workflows demonstrated ownership, temporary/subscription identities,
-compatible writers, promotion and explicit retirement. Optimized KafkaSources,
-backup/restore and the 60s four-index workflow passed. The 1s variant is stress only.
-The accepted 26.46/26.47 pair shares implementation and plan encoding. It is not
-arbitrary-release or migration coverage. Its final implementation walkthrough now
-passes with surviving warmed replicas, held snapshots, full writers across
-promotion and clean outgoing-controller exit on retirement. Independent evidence
-review found no unexpected panics in the archived top-level logs.
-
-The image-replacement fixture now uses the multithread runtime its cleanup needs.
-The prior hidden panics reproduce on unchanged source. After the test-only repair,
-the orchestrator suite and strict Clippy pass without panic markers. Native
-binaries remain pinned to implementation `8ef1fc1b`.
+Shared dependency, refresh and shard rows derive from durable state. Conditional
+maintenance and bounded retry repairs preserve protection and validation. The
+image-replacement test's hidden task panics were repaired using its required
+multithread runtime, with unchanged assertions and passing tests/Clippy.
 
 ## Worker and evidence
 
-Replacement worker `i-04aaff9ac16f9c30c`: 16 CPUs, 61 GiB RAM, 500 GiB disk.
-Deletion: 2026-11-23 19:02:53 UTC. Automatic shutdown is scheduled separately
-on November 22. `worker.json` and `worker-extension-20261122.json` record its
-identity and cache-retention deadline.
-Recheck state and expiry before reuse. Extend within existing caps when needed.
-Builds use one job, four CPUs, 32 GiB, no swap and a 30 GiB disk reserve.
-Runtime uses a 28 GiB/6-CPU user slice plus an 8 GiB/2-CPU root slice.
-Never overlap builds and measured runtimes.
+Worker `i-04aaff9ac16f9c30c`: 16 CPUs, 61 GiB RAM, 500 GiB disk. Automatic shutdown:
+2026-11-22 18:02:13 UTC. Deletion: 2026-11-23 19:02:53 UTC. Recheck access and expiry.
+Builds use one job, 4 CPUs, 32 GiB, no swap. Container runs use 40 GiB/eight CPUs
+aggregate. Direct native runs use 28 GiB/six CPUs plus 8 GiB/two CPUs for fixtures.
+Never overlap builds and runtimes. Keep 30 GiB disk reserve and local builds light.
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
-`remote.py` accesses scratch. Worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, provisioned clean at `8ef1fc1b`.
-Verify and preserve remote work before syncing an explicit revision to an idle,
-clean worker. `final-version-pair-20261122.log` records the completed pair build.
-Post-build source restoration is verified.
-`final-native-mv-outcome.md` records completed debug build and SQL acceptance,
-including its exact-command continuation after timeout and clean teardown.
+`remote.py` accesses the worker. Main scratch worktree:
+`/home/ubuntu/materialize-m3-controller-followups`, clean at `8ef1fc1b`.
+`/home/ubuntu/materialize-m3-fixture-checks` is the separate test worktree with the
+verified orchestrator test patch. Preserve its work before reuse. Native debug
+artifacts are pinned separately from the shared target, whose clusterd is now the
+candidate package version. SLT requires a matched sibling clusterd. Use
+`native-slt-tools/`, not an unmatched shared-target pair.
 
-Do not assume the old timing binaries survive. Current debug artifacts are in
-`final-native-8ef1fc1b/artifacts`, with receipts in `final-pinning-20261122.log`.
-`final-acceptance/` contains locally prepared source receipts, pair-build and
-lifecycle harnesses. The versioned lifecycle preserves its predecessor assertions
-and adds the existing clean-controller-exit check. Container-driver copies pass
-syntax and normalized-AST comparisons, with only paths/revision changed. They
-are undergoing acceptance. `driver-repointing-checks.json` records static checks.
-Container workflows use the existing aggregate 40 GiB/eight-CPU slice.
-The baseline worktree expired.
-Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
+Essential evidence pointers:
+- `ci-144427/`: current annotations, job logs and failure inventory. Older
+  `ci-144357-outcome.md` does not describe current CI blockers.
+- `final-native-{lifecycle,ddl,adapter-loss,subscriptions,four-index}-outcome.md`:
+  independently reviewed runtime outcomes, archive paths and coverage limits.
+- `final-cdc-evidence/`: completed live-reader handover/reconnect captures.
+- `tables-repro-run.log`: reproduced unchanged CI failure. `final-acceptance/`
+  contains private bounded drivers, including the diagnostic shadow view.
+- `ddl-version-observation-boundary.md`: private observer repair that retains the
+  workflow's existing readiness wait and SQL-version assertions.
+- `replica-boundary-independent-review.md`, `replica-metadata-verification.md` and
+  `replica-startup-comparison.md`: implementation review and startup evidence.
+- `native-final-bounded-audit.md`, `remaining-inline-owner-inventory.md` and the
+  [follow-ups](20260903_decoupled_coordination_followups.md): scope and retained work.
+
+After CI repairs and targeted verification, clean owned runtimes/resources, assess
+remaining architecture-generated load separately, and consolidate own fixups without
+rewriting others' work. Keep pinned upstream `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
-
-Essential pointers under the evidence root:
-- `final-native-ddl-outcome.md` and `final-native-subscriptions-outcome.md`:
-  independently audited full workflows, archived evidence and coverage limits.
-- `final-native-adapter-loss-outcome.md`: independently audited progress, retention,
-  compaction, reconstruction and teardown evidence, with coverage limits.
-- `ddl-version-observation-boundary.md`: diagnosed private probe failure and repair
-  preserving the workflow's existing readiness wait.
-- `final-native-lifecycle-outcome.md`: independently audited walkthrough, evidence
-  archive and unresolved resource-guard limitation.
-- `orchestrator-fixture-runtime-repair.md`: causal test-runtime repair and checks.
-- `final-persistcli-pinning.log`, `final-mc-image-build.log` and
-  `final-fixture-image-pull.log`: prepared acceptance prerequisites.
-- `replica-metadata-verification.md`: schema contracts, source receipts and controls.
-- `replica-startup-comparison.md` and its evidence archive: matched phase/CPU/RSS
-  measurements, successful teardown and pending data cleanup.
-- `ci-144357-outcome.md`: verified lint results and remaining CI blockers.
-- `native-final-bounded-audit.md`: inspected ownership boundaries and exclusions.
-- `remaining-inline-owner-inventory.md`: approved retry cut and retained limitations.
-- `current-frontier-lifecycle-audit.md`, `current-frontier-ddl-audit.md` and
-  `current-frontier-adapter-loss-audit.md`: prior acceptance fixtures and evidence.
-- `mv-refill-verification.md`, `native-plan-admission-verification.md`,
-  `storage-usage-final-checks.log` and `plan-introspection-red-green.md`: completed
-  boundary repairs and their negative controls.
-
-The [follow-ups](20260903_decoupled_coordination_followups.md) retain ownership/load
-opportunities and deferred scope. The [local guide](../controllerd.md) contains the
-required user-facing demo and compatible-version walkthrough.
