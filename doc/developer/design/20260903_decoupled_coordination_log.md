@@ -6,24 +6,13 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** verify the remaining Cargo and RF fixtures, then diagnose the
-fixed-refresh CREATE invalidation without reopening the deferred retry scope.
-Replica startup now returns typed removal.
-The follower suite passes after reducing the liveness fixture's debug stack frame
-and testing backoff with an ownership change rather than compatible frontier updates.
+**Next action:** verify the remaining Cargo and catalog-inventory fixtures, then
+diagnose fixed-refresh CREATE invalidation without reopening the deferred retry
+scope. Run final-head acceptance after the remaining repairs, not per change.
 
-Temporary cleanup passes both protection modes, including foreign-owner retention
-through promotion and explicit retirement. Candidate Persist outputs remain
-non-writing by policy. Durable ownership is checked before promotion, and SQL
-projections afterward. Both the captured failed diagnostic and successful run are
-cleaned up. Their measured output frontiers confirm progress resumes at promotion.
-
-The JSON-kind guard passes unchanged `tables.td`, including tombstone validation
-and final consistency checks, with matched debug binaries. Stored-view controls
-retain strict malformed-ID errors. Generated catalog plans pass verification and
-cover the missing derived views. The broader optimizer guard issue remains in
-followups. Native catalog fixtures and the branch-local v97 encoding snapshot
-also pass their targeted checks. Older encoding snapshots are unchanged.
+Catalog decoding, plan coverage, native catalog fixtures, temporary cleanup and
+RF convergence coverage have local verification. CI remains red on the older
+pushed head. Detailed outcomes and limitations are linked below.
 
 ## Live failures and constraints
 
@@ -31,9 +20,9 @@ also pass their targeted checks. Older encoding snapshots are unchanged.
 runtime jobs and is now terminal with failures. The old image-publicity blocker
 is absent. Newly completed failures are being classified. Known failures include:
 
-- Replica availability after RF0 to RF1 and sink-status history counts remain
-  under investigation. Catalog decoding, EXPLAIN coverage, replica removal and
-  temporary cleanup have locally verified repairs that this CI build predates.
+- Sink-status history counts and remaining catalog-inventory fixtures are open.
+  Catalog decoding, EXPLAIN coverage, replica removal, temporary cleanup and RF
+  coverage have locally verified repairs that this CI build predates.
 - An unsupported-upgrade skip trips the CI wrapper's empty-service-log check.
 - Merge-skew source conflicts. Merging main remains unauthorized. Other CI jobs
   have finished. Preserve the completed build's evidence when publishing fixes.
@@ -41,12 +30,17 @@ is absent. Newly completed failures are being classified. Known failures include
 Pending user decisions: restore the public sink-status `created` fallback, and
 test history retention at its snapshot independently of startup-event publication
 rather than impose a new ordering barrier. Neither status repair is implemented.
+Also awaiting permission to update only two expected Materialize catalog rows in
+the imported Cockroach SRF fixture, which the test guide says not to edit.
 
 Do not weaken assertions, raise deadlines or resource limits, change Persist or
 the 60s publication default, or add unrelated optimizations. The retry-scheduling
 cut remains approved. Positive builtin-schema migrations, pre-native conversion
 and Kubernetes/operator/Terraform integration remain deferred. Debug upsert OOM
 also reproduces on the pinned upstream base.
+
+Candidate Persist outputs remain non-writing until promotion. Temporary ownership
+is checked durably before promotion and through SQL projections afterward.
 
 The successful versioned walkthrough followed an earlier resource-guard interruption.
 A separate metadata probe demonstrates a guard weakness but does not identify the
@@ -55,6 +49,14 @@ historical intermittent scheduled-MV failure has not been proven eliminated. Any
 recurrence needs diagnosis, not another rerun.
 
 ## Verified outcomes
+
+Typed replica removal, follower liveness, foreign temporary-owner cleanup and
+native catalog fixtures pass targeted checks. The JSON-kind decoder guard passes
+unchanged `tables.td`, including tombstone validation and consistency checks.
+Generated catalog plans pass verification. The unreleased v97 snapshot is current,
+with older snapshots untouched. RF coverage polls membership and requires one
+successful read, without strengthening ALTER acknowledgment. Both testdrive and
+the remaining unified-cluster SLT pass.
 
 Runtime implementation `8ef1fc1b` passes the distinct-package-version walkthrough,
 unchanged scheduled-MV suites, full DDL/combined ingestion, adapter loss,
@@ -102,6 +104,8 @@ Essential evidence pointers:
   `storage-shards-decoder-investigation.md`: complete guarded-view verification,
   generated plan checks and stored-view controls. `native-catalog-fixture-checks.log`
   and `v97-stability-{before,after}.log` cover the catalog fixtures and encodings.
+- `native-unified-{rf,slt}-check.log`: complete RF testdrive and remaining SLT
+  coverage. `catalog-decoder-and-rf-final.tar.gz` preserves runtime evidence.
 - `ci-144427/`: current annotations, job logs and failure inventory. Older
   `ci-144357-outcome.md` does not describe current CI blockers.
 - `final-native-{lifecycle,ddl,adapter-loss,subscriptions,four-index}-outcome.md`:
