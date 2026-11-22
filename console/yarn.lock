@@ -11952,9 +11952,9 @@ __metadata:
   linkType: hard
 
 "style-mod@npm:^4.0.0, style-mod@npm:^4.1.0, style-mod@npm:^4.1.4":
-  version: 4.1.4
-  resolution: "style-mod@npm:4.1.4"
-  checksum: 10c0/e588c4f10b6c226482ac6d508f074af645cc1f22e6573f8d8bdc0a98412b4c6ea474ecd88625d966c7f1a929ae861d3db0d7b2f8fa5b4652ef2e877211c4391d
+  version: 4.1.5
+  resolution: "style-mod@npm:4.1.5"
+  checksum: 10c0/e3eb5fc744ce542e84693037b330ce5c2d54cf399b6c413bf4dd22948057924645616605e9a892fc3b5ac5a8d89a3cf3d08abd7658ec757f056182c46f97c1e1
   languageName: node
   linkType: hard
 
