@@ -6,8 +6,9 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** collect the decoder control/sibling probes and verify the rebuilt
-builtin. Replica startup now returns typed removal.
+**Next action:** identify the optimizer rewrite that introduces an unguarded
+catalog decoder predicate, and verify the pending native catalog fixtures.
+Replica startup now returns typed removal.
 The follower suite passes after reducing the liveness fixture's debug stack frame
 and testing backoff with an ownership change rather than compatible frontier updates.
 
@@ -17,9 +18,10 @@ non-writing by policy. Durable ownership is checked before promotion, and SQL
 projections afterward. Both the captured failed diagnostic and successful run are
 cleaned up. Their measured output frontiers confirm progress resumes at promotion.
 
-The unchanged `tables.td` reproduces the catalog JSON error. An inline argument
-guard passes, but the stored builtin takes an additional optimizer pass. Verify
-the rebuilt view before accepting the SQL repair. No decoder relaxation is approved.
+The rebuilt argument-guarded builtin still fails unchanged `tables.td`. Its plan
+contains both guarded and unguarded decoder predicates. Both inline forms pass,
+so inline probes cannot validate this repair. The SQL change remains uncommitted
+and insufficient. No decoder relaxation is approved.
 
 ## Live failures and constraints
 
@@ -84,12 +86,13 @@ Never overlap builds and runtimes. Keep 30 GiB disk reserve and local builds lig
 
 Evidence root: `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/`.
 `remote.py` accesses the worker. Main scratch worktree:
-`/home/ubuntu/materialize-m3-controller-followups`, clean at `8ef1fc1b`.
+`/home/ubuntu/materialize-m3-controller-followups`, based on `8ef1fc1b` with
+recorded runtime source overlays.
 `/home/ubuntu/materialize-m3-fixture-checks` is the separate test worktree with the
-verified orchestrator test patch. Preserve its work before reuse. Native debug
-artifacts are pinned separately from the shared target, whose clusterd is now the
-candidate package version. SLT requires a matched sibling clusterd. Use
-`native-slt-tools/`, not an unmatched shared-target pair.
+recorded decoder, follower and test patches. Preserve its work before reuse.
+`native-decoder-current/artifacts/` contains fresh debug binaries and a matched
+SLT/clusterd pair, with build provenance beside it. This build reproduces the
+decoder failure. Do not treat it as a verified repair or mix sibling binaries.
 
 Essential evidence pointers:
 - `ci-144427/`: current annotations, job logs and failure inventory. Older
