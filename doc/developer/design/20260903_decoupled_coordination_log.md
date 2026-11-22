@@ -7,12 +7,10 @@ Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
-**Next action:** collect the native DDL run on `i-04aaff9ac16f9c30c`, then run
-subscriptions and four-index progress with the prepared drivers. Adapter-loss
-acceptance is complete and independently audited.
-The distinct-version walkthrough and unchanged scheduled-MV suites pass on the
-final debug implementation. Combined-ingestion acceptance remains pending.
-Keep the PR draft.
+**Next action:** collect the 60s four-index run on `i-04aaff9ac16f9c30c`, then
+run the existing CDC handover fixtures. DDL/combined ingestion, adapter loss,
+subscriptions, the distinct-version walkthrough and unchanged scheduled-MV suites
+pass on the final debug implementation. Keep the PR draft.
 
 The bounded source audit found no further reachable monolithic alternative in
 local launch/deployment or storage/introspection publication. Retained serialized
@@ -30,8 +28,9 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   merge-skew encounters source conflicts, and the x86 build fails its image-publicity
   check because pubsubd is not public on DockerHub. Image-dependent runtime coverage
   is incomplete. Do not merge main or change registry permissions without approval.
-- Final DDL/ingestion, subscription and four-index acceptance
-  remain outstanding. The versioned walkthrough does not test subscriptions.
+- Final four-index acceptance and targeted CDC reader-cessation checks remain
+  outstanding. DDL proves ingestion continuity but does not isolate reader
+  cessation while both deployments remain alive.
   An earlier resource-guard interruption remains unexplained: a separate metadata
   probe demonstrates a guard weakness but does not identify the original PID.
   The successful diagnostic rerun retained the same placement assertion.
@@ -48,6 +47,13 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   reproduces on the pinned upstream base.
 
 ## Completed outcomes
+
+Final DDL/combined-ingestion and subscription workflows pass. Both versions write
+across promotion, sink authority transfers, and explicit retirement fences the
+predecessor. Subscription identity collisions, joins, progress, survivor cleanup
+and predecessor session continuity are checked. Detailed assertion limits remain
+in the linked outcomes. These runs do not establish CDC reader cessation.
+
 
 Final debug adapter-loss acceptance passes with external replicas progressing
 without ingress, retained history, physical batch compaction after replacement,
@@ -119,6 +125,8 @@ Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
 
 Essential pointers under the evidence root:
+- `final-native-ddl-outcome.md` and `final-native-subscriptions-outcome.md`:
+  independently audited full workflows, archived evidence and coverage limits.
 - `final-native-adapter-loss-outcome.md`: independently audited progress, retention,
   compaction, reconstruction and teardown evidence, with coverage limits.
 - `ddl-version-observation-boundary.md`: diagnosed private probe failure and repair
