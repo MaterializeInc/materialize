@@ -48,11 +48,8 @@ SELECT * FROM t;
 ----
 1
 
-statement ok
-ALTER CLUSTER c SET (REPLICATION FACTOR 0);
-
-statement ok
-ALTER CLUSTER c SET (REPLICATION FACTOR 1);
+# Suspension and resumption need observable policy convergence, not just ALTER
+# acknowledgement. testdrive/unified-cluster.td checks those boundaries.
 
 statement ok
 INSERT INTO t VALUES (2);

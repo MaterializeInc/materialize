@@ -42,9 +42,37 @@ running
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflows WHERE name LIKE 'Source dataflow:%'
 true
 
+# RF-only ALTER acknowledges desired configuration before policy materializes
+# replicas. Observe both boundaries so this exercises a real suspend/resume.
+> CREATE TABLE uc_table (a int)
+> CREATE INDEX uc_table_idx IN CLUSTER uc ON uc_table (a)
+> INSERT INTO uc_table VALUES (1)
+> SELECT * FROM uc_table
+1
+
+> ALTER CLUSTER uc SET (REPLICATION FACTOR 0)
+> SELECT count(*) FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'uc'
+0
+
+> INSERT INTO uc_table VALUES (2)
+> ALTER CLUSTER uc SET (REPLICATION FACTOR 1)
+> SELECT count(*) FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'uc'
+1
+
+# Membership convergence is retryable. The subsequent read must work once.
+$ set-max-tries max-tries=1
+
+> SELECT * FROM uc_table
+1
+2
+
 > RESET cluster
 
 > DROP SOURCE uc_auction CASCADE
+
+> DROP TABLE uc_table
 
 > DROP CLUSTER uc
 
