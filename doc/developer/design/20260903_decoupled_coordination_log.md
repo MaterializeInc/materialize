@@ -6,9 +6,9 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** verify the remaining catalog-inventory fixtures, then
-diagnose fixed-refresh CREATE invalidation without reopening the deferred retry
-scope. Run final-head acceptance after the remaining repairs, not per change.
+**Next action:** diagnose fixed-refresh CREATE invalidation without reopening
+the deferred retry scope. The imported Cockroach inventory edit still needs
+permission. Run final-head acceptance after the remaining repairs, not per change.
 
 Catalog decoding, plan coverage, native catalog fixtures, temporary cleanup and
 RF convergence coverage have local verification. CI remains red on the older
@@ -20,7 +20,7 @@ pushed head. Detailed outcomes and limitations are linked below.
 runtime jobs and is now terminal with failures. The old image-publicity blocker
 is absent. Newly completed failures are being classified. Known failures include:
 
-- Sink-status history counts and remaining catalog-inventory fixtures are open.
+- Sink-status history counts and the imported Cockroach inventory fixture are open.
   Catalog decoding, EXPLAIN coverage, replica removal, temporary cleanup and RF
   coverage have locally verified repairs that this CI build predates.
 - An unsupported-upgrade skip trips the CI wrapper's empty-service-log check.
@@ -58,7 +58,8 @@ with older snapshots untouched. RF coverage polls membership and requires one
 successful read, without strengthening ALTER acknowledgment. Both testdrive and
 the remaining unified-cluster SLT pass. Targeted Rust checks now also pass for
 shared plan namespaces, rewrite conflicts/cancellation, pending-index isolation,
-webhook metrics, the native CLI and hydration-history isolation.
+webhook metrics, the native CLI and hydration-history isolation. Complete
+`catalog.td` and `cluster.slt` pass with native builtin inventory expectations.
 
 Runtime implementation `8ef1fc1b` passes the distinct-package-version walkthrough,
 unchanged scheduled-MV suites, full DDL/combined ingestion, adapter loss,
@@ -109,6 +110,9 @@ Essential evidence pointers:
 - `remaining-native-fixture-build-retry.log` and
   `remaining-native-fixture-runtime.log`: compiled fixtures and targeted Rust
   tests. The runtime used isolated metadata and the existing aggregate caps.
+- `native-catalog-inventory-counts-check.log` and `native-cluster-slt-check.log`:
+  complete catalog and cluster checks. `native-catalog-inventory-evidence.tar.gz`
+  preserves the catalog runs, including the earlier inventory failures.
 - `native-unified-{rf,slt}-check.log`: complete RF testdrive and remaining SLT
   coverage. `catalog-decoder-and-rf-final.tar.gz` preserves runtime evidence.
 - `ci-144427/`: current annotations, job logs and failure inventory. Older
