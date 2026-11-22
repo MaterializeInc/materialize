@@ -11,11 +11,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_catalog::builtin::{Builtin, MZ_CATALOG_RAW, MZ_COMPUTE_HYDRATION_TIMES_IND};
-use mz_expr::SafeMfpPlan;
+use mz_catalog::builtin::{
+    Builtin, MZ_CATALOG_DEPLOYMENT_AUTHORITY, MZ_CATALOG_RAW, MZ_COMPUTE_HYDRATION_TIMES_IND,
+};
 use mz_ore::metrics::MetricsRegistry;
-use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Row, RowArena};
 use mz_sql::catalog::IdReference;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 
@@ -25,7 +24,7 @@ use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{Optimize, OptimizerConfig};
 
 #[mz_ore::test(tokio::test)]
-async fn hydration_times_filters_catalog_protection_before_backpressure() {
+async fn hydration_times_isolates_catalog_history() {
     Catalog::with_debug(|catalog| async move {
         let state = Arc::new(catalog.state().clone());
         let index_id = state.resolve_builtin_object(&Builtin::<IdReference>::Index(
@@ -56,46 +55,16 @@ async fn hydration_times_filters_catalog_protection_before_backpressure() {
             .source()
             .expect("raw catalog source")
             .global_id;
-        // Compute evaluates these source operators before LimitProgress. Filtering
-        // later in the dataflow would still let unrelated catalog updates create
-        // pending timestamps in retained metrics' logical backpressure.
-        let operators = dataflow
-            .source_imports
-            .get(&raw_id)
-            .expect("builtin index imports raw catalog")
-            .desc
-            .arguments
-            .operators
-            .clone()
-            .expect("raw catalog import must filter before LimitProgress");
-        let plan = SafeMfpPlan::from_mfp(operators);
-        for (json, retained) in [
-            (
-                r#"{"kind":"CollectionCompactionBound","key":{"id":{"User":1}},"value":{"frontier":1000}}"#,
-                false,
-            ),
-            (
-                r#"{"kind":"ClientReadRequirement","key":{"incarnation":1,"id":{"User":1}},"value":{"frontier":1000}}"#,
-                false,
-            ),
-            (
-                r#"{"kind":"FenceToken","deploy_generation":42,"epoch":17}"#,
-                true,
-            ),
-            (
-                r#"{"kind":"Config","key":{"key":"catalog_read_protection_enabled"},"value":{"value":1}}"#,
-                true,
-            ),
-        ] {
-            let row = json.parse::<Jsonb>().expect("valid catalog JSON").into_row();
-            let arena = RowArena::new();
-            let mut output = Row::default();
-            let actual = plan
-                .evaluate_into(&mut row.iter().collect(), &arena, &mut output)
-                .expect("evaluate raw catalog source operators")
-                .is_some();
-            assert_eq!(actual, retained, "source import retention for {json}");
-        }
+        let authority_id =
+            state
+                .get_entry(&state.resolve_builtin_object(
+                    &Builtin::<IdReference>::MaterializedView(&MZ_CATALOG_DEPLOYMENT_AUTHORITY),
+                ))
+                .latest_global_id();
+        // Retained metrics may retain the authority output's history, but must
+        // not pin the catalog journal through their reconstruction window.
+        assert!(dataflow.source_imports.contains_key(&authority_id));
+        assert!(!dataflow.source_imports.contains_key(&raw_id));
     })
     .await;
 }
