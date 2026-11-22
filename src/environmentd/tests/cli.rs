@@ -12,7 +12,7 @@ use std::time::Duration;
 use assert_cmd::{Command, cargo_bin};
 
 fn cmd() -> Command {
-    let mut cmd = Command::new(cargo_bin!("environmentd"));
+    let mut cmd = Command::new(cargo_bin!("controllerd"));
     cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
 }
@@ -23,9 +23,10 @@ fn cmd() -> Command {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
 fn test_version() {
     // We don't make assertions about the build SHA because caching in CI can
-    // cause the test binary and `environmentd` to have different embedded SHAs.
+    // cause the test binary and `controllerd` to have different embedded SHAs.
     let expected_version = mz_environmentd::BUILD_INFO.version;
     assert!(!expected_version.is_empty());
+    // The native entry point retains the shared argument type's version label.
     cmd()
         .arg("-V")
         .assert()

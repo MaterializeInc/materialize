@@ -64,7 +64,7 @@ mod index_timeline;
 #[path = "sql/prepared_rewrites.rs"]
 mod prepared_rewrites;
 
-/// A peer index selected only in another build must not block unrelated compute
+/// A peer index selected only in another namespace must not block unrelated compute
 /// installation or SQL. Both indexes are admitted at birth, and retention advances
 /// after DROP.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -131,31 +131,35 @@ async fn test_peer_index_pending_installation() {
             let selection = selections
                 .next()
                 .expect("SQL must select its immutable plan");
-            assert!(selections.next().is_none(), "fresh fixture has one build");
+            assert!(
+                selections.next().is_none(),
+                "fresh fixture has one plan namespace"
+            );
             let shard = txn.get_expression_cache_shard().unwrap();
             break (template, input, selection, shard);
         };
-        let build: semver::Version = selection
-            .build_version
-            .parse()
-            .expect("valid selected build version");
+        let build = mz_catalog::expr_cache::expression_build_version(&mz_environmentd::BUILD_INFO);
         assert_eq!(
-            build,
-            mz_catalog::expr_cache::expression_build_version(&mz_environmentd::BUILD_INFO)
+            selection.build_version,
+            mz_catalog::expr_cache::PROTOTYPE_SHARED_PLAN_NAMESPACE
         );
-        // Keep semantic compatibility and the development namespace prefix, but
-        // model a peer build for which this replica has no selected plan.
-        let mut pending_build = build.clone();
-        pending_build.build = semver::BuildMetadata::new(&if build.build.is_empty() {
-            "peer-pending-test".to_owned()
-        } else {
-            format!("{}.peer-pending-test", build.build)
-        })
-        .unwrap();
-        let pending_store =
-            ExpressionCacheHandle::open_plan_store(pending_build.clone(), &persist, shard).await;
-        let pending_build = pending_build.to_string();
-        let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        // Compatible builds share a namespace. Model an unavailable selection
+        // with a distinct namespace, not merely a different executable build.
+        let pending_namespace = format!("{}.peer-pending-test", selection.build_version);
+        let pending_store = ExpressionCacheHandle::open_plan_store_in_namespace(
+            build.clone(),
+            pending_namespace.clone(),
+            &persist,
+            shard,
+        )
+        .await;
+        let store = ExpressionCacheHandle::open_plan_store_in_namespace(
+            build,
+            selection.build_version.clone(),
+            &persist,
+            shard,
+        )
+        .await;
         let mut plans = store
             .read_plans(vec![(selection.id, selection.revision)])
             .await
@@ -199,8 +203,8 @@ async fn test_peer_index_pending_installation() {
         assert!(selection.replica_owner.is_none());
         let revision = uuid::Uuid::new_v4();
         let pending_revision = uuid::Uuid::new_v4();
-        // Each build durably writes its real plan before selecting it. The
-        // pending index lacks an own-build selection, not the selected bytes.
+        // Each namespace contains its real plan before selection. The
+        // pending index lacks an own-namespace selection, not the selected bytes.
         for (store, id, name, revision) in [
             (&pending_store, pending_id, "peer_pending", pending_revision),
             (&store, selected_id, "peer_selected", revision),
@@ -253,7 +257,7 @@ async fn test_peer_index_pending_installation() {
                     pending_id,
                     "peer_pending",
                     pending_revision,
-                    &pending_build,
+                    &pending_namespace,
                 ),
                 (
                     selected_item,
@@ -353,7 +357,7 @@ async fn test_peer_index_pending_installation() {
         .get(0);
         assert!(
             absent,
-            "index without an own-build selection must not enter compute"
+            "index without an own-namespace selection must not enter compute"
         );
         let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
             .await
@@ -387,7 +391,7 @@ async fn test_peer_index_pending_installation() {
         loop {
             peer.sync_to_current_updates().await.unwrap();
             let snapshot = peer.snapshot().await.unwrap();
-            // DROP retires this writer's selections, not another build's
+            // DROP retires this writer's selections, not another namespace's
             // metadata. A selection with no live catalog owner grants no
             // protection and cannot install an export.
             assert_eq!(
@@ -398,7 +402,7 @@ async fn test_peer_index_pending_installation() {
                     .filter(|plan| plan.id == pending_id)
                     .map(|plan| plan.build_version)
                     .collect::<Vec<_>>(),
-                [pending_build.as_str()]
+                [pending_namespace.as_str()]
             );
             let bound = snapshot
                 .collection_compaction_bounds

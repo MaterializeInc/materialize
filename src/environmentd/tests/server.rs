@@ -3339,16 +3339,23 @@ async fn smoketest_webhook_source() {
         .into_iter()
         .find(|metric| metric.name() == "mz_http_requests_total")
         .unwrap();
-    let total_requests_metric = &total_requests_metric.get_metric()[0];
+    let total_requests_metric = total_requests_metric
+        .get_metric()
+        .iter()
+        .find(|metric| {
+            metric.get_label().iter().any(|label| {
+                label.name() == "path"
+                    && label.value() == "/api/webhook/{:database}/{:schema}/{:id}"
+            })
+        })
+        .expect("webhook request metric");
     assert_eq!(total_requests_metric.get_counter().value(), 100.0);
 
-    let path_label = &total_requests_metric.get_label()[0];
-    assert_eq!(
-        path_label.value(),
-        "/api/webhook/{:database}/{:schema}/{:id}"
-    );
-
-    let status_label = &total_requests_metric.get_label()[2];
+    let status_label = total_requests_metric
+        .get_label()
+        .iter()
+        .find(|label| label.name() == "status")
+        .expect("HTTP status label");
     assert_eq!(status_label.value(), "200");
 
     // Wait for the events to be persisted.

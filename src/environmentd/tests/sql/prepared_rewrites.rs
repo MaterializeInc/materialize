@@ -196,8 +196,9 @@ async fn run_inner(conflict: Conflict) {
             Err(error) => panic!("follow peer: {error}"),
         }
     }
-    let store = ExpressionCacheHandle::open_plan_store(
-        selection.build_version.parse().unwrap(),
+    let store = ExpressionCacheHandle::open_plan_store_in_namespace(
+        mz_catalog::expr_cache::expression_build_version(&mz_environmentd::BUILD_INFO),
+        selection.build_version.clone(),
         &persist,
         shard,
     )
