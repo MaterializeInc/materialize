@@ -3607,9 +3607,8 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
 
 
 def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
-    # Protected same-generation opens preserve potentially live foreign owners.
-    # Crashed-owner resources may remain until promotion. Graceful session close
-    # and unprotected restart both reclaim their items without that delay.
+    # Same-adapter, same-generation replacement authorizes predecessor cleanup.
+    # Other deployments remain protected through promotion until retirement.
 
     def forget_cached_conns() -> None:
         """Drop the connections `sql_query` caches.
@@ -3747,29 +3746,56 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
     assert len(shards) == 1, f"expected one ephemeral storage mapping: {shards}"
     temp_shard = shards[0][0]
 
-    # --- kill -9, with session b's items still live ---------------------------
+    def assert_names_isolated() -> None:
+        # Inventories span owners, but name resolution is session-local.
+        # Catalog lookup errors use a generic SQLSTATE, so check the name.
+        for name in ("tt", "tv"):
+            try:
+                query(f"SELECT * FROM {name}")
+            except PsycopgError as error:
+                assert (
+                    error.diag.message_primary == f"unknown catalog item '{name}'"
+                ), str(error)
+            else:
+                raise UIError(f"a new session resolved the crashed owner's {name}")
+
+    ephemeral_items = """SELECT data::text FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+          AND data->'value'->>'ephemeral_owner_session' IS NOT NULL
+        ORDER BY data::text"""
+
+    def storage_state(shard: str) -> str:
+        # Mapping removal and WAL enqueue are atomic. Finalization stays
+        # disabled so the WAL entry remains observable after cleanup.
+        return f"""SELECT
+            (SELECT count(*) FROM mz_internal.mz_catalog_raw
+             WHERE data->>'kind' = 'StorageCollectionMetadata'
+               AND data->'value'->>'shard' = '{shard}'),
+            (SELECT count(*) FROM mz_internal.mz_catalog_raw
+             WHERE data->>'kind' = 'UnfinalizedShard'
+               AND data->'key'->>'shard' = '{shard}')"""
+
+    def wait_for_cleanup(shard: str) -> None:
+        wait_for(temp_item_counts, [(0, 0)], "temporary SQL inventory cleanup")
+        # Projections alone cannot prove that durable rows were reclaimed.
+        wait_for(ephemeral_items, [], "durable temporary Item cleanup", system=True)
+        wait_for(temp_comment_count, [(0,)], "temporary comment cleanup", system=True)
+        wait_for(
+            storage_state(shard),
+            [(0, 1)],
+            "temporary mapping removal and reclamation WAL enqueue",
+            system=True,
+        )
+
+    # --- Same-generation replacement retires the crashed predecessor ---------
 
     c.kill("materialized")
     c.up("materialized")
     forget_cached_conns()
 
-    wait_for(
-        temp_item_counts,
-        [(1, 1)] if protected else [(0, 0)],
-        "temporary item inventory after same-generation restart",
-    )
-    # Introspection inventories durable items across owners. Name resolution
-    # must not expose a foreign owner's temporary namespace to a new session.
-    # Catalog lookup errors use a generic SQLSTATE, so check the missing name.
-    for name in ("tt", "tv"):
-        try:
-            query(f"SELECT * FROM {name}")
-        except PsycopgError as error:
-            assert error.diag.message_primary == f"unknown catalog item '{name}'", str(
-                error
-            )
-        else:
-            raise UIError(f"a new session resolved the crashed owner's {name}")
+    # Catalog-authorized reclamation can run in the background in either mode.
+    wait_for_cleanup(temp_shard)
+    assert_names_isolated()
     # Connection IDs can be recycled. Session UUIDs identify the rows that must
     # disappear across close and restart.
     wait_for(
@@ -3781,43 +3807,43 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
     )
 
     if protected:
-        retained = c.sql_query(
-            """SELECT count(*) FROM mz_internal.mz_catalog_raw
+        # --- A fresh owner becomes foreign to generation 2 -------------------
+        conn_foreign = c.sql_connection()
+        cur_foreign = conn_foreign.cursor()
+        cur_foreign.execute("CREATE TEMP TABLE tt (a int)")
+        cur_foreign.execute("CREATE TEMP VIEW tv AS SELECT * FROM tt")
+        cur_foreign.execute("INSERT INTO tt VALUES (1)")
+        cur_foreign.execute("SELECT count(*) FROM tv")
+        assert cur_foreign.fetchall() == [(1,)]
+        cur_foreign.execute("COMMENT ON TABLE tt IS 'crash victim'")
+        wait_for(temp_item_counts, [(1, 1)], "restarted owner's temporary items")
+        foreign_items = query(ephemeral_items, system=True)
+        assert len(foreign_items) == 2, foreign_items
+        owners = query(
+            """SELECT DISTINCT data->'value'->>'ephemeral_owner_incarnation'
+               FROM mz_internal.mz_catalog_raw
                WHERE data->>'kind' = 'Item'
                  AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
-            port=6877,
-            user="mz_system",
-        )
-        assert retained == [(2,)], f"same-generation open reclaimed owners: {retained}"
-        assert c.sql_query(temp_comment_count, port=6877, user="mz_system") == [(1,)]
-        assert (
-            c.sql_query(
-                f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
-                WHERE data->>'kind' = 'StorageCollectionMetadata'
-                  AND data->'value'->>'shard' = '{temp_shard}'""",
-                port=6877,
-                user="mz_system",
-            )
-            == [(1,)]
-        ), "same-generation open removed a foreign storage mapping"
-        assert (
-            c.sql_query(
-                f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
-                WHERE data->>'kind' = 'UnfinalizedShard'
-                  AND data->'key'->>'shard' = '{temp_shard}'""",
-                port=6877,
-                user="mz_system",
-            )
-            == [(0,)]
-        ), "same-generation open enqueued a foreign shard for finalization"
-
-        retiring_incarnations = query(
-            """SELECT data->'key'->>'id' FROM mz_internal.mz_catalog_raw
-               WHERE data->>'kind' = 'ClientIncarnation'""",
             system=True,
         )
-        assert retiring_incarnations, "promotion requires prior executions"
-        retiring_ids = ", ".join(f"'{int(row[0])}'" for row in retiring_incarnations)
+        assert len(owners) == 1 and owners[0][0] is not None, owners
+        owner = int(owners[0][0])
+        shards = query(
+            f"""SELECT m.data->'value'->>'shard'
+                FROM mz_internal.mz_catalog_raw m
+                WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+                  AND m.data->'key'->'id' IN (
+                    SELECT i.data->'value'->'global_id'
+                    FROM mz_internal.mz_catalog_raw i
+                    WHERE i.data->>'kind' = 'Item'
+                      AND i.data->'value'->>'ephemeral_owner_incarnation' = '{owner}')""",
+            system=True,
+        )
+        assert len(shards) == 1, shards
+        foreign_shard = shards[0][0]
+        assert foreign_shard != temp_shard, shards
+        [(environment_id,)] = query("SELECT mz_environment_id()")
+
         c.kill("materialized")
         with c.override(
             Materialized(
@@ -3831,59 +3857,66 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
         ):
             c.up("materialized")
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, timeout=120)
+            forget_cached_conns()
+
+            # Capture protection only after its writer is dead and generation 2
+            # is ready. Live publishers can legitimately change requirements.
+            retiring_incarnations = query(
+                """SELECT data->'key'->>'id' FROM mz_internal.mz_catalog_raw
+                   WHERE data->>'kind' = 'ClientIncarnation'
+                     AND data->'value'->>'deployment_generation' = '1'""",
+                system=True,
+            )
+            assert (str(owner),) in retiring_incarnations, retiring_incarnations
+            retiring_ids = ", ".join(
+                f"'{int(row[0])}'" for row in retiring_incarnations
+            )
+            owner_protection = f"""SELECT data::text FROM mz_internal.mz_catalog_raw
+                WHERE (data->>'kind' = 'ClientIncarnation'
+                       AND data->'key'->>'id' = '{owner}')
+                   OR (data->>'kind' = 'ClientReadRequirement'
+                       AND data->'key'->>'incarnation' = '{owner}')
+                ORDER BY data::text"""
+            protection = query(owner_protection, system=True)
+            assert len(protection) > 1, "foreign owner must have read protection"
+
+            def assert_foreign_retained() -> None:
+                assert query(ephemeral_items, system=True) == foreign_items
+                assert query(temp_comment_count, system=True) == [(1,)]
+                assert query(storage_state(foreign_shard), system=True) == [(1, 0)]
+                assert query(owner_protection, system=True) == protection
+                assert_names_isolated()
+
+            # The active deployment is dead, and candidate Persist outputs do
+            # not write before promotion. Check current durable ownership here,
+            # then check the persisted SQL inventory once its producer resumes.
+            assert_foreign_retained()
             c.promote_mz(retire_mz_service=None)
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, timeout=120)
-        forget_cached_conns()
-        wait_for(temp_item_counts, [(0, 0)], "SQL invisibility after promotion")
-        wait_for(
-            f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
-                WHERE (data->>'kind' = 'ClientIncarnation'
-                       AND data->'key'->>'id' IN ({retiring_ids}))
-                   OR (data->>'kind' = 'ClientReadRequirement'
-                       AND data->'key'->>'incarnation' IN ({retiring_ids}))""",
-            [(0,)],
-            "old-deployment executions and grants to retire at promotion",
-            system=True,
-        )
+            forget_cached_conns()
+            assert_foreign_retained()
+            assert query(temp_item_counts) == [(1, 1)]
 
-    # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
-    # the durable rows themselves are gone, so a reclamation that merely stopped
-    # rendering the items would still be caught here. It is system-only.
-    ephemeral = c.sql_query(
-        """SELECT count(*) FROM mz_internal.mz_catalog_raw
-           WHERE data->>'kind' = 'Item'
-             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
-        port=6877,
-        user="mz_system",
-    )
-    assert ephemeral == [
-        (0,)
-    ], f"ephemeral catalog items survived the restart: {ephemeral}"
+            # Materialized runs controllerd with its default local retirement
+            # endpoint. Use the environment identity from generation 1's launch.
+            c.retire_mz_deployment("materialized", 1, environment_id=environment_id)
+            wait_for(
+                f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+                    WHERE (data->>'kind' = 'ClientIncarnation'
+                           AND data->'value'->>'deployment_generation' = '1')
+                       OR (data->>'kind' = 'ClientReadRequirement'
+                           AND data->'key'->>'incarnation' IN ({retiring_ids}))""",
+                [(0,)],
+                "all generation-1 incarnations and requirements to retire",
+                system=True,
+            )
+            wait_for_cleanup(foreign_shard)
+            assert_names_isolated()
+        try:
+            conn_foreign.close()
+        except Exception:
+            pass
 
-    # The comment row dies with its item, independently of storage protection.
-    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
-    assert comments == [
-        (0,)
-    ], f"the temp table's comment survived the restart: {comments}"
-
-    # Promotion retires old-deployment protection. Mapping removal and WAL
-    # enqueue are atomic, while physical cleanup may follow asynchronously.
-    storage_cleanup = f"""SELECT
-        (SELECT count(*) FROM mz_internal.mz_catalog_raw
-         WHERE data->>'kind' = 'StorageCollectionMetadata'
-           AND data->'value'->>'shard' = '{temp_shard}'),
-        (SELECT count(*) FROM mz_internal.mz_catalog_raw
-         WHERE data->>'kind' = 'UnfinalizedShard'
-           AND data->'key'->>'shard' = '{temp_shard}')"""
-    if protected:
-        wait_for(
-            storage_cleanup,
-            [(0, 1)],
-            "temporary storage retirement after deployment promotion",
-            system=True,
-        )
-    else:
-        assert query(storage_cleanup, system=True) == [(0, 1)], temp_shard
     c.sql(
         "ALTER SYSTEM RESET enable_storage_shard_finalization",
         port=6877,
