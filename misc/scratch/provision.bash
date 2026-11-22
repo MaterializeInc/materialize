@@ -30,7 +30,7 @@ K9S_VERSION=v0.50.18
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL_VERSION=v1.34.10
 # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-KIND_VERSION=v0.32.0
+KIND_VERSION=v0.33.0
 NODE_ARCH=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/x64/")
 
 # Everything runs in parallel — no serial APT bottleneck.
