@@ -8,7 +8,8 @@ adapter-owned policy, shared query transport and required formats. M2 and the
 60s publication default remain closed.
 
 **Next action:** collect the native DDL run on `i-04aaff9ac16f9c30c`, then run
-adapter loss, subscriptions and four-index progress with the prepared drivers.
+subscriptions and four-index progress with the prepared drivers. Adapter-loss
+acceptance is complete and independently audited.
 The distinct-version walkthrough and unchanged scheduled-MV suites pass on the
 final debug implementation. Combined-ingestion acceptance remains pending.
 Keep the PR draft.
@@ -29,7 +30,7 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   merge-skew encounters source conflicts, and the x86 build fails its image-publicity
   check because pubsubd is not public on DockerHub. Image-dependent runtime coverage
   is incomplete. Do not merge main or change registry permissions without approval.
-- Final DDL/ingestion, adapter-loss, subscription and four-index acceptance
+- Final DDL/ingestion, subscription and four-index acceptance
   remain outstanding. The versioned walkthrough does not test subscriptions.
   An earlier resource-guard interruption remains unexplained: a separate metadata
   probe demonstrates a guard weakness but does not identify the original PID.
@@ -47,6 +48,13 @@ remain explicitly deferred. See `native-final-bounded-audit.md`.
   reproduces on the pinned upstream base.
 
 ## Completed outcomes
+
+Final debug adapter-loss acceptance passes with external replicas progressing
+without ingress, retained history, physical batch compaction after replacement,
+and replica reconstruction. The unchanged workflow covers unified replicas and
+bounded sink-result assertions, not prolonged outages or unrestricted exactly-once
+behavior. Project-scoped containers, volumes and networks are gone.
+
 
 Replica reconstruction defers ordinary builtin-view optimization outside required
 schema dependency closures. It preserves original optimizer features and exact
@@ -111,6 +119,10 @@ Pinned upstream remains `d9a2c5dc402fd9fa359607305669d05f27215cc4`.
 Preserve the unrelated temporary TOML file in the editing worktree.
 
 Essential pointers under the evidence root:
+- `final-native-adapter-loss-outcome.md`: independently audited progress, retention,
+  compaction, reconstruction and teardown evidence, with coverage limits.
+- `ddl-version-observation-boundary.md`: diagnosed private probe failure and repair
+  preserving the workflow's existing readiness wait.
 - `final-native-lifecycle-outcome.md`: independently audited walkthrough, evidence
   archive and unresolved resource-guard limitation.
 - `orchestrator-fixture-runtime-repair.md`: causal test-runtime repair and checks.
