@@ -719,13 +719,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                     runnable = job.get("runnable_at")
                     if not runnable or job.get("started_at"):
                         continue
+                    job_priority = (job.get("priority") or {}).get("number") or 0
                     if datetime.now(UTC) - datetime.fromisoformat(runnable) < timedelta(
-                        minutes=20
+                        minutes=140 if job_priority < 0 else 20
                     ):
                         continue
 
                     print(
-                        f"Job {job.get('id')} ({job.get('web_url')}) with priority {priority} is runnable since {runnable} on {queue}, considering {queue} stuck"
+                        f"Job {job.get('id')} ({job.get('web_url')}) with priority {job_priority} is runnable since {runnable} on {queue}, considering {queue} stuck"
                     )
                     stuck.add(queue)
         except Exception:
