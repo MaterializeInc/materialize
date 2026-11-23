@@ -28,7 +28,7 @@ disable = true
 [[module.mounts]]
   source = "static"
   target = "static"
-  excludeFiles = ["**", "*"]
+  files = ["! **", "! *"]
 
 # Skill-specific parameters
 [params]

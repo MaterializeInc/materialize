@@ -34,7 +34,8 @@ to `git pull` the latest version of Materialize.
 
 # View the docs locally
 
-1. [Install Hugo](https://gohugo.io/getting-started/installing/).
+1. Install [Hugo](https://gohugo.io/getting-started/installing/) and
+   [Dart Sass](https://gohugo.io/functions/css/sass/#dart-sass) to compile the site's stylesheets.
 
 1. Launch the site by running:
 

@@ -356,8 +356,7 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
     && rm -rf /root/.cache/pip
 
 # Install docs site dependencies. These are towards the end for the same reason
-# as the Python dependencies. These are only supported on x86_64 at the moment.
-# See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
+# as the Python dependencies. The docs build runs on x86_64.
 #
 # On every Hugo version bump, compare doc/user/layouts/sitemap.xml with the new
 # version's built-in sitemap template, which it copies, and port any changes.
@@ -365,7 +364,9 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
 # renovate: datasource=github-release-attachments depName=wjdp/htmltest
 ARG HTMLTEST_AMD64=v0.17.0@775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb
 # renovate: datasource=github-release-attachments depName=gohugoio/hugo
-ARG HUGO_AMD64=v0.152.2@08200e4d82f086c94c301e8ba08102f9e23f38774ad949bb3251cac76283684a
+ARG HUGO_AMD64=v0.170.1@a1c81c53a8bc789f1af9494a6b6be1a9b1aa7782e22a1398f919d5df50558433
+# renovate: datasource=github-release-attachments depName=sass/dart-sass
+ARG DART_SASS_AMD64=1.108.2@32d2eb5b83cbc180fce9657ff3c57401a9006c59eccfe0bfdde0aa755a66d42f
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
     HTMLTEST_VERSION=${HTMLTEST_AMD64%@*} \
@@ -374,10 +375,16 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
     && HUGO_VERSION=${HUGO_AMD64%@*} \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/${HUGO_VERSION}/hugo_extended_withdeploy_${HUGO_VERSION#v}_Linux-64bit.tar.gz > hugo.tar.gz \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/${HUGO_VERSION}/hugo_withdeploy_${HUGO_VERSION#v}_linux-amd64.tar.gz > hugo.tar.gz \
     && echo "${HUGO_AMD64#*@} hugo.tar.gz" | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
-    && rm hugo.tar.gz; \
+    && rm hugo.tar.gz \
+    && DART_SASS_VERSION=${DART_SASS_AMD64%@*} \
+    && curl -fsSL https://github.com/sass/dart-sass/releases/download/${DART_SASS_VERSION}/dart-sass-${DART_SASS_VERSION}-linux-x64.tar.gz > dart-sass.tar.gz \
+    && echo "${DART_SASS_AMD64#*@} dart-sass.tar.gz" | sha256sum --check \
+    && tar -xzf dart-sass.tar.gz -C /opt \
+    && ln -s /opt/dart-sass/sass /usr/local/bin/sass \
+    && rm dart-sass.tar.gz; \
     fi
 
 # Install KinD, kubectl, helm & helm-docs
