@@ -1282,7 +1282,7 @@ fn append_batches<'scope>(
         .expect("statistics initialized")
         .clone();
 
-    // An output whose frontier tracks the last successful compare and append of this operator
+    // An output whose frontier tracks the shard's upper, as last observed by this operator.
     let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator accepts the batch descriptions and tokens that represent
@@ -1736,6 +1736,15 @@ fn append_batches<'scope>(
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                        }
+
+                        // NOTE: A sink that never wins an append, for example in read-only mode,
+                        // only learns the shard's upper here.
+                        let behind =
+                            PartialOrder::less_than(&*current_upper.borrow(), &mismatch.current);
+                        if behind {
+                            current_upper.borrow_mut().clone_from(&mismatch.current);
+                            upper_cap_set.downgrade(current_upper.borrow().iter());
                         }
 
                         if bail_on_concurrent_modification {

@@ -49,6 +49,7 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import METADATA_STORE
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
@@ -9275,3 +9276,93 @@ def workflow_test_controller_oracle_stall(
         f"by {growth:.2f}x (ceiling {ceiling}x), so the reads did not stay "
         "bounded per reconciliation phase"
     )
+
+
+def workflow_test_source_replica_losing_appends(c: Composition) -> None:
+    """A source replica that loses every persist append to another replica must
+    still report `offset_committed` as the shard advances."""
+
+    slow_replica = Clusterd(name="clusterd2", workers=1)
+    # Only this replica resolves the metadata store to the proxy, so only its
+    # persist appends are delayed.
+    slow_replica.config["links"] = [f"toxiproxy:{METADATA_STORE}"]  # type: ignore
+
+    with c.override(
+        Clusterd(name="clusterd1", workers=1),
+        slow_replica,
+        Testdrive(no_reset=True, default_timeout="60s"),
+    ):
+        c.down(destroy_volumes=True)
+        c.up("materialized", "toxiproxy", Service("testdrive", idle=True))
+        c.testdrive(dedent(f"""
+            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+            {{
+              "name": "metadata",
+              "listen": "0.0.0.0:26257",
+              "upstream": "{METADATA_STORE}:26257"
+            }}
+
+            $ http-request method=POST url=http://toxiproxy:8474/proxies/metadata/toxics content-type=application/json
+            {{
+              "name": "latency",
+              "type": "latency",
+              "attributes": {{"latency": 100}}
+            }}
+            """))
+        c.up("clusterd1", "clusterd2")
+
+        # Without the alias both replicas are equally fast and the test passes vacuously.
+        def resolve(host: str) -> str:
+            return c.exec(
+                "clusterd2", "getent", "hosts", host, capture=True
+            ).stdout.split()[0]
+
+        assert resolve(METADATA_STORE) == resolve(
+            "toxiproxy"
+        ), f"clusterd2 does not reach {METADATA_STORE} through toxiproxy"
+
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
+            ALTER SYSTEM SET storage_statistics_interval = 2000;
+            CREATE CLUSTER src REPLICAS (
+                fast (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                ),
+                slow (
+                    STORAGECTL ADDRESSES ['clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd2:2102'],
+                    WORKERS 1
+                )
+            );
+            GRANT ALL ON CLUSTER src TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.testdrive(dedent("""
+            > CREATE SOURCE auction IN CLUSTER src FROM LOAD GENERATOR AUCTION (TICK INTERVAL '500ms');
+            > CREATE TABLE bids FROM SOURCE auction (REFERENCE bids);
+
+            > SELECT r.name FROM mz_internal.mz_source_statistics_raw s
+              JOIN mz_objects o ON o.id = s.id
+              JOIN mz_cluster_replicas r ON r.id = s.replica_id
+              WHERE o.name = 'bids' AND s.offset_committed > 20
+            fast
+            slow
+
+            # A second, later threshold, so one append the slow replica happens to win cannot pass.
+            > SELECT r.name FROM mz_internal.mz_source_statistics_raw s
+              JOIN mz_objects o ON o.id = s.id
+              JOIN mz_cluster_replicas r ON r.id = s.replica_id
+              WHERE o.name = 'bids' AND s.offset_committed > 80
+            fast
+            slow
+            """))

@@ -4021,3 +4021,65 @@ def workflow_system_replica_id_collision(c: Composition) -> None:
             time.time() < deadline
         ), f"mz_new runs {ids}, expected one id other than {old_id}"
         time.sleep(1)
+
+
+def workflow_offset_committed_read_only(c: Composition) -> None:
+    """A source that ingests while a new generation is read-only must not
+    regress `offset_committed` when that generation is promoted."""
+
+    def ingest(total: int) -> None:
+        c.testdrive(dedent(f"""
+            $ kafka-ingest format=bytes topic=oc repeat=1000
+            row
+            > SELECT s.offset_committed FROM mz_internal.mz_source_statistics_raw s
+              JOIN mz_objects o USING (id) WHERE o.name = 'oc_tbl'
+            {total}
+            """))
+
+    c.down(destroy_volumes=True)
+    c.up("kafka", "schema-registry", "mz_old", Service("testdrive", idle=True))
+    setup(c)
+    # Report often, so a replica reports before its first append after the promotion.
+    c.sql(
+        "ALTER SYSTEM SET storage_statistics_collection_interval = 500;"
+        "ALTER SYSTEM SET storage_statistics_interval = 1000;",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.testdrive(dedent("""
+        > CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL = 'PLAINTEXT';
+        $ kafka-create-topic topic=oc
+        > CREATE SOURCE oc_source
+          IN CLUSTER cluster_singlereplica
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-oc-${testdrive.seed}');
+        > CREATE TABLE oc_tbl FROM SOURCE oc_source (REFERENCE "testdrive-oc-${testdrive.seed}")
+          FORMAT BYTES ENVELOPE NONE;
+        """))
+    ingest(1000)
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    ingest(2000)
+    # mz_new's read-only sink polls the shard upper once a second, so give it several polls.
+    time.sleep(5)
+
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        # Reaching 3000 proves the promoted replica's reports arrive.
+        ingest(3000)
+
+    logs = c.invoke("logs", "mz_new", capture=True).stdout
+    assert "gauge offset_committed" not in logs, "offset_committed regressed"
