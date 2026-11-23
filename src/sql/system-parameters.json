@@ -4666,15 +4666,7 @@
       "scope": "environment",
       "userVisible": false,
       "constraint": {
-        "kind": "range",
-        "start": {
-          "value": "1 ms",
-          "inclusive": true
-        },
-        "end": {
-          "value": "18446744073709551615 ms",
-          "inclusive": true
-        }
+        "kind": "nonZero"
       },
       "dyncfg": true
     },

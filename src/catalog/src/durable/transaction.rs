@@ -2368,12 +2368,7 @@ impl<'a> Transaction<'a> {
     pub fn set_0dt_deployment_max_wait(&mut self, value: Duration) -> Result<(), CatalogError> {
         self.set_config(
             WITH_0DT_DEPLOYMENT_MAX_WAIT.into(),
-            Some(
-                value
-                    .as_millis()
-                    .try_into()
-                    .expect("max wait fits into u64"),
-            ),
+            Some(u64::try_from(value.as_millis()).unwrap_or(u64::MAX)),
         )
     }
 
@@ -2387,14 +2382,12 @@ impl<'a> Transaction<'a> {
         &mut self,
         value: Duration,
     ) -> Result<(), CatalogError> {
+        // Round up. Truncating would store a sub-millisecond interval as zero, which preflight
+        // skips.
+        let millis = value.as_nanos().div_ceil(1_000_000);
         self.set_config(
             WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.into(),
-            Some(
-                value
-                    .as_millis()
-                    .try_into()
-                    .expect("ddl check interval fits into u64"),
-            ),
+            Some(u64::try_from(millis).unwrap_or(u64::MAX)),
         )
     }
 

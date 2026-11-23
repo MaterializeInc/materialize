@@ -30,10 +30,6 @@ pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// The durable catalog stores the DDL polling period in whole milliseconds.
-pub const DDL_CHECK_INTERVAL_RANGE: std::ops::RangeInclusive<Duration> =
-    Duration::from_millis(1)..=Duration::from_millis(u64::MAX);
-
 pub const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: Config<Duration> = Config::new(
     "with_0dt_deployment_ddl_check_interval",
     Duration::from_secs(5 * 60),

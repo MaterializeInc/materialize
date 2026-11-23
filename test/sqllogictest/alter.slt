@@ -226,7 +226,40 @@ db error: ERROR: parameter "storage_statistics_interval" cannot have value "0ns"
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '0s';
 ----
-db error: ERROR: parameter "with_0dt_deployment_ddl_check_interval" cannot have value "0ns": must be at least 1 ms
+db error: ERROR: parameter "with_0dt_deployment_ddl_check_interval" cannot have value "0ns": only supports non-zero durations
+
+# Durations beyond the millisecond range of the catalog are accepted.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '18446744073709552 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET with_0dt_deployment_max_wait = '18446744073709552 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET with_0dt_deployment_ddl_check_interval;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET with_0dt_deployment_max_wait;
+----
+COMPLETE 0
+
+# A stored value that violates its constraint is ignored. The largest number of seconds is
+# stored as 0.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_statistics_interval = '18446744073709551615 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET storage_statistics_interval;
+----
+COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET "0dt_deployment_hydration_check_interval" = '0s';

@@ -8326,7 +8326,7 @@ pub fn plan_alter_system_set(
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
-        name: name.into_string(),
+        name: name.as_str().to_ascii_lowercase(),
         value: scl::plan_set_variable_to(to)?,
     }))
 }
@@ -8343,7 +8343,7 @@ pub fn plan_alter_system_reset(
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::AlterSystemReset(AlterSystemResetPlan {
-        name: name.into_string(),
+        name: name.as_str().to_ascii_lowercase(),
     }))
 }
 
