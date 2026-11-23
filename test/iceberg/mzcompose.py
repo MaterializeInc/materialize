@@ -129,10 +129,67 @@ def workflow_smoke(c: Composition) -> None:
         "catalog.td",
         "nested-records.td",
         "uuid-column.td",
-        "jsonb-column.td",
         "key-validation.td",
         "duckdb-value-format.td",
     )
+
+
+def workflow_jsonb_column(c: Composition) -> None:
+    key = _setup(c)
+    args = [f"--var=s3-access-key={key}", "--var=aws-endpoint=minio:9000"]
+    c.run_testdrive_files(*args, "jsonb-column-setup.td")
+
+    # Reuse the empty manifest list to model a sink snapshot from before the
+    # encoding marker existed. Keep the same frontier so the sink resumes it.
+    c.kill("materialized")
+    token = get_polaris_access_token(c)
+    tables = f"http://localhost:{c.port('polaris', 8181)}/api/catalog/v1/default_catalog/namespaces/default_namespace/tables"
+    legacy_url = f"{tables}/legacy_jsonb"
+    meta = _polaris_get(legacy_url, token)["metadata"]
+    current_id = meta["current-snapshot-id"]
+    current = next(s for s in meta["snapshots"] if s["snapshot-id"] == current_id)
+    summary = current["summary"].copy()
+    del summary["mz-jsonb-encoding"]
+    snapshot = {
+        **current,
+        "snapshot-id": current_id + 1,
+        "parent-snapshot-id": current_id,
+        "sequence-number": meta["last-sequence-number"] + 1,
+        "timestamp-ms": int(time.time() * 1000),
+        "summary": summary,
+    }
+    updates = [
+        {"action": "add-snapshot", "snapshot": snapshot},
+        {
+            "action": "set-snapshot-ref",
+            "ref-name": "main",
+            "type": "branch",
+            "snapshot-id": snapshot["snapshot-id"],
+        },
+    ]
+    req = urllib.request.Request(
+        legacy_url,
+        data=json.dumps({"requirements": [], "updates": updates}).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req):
+        pass
+
+    c.up("materialized")
+    c.run_testdrive_files("--no-reset", *args, "jsonb-column.td")
+    for name, encoding in [("jsonb_table", "1"), ("legacy_jsonb", "0")]:
+        meta = _polaris_get(f"{tables}/{name}", token)["metadata"]
+        assert "mz-jsonb-encoding" not in meta.get("properties", {})
+        current = next(
+            s
+            for s in meta["snapshots"]
+            if s["snapshot-id"] == meta["current-snapshot-id"]
+        )
+        assert current["summary"]["mz-jsonb-encoding"] == encoding
 
 
 def workflow_gcp_connection_validation(c: Composition) -> None:

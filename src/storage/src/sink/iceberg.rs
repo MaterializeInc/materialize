@@ -84,7 +84,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
-use std::convert::Infallible;
 use std::future::Future;
 use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -103,8 +102,8 @@ use iceberg::arrow::{
     arrow_schema_to_schema, arrow_schema_to_schema_auto_assign_ids, schema_to_arrow_schema,
 };
 use iceberg::spec::{
-    DataFile, FormatVersion, NestedField, NestedFieldRef, PrimitiveType, Snapshot, StructType,
-    Type, read_data_files_from_avro, write_data_files_to_avro,
+    DataFile, FormatVersion, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+    read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
@@ -125,8 +124,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
-use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
-use mz_interchange::avro::DiffPair;
+use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder, JsonbStringEncoding};
 use mz_interchange::envelopes::for_each_diff_pair_async;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -147,7 +145,9 @@ use mz_storage_types::sinks::{
 };
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    AsyncInputHandle, Disconnected, Event, OperatorBuilder, PressOnDropButton,
+};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -166,9 +166,8 @@ use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
-/// Set the default capacity for the array builders inside the ArrowBuilder. This is the
-/// number of items each builder can hold before it needs to allocate more memory.
-const DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY: usize = 1024;
+const JSONB_ENCODING_PROPERTY: &str = "mz-jsonb-encoding";
+
 /// Set the default buffer capacity for the string and binary array builders inside the
 /// ArrowBuilder. This is the number of bytes each builder can hold before it needs to allocate
 /// more memory.
@@ -194,6 +193,27 @@ struct WriterContext {
     /// Generates unique file names with a per-worker UUID suffix.
     file_name_generator: DefaultFileNameGenerator,
     writer_properties: WriterProperties,
+    jsonb_encoding: JsonbStringEncoding,
+}
+
+impl WriterContext {
+    fn row_columns(
+        &self,
+        schema: &Arc<ArrowSchema>,
+        row: &Row,
+        diff: i32,
+    ) -> anyhow::Result<Vec<ArrayRef>> {
+        let mut builder = ArrowBuilder::new_with_schema(
+            Arc::clone(schema),
+            1,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+            self.jsonb_encoding,
+        )?;
+        builder.add_row(row)?;
+        let (_, mut columns, _) = builder.to_record_batch()?.into_parts();
+        columns.push(Arc::new(Int32Array::from(vec![diff])));
+        Ok(columns)
+    }
 }
 
 /// Envelope-specific logic for writing Iceberg data files.
@@ -214,7 +234,7 @@ trait EnvelopeHandler: Send {
     /// this to disable memory-intensive optimisations like seen-rows deduplication.
     async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>>;
 
-    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch>;
+    fn row_to_batch(&self, row: &Row, diff: i32, ts: Timestamp) -> anyhow::Result<RecordBatch>;
 }
 
 struct UpsertEnvelopeHandler {
@@ -355,42 +375,8 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
         ))
     }
 
-    /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
-    /// which the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
-    fn row_to_batch(
-        &self,
-        diff_pair: DiffPair<Row>,
-        _ts: Timestamp,
-    ) -> anyhow::Result<RecordBatch> {
-        let mut builder = ArrowBuilder::new_with_schema(
-            Arc::clone(&self.ctx.arrow_schema),
-            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
-            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-        )
-        .context("Failed to create builder")?;
-
-        let mut op_values = Vec::new();
-
-        if let Some(before) = diff_pair.before {
-            builder
-                .add_row(&before)
-                .context("Failed to add delete row to builder")?;
-            op_values.push(-1i32);
-        }
-        if let Some(after) = diff_pair.after {
-            builder
-                .add_row(&after)
-                .context("Failed to add insert row to builder")?;
-            op_values.push(1i32);
-        }
-
-        let batch = builder
-            .to_record_batch()
-            .context("Failed to create record batch")?;
-
-        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
-        columns.push(Arc::new(Int32Array::from(op_values)));
-
+    fn row_to_batch(&self, row: &Row, diff: i32, _ts: Timestamp) -> anyhow::Result<RecordBatch> {
+        let columns = self.ctx.row_columns(&self.ctx.arrow_schema, row, diff)?;
         RecordBatch::try_new(Arc::clone(&self.schema_with_op), columns)
             .context("Failed to create batch with op column")
     }
@@ -443,41 +429,12 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
         ))
     }
 
-    /// Every change is written as a plain data row: the `before` half (if present) gets
-    /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
-    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch> {
-        let mut builder = ArrowBuilder::new_with_schema(
-            Arc::clone(&self.user_schema_for_append),
-            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
-            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-        )
-        .context("Failed to create builder")?;
-
-        let mut diff_values: Vec<i32> = Vec::new();
+    fn row_to_batch(&self, row: &Row, diff: i32, ts: Timestamp) -> anyhow::Result<RecordBatch> {
+        let mut columns = self
+            .ctx
+            .row_columns(&self.user_schema_for_append, row, diff)?;
         let ts_i64 = i64::try_from(u64::from(ts)).unwrap_or(i64::MAX);
-
-        if let Some(before) = diff_pair.before {
-            builder
-                .add_row(&before)
-                .context("Failed to add before row to builder")?;
-            diff_values.push(-1i32);
-        }
-        if let Some(after) = diff_pair.after {
-            builder
-                .add_row(&after)
-                .context("Failed to add after row to builder")?;
-            diff_values.push(1i32);
-        }
-
-        let n = diff_values.len();
-        let batch = builder
-            .to_record_batch()
-            .context("Failed to create record batch")?;
-
-        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
-        columns.push(Arc::new(Int32Array::from(diff_values)));
-        columns.push(Arc::new(Int64Array::from(vec![ts_i64; n])));
-
+        columns.push(Arc::new(Int64Array::from(vec![ts_i64])));
         RecordBatch::try_new(Arc::clone(&self.ctx.arrow_schema), columns)
             .context("Failed to create append record batch")
     }
@@ -848,16 +805,13 @@ async fn do_commit(
 /// Attempt a single commit of a batch of data files to an Iceberg table.
 async fn try_commit_batch(
     table: Table,
-    snapshot_properties: Vec<(String, String)>,
+    commit: &SinkSnapshot,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
     catalog: &dyn Catalog,
     conn_namespace: &str,
     conn_table: &str,
-    sink_id: GlobalId,
-    sink_version: u64,
     batch_lower: &Antichain<Timestamp>,
-    batch_upper: &Antichain<Timestamp>,
     metrics: &IcebergSinkMetrics,
 ) -> (Table, RetryResult<(), anyhow::Error>) {
     // We begin the attempt by evaluating our current state.
@@ -878,27 +832,26 @@ async fn try_commit_batch(
         }
     };
 
-    let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-    let last = match retrieve_upper_from_snapshots(&mut snapshots) {
+    let last = match latest_sink_snapshot(&table) {
         Ok(last) => last,
         Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
     };
-    if let Some((last_frontier, last_id, last_version)) = last {
+    if let Some(last) = last {
         // Just in case the sink was recreated, check both sink ID and version to see if it was us.
-        if last_id == sink_id && last_version == sink_version && last_frontier == *batch_upper {
+        if &last == commit {
             // Our own commit for this batch is already on the table.
             // We must've missed the response.
             info!(
                 namespace = %conn_namespace,
                 table = %conn_table,
                 lower = %batch_lower.pretty(),
-                upper = %batch_upper.pretty(),
+                upper = %commit.upper.pretty(),
                 "found iceberg commit from previous attempt, treating as success"
             );
             return (table, RetryResult::Ok(()));
         }
 
-        if last_version > sink_version {
+        if last.sink_version > commit.sink_version {
             // We've been superseded by a new version of the sink.
             return (
                 table,
@@ -907,14 +860,14 @@ async fn try_commit_batch(
                     with version {}. Current sink version: {}. \
                     Frontiers may be out of sync, aborting to avoid data loss.",
                     conn_table,
-                    last_version,
-                    sink_version,
+                    last.sink_version,
+                    commit.sink_version,
                 )),
             );
         }
 
-        if PartialOrder::less_equal(batch_upper, &last_frontier)
-            || PartialOrder::less_than(batch_lower, &last_frontier)
+        if PartialOrder::less_equal(&commit.upper, &last.upper)
+            || PartialOrder::less_than(batch_lower, &last.upper)
         {
             // This batch contains records someone else has already written.
             return (
@@ -923,13 +876,24 @@ async fn try_commit_batch(
                     "Iceberg table '{}' has been modified by another writer. \
                     Current frontier: {:?}, last frontier: {:?}.",
                     conn_table,
-                    batch_upper,
-                    last_frontier,
+                    commit.upper,
+                    last.upper,
                 )),
+            );
+        }
+
+        if last.quote_jsonb != commit.quote_jsonb {
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!("Iceberg JSONB encoding changed during the write")),
             );
         }
     }
 
+    let snapshot_properties = match commit.properties() {
+        Ok(properties) => properties,
+        Err(error) => return (table, RetryResult::FatalErr(error)),
+    };
     match do_commit(
         &table,
         catalog,
@@ -1162,17 +1126,39 @@ async fn load_or_create_table(
     }
 }
 
-/// Find the most recent Materialize frontier from Iceberg snapshots.
-/// Returns: (frontier, sink id, sink version)
-///
-/// We store the frontier in snapshot metadata to track where we left off after restarts.
-/// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
-/// The input slice will be sorted by sequence number in descending order.
-fn retrieve_upper_from_snapshots(
-    snapshots: &mut [Arc<Snapshot>],
-) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
+#[derive(PartialEq, Eq)]
+struct SinkSnapshot {
+    upper: Antichain<Timestamp>,
+    sink_id: GlobalId,
+    sink_version: u64,
+    quote_jsonb: bool,
+}
+
+impl SinkSnapshot {
+    fn properties(&self) -> anyhow::Result<Vec<(String, String)>> {
+        Ok(vec![
+            ("mz-sink-id".to_owned(), self.sink_id.to_string()),
+            ("mz-sink-version".to_owned(), self.sink_version.to_string()),
+            (
+                "mz-frontier".to_owned(),
+                serde_json::to_string(self.upper.elements())?,
+            ),
+            (
+                JSONB_ENCODING_PROPERTY.to_owned(),
+                u8::from(self.quote_jsonb).to_string(),
+            ),
+        ])
+    }
+}
+
+/// Read the most recent sink commit, skipping compaction snapshots.
+fn latest_sink_snapshot(table: &Table) -> anyhow::Result<Option<SinkSnapshot>> {
+    let mut snapshots: Vec<_> = table.metadata().snapshots().collect();
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
+    if snapshots.is_empty() {
+        return Ok(None);
+    }
     for snapshot in snapshots {
         let props = &snapshot.summary().additional_properties;
         if let (Some(frontier_json), Some(sink_id_str), Some(sink_version_str)) = (
@@ -1192,7 +1178,24 @@ fn retrieve_upper_from_snapshots(
                 .parse::<u64>()
                 .context("Failed to parse mz-sink-version from snapshot properties")?;
 
-            return Ok(Some((frontier, sink_id, sink_version)));
+            // Older sink snapshots stored JSONB string scalars as raw text.
+            let quote_jsonb = match props
+                .get(JSONB_ENCODING_PROPERTY)
+                .or_else(|| table.metadata().properties().get(JSONB_ENCODING_PROPERTY))
+                .map(String::as_str)
+            {
+                None | Some("0") => false,
+                Some("1") => true,
+                Some(version) => {
+                    anyhow::bail!("unsupported Iceberg JSONB encoding version {version}")
+                }
+            };
+            return Ok(Some(SinkSnapshot {
+                upper: frontier,
+                sink_id,
+                sink_version,
+                quote_jsonb,
+            }));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1207,7 +1210,7 @@ fn retrieve_upper_from_snapshots(
         }
     }
 
-    Ok(None)
+    anyhow::bail!("Iceberg snapshot history contains no sink frontier")
 }
 
 /// Convert a Materialize RelationDesc into Arrow and Iceberg schemas.
@@ -1309,7 +1312,7 @@ fn mint_batch_descriptions<'scope>(
     initial_schema: SchemaRef,
 ) -> (
     StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    StreamVec<'scope, Timestamp, Infallible>,
+    StreamVec<'scope, Timestamp, bool>,
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
@@ -1321,7 +1324,8 @@ fn mint_batch_descriptions<'scope>(
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
-    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (table_ready_output, table_ready_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (batch_desc_output, batch_desc_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = builder.new_input_for(input, Pipeline, &batch_desc_output);
@@ -1372,13 +1376,10 @@ fn mint_batch_descriptions<'scope>(
                 "iceberg mint loaded/created table"
             );
 
-            *table_ready_capset = CapabilitySet::new();
-
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
-            let (resume_upper, resume_version) = match resume {
-                Some((f, _, v)) => (f, v),
-                None => (Antichain::from_elem(Timestamp::minimum()), 0),
+            let resume = latest_sink_snapshot(&table)?;
+            let (resume_upper, resume_version, quote_jsonb) = match resume {
+                Some(last) => (last.upper, last.sink_version, last.quote_jsonb),
+                None => (Antichain::from_elem(Timestamp::minimum()), 0, true),
             };
             debug!(
                 ?sink_id,
@@ -1414,6 +1415,9 @@ fn mint_batch_descriptions<'scope>(
             if resume_version > sink_version {
                 anyhow::bail!("Fenced off by newer sink version: resume_version {}, sink_version {}", resume_version, sink_version);
             }
+
+            table_ready_output.give(&table_ready_capset[0], quote_jsonb);
+            *table_ready_capset = CapabilitySet::new();
 
             let mut initialized = false;
             let mut observed_frontier;
@@ -1590,10 +1594,22 @@ fn mint_batch_descriptions<'scope>(
     });
     (
         batch_desc_stream,
-        table_ready_stream,
+        table_ready_stream.broadcast(),
         statuses,
         button.press_on_drop(),
     )
+}
+
+/// The minter chooses the encoding once for all writers and the committer.
+async fn wait_for_table(
+    mut input: AsyncInputHandle<Timestamp, Vec<bool>, Disconnected>,
+) -> Option<bool> {
+    while let Some(event) = input.next().await {
+        if let Event::Data(_, values) = event {
+            return values.into_iter().next();
+        }
+    }
+    None
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1735,7 +1751,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     name: String,
     input: SinkBatchStream<'scope>,
     batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
+    table_ready_stream: StreamVec<'scope, Timestamp, bool>,
     sink_id: GlobalId,
     from_id: GlobalId,
     key_is_synthetic: bool,
@@ -1756,7 +1772,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
 
     let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
+    let table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
         builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(input, Pipeline);
@@ -1780,9 +1796,9 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         )
                     })?;
 
-                while let Some(_) = table_ready_input.next().await {
-                    // Wait for table to be ready
-                }
+                let Some(quote_jsonb) = wait_for_table(table_ready_input).await else {
+                    return Ok(());
+                };
                 let table = catalog.load_table(&table_ident).await.with_context(|| {
                     format!(
                         "Failed to load Iceberg table '{}.{}' in write_data_files operator",
@@ -1837,6 +1853,11 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
 
                 let writer_properties = WriterProperties::new();
 
+                let jsonb_encoding = if quote_jsonb {
+                    JsonbStringEncoding::Json
+                } else {
+                    JsonbStringEncoding::LegacyRaw
+                };
                 let ctx = WriterContext {
                     arrow_schema,
                     current_schema: Arc::clone(&current_schema),
@@ -1844,6 +1865,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     location_generator,
                     file_name_generator,
                     writer_properties,
+                    jsonb_encoding,
                 };
                 let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
                 let mut pk_warner =
@@ -1987,15 +2009,19 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     warner.observe(key, time);
                                 }
 
-                                let record_batch = handler
-                                    .row_to_batch(diff_pair, time)
-                                    .context("failed to convert row to recordbatch")?;
-                                staged_messages_since_flush +=
-                                    u64::cast_from(record_batch.num_rows());
-                                batch_writer
-                                    .write(record_batch)
-                                    .await
-                                    .context("failed to write recordbatch")?;
+                                // Separate buffers let each half use the full Utf8 offset range.
+                                for (row, diff) in [(diff_pair.before, -1), (diff_pair.after, 1)] {
+                                    if let Some(row) = row {
+                                        let batch = handler
+                                            .row_to_batch(&row, diff, time)
+                                            .context("failed to convert row to recordbatch")?;
+                                        batch_writer
+                                            .write(batch)
+                                            .await
+                                            .context("failed to write recordbatch")?;
+                                        staged_messages_since_flush += 1;
+                                    }
+                                }
                                 if staged_messages_since_flush >= 10_000 {
                                     statistics.inc_messages_staged_by(staged_messages_since_flush);
                                     staged_messages_since_flush = 0;
@@ -3116,7 +3142,7 @@ fn commit_to_iceberg<'scope>(
     sink_version: u64,
     batch_input: StreamVec<'scope, Timestamp, BoundedDataFile>,
     batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
+    table_ready_stream: StreamVec<'scope, Timestamp, bool>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -3139,7 +3165,7 @@ fn commit_to_iceberg<'scope>(
     let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
     let mut batch_desc_input =
         builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
-    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
+    let table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
 
     let (button, errors) = builder.build_fallible(move |_caps| {
         Box::pin(async move {
@@ -3163,9 +3189,9 @@ fn commit_to_iceberg<'scope>(
 
             let mut write_handle = write_handle.await?;
 
-            while let Some(_) = table_ready_input.next().await {
-                // Wait for table to be ready
-            }
+            let Some(quote_jsonb) = wait_for_table(table_ready_input).await else {
+                return Ok(());
+            };
             let mut table = catalog.load_table(&table_ident).await.with_context(|| {
                 format!(
                     "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
@@ -3285,18 +3311,17 @@ fn commit_to_iceberg<'scope>(
                     let instant = Instant::now();
 
                     let frontier = batch.1.clone();
-                    let frontier_json = serde_json::to_string(&frontier.elements())
-                        .context("Failed to serialize frontier to JSON")?;
-                    let snapshot_properties = vec![
-                        ("mz-sink-id".to_string(), sink_id.to_string()),
-                        ("mz-frontier".to_string(), frontier_json),
-                        ("mz-sink-version".to_string(), sink_version.to_string()),
-                    ];
+                    let commit = SinkSnapshot {
+                        upper: frontier.clone(),
+                        sink_id,
+                        sink_version,
+                        quote_jsonb,
+                    };
 
                     let (table_state, commit_result) = Retry::default()
                         .max_tries(5)
                         .retry_async_with_state(table, |_, table| {
-                            let snapshot_properties = snapshot_properties.clone();
+                            let commit = &commit;
                             let data_files = data_files.clone();
                             let delete_files = delete_files.clone();
                             let metrics = Arc::clone(&metrics);
@@ -3304,20 +3329,16 @@ fn commit_to_iceberg<'scope>(
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
                             let batch_lower = batch.0.clone();
-                            let batch_upper = batch.1.clone();
                             async move {
                                 try_commit_batch(
                                     table,
-                                    snapshot_properties,
+                                    commit,
                                     data_files,
                                     delete_files,
                                     catalog.as_ref(),
                                     &conn_namespace,
                                     &conn_table,
-                                    sink_id,
-                                    sink_version,
                                     &batch_lower,
-                                    &batch_upper,
                                     &metrics,
                                 )
                                 .await

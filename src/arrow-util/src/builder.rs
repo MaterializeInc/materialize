@@ -12,6 +12,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -29,6 +30,13 @@ use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
 
 pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
 const EXTENSION_PREFIX: &str = "materialize.v1.";
+
+/// Encoding of JSONB string scalars in Arrow Utf8 columns.
+#[derive(Clone, Copy, Debug)]
+pub enum JsonbStringEncoding {
+    Json,
+    LegacyRaw,
+}
 
 pub struct ArrowBuilder {
     columns: Vec<ArrowColumn>,
@@ -183,12 +191,10 @@ impl ArrowBuilder {
         let mut columns = vec![];
         for field in schema.fields() {
             columns.push(ArrowColumn::new(
-                field.name().clone(),
-                field.is_nullable(),
-                field.data_type().clone(),
-                typename_from_field(field)?,
+                field,
                 item_capacity,
                 data_capacity,
+                JsonbStringEncoding::Json,
             )?);
         }
         Ok(Self {
@@ -208,16 +214,15 @@ impl ArrowBuilder {
         schema: Arc<Schema>,
         item_capacity: usize,
         data_capacity: usize,
+        jsonb_encoding: JsonbStringEncoding,
     ) -> Result<Self, anyhow::Error> {
         let mut columns = vec![];
         for field in schema.fields() {
             columns.push(ArrowColumn::new(
-                field.name().clone(),
-                field.is_nullable(),
-                field.data_type().clone(),
-                typename_from_field(field)?,
+                field,
                 item_capacity,
                 data_capacity,
+                jsonb_encoding,
             )?);
         }
         Ok(Self {
@@ -586,6 +591,7 @@ fn builder_for_datatype(
     data_type: &DataType,
     item_capacity: usize,
     data_capacity: usize,
+    jsonb_encoding: JsonbStringEncoding,
 ) -> Result<ColBuilder, anyhow::Error> {
     let builder = match &data_type {
         DataType::Boolean => {
@@ -635,14 +641,8 @@ fn builder_for_datatype(
                 .with_precision_and_scale(*precision, *scale)?,
         ),
         DataType::List(field) => {
-            let inner_col_builder = ArrowColumn::new(
-                field.name().clone(),
-                field.is_nullable(),
-                field.data_type().clone(),
-                typename_from_field(field)?,
-                item_capacity,
-                data_capacity,
-            )?;
+            let inner_col_builder =
+                ArrowColumn::new(field, item_capacity, data_capacity, jsonb_encoding)?;
             ColBuilder::ListBuilder(Box::new(
                 ListBuilder::new(inner_col_builder).with_field(Arc::clone(field)),
             ))
@@ -650,14 +650,8 @@ fn builder_for_datatype(
         DataType::Struct(fields) => {
             let mut field_builders: Vec<Box<dyn ArrayBuilder>> = vec![];
             for field in fields {
-                let inner_col_builder = ArrowColumn::new(
-                    field.name().clone(),
-                    field.is_nullable(),
-                    field.data_type().clone(),
-                    typename_from_field(field)?,
-                    item_capacity,
-                    data_capacity,
-                )?;
+                let inner_col_builder =
+                    ArrowColumn::new(field, item_capacity, data_capacity, jsonb_encoding)?;
                 field_builders.push(Box::new(inner_col_builder));
             }
             ColBuilder::StructBuilder(StructBuilder::new(fields.clone(), field_builders))
@@ -674,14 +668,8 @@ fn builder_for_datatype(
                 let key_field = &fields[0];
                 let value_field = &fields[1];
                 let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
-                let value_builder = ArrowColumn::new(
-                    value_field.name().clone(),
-                    value_field.is_nullable(),
-                    value_field.data_type().clone(),
-                    typename_from_field(value_field)?,
-                    item_capacity,
-                    data_capacity,
-                )?;
+                let value_builder =
+                    ArrowColumn::new(value_field, item_capacity, data_capacity, jsonb_encoding)?;
                 // Use the names from the schema's entries struct rather than
                 // arrow-rs's defaults (`entries`/`keys`/`values`) — when the
                 // schema came from Iceberg (`key_value`/`key`/`value`) the
@@ -725,6 +713,7 @@ struct ArrowColumn {
     nullable: bool,
     data_type: DataType,
     extension_type_name: String,
+    jsonb_encoding: JsonbStringEncoding,
     inner: ColBuilder,
 }
 
@@ -774,19 +763,23 @@ fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
 
 impl ArrowColumn {
     fn new(
-        field_name: String,
-        nullable: bool,
-        data_type: DataType,
-        extension_type_name: String,
+        field: &Field,
         item_capacity: usize,
         data_capacity: usize,
+        jsonb_encoding: JsonbStringEncoding,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
-            inner: builder_for_datatype(&data_type, item_capacity, data_capacity)?,
-            field_name,
-            nullable,
-            data_type,
-            extension_type_name,
+            inner: builder_for_datatype(
+                field.data_type(),
+                item_capacity,
+                data_capacity,
+                jsonb_encoding,
+            )?,
+            field_name: field.name().clone(),
+            nullable: field.is_nullable(),
+            data_type: field.data_type().clone(),
+            extension_type_name: typename_from_field(field)?,
+            jsonb_encoding,
         })
     }
 }
@@ -936,10 +929,14 @@ impl ArrowColumn {
             (ColBuilder::FixedSizeBinaryBuilder(builder), Datum::Uuid(val)) => {
                 builder.append_value(val.as_bytes())?
             }
-            // The jsonb arms must precede the `Datum::String` arms, which would
-            // otherwise write JSON string scalars unquoted and unescaped.
             (ColBuilder::StringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
-                builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
+                let json = match (self.jsonb_encoding, datum) {
+                    (JsonbStringEncoding::LegacyRaw, Datum::String(s)) => Cow::Borrowed(s),
+                    _ => Cow::Owned(JsonbRef::from_datum(datum).to_serde_json().to_string()),
+                };
+                let end = builder.values_slice().len() + json.len();
+                i32::try_from(end).map_err(|_| ArrowError::OffsetOverflowError(end))?;
+                builder.append_value(json.as_ref());
             }
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::LargeStringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
