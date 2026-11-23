@@ -444,9 +444,9 @@ RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/ter
     && rm terraform.zip
 
 # renovate: datasource=github-release-attachments depName=terraform-docs/terraform-docs
-ARG TERRAFORM_DOCS_AMD64=v0.20.0@34ae01772412bb11474e6718ea62113e38ff5964ee570a98c69fafe3a6dff286
+ARG TERRAFORM_DOCS_AMD64=v0.25.1@246f1a3211c9dbbed4c4af82b856dbd40acda78816ac8cdb5203c2869b659c76
 # renovate: datasource=github-release-attachments depName=terraform-docs/terraform-docs
-ARG TERRAFORM_DOCS_ARM64=v0.20.0@371b4ed983781d1efdd8f7de06264baac41b1d80927f7fd718c405a303d863a0
+ARG TERRAFORM_DOCS_ARM64=v0.25.1@a5b4b1ae887138fe1c617fe4e1aea272511d9a7ffc2cf98b0a2aacd87b348b56
 
 RUN TERRAFORM_DOCS_VERSION=${TERRAFORM_DOCS_AMD64%@*} \
     && curl -fsSL https://github.com/terraform-docs/terraform-docs/releases/download/${TERRAFORM_DOCS_VERSION}/terraform-docs-${TERRAFORM_DOCS_VERSION}-linux-$ARCH_GO.tar.gz > terraform-docs.tar.gz \
