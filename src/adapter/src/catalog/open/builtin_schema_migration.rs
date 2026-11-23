@@ -931,7 +931,7 @@ impl Migration {
 
         self.migrate_evolve(&plan.evolve).await?;
         let new_shards = self
-            .migrate_replace(&[plan.replace.as_slice(), &allocate].concat())
+            .get_or_insert_shards(&[plan.replace.as_slice(), &allocate].concat())
             .await?;
 
         let mut migrated_objects = BTreeSet::new();
@@ -1114,7 +1114,7 @@ impl Migration {
     /// A read-only process never commits the shard the storage controller would allocate for
     /// them, so the promoted leader would allocate another. From the migration shard, every
     /// process of this version and deploy generation gets the same shards for them, given the same
-    /// global ids (see `migrate_replace`). The current leader does not know these shards, so the
+    /// global ids (see `get_or_insert_shards`). The current leader does not know these shards, so the
     /// read-only process can write them, and what it writes survives promotion.
     fn plan_allocation(&self) -> Vec<SystemObjectDescription> {
         self.system_objects
@@ -1284,7 +1284,7 @@ impl Migration {
 
     /// Get shards for `objects` from the migration shard, inserting new ones where it has none at
     /// this version and deploy generation.
-    async fn migrate_replace(
+    async fn get_or_insert_shards(
         &self,
         objects: &[SystemObjectDescription],
     ) -> anyhow::Result<BTreeMap<GlobalId, ShardId>> {
@@ -1675,7 +1675,7 @@ mod migration_shard {
         // and keep supporting both key formats.
         pub(super) deploy_generation: Option<u64>,
         /// The builtin this entry is for, set in entries for builtins that had no shard (see
-        /// `Migration::migrate_replace`).
+        /// `Migration::get_or_insert_shards`).
         ///
         /// NOTE: once a release writes this field, it must not be reverted or left out of a
         /// backport. A version that doesn't know the field decodes these entries without it. If

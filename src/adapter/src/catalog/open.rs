@@ -80,7 +80,7 @@ pub struct InitializeStateResult {
     /// shard yet, in practice new ones. Only used by 0dt migration.
     ///
     /// Derived by filtering to items with a global id in `MigrationRunResult::new_shards`, which
-    /// only `migrate_replace` populates. `Evolution` migrates in place and reuses the leader's
+    /// only `get_or_insert_shards` populates. `Evolution` migrates in place and reuses the leader's
     /// shard, so it never lands here. Read-only write paths depend on that: force-writing a shard
     /// while read-only is safe only because we exclusively own it (see
     /// `ComputeController::allow_writes_in_read_only`).
