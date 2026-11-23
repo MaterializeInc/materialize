@@ -194,12 +194,19 @@ class Disruptions:
         self.claims = Claims()
         self._observed = float("-inf")
         self._armed: ArmedKill | None = None
+        self.ddl_kills = True
 
     def configure(self, d: Draw) -> None:
         self.cooldown = d.choice((15.0, 60.0, 180.0))
         self.kill_probability = d.choice((0.0, 0.3, 0.9))
         self.manual_share = d.choice((0.0, 0.5))
         self.patch_probability = d.choice((0.0, 0.3, 0.6))
+        # One timeline in three: a rollout needs about two minutes in which
+        # the driver deletes no environmentd pod. In a 4 h run 14% of the
+        # rollouts without such a deletion reached Applied and 2% of those
+        # with one, and with these kills in every timeline 11% of the
+        # rollouts were without one after two minutes, down from 45%.
+        self.ddl_kills = d.choice((False, False, True))
 
     def _due(self, name: str) -> bool:
         if self.ctx.quiesced.is_set():
@@ -355,7 +362,7 @@ class Disruptions:
         registering a table's new schema with its shard. A process that dies
         in between leaves the two apart.
         """
-        if self.kube is None or not self._due("kill_after_ddl"):
+        if self.kube is None or not self.ddl_kills or not self._due("kill_after_ddl"):
             return Status.NOT_SENT
         armed = ArmedKill(
             target=d.choice(

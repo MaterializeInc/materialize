@@ -371,7 +371,8 @@ class Driver(hegel.StateMachine):
             f" rmw {c.history.rmw_share}, epoch {c.history.epoch_size};"
             f" counters keys {c.counters.keys};"
             f" disruption cooldown {c.disruptions.cooldown}s,"
-            f" rollout kill probability {c.disruptions.kill_probability};"
+            f" rollout kill probability {c.disruptions.kill_probability},"
+            f" kills after DDL {c.disruptions.ddl_kills};"
             f" cancel modes {c.cancel.modes} share {c.cancel.cancel_share};"
             f" system parameter changes {c.flags.enabled}"
         )

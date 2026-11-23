@@ -159,7 +159,7 @@ session rebinding models, `halt_proof.py`, `exit_evidence.py`,
 | Blue/green deployments | none | new. Staging schema and cluster, swapped in one transaction and dropped, under reads and subscriptions through the live names. After a swap whose COMMIT got no answer the order of generations is no longer judged, because the server can still apply it |
 | Exports added while a source ingests | none | new, part of `cdc.py`. The export is created under a burst of upstream transactions and read at once, in the same `SELECT` as the others, and judged at their ledger prefix. An export that equals its table at a later prefix has a property of its own |
 | System parameter changes | none | new. No check of its own |
-| Pod deletion after DDL | none | new, part of `disrupt.py`. A rule arms one deletion of an environmentd or clusterd pod, which the next DDL operation triggers a drawn delay after it is sent. `ADD COLUMN` is left out while a death in that statement leaves environmentd unable to boot |
+| Pod deletion after DDL | none | new, part of `disrupt.py`. In a drawn third of the timelines a rule arms one deletion of an environmentd or clusterd pod, which the next DDL operation triggers a drawn delay after it is sent. The other timelines leave rollouts the quiet minutes they need to complete. `ADD COLUMN` is left out while a death in that statement leaves environmentd unable to boot |
 
 ### Families still to port
 

@@ -683,6 +683,9 @@ def test_an_armed_kill_deletes_one_pod_after_the_next_ddl_operation(
     assert len(kube.deleted) == 1
 
     d.last.clear()
+    d.ddl_kills = False
+    assert d.kill_after_ddl(SeededDraw(1)) is client.Status.NOT_SENT
+    d.ddl_kills = True
     assert d.kill_after_ddl(SeededDraw(1)) is client.Status.DONE
     ctx.quiesced.set()
     d.ddl_sent("create")
