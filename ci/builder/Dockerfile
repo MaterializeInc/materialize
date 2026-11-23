@@ -456,9 +456,9 @@ RUN TERRAFORM_DOCS_VERSION=${TERRAFORM_DOCS_AMD64%@*} \
     && rm terraform-docs.tar.gz
 
 # renovate: datasource=github-release-attachments depName=mikefarah/yq
-ARG YQ_AMD64=v4.48.2@0ffc35320180d4911bc3a772934da508715e08af444cb33d4d43660065e25bcc
+ARG YQ_AMD64=v4.54.3@129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
 # renovate: datasource=github-release-attachments depName=mikefarah/yq
-ARG YQ_ARM64=v4.48.2@3c21630fda217239a5b7d718d08f08e02503098230b3abd49195d315a6dcfe45
+ARG YQ_ARM64=v4.54.3@89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
 
 RUN YQ_VERSION=${YQ_AMD64%@*} \
     && curl -fsSL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$ARCH_GO > yq \
