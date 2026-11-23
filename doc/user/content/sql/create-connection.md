@@ -936,16 +936,22 @@ authentication:
 
 * Enable IAM database authentication on the DB instance or cluster.
 * Set the `rds.iam_auth_for_replication` parameter to `1` in the DB parameter
-  group (or the DB cluster parameter group, for Multi-AZ clusters).
-  Materialize ingests data over a replication connection, and Amazon RDS does
-  not accept IAM authentication on replication connections unless this
-  parameter is set. `rds.logical_replication` must also be set to `1`.
+  group. For Amazon Aurora and for Multi-AZ DB clusters, set it in the DB
+  cluster parameter group. Materialize ingests data over a replication
+  connection, and Amazon RDS does not accept IAM authentication on replication
+  connections unless this parameter is set. `rds.logical_replication` must
+  also be set to `1`.
 * Grant the database user the `rds_iam` and `rds_replication` roles.
 * Allow the IAM role assumed by the [AWS connection](#aws) to perform the
   `rds-db:connect` action for that database user.
 
 See the Amazon RDS User Guide for instructions on [IAM database authentication](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
 and on [IAM authentication for logical replication connections](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.FeatureSupport.IAMLogicalReplication.html).
+
+If the connection validates but a source that uses it fails with `password
+authentication failed`, check that `rds.iam_auth_for_replication` is set to
+`1`. Validation uses an ordinary connection, which authenticates with IAM
+whether or not the parameter is set.
 
 {{< /tab >}}
 {{< /tabs >}}
