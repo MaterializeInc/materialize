@@ -282,6 +282,7 @@ case "$cmd" in
 
         if [[ $secrets == "true" ]]; then
             args+=(
+                --env ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON
                 --env AWS_ACCESS_KEY_ID
                 --env AWS_DEFAULT_REGION
                 --env AWS_SECRET_ACCESS_KEY

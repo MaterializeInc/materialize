@@ -287,6 +287,7 @@ ahash = { version = "0.8.12", default-features = false }
 aho-corasick = "1.1.4"
 allocation-counter = "0"
 annotate-snippets = "0.12.15"
+antithesis-instrumentation = "0.1.1"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"

@@ -1,0 +1,84 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# What the Antithesis test deploys besides the operator and the dependencies in
+# misc/helm-charts/testing. ci/test/build-antithesis.sh fills in the variables.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+# For the Materialize resource, which the driver creates.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+  persist_backend_url: "s3://minio:minio123@persist/antithesis?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+  license_key: "${LICENSE_KEY}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: driver
+  namespace: materialize
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: driver
+  namespace: materialize
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: driver
+  namespace: materialize
+spec:
+  serviceAccountName: driver
+  # The driver ends a timeline by exiting.
+  restartPolicy: Never
+  # Antithesis pulls only the images that the manifests name, and the test
+  # runs without internet access.
+  initContainers:
+  - name: pull-environmentd
+    image: ${REGISTRY}/environmentd:${TAG}
+    command: [/busybox/true]
+  - name: pull-clusterd
+    image: ${REGISTRY}/clusterd:${TAG}
+    command: [/busybox/true]
+  containers:
+  - name: driver
+    image: ${REGISTRY}/antithesis-driver:${TAG}
+    env:
+    - name: ENVIRONMENTD_IMAGE
+      value: ${REGISTRY}/environmentd:${TAG}
+    - name: SYSTEM_PARAMETERS
+      value: "${SYSTEM_PARAMETERS}"
+    # Antithesis starts the test when the driver reports `setup_complete` or
+    # when every resource is ready, whichever comes first. The driver creates
+    # this file right after the former, so that the latter cannot come first.
+    readinessProbe:
+      exec:
+        command: [test, -e, /tmp/ready]

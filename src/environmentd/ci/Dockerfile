@@ -14,6 +14,12 @@ MZFROM distroless-prod-base
 COPY environmentd entrypoint.sh /usr/local/bin/
 COPY --from=openssh /output/ssh /usr/bin/ssh
 
+# Antithesis symbolizes coverage from the binaries under /symbols.
+ARG ANTITHESIS
+USER root
+RUN ["/busybox/sh", "-c", "[ -z \"$ANTITHESIS\" ] || (mkdir /symbols && ln -s /usr/local/bin/environmentd /symbols/)"]
+USER materialize
+
 # tini reaps orphaned subprocesses and forwards signals to the whole process
 # group, including environmentd. Run entrypoint.sh through busybox `sh`
 # explicitly, as distroless has no /bin/sh.

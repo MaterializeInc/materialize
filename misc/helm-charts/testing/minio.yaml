@@ -31,7 +31,7 @@ spec:
         # images that can be pulled anonymously. It is published under every
         # Materialize release tag, so the tag names a Materialize release, not
         # a MinIO version.
-        image: materialize/minio:v26.42.0
+        image: docker.io/materialize/minio:v26.42.0
         command: [minio]
         args:
         - server
@@ -98,7 +98,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: awscli
-        image: amazon/aws-cli:2.31.19
+        image: docker.io/amazon/aws-cli:2.31.19
         env:
         - name: AWS_ACCESS_KEY_ID
           value: "minio"

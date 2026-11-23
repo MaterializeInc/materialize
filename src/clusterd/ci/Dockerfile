@@ -14,6 +14,12 @@ MZFROM distroless-prod-base
 COPY clusterd entrypoint.sh /usr/local/bin/
 COPY --from=openssh /output/ssh /usr/bin/ssh
 
+# Antithesis symbolizes coverage from the binaries under /symbols.
+ARG ANTITHESIS
+USER root
+RUN ["/busybox/sh", "-c", "[ -z \"$ANTITHESIS\" ] || (mkdir /symbols && ln -s /usr/local/bin/clusterd /symbols/)"]
+USER materialize
+
 # tini (from distroless-prod-base) is PID 1 so ssh tunnel subprocesses get
 # reaped. entrypoint.sh sets Kubernetes defaults, then execs clusterd. Run it
 # through busybox `sh` explicitly, as distroless has no /bin/sh.

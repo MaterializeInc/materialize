@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis runs everything on one node and requires that the CPU requests of
+# all pods sum to less than 1 CPU and their memory requests to less than 10 GiB.
+
+operator:
+  clusters:
+    # With swap, clusterd pods select nodes labeled `materialize.cloud/swap`.
+    swap_enabled: false
+    # A replica requests the `cpu_limit` and `memory_limit` of its size, so
+    # these sizes have neither.
+    sizes:
+      antithesis-1: {workers: 1, scale: 1, credits_per_hour: "0"}
+      antithesis-2: {workers: 2, scale: 1, credits_per_hour: "0"}
+    defaultSizes:
+      default: antithesis-1
+      catalogServer: antithesis-1
+
+environmentd:
+  defaultResources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+
+balancerd:
+  enabled: false
+
+console:
+  enabled: false
+
+# Antithesis runs without internet access.
+telemetry:
+  enabled: false

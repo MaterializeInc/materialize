@@ -49,6 +49,11 @@ def main() -> None:
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
+        if repo.rd.antithesis:
+            # Only the images that the test/antithesis harness runs.
+            names = ["environmentd", "clusterd", "orchestratord", "antithesis-driver"]
+            repo.resolve_dependencies(repo.images[name] for name in names).ensure()
+            return
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         # An image's registry visibility is the same across every build step, so
         # only verify it from the primary x86_64 build. That keeps the anonymous

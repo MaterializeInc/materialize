@@ -16,7 +16,14 @@
 //! Process utilities.
 
 /// The exit code of [`halt!`](crate::halt).
-pub const HALT_EXIT_CODE: i32 = 166;
+///
+/// Antithesis fails a run for every container exit code other than 0, 137 and
+/// 143, so its build flavor halts with 143, the exit code of a SIGTERM.
+pub const HALT_EXIT_CODE: i32 = if cfg!(feature = "antithesis") {
+    143
+} else {
+    166
+};
 
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
 ///

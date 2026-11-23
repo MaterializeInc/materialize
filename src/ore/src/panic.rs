@@ -237,6 +237,23 @@ pub fn install_enhanced_handler() {
             "{timestamp}thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}"
         );
 
+        // Antithesis fails a run for every process that dies from a signal, as
+        // on abort. These panics are designed exits (a fenced catalog epoch, an
+        // expired reader lease), so its build flavor exits like a halt instead.
+        #[cfg(feature = "antithesis")]
+        let designed = msg.contains("Fence(Epoch {")
+            || (msg.contains("current catalog epoch")
+                && msg.contains("fenced by new catalog epoch"))
+            || (msg.contains("could not fetch batch part")
+                && msg.contains("has been expired out of state"));
+        let abort = move || -> ! {
+            #[cfg(feature = "antithesis")]
+            if designed {
+                crate::process::exit_thread_safe(crate::process::HALT_EXIT_CODE);
+            }
+            process::abort()
+        };
+
         // Ideal path: spawn a thread that attempts to lock the Rust-managed
         // stderr stream and write the panic message there. Acquiring the stderr
         // lock prevents interleaving with concurrent output from the `tracing`
@@ -258,7 +275,7 @@ pub fn install_enhanced_handler() {
 
                 // Abort while still holding the stderr lock to ensure the panic
                 // is the last output printed to stderr.
-                process::abort();
+                abort();
             }
         });
 
@@ -275,7 +292,7 @@ pub fn install_enhanced_handler() {
             let _ = stderr.write_all(buf.as_bytes());
         }
 
-        process::abort();
+        abort();
     }))
 }
 

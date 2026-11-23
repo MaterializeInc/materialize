@@ -197,6 +197,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "antithesis-instrumentation"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009bd9354d773dea6b85c08fa0d929ff6c52003cbe3cf496614eff79d2895eb5"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7899,6 +7908,7 @@ dependencies = [
 name = "mz-ore"
 version = "0.1.0"
 dependencies = [
+ "antithesis-instrumentation",
  "anyhow",
  "async-trait",
  "bytemuck",

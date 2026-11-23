@@ -92,6 +92,10 @@ yansi = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
 
+# The crate builds for Linux targets only.
+[target.'cfg(target_os = "linux")'.dependencies]
+antithesis-instrumentation = { workspace = true, optional = true }
+
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
@@ -109,6 +113,9 @@ tracing-subscriber.workspace = true
 
 [features]
 default = ["tokio-console"]
+# For the Antithesis build flavor only. Links the coverage instrumentation
+# runtime and makes designed process exits acceptable to the platform.
+antithesis = ["dep:antithesis-instrumentation", "process"]
 async = [
     "async-trait",
     "futures",
