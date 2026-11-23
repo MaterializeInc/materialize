@@ -6,11 +6,10 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** finish the active scheduled-MV acceptance run. The other current
-native workflows and repaired catalog-completion fixture passed. The proposed
-ALTER SINK overlap-acquisition repair awaits approval. Its read-floor difference
-is confirmed by source, but is not yet tied to the CI timeout. Keep startup
-optimization proposals separate.
+**Next action:** obtain approval for the scoped ALTER SINK overlap-acquisition
+repair and resolve the pubsubd registry check. Native acceptance and the test-only
+Rust repair passed. The ALTER read-floor difference is confirmed by source, but
+is not yet tied to the CI timeout. Keep startup optimization proposals separate.
 
 ## Decisions in force
 
@@ -32,22 +31,22 @@ optimization proposals separate.
 
 ## Outstanding work
 
-- **CI.** [Build 144492](https://buildkite.com/materialize/test/builds/144492)
-  ran runtime integration. The registry blocker is resolved. The stale Rust
-  expectation reproduced locally and its test-only repair passes, with fresh CI
-  still required. A parallel platform check times out waiting for Iceberg sink
-  progress before the catalog write. Actual sink lag versus observation failure
-  remains unresolved. See `ci-144492/triage.md` and `alter-sink-read-floor.md`
-  there. Merge skew remains accepted.
+- **CI.** [Build 144502](https://buildkite.com/materialize/test/builds/144502)
+  again reports pubsubd as non-public on Docker Hub. Build 144492 ran runtime
+  integration but skipped the normal x86 image-build step. That did not prove
+  registry provisioning was resolved. Do not bypass the check. The stale Rust
+  expectation is repaired and verified locally, with fresh CI still required.
+  The earlier Iceberg ALTER timeout remains unexplained. See `ci-144492/triage.md`,
+  `ci-144492/alter-sink-read-floor.md` and `ci-144502/`. Merge skew remains accepted.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
   deferral on the controller. Paired cache publication could avoid duplicate
   adapter work, but needs compatibility and startup-order decisions. No such
   change is approved. See `current-controller-startup-outcome.md`.
-- **Remaining acceptance:** scheduled-MV suites are active on pinned debug
-  artifacts. No build overlaps them. The focused Rust repair retains successful
-  creation, zero reallocation and all existing deadlines.
+- **ALTER SINK decision:** the proposed repair would acquire earlier protected
+  input history for overlap, rather than reuse a later adapter grant. Do not
+  change ordinary SQL timestamp selection. Approval and a regression are pending.
 - **Two unexplained events.** A walkthrough run stopped on the resource guard
   and passed on rerun. A probe shows a guard weakness but not the original
   process. The scheduled-MV suite failed once intermittently. A recurrence of
@@ -56,13 +55,16 @@ optimization proposals separate.
 ## Verified outcomes
 
 Implementation `c1b310c5` passed the default-debug two-version walkthrough,
-DDL with combined ingestion, adapter loss, subscription identity and the 60s
-four-index workflow. Both versions wrote before and after promotion, with warmed
+DDL with combined ingestion, adapter loss, subscription identity, the 60s
+four-index workflow and scheduled/replica-targeted MV suites. Both versions wrote before and after promotion, with warmed
 execution and surviving protection preserved. Retired reopening was rejected.
 The pair shares implementation and plan encoding, not arbitrary-release
 compatibility. DDL used a stricter resource split, so do not compare its timing
 with earlier container runs. Other container runs retained the original caps.
-Evidence: `current-native-acceptance/`.
+Evidence: `current-native-acceptance/`. Its `catalog-completion-outcome.md`
+records the test-only repair's reproduced failure, passing result and checks.
+The worker is idle, with a clean source checkout and no native processes or
+running containers. Receipts are preserved locally.
 
 Targeted checks cover fixed-refresh snapshot retention and current privilege
 validation, conditional shared maintenance, catalog-derived introspection,
