@@ -46,7 +46,7 @@ SERVICES = [
         name="console-runner",
         config={
             # renovate: datasource=docker depName=node versioning=docker
-            "image": "node:22-alpine",
+            "image": "node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a",
             "volumes": [
                 f"{MZ_ROOT}:/workdir",
                 "/var/run/docker.sock:/var/run/docker.sock",

@@ -135,7 +135,7 @@ SERVICES = [
         name="console-k6",
         config={
             # renovate: datasource=docker depName=grafana/k6 versioning=docker
-            "image": "grafana/k6:1.6.0",
+            "image": "grafana/k6:1.6.0@sha256:be2a9ceb1b6ffc573277af4157135882a6d6433968b41e858ab02c5fd5847532",
             "volumes": [f"{MZ_ROOT}:/workdir"],
             "working_dir": "/workdir/console/e2e-tests/k6",
             # The summary export is written into the bind mount.

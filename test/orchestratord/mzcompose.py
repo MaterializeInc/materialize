@@ -321,7 +321,9 @@ def stop_and_remove_container(container_name: str) -> None:
 
 
 # renovate: datasource=docker depName=registry versioning=docker
-REGISTRY_PROXY_IMAGE = "registry:2"
+REGISTRY_PROXY_IMAGE = (
+    "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+)
 
 
 def pull_registry_proxy_image(max_attempts: int = 5) -> None:
@@ -5940,7 +5942,7 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
 
 OIDC_HYDRA_NAMESPACE = "hydra"
 # renovate: datasource=docker depName=oryd/hydra versioning=docker
-OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0"
+OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0@sha256:2c93beb5e5f260cb5ed5ab579d8a1c133b0ec503c933244370522a2a53695ce7"
 OIDC_HYDRA_PUBLIC_PORT = 4444
 OIDC_HYDRA_ADMIN_PORT = 4445
 OIDC_HYDRA_ISSUER = f"http://hydra-public.{OIDC_HYDRA_NAMESPACE}.svc.cluster.local:{OIDC_HYDRA_PUBLIC_PORT}"
