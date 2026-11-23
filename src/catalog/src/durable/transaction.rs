@@ -162,9 +162,18 @@ impl<'a> DryRunTransaction<'a> {
     }
 }
 
-/// Decoded durable state shared with transactions until their pending changes are committed.
+/// Durable catalog collections decoded into Rust key/value maps for transaction reads.
+///
+/// The durable handle retains this base across transactions. It represents the same
+/// collections as the protobuf [`Snapshot`], not the adapter's derived planning
+/// objects and lookup indexes. Each [`Transaction`] shares the base maps and keeps
+/// its pending writes separate.
+///
+/// Cloning shares the maps without copying their entries. Applying updates requires
+/// exclusive ownership of the affected maps, checked by [`Arc::get_mut`]. Transaction
+/// commit consumes its base references before returning the durable handle.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct TransactionSnapshot {
+pub(super) struct DecodedCatalogState {
     databases: Arc<BTreeMap<DatabaseKey, DatabaseValue>>,
     schemas: Arc<BTreeMap<SchemaKey, SchemaValue>>,
     roles: Arc<BTreeMap<RoleKey, RoleValue>>,
@@ -198,7 +207,7 @@ pub(super) struct TransactionSnapshot {
     txn_wal_shard: Arc<BTreeMap<(), TxnWalShardValue>>,
 }
 
-impl TryFrom<Snapshot> for TransactionSnapshot {
+impl TryFrom<Snapshot> for DecodedCatalogState {
     type Error = TryFromProtoError;
 
     fn try_from(snapshot: Snapshot) -> Result<Self, Self::Error> {
@@ -247,7 +256,11 @@ impl TryFrom<Snapshot> for TransactionSnapshot {
     }
 }
 
-impl TransactionSnapshot {
+impl DecodedCatalogState {
+    /// Applies an insertion or retraction to an exclusively owned decoded base.
+    ///
+    /// Retractions must precede replacement insertions and match the existing value.
+    /// Returns decoding errors and panics on violated ownership or update invariants.
     pub(super) fn apply(
         &mut self,
         kind: &crate::durable::objects::state_update::StateUpdateKind,
@@ -399,7 +412,7 @@ impl<'a> Transaction<'a> {
 
     pub(super) fn from_shared(
         durable_catalog: &'a mut dyn DurableCatalogState,
-        TransactionSnapshot {
+        DecodedCatalogState {
             databases,
             schemas,
             roles,
@@ -427,7 +440,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
-        }: TransactionSnapshot,
+        }: DecodedCatalogState,
         upper: mz_repr::Timestamp,
     ) -> Transaction<'a> {
         // For these collections uniqueness is plain equality of the name fields, so the same

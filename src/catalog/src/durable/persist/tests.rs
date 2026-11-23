@@ -16,7 +16,7 @@ use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_i
 use crate::durable::{DurableCatalogError, TestCatalogStateBuilder, test_bootstrap_args};
 
 #[mz_ore::test]
-fn test_transaction_snapshot_refresh_and_decode_recovery() {
+fn test_decoded_state_refresh_and_decode_recovery() {
     use std::sync::Arc;
 
     use mz_ore::metrics::MetricsRegistry;
@@ -28,7 +28,7 @@ fn test_transaction_snapshot_refresh_and_decode_recovery() {
     };
     use crate::durable::objects::Snapshot;
     use crate::durable::objects::serialization::proto;
-    use crate::durable::transaction::TransactionSnapshot;
+    use crate::durable::transaction::DecodedCatalogState;
 
     let setting = |value: &str| {
         StateUpdateKind::Setting(
@@ -54,7 +54,7 @@ fn test_transaction_snapshot_refresh_and_decode_recovery() {
     let original = setting("original");
     let trace = vec![(original.clone(), 1.into(), Diff::ONE)];
     let base = state
-        .transaction_snapshot(&trace)
+        .refresh_decoded_state(&trace)
         .expect("initialize cache");
     drop(base);
     let mut apply = |state: &mut CatalogStateInner, kind, diff| {
@@ -76,16 +76,16 @@ fn test_transaction_snapshot_refresh_and_decode_recovery() {
         let next = setting(&i.to_string());
         apply(&mut state, previous, Diff::MINUS_ONE);
         apply(&mut state, next.clone(), Diff::ONE);
-        assert_eq!(state.transaction_updates.len(), 2);
+        assert_eq!(state.pending_decoded_updates.len(), 2);
         previous = next;
     }
     apply(&mut state, previous, Diff::MINUS_ONE);
     apply(&mut state, original.clone(), Diff::ONE);
-    assert!(state.transaction_updates.is_empty());
+    assert!(state.pending_decoded_updates.is_empty());
     let valid_wal = wal(&ShardId::new().to_string());
     apply(&mut state, valid_wal.clone(), Diff::ONE);
     apply(&mut state, valid_wal.clone(), Diff::MINUS_ONE);
-    assert!(state.transaction_updates.is_empty());
+    assert!(state.pending_decoded_updates.is_empty());
 
     let replacement = setting("replacement");
     apply(&mut state, original, Diff::MINUS_ONE);
@@ -96,10 +96,10 @@ fn test_transaction_snapshot_refresh_and_decode_recovery() {
         (replacement.clone(), 2.into(), Diff::ONE),
         (malformed.clone(), 2.into(), Diff::ONE),
     ];
-    assert!(state.transaction_snapshot(&corrupt).is_err());
-    assert!(state.transaction_snapshot.is_none());
-    assert!(state.transaction_updates.is_empty());
-    assert!(state.transaction_snapshot(&corrupt).is_err());
+    assert!(state.refresh_decoded_state(&corrupt).is_err());
+    assert!(state.decoded_state.is_none());
+    assert!(state.pending_decoded_updates.is_empty());
+    assert!(state.refresh_decoded_state(&corrupt).is_err());
 
     apply(&mut state, malformed, Diff::MINUS_ONE);
     apply(&mut state, valid_wal.clone(), Diff::ONE);
@@ -122,9 +122,9 @@ fn test_transaction_snapshot_refresh_and_decode_recovery() {
     expected.txn_wal_shard.insert((), value);
     assert_eq!(
         state
-            .transaction_snapshot(&repaired)
+            .refresh_decoded_state(&repaired)
             .expect("rebuild repaired cache"),
-        TransactionSnapshot::try_from(expected).expect("decode expected snapshot")
+        DecodedCatalogState::try_from(expected).expect("decode expected snapshot")
     );
 }
 

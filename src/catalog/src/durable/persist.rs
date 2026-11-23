@@ -60,7 +60,7 @@ use crate::durable::objects::state_update::{
     TryIntoStateUpdateKind,
 };
 use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
-use crate::durable::transaction::{TransactionBatch, TransactionSnapshot};
+use crate::durable::transaction::{DecodedCatalogState, TransactionBatch};
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
     BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DryRunTransaction,
@@ -1630,8 +1630,8 @@ struct CatalogStateInner {
     // Decoding stays fallible at transaction entry, including for collections that
     // do not produce adapter updates. Consolidating pending changes bounds retained
     // history when a read-only handle synchronizes without opening transactions.
-    transaction_snapshot: Option<TransactionSnapshot>,
-    transaction_updates: BTreeMap<StateUpdateKind, Diff>,
+    decoded_state: Option<DecodedCatalogState>,
+    pending_decoded_updates: BTreeMap<StateUpdateKind, Diff>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
 }
@@ -1639,21 +1639,26 @@ struct CatalogStateInner {
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
-            transaction_snapshot: None,
-            transaction_updates: BTreeMap::new(),
+            decoded_state: None,
+            pending_decoded_updates: BTreeMap::new(),
             updates: VecDeque::new(),
         }
     }
 
-    fn transaction_snapshot(
+    /// Returns a shared decoded base refreshed through the supplied catalog trace.
+    ///
+    /// The caller must synchronize and validate fencing before calling this method.
+    /// The trace must include all updates delivered to this applier. Earlier base
+    /// handles must have been released before refreshing changed collections.
+    fn refresh_decoded_state(
         &mut self,
         trace: &[(StateUpdateKind, Timestamp, Diff)],
-    ) -> Result<TransactionSnapshot, TryFromProtoError> {
+    ) -> Result<DecodedCatalogState, TryFromProtoError> {
         // Decode only updates since the preceding transaction. On a decoding error,
         // discard the candidate so the next attempt rebuilds from the authoritative trace.
-        let snapshot = match self.transaction_snapshot.take() {
+        let snapshot = match self.decoded_state.take() {
             Some(mut snapshot) => {
-                let mut updates: Vec<_> = std::mem::take(&mut self.transaction_updates)
+                let mut updates: Vec<_> = std::mem::take(&mut self.pending_decoded_updates)
                     .into_iter()
                     .collect();
                 // Replacements retract the old value before inserting the new one.
@@ -1664,14 +1669,14 @@ impl CatalogStateInner {
                 snapshot
             }
             None => {
-                let mut snapshot = TransactionSnapshot::default();
+                let mut snapshot = DecodedCatalogState::default();
                 for (kind, _, diff) in trace {
                     snapshot.apply(kind, *diff)?;
                 }
                 snapshot
             }
         };
-        self.transaction_snapshot = Some(snapshot.clone());
+        self.decoded_state = Some(snapshot.clone());
         Ok(snapshot)
     }
 }
@@ -1708,9 +1713,9 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 Ok(None)
             }
             (kind, diff) => {
-                if self.transaction_snapshot.is_some() {
+                if self.decoded_state.is_some() {
                     use std::collections::btree_map::Entry;
-                    match self.transaction_updates.entry(kind.clone()) {
+                    match self.pending_decoded_updates.entry(kind.clone()) {
                         Entry::Vacant(entry) => {
                             entry.insert(diff);
                         }
@@ -1750,7 +1755,7 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
                 .transaction_step_seconds
                 .with_label_values(&["snapshot_build", "durable"])
                 .start_timer();
-            self.update_applier.transaction_snapshot(&self.snapshot)?
+            self.update_applier.refresh_decoded_state(&self.snapshot)?
         };
         let commit_ts = self.upper;
         let _timer = self
