@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-aws-types = { workspace = true, optional = true }
 mz-aws-util = { path = "../aws-util", default-features = false, features = ["rds"], optional = true }
 mz-cloud-resources = { path = "../cloud-resources", optional = true }
 mz-ore = { path = "../ore", default-features = false }
@@ -37,7 +36,6 @@ default = ["mz-build-tools/default", "replication", "schemas", "tunnel"]
 replication = ["tunnel"]
 schemas = ["mz-source-schema-change", "prost", "serde", "proptest", "mz-proto", "tunnel"]
 tunnel = [
-    "aws-types",
     "mz-aws-util",
     "mz-cloud-resources",
     "serde",

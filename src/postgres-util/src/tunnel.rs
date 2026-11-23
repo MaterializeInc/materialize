@@ -12,8 +12,7 @@ use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-use aws_types::SdkConfig;
-use mz_aws_util::rds::rds_auth_token;
+use mz_aws_util::rds::RdsIamAuth;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task::{self, AbortOnDropHandle};
@@ -22,6 +21,7 @@ use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
+use tokio_postgres::error::SqlState;
 use tokio_postgres::tls::MakeTlsConnect;
 use tracing::{info, warn};
 
@@ -92,15 +92,15 @@ pub struct Config {
     tunnel: TunnelConfig,
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
-    /// If set, authenticate with an AWS IAM authentication token generated
-    /// from this configuration, in place of a password.
-    aws_config: Option<SdkConfig>,
+    /// If set, authenticate with an AWS IAM authentication token in place of
+    /// a password.
+    iam_auth: Option<RdsIamAuth>,
 }
 
 impl Config {
     /// Creates a new configuration.
     ///
-    /// If `aws_config` is `Some`, each connection authenticates to Amazon RDS
+    /// If `iam_auth` is `Some`, each connection authenticates to Amazon RDS
     /// or Aurora with a freshly generated AWS IAM authentication token, and
     /// any password set on `inner` is ignored.
     pub fn new(
@@ -108,14 +108,14 @@ impl Config {
         tunnel: TunnelConfig,
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
-        aws_config: Option<SdkConfig>,
+        iam_auth: Option<RdsIamAuth>,
     ) -> Result<Self, PostgresError> {
         let config = Self {
             inner,
             tunnel,
             in_task,
             ssh_timeout_config,
-            aws_config,
+            iam_auth,
         };
 
         // Early validate that the configuration contains only a single TCP
@@ -203,19 +203,42 @@ impl Config {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
 
-        if let Some(aws_config) = &self.aws_config {
-            // Sign the token for the address of the database itself, not for
-            // any tunnel in front of it. A token is valid for 15 minutes and
-            // is only checked when a connection opens, so generate a new one
-            // for every connection.
-            let (host, port) = self.address()?;
-            let Some(user) = self.inner.get_user() else {
-                bail_generic!("AWS IAM authentication requires a user");
-            };
-            let token = rds_auth_token(host, port, user, aws_config).await?;
-            postgres_config.password(token);
-        }
+        let iam_token = match &self.iam_auth {
+            None => None,
+            Some(iam_auth) => {
+                // Sign the token for the address of the database itself, not
+                // for any tunnel in front of it. A token is valid for 15
+                // minutes and is only checked when a connection opens, so
+                // generate a new one for every connection.
+                let (host, port) = self.address()?;
+                let Some(user) = self.inner.get_user() else {
+                    bail_generic!("AWS IAM authentication requires a user");
+                };
+                let token = iam_auth.token(host, port, user).await?;
+                postgres_config.password(&token.token);
+                Some(token)
+            }
+        };
 
+        let result = self
+            .connect_with_config(task_name, postgres_config, ssh_tunnel_manager)
+            .await;
+        if let Err(error) = &result
+            && let Some(iam_auth) = &self.iam_auth
+            && let Some(token) = &iam_token
+            && is_authentication_failure(error)
+        {
+            iam_auth.token_rejected(token);
+        }
+        result
+    }
+
+    async fn connect_with_config(
+        &self,
+        task_name: &str,
+        mut postgres_config: tokio_postgres::Config,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<Client, PostgresError> {
         let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
             mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
             mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
@@ -351,5 +374,20 @@ impl Config {
 
     pub fn get_dbname(&self) -> Option<&str> {
         self.inner.get_dbname()
+    }
+}
+
+/// Reports whether the server refused the connection's credentials.
+///
+/// These are the SQLSTATE class 28 errors. Amazon RDS reports a rejected IAM
+/// authentication token as one of them.
+fn is_authentication_failure(error: &PostgresError) -> bool {
+    match error {
+        PostgresError::Postgres(e) => {
+            let code = e.code();
+            code == Some(&SqlState::INVALID_PASSWORD)
+                || code == Some(&SqlState::INVALID_AUTHORIZATION_SPECIFICATION)
+        }
+        _ => false,
     }
 }

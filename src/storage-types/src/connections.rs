@@ -2651,12 +2651,12 @@ impl PostgresConnection<InlinedConnection> {
             }
         };
 
-        let aws_config = match self.aws_connection.as_ref() {
+        let iam_auth = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(
                 aws_ref
                     .connection
-                    .load_sdk_config_with_cached_credentials(
+                    .load_rds_iam_auth(
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
@@ -2671,7 +2671,7 @@ impl PostgresConnection<InlinedConnection> {
             tunnel,
             params.ssh_timeout_config,
             in_task,
-            aws_config,
+            iam_auth,
         )?)
     }
 
@@ -3034,12 +3034,12 @@ impl MySqlConnection<InlinedConnection> {
             }
         };
 
-        let aws_config = match self.aws_connection.as_ref() {
+        let iam_auth = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(
                 aws_ref
                     .connection
-                    .load_sdk_config_with_cached_credentials(
+                    .load_rds_iam_auth(
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
@@ -3058,7 +3058,7 @@ impl MySqlConnection<InlinedConnection> {
                 .parameters
                 .mysql_source_timeouts
                 .clone(),
-            aws_config,
+            iam_auth,
         )?)
     }
 

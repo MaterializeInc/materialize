@@ -7703,7 +7703,6 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "aws-types",
  "chrono",
  "fancy-regex",
  "itertools 0.15.0",
@@ -8268,7 +8267,6 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "aws-types",
  "mz-aws-util",
  "mz-build-tools",
  "mz-cloud-resources",

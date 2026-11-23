@@ -21,6 +21,8 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4::SigningParams;
 use aws_sigv4::sign::v4::signing_params::BuildError;
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 const AWS_TOKEN_EXPIRATION_SECONDS: u64 = 900;
@@ -68,11 +70,85 @@ pub async fn rds_auth_token(
     username: &str,
     aws_config: &SdkConfig,
 ) -> Result<String, RdsTokenError> {
+    let token = sign_rds_auth_token(host, port, username, aws_config).await?;
+    Ok(token.token)
+}
+
+/// An RDS IAM authentication token.
+#[derive(Debug, Clone)]
+pub struct RdsAuthToken {
+    /// The token, to use as the database password.
+    pub token: String,
+    /// The access key ID of the credentials that signed the token.
+    pub access_key_id: String,
+}
+
+/// Authenticates database connections to Amazon RDS with AWS IAM.
+#[derive(Clone)]
+pub struct RdsIamAuth {
+    aws_config: SdkConfig,
+    on_token_rejected: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+}
+
+impl fmt::Debug for RdsIamAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RdsIamAuth")
+            .field("aws_config", &self.aws_config)
+            .field("on_token_rejected", &self.on_token_rejected.is_some())
+            .finish()
+    }
+}
+
+impl RdsIamAuth {
+    /// Signs tokens with the credentials provider of `aws_config`.
+    pub fn new(aws_config: SdkConfig) -> RdsIamAuth {
+        RdsIamAuth {
+            aws_config,
+            on_token_rejected: None,
+        }
+    }
+
+    /// Calls `hook` with the access key ID of the signing credentials whenever
+    /// [`RdsIamAuth::token_rejected`] reports a rejected token.
+    ///
+    /// A provider that caches credentials uses this to drop credentials that
+    /// AWS no longer honors, such as those of a revoked role session.
+    pub fn on_token_rejected(mut self, hook: impl Fn(&str) + Send + Sync + 'static) -> RdsIamAuth {
+        self.on_token_rejected = Some(Arc::new(hook));
+        self
+    }
+
+    /// Like [`rds_auth_token`].
+    pub async fn token(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+    ) -> Result<RdsAuthToken, RdsTokenError> {
+        sign_rds_auth_token(host, port, username, &self.aws_config).await
+    }
+
+    /// Reports that the database rejected `token` as an authentication
+    /// failure.
+    pub fn token_rejected(&self, token: &RdsAuthToken) {
+        if let Some(hook) = &self.on_token_rejected {
+            hook(&token.access_key_id);
+        }
+    }
+}
+
+async fn sign_rds_auth_token(
+    host: &str,
+    port: u16,
+    username: &str,
+    aws_config: &SdkConfig,
+) -> Result<RdsAuthToken, RdsTokenError> {
     let credentials = aws_config
         .credentials_provider()
         .ok_or(RdsTokenError::MissingCredentialsProvider)?
         .provide_credentials()
         .await?;
+    let access_key_id = credentials.access_key_id().to_owned();
 
     // mirror existing SDK behaviour: default to us-east-1,
     let region = aws_config
@@ -116,7 +192,10 @@ pub async fn rds_auth_token(
         url.query_pairs_mut().append_pair(key, val);
     }
 
-    Ok(url.as_str()["https://".len()..].to_owned())
+    Ok(RdsAuthToken {
+        token: url.as_str()["https://".len()..].to_owned(),
+        access_key_id,
+    })
 }
 
 #[cfg(test)]
