@@ -196,14 +196,14 @@ candidate. It cannot by itself remove empty completeness writes or journal bytes
 
 The 60s comparison also found legacy frontier progress retained by dynamic SQL
 branches. Native-only cleanup removed those alternatives together with their SQL
-dependencies. The current comparison below measures remaining overhead, not an
+dependencies. The historical comparison below measures remaining overhead, not an
 isolated benefit from that removal. Remaining
 native observation relays are not alternate execution owners and cannot simply
 be stopped while their SQL inputs remain.
 
 ### Native-only resource comparison
 
-A fresh debug pair compares native `922ca8ed` with upstream `d9a2c5dc`, at 60s
+A recorded debug pair compares native `922ca8ed` with upstream `d9a2c5dc`, at 60s
 protection publication. Both passed two five-minute idle windows after five
 minutes of warmup, SQL validation, post-window profiles and cleanup. Common
 settings and aggregate limits match. No aggregate CPU throttling or memory-limit
@@ -240,6 +240,30 @@ Detailed attribution, profiles, provenance and limits are in
 `~/.local/share/aj/m3-evidence/native-only/native-ci-recovery/native-only-load-report.md`.
 
 ### Priorities after native-only cleanup
+
+The measurements above are not final-head CPU, memory or backend rates. Since
+`922ca8ed`, replica catalog opening gained deferred builtin-view optimization,
+shared catalog-derived rows replaced more adapter publishers, and conditional
+maintenance and retry paths changed. The matched startup comparison below
+measures one effect of replica deferral, not its steady-state memory benefit.
+Do not carry the old process footprints or exact component rates forward.
+
+The current architecture still maintains independent durable catalog outputs,
+replica frontier observations and incremental catalog followers. Their progress
+and reconstruction obligations remain even with 60s protection publication.
+`collection_mgmt.rs` still advances idle collection completeness. These are
+concrete places to investigate the historical write amplification, not evidence
+that every former excess operation remains or that the old rates still apply.
+The ALTER SINK overlap repair changes a DDL acquisition choice, and making the
+standalone relay image local-only changes packaging. Neither removes periodic
+work. No additional steady-state saving is claimed for them.
+
+An uninstrumented current controller has no metrics or profiling HTTP routes.
+The old observer requires diagnostic routes and its backend ledger requires
+Persist instrumentation. Reusing that observer unchanged cannot produce a
+complete current comparison. A future matched measurement must state its
+instrumentation and missing counters explicitly, rather than count unavailable
+controller counters as zero or silently reuse the old trace's attribution.
 
 Keep the 60s publication setting and Persist unchanged. Repeat measurements
 before assigning savings to a proposed optimization.
