@@ -54,8 +54,10 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     # Constant folding
     "Negative multiplicity in constant result",
     # Constant folding a DISTINCT/INTERSECT/reduce over a repeat_row collection
-    # with negative diffs. Seen in repeat_row (builds 17205, 17214).
-    "constant folding encountered reduce on collection with non-positive multiplicities",
+    # with negative diffs. Seen in repeat_row (builds 17205, 17214). The
+    # evaluator behind this is shared with row-wise subquery evaluation, so the
+    # message does not name constant folding.
+    "reduce on a collection with non-positive multiplicities",
     # Scalar subquery guard
     "negative number of rows produced in subquery",
 ]
