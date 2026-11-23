@@ -18,8 +18,8 @@
 //! serialized form.
 //!
 //! [`FuncRegistry::build`] records those properties for one representative
-//! instance of every variant, and `tests/func_registry.rs` in
-//! `mz-compute-types` compares the result against checked-in snapshots, one
+//! instance of every variant, and `tests/builtin_registry.rs` in
+//! `mz-catalog` compares the result against checked-in snapshots, one
 //! per half of [`Record`]. The module exists only under the `func-registry` feature,
 //! which that test enables. Production builds carry none of it. For `#[sqlfunc]`
 //! functions the record also carries the declaration text, the types-only
@@ -93,7 +93,7 @@ pub struct FuncRegistry {
 /// the function computes, and the source they were read from.
 ///
 /// The two halves are snapshotted separately by the test in
-/// `mz-compute-types`. A change to `properties` of a shipped LIR version
+/// `mz-catalog`. A change to `properties` of a shipped LIR version
 /// requires a version bump. A change to `source` alone is informational.
 #[derive(Debug)]
 pub struct Record<P> {

@@ -54,10 +54,10 @@ in `mz-expr` or `mz-repr`.
 Applies when the diff touches `UnaryFunc`, `BinaryFunc`, or `VariadicFunc`
 (`src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/**`, `#[sqlfunc]`
 bodies).
-- The registry snapshots under `src/compute-types/tests/snapshots/` are
-  regenerated in the same PR. A property change moves `func_registry.json`
-  and the current version's entry in `func_registry_digests.json`, a
-  `#[sqlfunc]` declaration or body change moves `func_registry_source.json`
+- The registry snapshots under `src/catalog/tests/snapshots/` are
+  regenerated in the same PR. A property change moves `builtin_registry.json`
+  and the current version's entry in `builtin_registry_digests.json`, a
+  `#[sqlfunc]` declaration or body change moves `builtin_registry_source.json`
   alone, and a change to a hand-written variant's body moves neither.
 - Every new variant with a payload has a `Sample` in
   `src/expr/src/scalar/func/registry.rs`, with a labeled second sample when a
@@ -65,7 +65,7 @@ bodies).
 - A removed function, a changed property, or a `body_fingerprint` change that
   alters results for some input bumps `LIR_VERSION` in
   `src/compute-types/src/plan.rs` if that version has shipped, and leaves the
-  old digest in `func_registry_digests.json` untouched. Additions need no
+  old digest in `builtin_registry_digests.json` untouched. Additions need no
   bump.
 - The PR description names the added, removed, and changed functions and,
   for body changes, states whether results change.
