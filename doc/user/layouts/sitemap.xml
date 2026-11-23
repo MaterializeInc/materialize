@@ -9,7 +9,7 @@
   by the Apache License, Version 2.0.
 */ -}}
 {{- /*
-  Hugo's built-in sitemap template, from v0.152.2, with absolute URLs. The
+  Hugo's built-in sitemap template, from v0.170.1, with absolute URLs. The
   sitemap protocol requires a full URL in every <loc>, and the built-in
   template emits .Permalink, which has no host under a bare-path baseURL such
   as "/docs".
@@ -23,17 +23,12 @@
     <loc>{{ partial "absolute-permalink.html" . }}</loc>{{ if not .Lastmod.IsZero }}
     <lastmod>{{ safeHTML ( .Lastmod.Format "2006-01-02T15:04:05-07:00" ) }}</lastmod>{{ end }}{{ with .Sitemap.ChangeFreq }}
     <changefreq>{{ . }}</changefreq>{{ end }}{{ if ge .Sitemap.Priority 0.0 }}
-    <priority>{{ .Sitemap.Priority }}</priority>{{ end }}{{ if .IsTranslated }}{{ range .Translations }}
+    <priority>{{ .Sitemap.Priority }}</priority>{{ end }}{{ if .IsTranslated }}{{ range .AllTranslations }}
     <xhtml:link
                 rel="alternate"
-                hreflang="{{ .Language.LanguageCode }}"
+                hreflang="{{ .Language.Locale }}"
                 href="{{ partial "absolute-permalink.html" . }}"
-                />{{ end }}
-    <xhtml:link
-                rel="alternate"
-                hreflang="{{ .Language.LanguageCode }}"
-                href="{{ partial "absolute-permalink.html" . }}"
-                />{{ end }}
+                />{{ end }}{{ end }}
   </url>
     {{- end -}}
   {{ end }}

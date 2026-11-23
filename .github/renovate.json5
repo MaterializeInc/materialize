@@ -20,8 +20,8 @@
   "constraints": {"rust": "1.98.1"},
   "customDatasources": {
     "gcloud": {
-      "defaultRegistryUrlTemplate": "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json",
-      "transformTemplates": ["{\"releases\": [{\"version\": version}]}"]
+      "defaultRegistryUrlTemplate": "https://storage.googleapis.com/storage/v1/b/cloud-sdk-release/o?matchGlob=google-cloud-cli-%5B0-9%5D*-linux-x86_64.tar.gz&fields=items(name,timeCreated)&maxResults=1000",
+      "transformTemplates": ["{\"releases\": [items.{\"version\": $split(name, '-')[3], \"releaseTimestamp\": timeCreated}]}"]
     },
     "inspector-sbomgen": {
       "defaultRegistryUrlTemplate": "https://docs.aws.amazon.com/inspector/latest/user/sbom-generator-versions.html",
@@ -39,7 +39,7 @@
         "/\\.(sh|bash|py)$/"
       ],
       "matchStrings": [
-        "#[ \\t]*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: packageName=(?<packageName>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n(?:[^\\n=]*?=|[^\\n:]*?:)[ \\t]*[\"']?(?:[^\\s\"'@]+:)?(?<currentValue>[^\\s\"'@,]+)(?:@(?<currentDigest>(?:sha256:)?[a-f0-9]+))?",
+        "#[ \\t]*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: packageName=(?<packageName>\\S+))?(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n(?:[^\\n=]*?=|[^\\n:]*?:)[ \\t]*(?:\\([ \\t]*\\n[ \\t]*)?[\"']?(?:[^\\s\"'@]+:)?(?<currentValue>[^\\s\"'@,]+)(?:@(?<currentDigest>(?:sha256:)?[a-f0-9]+))?",
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)[ \\t]*\\nprintf [\"'](?<currentValue>[^\"']+)"
       ],
       // Regex managers need a template to append a previously absent digest.
@@ -191,6 +191,14 @@
       "additionalBranchPrefix": "cargo-wasm-"
     },
     {
+      // js-sys requires an exact wasm-bindgen version. Bumping the manifest
+      // lets Cargo resolve both crates together when updating the lock file.
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["misc/wasm/**/Cargo.toml"],
+      "matchPackageNames": ["wasm-bindgen"],
+      "rangeStrategy": "bump"
+    },
+    {
       "matchManagers": ["cargo"],
       "matchFileNames": ["misc/materialize-sdk/**/Cargo.toml"],
       "additionalBranchPrefix": "cargo-sdk-"
@@ -240,6 +248,15 @@
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["docker"],
       "pinDigests": true
+    },
+    {
+      // Renovate checks the tag's age during lookup, then omits the timestamp
+      // from digest updates. Skip the duplicate branch check once lookup has
+      // returned a digest and cleared its pending checks.
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "matchJsonata": ["$exists(newDigest) and $not(pendingChecks = true) and $not($exists(releaseTimestamp)) and minimumReleaseAgeBehaviour = 'timestamp-optional'"],
+      "minimumReleaseAge": null
     },
     {
       // This tag also selects ZooKeeper and Schema Registry images, whose
