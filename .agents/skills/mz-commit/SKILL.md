@@ -42,9 +42,9 @@ Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 ### LIR plan changes: regenerate the schema registry
 
 The stable LIR format lets optimized plans be stored durably and reused, so
-two snapshot tests in `mz-compute-types` pin what a stored plan looks like
-and what it means. Both key off `LIR_VERSION` in
-`src/compute-types/src/plan.rs`.
+two snapshot tests pin what a stored plan looks like and what it means:
+`lir_schema` in `mz-compute-types` and `builtin_registry` in `mz-catalog`.
+Both key off `LIR_VERSION` in `src/compute-types/src/plan.rs`.
 
 `lir_schema` traces the serde schema of everything reachable from
 `LirRelationExpr` into `tests/snapshots/lir_v{LIR_VERSION}.json`. Run it
