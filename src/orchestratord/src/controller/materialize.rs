@@ -335,8 +335,9 @@ impl Context {
     }
 
     /// Checks that no other Materialize resource uses, or is about to use,
-    /// the resource ID that `mz` asks for in its
-    /// [`LAST_KNOWN_RESOURCE_ID_ANNOTATION`].
+    /// `resource_id`, the ID that `mz`'s initial status gets. That ID comes
+    /// from `mz`'s [`LAST_KNOWN_RESOURCE_ID_ANNOTATION`] if it has one, and is
+    /// random otherwise.
     ///
     /// Resources are named after the resource ID, so two Materialize
     /// resources sharing one would manage, and tear down, each other's
@@ -364,7 +365,7 @@ impl Context {
             };
             if existing_resource_id == Some(resource_id) {
                 return Err(Error::Anyhow(anyhow::anyhow!(
-                    "Materialize resource {}/{} sets the {LAST_KNOWN_RESOURCE_ID_ANNOTATION} annotation to {resource_id}, which Materialize resource {}/{} already uses. Delete the old resource first, or remove the annotation to get a new resource ID.",
+                    "Materialize resource {}/{} would use resource ID {resource_id}, which Materialize resource {}/{} already uses. If it comes from the {LAST_KNOWN_RESOURCE_ID_ANNOTATION} annotation, delete the old resource first, or remove the annotation to get a new resource ID.",
                     mz.namespace(),
                     mz.name_unchecked(),
                     existing_mz.namespace(),
@@ -398,30 +399,18 @@ impl k8s_controller::Context for Context {
         let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
+        let status = mz.status();
         if mz.status.is_none() {
             let step = metadata.step("initialize_status");
-            // The initial status can be seeded from annotations. Report bad
-            // values here, since nothing reads the annotations again once the
-            // status exists.
-            let initial = mz.initial_status_annotations().map_err(|e| {
-                Error::Anyhow(anyhow::anyhow!(
-                    "cannot initialize the status of materialize resource {}/{}: {e}",
-                    mz.namespace(),
-                    mz.name_unchecked(),
-                ))
-            })?;
-            if let Some(resource_id) = &initial.resource_id {
-                self.check_resource_id_conflicts(&client, mz, resource_id)
-                    .await?;
-            }
-            self.update_status(metadata, &mz_api, mz, mz.status(), true)
+            self.check_resource_id_conflicts(&client, mz, &status.resource_id)
+                .await?;
+            self.update_status(metadata, &mz_api, mz, status, true)
                 .await?;
             step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
         }
-        let status = mz.status();
 
         let step = metadata.step("resolve_environment_id");
         let backend_secret = secret_api.get(&mz.spec.backend_secret_name).await?;

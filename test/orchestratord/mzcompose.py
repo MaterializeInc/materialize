@@ -4086,22 +4086,18 @@ def workflow_recreate_with_last_known_status(
     assert resources_named_after(resource_id), "No resources named after the ID"
     print(f"Resource ID {resource_id} is on generation 2")
 
-    # While the old resource exists, no other resource can take its ID, and a
-    # value that is not a resource ID is rejected. Neither gets a status.
+    # While the old resource exists, no other resource can take its ID, and it
+    # gets no status.
     other = {"materialize": copy.deepcopy(definition["materialize"])}
     other["materialize"]["metadata"]["name"] = "12345678-1234-1234-1234-123456789013"
-    for value, expected in [
-        ("Not-An-ID", f"invalid {resource_id_annotation}"),
-        (resource_id, "already uses"),
-    ]:
-        other["materialize"]["metadata"]["annotations"] = {
-            resource_id_annotation: value
-        }
-        kubectl_apply_retrying_webhook(
-            ["kubectl", "apply", "-f", "-"], [other["materialize"]]
-        )
-        note = wait_for_failure_note(other, lambda note: expected in note)
-        print(f"Annotation value {value} was rejected: {note}")
+    other["materialize"]["metadata"]["annotations"] = {
+        resource_id_annotation: resource_id
+    }
+    kubectl_apply_retrying_webhook(
+        ["kubectl", "apply", "-f", "-"], [other["materialize"]]
+    )
+    note = wait_for_failure_note(other, lambda note: "already uses" in note)
+    print(f"Resource ID {resource_id} was refused: {note}")
     other_name = other["materialize"]["metadata"]["name"]
     other_status = json.loads(
         spawn.capture(

@@ -38,13 +38,16 @@ use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
-/// Seeds the resource ID of a recreated Materialize resource.
+/// Sets the resource ID of a new Materialize resource, so that a resource
+/// recreated on existing data, for example after a restore, keeps the names of
+/// the resource it replaces.
 ///
-/// Delete the old resource with foreground cascading deletion before
-/// recreating it with this annotation. The old resource then exists until the
-/// resources named after its ID are gone, and the operator refuses the ID for
-/// as long as it does. After a background delete, the new resource would apply
-/// over resources that are still being garbage collected.
+/// The operator refuses an ID that another Materialize resource still has. So
+/// delete the old resource with `--cascade=foreground`: it then stays until
+/// Kubernetes has deleted everything named after its ID, and the new resource
+/// can't start until that's done. With the default background deletion, the
+/// old resource disappears at once, and the new one would reuse names that
+/// Kubernetes is still deleting.
 pub const LAST_KNOWN_RESOURCE_ID_ANNOTATION: &str = "materialize.cloud/last-known-resource-id";
 pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
 
@@ -52,7 +55,8 @@ pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
 /// resource's status when a resource is recreated on existing data.
 ///
 /// These are read from annotations only when the status is first created.
-/// Changing the annotations afterward has no effect.
+/// Changing the annotations afterward has no effect. An invalid value is
+/// logged and ignored, as if the annotation weren't set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InitialStatusAnnotations {
     /// From [`LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION`]. Without it, the
@@ -838,26 +842,17 @@ pub mod v1alpha1 {
             }
         }
 
-        /// Parses the annotations that seed the initial status.
-        ///
-        /// Call this before creating the initial status, to report invalid
-        /// values, which [`Self::status`] ignores.
-        pub fn initial_status_annotations(
-            &self,
-        ) -> Result<InitialStatusAnnotations, anyhow::Error> {
-            InitialStatusAnnotations::parse(self.annotations())
-        }
-
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
 
                 // If we're creating the initial status on a recreated
                 // Environment, restore what the old resource's status held.
-                let initial = self.initial_status_annotations().unwrap_or_else(|e| {
-                    warn!("ignoring initial status annotations: {e}");
-                    InitialStatusAnnotations::default()
-                });
+                let initial =
+                    InitialStatusAnnotations::parse(self.annotations()).unwrap_or_else(|e| {
+                        warn!("ignoring initial status annotations: {e}");
+                        InitialStatusAnnotations::default()
+                    });
 
                 status.resource_id = initial.resource_id.unwrap_or_else(new_resource_id);
 
@@ -2159,26 +2154,17 @@ pub mod v1 {
             }
         }
 
-        /// Parses the annotations that seed the initial status.
-        ///
-        /// Call this before creating the initial status, to report invalid
-        /// values, which [`Self::status`] ignores.
-        pub fn initial_status_annotations(
-            &self,
-        ) -> Result<InitialStatusAnnotations, anyhow::Error> {
-            InitialStatusAnnotations::parse(self.annotations())
-        }
-
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
 
                 // If we're creating the initial status on a recreated
                 // Environment, restore what the old resource's status held.
-                let initial = self.initial_status_annotations().unwrap_or_else(|e| {
-                    warn!("ignoring initial status annotations: {e}");
-                    InitialStatusAnnotations::default()
-                });
+                let initial =
+                    InitialStatusAnnotations::parse(self.annotations()).unwrap_or_else(|e| {
+                        warn!("ignoring initial status annotations: {e}");
+                        InitialStatusAnnotations::default()
+                    });
 
                 status.resource_id = initial.resource_id.unwrap_or_else(new_resource_id);
 
@@ -3053,7 +3039,7 @@ mod tests {
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
     use super::{
-        DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION,
+        DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, InitialStatusAnnotations,
         LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, LAST_KNOWN_RESOURCE_ID_ANNOTATION,
         RolloutRequestTimeout,
     };
@@ -3088,7 +3074,7 @@ mod tests {
             (LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION, "3"),
             (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "abcde01234"),
         ]);
-        restored.initial_status_annotations().unwrap();
+        InitialStatusAnnotations::parse(restored.metadata.annotations.as_ref().unwrap()).unwrap();
         let status = restored.status();
         assert_eq!(status.resource_id, "abcde01234");
         assert_eq!(status.active_generation, 3);
@@ -3125,7 +3111,9 @@ mod tests {
             (LAST_KNOWN_RESOURCE_ID_ANNOTATION, "abcde012345"),
         ] {
             let invalid = mz(&[(annotation, value)]);
-            let err = invalid.initial_status_annotations().unwrap_err();
+            let err =
+                InitialStatusAnnotations::parse(invalid.metadata.annotations.as_ref().unwrap())
+                    .unwrap_err();
             assert!(err.to_string().contains(annotation), "{err}");
             let status = invalid.status();
             assert!(crate::crd::is_valid_resource_id(&status.resource_id));
