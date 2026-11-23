@@ -6,12 +6,12 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** revalidate image delivery and the broad parallel Iceberg case
-in fresh CI. The unused standalone pubsubd image is now non-publishable. Native
-tests retain their existing materialized multi-call image and separate relay
-process, with public-image checks unchanged. The scoped ALTER SINK repair has
-a failing-before, passing-after Iceberg witness. Its role in the original broad
-CI timeout remains unverified. Keep startup optimization proposals separate.
+**Next action:** diagnose the Cluster 4 lag-gate failure in CI 144537 and verify
+the fixture's observation preconditions. Hydration and native frontier publication
+are independent, so stopping a hydrated replica need not leave a published
+frontier for the lag comparison. Isolated debug and optimized runs passed, so
+this is not yet the established cause of that CI failure. Keep startup
+optimization proposals separate.
 
 ## Decisions in force
 
@@ -33,15 +33,12 @@ CI timeout remains unverified. Keep startup optimization proposals separate.
 
 ## Outstanding work
 
-- **CI.** [Build 144536](https://buildkite.com/materialize/test/builds/144536)
-  reports pubsubd as non-public on Docker Hub. Build 144492 ran runtime
-  integration but skipped the normal x86 image-build step. That did not prove
-  registry provisioning was resolved. The publication repair passes the real
-  dependency-graph regression and native launcher/composition checks locally.
-  Fresh CI is still required. The production Console E2E job also timed out
-  filling its API-key modal. Its cause is not established. See
-  `pubsub-image-publication/`, `ci-144492/triage.md` and
-  `alter-sink-overlap/outcome.md`. Merge skew remains accepted.
+- **CI.** [Build 144537](https://buildkite.com/materialize/test/builds/144537)
+  failed Cluster 4 waiting for the outgoing index frontier to exceed the paused
+  replacement's frontier. CI captured no frontier rows at failure. Do not treat
+  passing isolated runs as a repair. Evidence: `ci-144537/` and
+  `cluster-lag-gate/`. Merge skew remains accepted and pre-native upgrade smoke
+  remains unsupported.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
@@ -55,12 +52,21 @@ CI timeout remains unverified. Keep startup optimization proposals separate.
 
 ## Verified outcomes
 
+Fresh CI built the normal x86 images without publishing standalone pubsubd.
+Both parallel platform-check partitions passed, with the Iceberg commit-interval
+check actually executed. Cargo tests, native adapter-loss, catalog publication,
+warm promotion, hydration stability and Console E2E jobs also passed. Native
+tests retain the materialized multi-call image and separate relay process.
+Public-image checks are unchanged. See `ci-144537/` and
+`pubsub-image-publication/`.
+
 ALTER SINK acquires earlier protected input history through existing durable
 admission rather than reusing a later adapter grant. Ordinary SQL acquisition
 is unchanged. The debug Iceberg witness timed out at 300s before the repair and
 completed in 0.238s afterward, with external rows verified. The unchanged
 commit-interval check passed before and after. Targeted protection tests and
-independent review cover admission and races. See `alter-sink-overlap/outcome.md`
+independent review cover admission and races. The full adapter library suite
+also passed. See `alter-sink-overlap/outcome.md`
 for the exact witness, limits, receipts and failed harness attempts.
 
 Implementation `c1b310c5` passed the default-debug two-version walkthrough,
@@ -72,8 +78,8 @@ compatibility. DDL used a stricter resource split, so do not compare its timing
 with earlier container runs. Other container runs retained the original caps.
 Evidence: `current-native-acceptance/`. Its `catalog-completion-outcome.md`
 records the test-only repair's reproduced failure, passing result and checks.
-The worker is idle, with a clean source checkout and no native processes or
-running containers. Receipts are preserved locally.
+Receipts are preserved locally. These are not full acceptance reruns after the
+ALTER SINK repair.
 
 Targeted checks cover fixed-refresh snapshot retention and current privilege
 validation, conditional shared maintenance, catalog-derived introspection,
@@ -96,8 +102,10 @@ scheduled for 2026-11-23 19:02:53 UTC. Recheck access and extend it.
 
 Scratch worktrees:
 
-- `/home/ubuntu/materialize-m3-final-head`: clean checkout of `c1b310c5`.
-  The profiling overlay is restored and its runtimes and containers removed.
+- `/home/ubuntu/materialize-m3-final-head`: `c1b310c5` with the recorded five-file
+  ALTER SINK overlay and a diagnostic-only first-frontier-publication delay.
+  The delay's source receipt is in `cluster-lag-gate/publication-delay-source.json`.
+  Restore that owned patch before ordinary runs. The profiling overlay is removed.
   Current primary binaries are in `current-controller-baseline/artifacts/`.
   The scoped ALTER SINK binaries are in `alter-sink-overlap/artifacts-after/`,
   with separate source and binary receipts. They have targeted coverage, not a

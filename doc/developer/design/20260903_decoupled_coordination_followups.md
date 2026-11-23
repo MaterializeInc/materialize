@@ -391,26 +391,17 @@ than a full-inventory sweep or a new ownership protocol.
 
 ## Temporary-item cleanup after native retirement
 
-The legacy temporary-item upgrade tests require durable reclamation after their
-session is excluded. Native promotion must preserve those sessions, but explicit
-retirement currently does not replace that cleanup. `retired_realizations` removes
-execution metadata/protection, not Items. The remaining bulk temporary-item
-reclamation call is the unprotected catalog-open path in durable `persist.rs`.
-Graceful session close remains separate.
+Implemented: temporary Items retain their session UUID and record the adapter
+execution incarnation in the creation transaction. Normal disconnect cleanup
+remains. Adapters reclaim Items after catalog-confirmed execution replacement or
+deployment retirement, not promotion. `mz_sessions` remains observational.
 
-Items store their session UUID, while `mz_sessions_raw` reports client incarnation
-asynchronously. `coord/retired_rows.rs` can remove retired session observations
-without reclaiming their Items, so joining those observations is not a durable
-ownership contract. This is the unresolved ownership issue discussed on October 30,
-not a new regression from the lifecycle harness changes.
-
-Approved separate repair: retain the session UUID for visibility and store the
-existing adapter execution incarnation on temporary Items in the same creation
-transaction. Keep normal disconnect cleanup. Adapters reclaim Items only after
-catalog-confirmed execution replacement or deployment retirement, preserving
-surviving sessions and promotion alone. Do not add a creation transaction,
-controllerd maintenance owner or per-connection catalog record. `mz_sessions`
-remains observational. Implementation and lifecycle verification remain outstanding.
+The native cleanup fixture verified disconnect, crashed-owner replacement,
+promotion preservation and explicit retirement in both protection modes against
+default-debug `8ef1fc1b` binaries. It proves reclamation-WAL enqueue, not physical
+shard deletion. This is same-build coverage, not a distinct-version result.
+Evidence: `native-ci-recovery/temporary-cleanup-outcome.md` in the M3 evidence
+directory. This ownership repair is no longer outstanding.
 
 ## Native source-status latency
 
