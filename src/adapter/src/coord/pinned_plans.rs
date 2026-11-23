@@ -16,6 +16,10 @@
 //! test can thereby create items on one release and run their plans on the
 //! next.
 //!
+//! Only the LIR plan is substituted. The optimized MIR plan and the dataflow
+//! metainfo, including optimizer notices and index usage, still describe the
+//! fresh plan.
+//!
 //! The directory belongs to one environment, like its persist state. A file
 //! left from another environment is instantiated against whatever item now
 //! has its id.
@@ -26,7 +30,7 @@ use std::path::PathBuf;
 use std::{fs, io};
 
 use mz_compute_types::dataflows::LirDataflowDescription;
-use mz_compute_types::plan::pinned::PinnedDataflow;
+use mz_compute_types::plan::pinned::{PinError, PinnedDataflow};
 use mz_repr::GlobalId;
 use tracing::debug;
 
@@ -103,9 +107,13 @@ impl Coordinator {
 
         match PinnedDataflow::pin(plan.clone(), self.catalog().state()) {
             Ok(pinned) => files.store(id, &pinned),
-            // Dataflows over builtins or unstable dependencies are routine
-            // and simply run unpinned.
-            Err(e) => debug!("not pinning {id}: {e}"),
+            // Dataflows that depend on builtins are routine and run unpinned.
+            Err(
+                e @ (PinError::BuiltinCollection(_)
+                | PinError::BuiltinRelation { .. }
+                | PinError::UnstableDependency { .. }),
+            ) => debug!("not pinning {id}: {e}"),
+            Err(e) => panic!("pinning the plan for {id}: {e}"),
         }
         plan
     }
