@@ -25,6 +25,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::VersionedData;
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
@@ -40,7 +41,9 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, State};
+use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, RunPart, State};
+use crate::internal::state_diff::StateDiff;
+use crate::internal::state_versions::{StateVersions, UntypedStateVersionsIter};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -81,6 +84,12 @@ pub(crate) enum Command {
 
     /// Prints information about blob usage for a shard
     BlobUsage(StateArgs),
+
+    /// Checks that every blob referenced by a live state version exists, as JSON
+    AuditBlobs(StateArgs),
+
+    /// Reports the controller since, upper and size in updates from one shard state
+    AuditFrontiers(StateArgs),
 
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
@@ -166,6 +175,16 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
         }
         Command::ShardStats(args) => {
             shard_stats(&args.blob_uri).await?;
+        }
+        Command::AuditBlobs(args) => {
+            let versions = args.open().await?;
+            let report = audit_blobs(&versions, args.shard_id()).await?;
+            println!("{}", json!(report));
+        }
+        Command::AuditFrontiers(args) => {
+            let versions = args.open().await?;
+            let report = audit_frontiers(&versions, args.shard_id()).await?;
+            println!("{}", json!(report));
         }
     }
 
@@ -684,6 +703,230 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+struct LiveShard {
+    diffs: Vec<VersionedData>,
+    earliest: UntypedState<u64>,
+    current: UntypedState<u64>,
+}
+
+enum LoadedShard {
+    Uninitialized,
+    Live(LiveShard),
+    /// A rollup referenced by the head of consensus is absent from blob.
+    MissingRollup(PartialRollupKey),
+}
+
+/// Reconstructs the endpoints of a single consensus scan. The ordinary state
+/// iterator retries a missing rollup indefinitely, which would hide data loss.
+async fn load_live_shard(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<LoadedShard, anyhow::Error> {
+    let diffs = versions.fetch_all_live_diffs(&shard_id).await;
+    let (Some(first), Some(last)) = (diffs.first(), diffs.last()) else {
+        return Ok(LoadedShard::Uninitialized);
+    };
+    let earliest_seqno = first.seqno;
+    let latest_rollup_key =
+        StateDiff::<u64>::decode(&versions.cfg.build_version, last.data.clone()).latest_rollup_key;
+    let Some(mut current) = versions
+        .fetch_rollup_at_key::<u64>(&shard_id, &latest_rollup_key)
+        .await
+    else {
+        return Ok(LoadedShard::MissingRollup(latest_rollup_key));
+    };
+    current.apply_encoded_diffs(&versions.cfg, &versions.metrics, &diffs);
+    // GC removes a rollup from state only after truncating consensus past it,
+    // so a consistent scan always finds the earliest live diff's rollup here.
+    let earliest_rollup_key = current
+        .rollups()
+        .get(&earliest_seqno)
+        .map(|rollup| rollup.key.clone())
+        .ok_or_else(|| {
+            anyhow!("head of {shard_id} has no rollup for the earliest live diff {earliest_seqno}")
+        })?;
+    let Some(earliest) = versions
+        .fetch_rollup_at_key::<u64>(&shard_id, &earliest_rollup_key)
+        .await
+    else {
+        return Ok(LoadedShard::MissingRollup(earliest_rollup_key));
+    };
+    Ok(LoadedShard::Live(LiveShard {
+        diffs,
+        earliest,
+        current,
+    }))
+}
+
+/// Rollup keys are never re-added. A key still referenced and missing on a
+/// second load could not have been deleted by a concurrent GC.
+async fn load_live_shard_confirmed(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<LoadedShard, anyhow::Error> {
+    let mut previous_missing = None;
+    for _ in 0..5 {
+        match load_live_shard(versions, shard_id).await? {
+            LoadedShard::MissingRollup(key) => {
+                if previous_missing.as_ref() == Some(&key) {
+                    return Ok(LoadedShard::MissingRollup(key));
+                }
+                previous_missing = Some(key);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            loaded => return Ok(loaded),
+        }
+    }
+    Err(anyhow!(
+        "rollups referenced by the head of {shard_id} disappeared on repeated loads"
+    ))
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct BlobAuditReport {
+    since: Option<Vec<u64>>,
+    missing: Vec<String>,
+}
+
+/// Checks every batch part, hollow run and rollup referenced at or above
+/// seqno_since without taking a read hold that would prevent GC.
+async fn audit_blobs(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<BlobAuditReport, anyhow::Error> {
+    let mut report = BlobAuditReport::default();
+    let live = match load_live_shard_confirmed(versions, shard_id).await? {
+        LoadedShard::Uninitialized => return Ok(report),
+        LoadedShard::MissingRollup(key) => {
+            report.missing.push(key.complete(&shard_id).to_string());
+            return Ok(report);
+        }
+        LoadedShard::Live(live) => live,
+    };
+    let current = live.current.check_ts_codec(&shard_id)?;
+    let seqno_since = current.seqno_since();
+    report.since = Some(current.collections.trace.since().elements().to_vec());
+
+    let mut referenced = BTreeMap::new();
+    let mut runs = BTreeMap::new();
+    let mut states = UntypedStateVersionsIter::new(
+        shard_id,
+        versions.cfg.clone(),
+        Arc::clone(&versions.metrics),
+        live.earliest,
+        live.diffs,
+    )
+    .check_ts_codec()?;
+    while let Some(state) = states.next(|_| {}) {
+        if state.seqno < seqno_since {
+            continue;
+        }
+        for rollup in state.collections.rollups.values() {
+            referenced.insert(rollup.key.complete(&shard_id).to_string(), state.seqno);
+        }
+        for part in state.collections.trace.batches().flat_map(|b| &b.parts) {
+            match part {
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    referenced.insert(part.key.complete(&shard_id).to_string(), state.seqno);
+                }
+                RunPart::Single(BatchPart::Inline { .. }) => {}
+                RunPart::Many(run) => {
+                    runs.insert(run.key.clone(), (part.clone(), state.seqno));
+                }
+            }
+        }
+    }
+
+    let mut absent = Vec::new();
+    for (run, seqno) in runs.into_values() {
+        let mut parts = pin!(run.part_stream(shard_id, &*versions.blob, &versions.metrics));
+        while let Some(part) = parts.next().await {
+            match part {
+                Ok(part) => {
+                    if let BatchPart::Hollow(part) = part.as_ref() {
+                        let last = referenced
+                            .entry(part.key.complete(&shard_id).to_string())
+                            .or_insert(seqno);
+                        *last = (*last).max(seqno);
+                    }
+                }
+                Err(missing_run) => absent.push((missing_run.to_string(), seqno)),
+            }
+        }
+    }
+    // Listing avoids fetching the contents of every referenced part.
+    versions
+        .blob
+        .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |m| {
+            referenced.remove(m.key);
+        })
+        .await?;
+    for (key, seqno) in referenced {
+        if versions.blob.get(&key).await?.is_none() {
+            absent.push((key, seqno));
+        }
+    }
+    if absent.is_empty() {
+        return Ok(report);
+    }
+    // GC may have released state versions between the scan and the missing GETs.
+    let fresh_seqno_since = match load_live_shard_confirmed(versions, shard_id).await? {
+        LoadedShard::Live(fresh) => fresh.current.check_ts_codec(&shard_id)?.seqno_since(),
+        LoadedShard::MissingRollup(key) => {
+            report.missing.push(key.complete(&shard_id).to_string());
+            return Ok(report);
+        }
+        LoadedShard::Uninitialized => {
+            return Err(anyhow!(
+                "{shard_id} lost all of its live diffs during the audit"
+            ));
+        }
+    };
+    report.missing.extend(
+        absent
+            .into_iter()
+            .filter_map(|(key, seqno)| (seqno >= fresh_seqno_since).then_some(key)),
+    );
+    Ok(report)
+}
+
+#[derive(Debug, serde::Serialize)]
+struct FrontierAuditReport {
+    since: Vec<u64>,
+    upper: Vec<u64>,
+    updates: usize,
+}
+
+/// Reads the controller's critical since (or the shard since if unregistered)
+/// and the export bootstrap state without taking a read hold.
+async fn audit_frontiers(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> anyhow::Result<Option<FrontierAuditReport>> {
+    let diffs = versions.fetch_recent_live_diffs::<u64>(&shard_id).await;
+    if diffs.0.is_empty() {
+        return Ok(None);
+    }
+    let state = versions
+        .fetch_current_state::<u64>(&shard_id, diffs.0)
+        .await
+        .check_ts_codec(&shard_id)?;
+    let trace = &state.collections.trace;
+    if state.collections.is_tombstone() {
+        return Ok(None);
+    }
+    let since = state
+        .collections
+        .critical_readers
+        .get(&PersistClient::CONTROLLER_CRITICAL_SINCE)
+        .map_or_else(|| trace.since(), |reader| &reader.since);
+    Ok(Some(FrontierAuditReport {
+        since: since.elements().to_vec(),
+        upper: trace.upper().elements().to_vec(),
+        updates: trace.batches().map(|b| b.len).sum(),
+    }))
+}
+
 /// The following is a very terrible hack that no one should draw inspiration from. Currently State
 /// is generic over <K, V, T, D>, with KVD being represented as phantom data for type safety and to
 /// detect persisted codec mismatches. However, reading persisted States does not require actually
@@ -778,5 +1021,164 @@ impl Codec64 for O {
 
     fn decode(buf: [u8; 8]) -> Self {
         Self(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_dyncfg::ConfigUpdates;
+    use timely::progress::Antichain;
+
+    use crate::Diagnostics;
+    use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES};
+    use crate::critical::Opaque;
+    use crate::tests::new_test_client;
+
+    use super::*;
+
+    async fn shard_with_parts(config: &ConfigUpdates) -> (PersistClient, ShardId) {
+        let client = new_test_client(config).await;
+        client.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        client.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let shard_id = ShardId::new();
+        let (mut write, _read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        write
+            .expect_compare_and_append(&[(("a".into(), "1".into()), 0, 1)], 0, 1)
+            .await;
+        (client, shard_id)
+    }
+
+    fn state_versions(client: &PersistClient) -> StateVersions {
+        StateVersions::new(
+            client.cfg.clone(),
+            Arc::clone(&client.consensus),
+            Arc::clone(&client.blob),
+            Arc::clone(&client.metrics),
+        )
+    }
+
+    async fn shard_keys(
+        client: &PersistClient,
+        shard_id: ShardId,
+    ) -> Vec<(String, PartialBlobKey)> {
+        let mut keys = Vec::new();
+        client
+            .blob
+            .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |m| {
+                let (_, partial) = BlobKey::parse_ids(m.key).expect("valid key");
+                keys.push((m.key.to_owned(), partial));
+            })
+            .await
+            .expect("listable");
+        keys
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn audit_blobs_reports_deleted_blobs(dyncfgs: ConfigUpdates) {
+        let (client, shard_id) = shard_with_parts(&dyncfgs).await;
+        let versions = state_versions(&client);
+
+        let report = audit_blobs(&versions, shard_id)
+            .await
+            .expect("audit succeeds");
+        assert!(report.since.is_some());
+        assert!(report.missing.is_empty(), "{report:?}");
+
+        let mut deleted = BTreeSet::new();
+        for (key, partial) in shard_keys(&client, shard_id).await {
+            if let PartialBlobKey::Batch(..) = partial {
+                client.blob.delete(&key).await.expect("deletable");
+                deleted.insert(key);
+            }
+        }
+        let report = audit_blobs(&versions, shard_id)
+            .await
+            .expect("audit succeeds");
+        assert!(!report.missing.is_empty(), "{report:?}");
+        for missing in &report.missing {
+            assert!(deleted.contains(missing), "{missing:?}");
+        }
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn audit_blobs_reports_deleted_head_rollup(dyncfgs: ConfigUpdates) {
+        let (client, shard_id) = shard_with_parts(&dyncfgs).await;
+        let mut deleted = BTreeSet::new();
+        for (key, partial) in shard_keys(&client, shard_id).await {
+            if let PartialBlobKey::Rollup(..) = partial {
+                client.blob.delete(&key).await.expect("deletable");
+                deleted.insert(key);
+            }
+        }
+
+        let report = audit_blobs(&state_versions(&client), shard_id)
+            .await
+            .expect("audit succeeds");
+        assert_eq!(report.missing.len(), 1, "{report:?}");
+        assert!(deleted.contains(&report.missing[0]));
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn audit_frontiers_reports_reader_sinces(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let shard_id = ShardId::new();
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        write
+            .expect_compare_and_append(&[(("a".into(), "1".into()), 0, 1)], 0, 3)
+            .await;
+        let mut critical = client
+            .open_critical_since::<String, String, u64, i64>(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&0i64),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("codec match");
+        critical
+            .compare_and_downgrade_since(
+                &Opaque::encode(&0i64),
+                (&Opaque::encode(&0i64), &Antichain::from_elem(2)),
+            )
+            .await
+            .expect("opaque matches");
+
+        let report = audit_frontiers(&state_versions(&client), shard_id)
+            .await
+            .expect("audit succeeds");
+        let report = report.expect("initialized shard");
+        assert_eq!(report.upper, vec![3]);
+        assert_eq!(report.updates, 1);
+        // The leased reader still holds the shard since at zero.
+        assert_eq!(report.since, vec![2]);
+        drop(read);
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn audits_report_uninitialized_shard(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let versions = state_versions(&client);
+        let shard_id = ShardId::new();
+        assert!(
+            audit_blobs(&versions, shard_id)
+                .await
+                .unwrap()
+                .since
+                .is_none()
+        );
+        assert!(
+            audit_frontiers(&versions, shard_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

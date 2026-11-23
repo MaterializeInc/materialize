@@ -38,6 +38,7 @@ acknowledged writes.
 | `kill`, `kill_after_ddl` | Deletes environmentd, clusterd and orchestratord pods, also a fraction of a second after a DDL statement was sent |
 | `roll` | Requests 0dt rollouts to a new generation, promotes the manual ones, deletes pods in their phases, and changes the spec while one is promoting. The active generation never decreases, and an up-to-date resource runs its spec |
 | `write_to_candidate` | A generation that orchestratord has not told to promote acknowledges no write sent straight to its pod |
+| Persist shard audits | Read-only `persistcli inspect` checks sample live and unmapped shards for missing blobs. A live collection must retain its shard. Each source export with data must hold its remap since below its upper |
 | after faults stop | Every check above passes again, the Postgres source and the Kafka round trip catch up, every replica is online, and the Materialize resource is up to date |
 
 A timeline draws how much DDL and how many pod deletions it gets, including

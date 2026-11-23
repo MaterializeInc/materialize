@@ -20,12 +20,13 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import psycopg
 from antithesis.assertions import always, reachable, unreachable  # pyright: ignore
 from antithesis.lifecycle import setup_complete  # pyright: ignore
 from antithesis.random import AntithesisRandom  # pyright: ignore
+from persist_audit import audit
 
 KUBERNETES = "KUBERNETES_SERVICE_HOST" in os.environ
 NAMESPACE = "materialize-environment"
@@ -349,14 +350,15 @@ def kafka_read(w: Worker) -> None:
 def ddl(w: Worker) -> None:
     """One step in the life of a view, a table or the cluster, so that kills
     land between any two of them."""
-    view, table = f"scratch{w.n}", f"scratch_t{w.n}"
+    view, table = f"scratch{w.n}", f"scratch_t{rnd.randrange(2)}"
     statements = [
         f"CREATE MATERIALIZED VIEW IF NOT EXISTS {view} IN CLUSTER c AS {SUMS}",
         f"CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER c ON {view}",
         f"DROP MATERIALIZED VIEW IF EXISTS {view} CASCADE",
         f"CREATE TABLE IF NOT EXISTS {table} (id bigint)",
         f"INSERT INTO {table} SELECT max(id) FROM ledger",
-        f"DROP TABLE IF EXISTS {table}",
+        f"CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER s ON {table}",
+        f"DROP TABLE IF EXISTS {table} CASCADE",
         f"ALTER CLUSTER c SET (REPLICATION FACTOR {rnd.randint(1, 2)})",
         f"ALTER CLUSTER c SET (SIZE '{rnd.choice(SIZES)}')",
     ]
@@ -582,6 +584,11 @@ def setup() -> None:
         "CREATE TABLE ledger2 (id bigint, k int, v int)",
         "CREATE TABLE counter (k int, v bigint)",
         "CREATE TABLE probe (x int)",
+        # The first read-only generation can still be reading this index when
+        # the active generation drops the table with CASCADE (PER-163).
+        "CREATE TABLE scratch_t0 (id bigint)",
+        "INSERT INTO scratch_t0 VALUES (0)",
+        "CREATE DEFAULT INDEX IN CLUSTER s ON scratch_t0",
         f"INSERT INTO counter SELECT generate_series(1, {KEYS}) - 1, 0",
         f"CREATE MATERIALIZED VIEW sums IN CLUSTER c AS {SUMS}",
         # The counters change in place, so they retract through this join.
@@ -616,7 +623,27 @@ def setup() -> None:
         retry(rule.__name__, lambda: rule(w))
 
 
-def recover(workers: list[threading.Thread]) -> None:
+def persist_backends() -> tuple[str, str]:
+    if KUBERNETES:
+        urls = kubectl(
+            "get",
+            "secret",
+            "materialize-backend",
+            "-n",
+            NAMESPACE,
+            "-o",
+            'jsonpath={.data.metadata_backend_url}{" "}{.data.persist_backend_url}',
+        ).split()
+        metadata, blob = (base64.b64decode(url).decode() for url in urls)
+        parts = urlparse(metadata)
+        query = parse_qsl(parts.query) + [("options", "--search_path=consensus")]
+        consensus = parts._replace(query=urlencode(query)).geturl()
+    else:
+        consensus, blob = os.environ["CONSENSUS_URI"], os.environ["BLOB_URI"]
+    return consensus, blob
+
+
+def recover(workers: list[threading.Thread], backends: tuple[str, str]) -> None:
     """Stops the faults and asserts that everything recovers."""
     quiesced.set()
     log("stopping faults")
@@ -659,6 +686,15 @@ def recover(workers: list[threading.Thread]) -> None:
             request_rollout()
         return not up_to_date(cr) and f"not up to date: {phase(cr)}"
 
+    def persist() -> Any:
+        return audit(
+            mz_session("mz_system", "-c cluster=mz_catalog_server"),
+            *backends,
+            rnd,
+            lambda: False,
+            deadline,
+        )
+
     def recovers(check: Callable[[], Any]) -> None:
         # Until the check neither raises nor returns a problem.
         while True:
@@ -673,18 +709,19 @@ def recover(workers: list[threading.Thread]) -> None:
 
     # Side by side: a timeline seldom lives for minutes once faults stop.
     problems: dict[str, dict[str, str]] = {}
-    checks = [tables, pg_source, kafka, replicas, applied]
+    checks = [tables, pg_source, kafka, replicas, persist, applied]
     threads = [threading.Thread(target=recovers, args=(check,)) for check in checks]
     for thread in threads:
         thread.start()
     # A rollout in progress takes minutes, so the others are asserted first.
     for thread in threads[:-1]:
         thread.join()
-    t, p, k, r = (problems[check.__name__] for check in checks[:-1])
+    t, p, k, r, shards = (problems[check.__name__] for check in checks[:-1])
     always(not t, "every check passes again after faults stop", t)
     always(not p, "the Postgres source catches up after faults stop", p)
     always(not k, "the Kafka sink read back equals its view after faults stop", k)
     always(not r, "every replica is online after faults stop", r)
+    always(not shards, "persist shards can be audited after faults stop", shards)
     threads[-1].join()
     a = problems["applied"]
     always(not a, "the resource is up to date after faults stop", a)
@@ -703,6 +740,7 @@ def main() -> None:
         request_rollout("ManuallyPromote")
         while phase(resource()) != "ReadyToPromote":
             time.sleep(2)
+    backends = persist_backends()
     setup_complete({"host": mz_host})
     # The pod's readiness probe. Antithesis also starts the test once every
     # resource is ready, which must not come before the setup is complete.
@@ -740,6 +778,16 @@ def main() -> None:
     # One thread follows the rollouts, so that the generations are compared in
     # the order read.
     rules = [weights] * WORKERS + ([{roll: 1}] if KUBERNETES else [])
+
+    def audit_shards(w: Worker) -> None:
+        audit(
+            mz_session("mz_system", "-c cluster=mz_catalog_server"),
+            *backends,
+            rnd,
+            quiesced.is_set,
+        )
+
+    rules.append({audit_shards: 1})
     workers = [
         threading.Thread(target=work, args=(n, r), daemon=True)
         for n, r in enumerate(rules)
@@ -755,7 +803,7 @@ def main() -> None:
         time.sleep(1)
         if KUBERNETES and time.monotonic() - started > 60 and rnd.random() < 1 / 60:
             break
-    recover(workers)
+    recover(workers, backends)
     # Outside Antithesis the SDK only records assertions, in this file.
     output = Path(os.environ.get("ANTITHESIS_SDK_LOCAL_OUTPUT", os.devnull)).read_text()
     asserts = [
