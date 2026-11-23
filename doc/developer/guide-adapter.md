@@ -110,10 +110,18 @@ publication and commit. If asynchronous optimization is invalidated, release DDL
 admission before replanning so a queued statement can take its turn.
 
 MV allocation also retains purification's transaction-owned holds across backoff.
-For fixed REFRESH/AS OF births, structural invalidation returns a serialization
-error rather than repurifying the statement. Re-evaluating AT CREATION would
-silently choose a different snapshot. Metadata-only retries retain the chosen
-timestamp. Automatic births may replan, and EXPLAIN remains transient.
+Fixed REFRESH/AS OF births retain their timestamp and protection across unrelated
+catalog changes. Revalidate captured logical dependencies and selected physical
+imports, including their transitive definitions and collection bindings. A changed
+or dropped dependency rejects the statement. Also retain the target database and
+schema names: stored SQL names the target namespace, so its rename or removal
+invalidates preparation even if every input is unchanged. Capture validity against
+the catalog used to plan, not a newer state reached during protection acquisition.
+Recheck creation and dependency-usage privileges against the current catalog before
+commit, including current role memberships. Unchanged definitions do not imply
+unchanged authorization. Replacement/drop sets still require the full structural
+revision. Never repurify AT CREATION to obtain a new snapshot. Automatic births may
+replan, and EXPLAIN remains transient.
 
 Dequeuing serialized DDL reserves its existing guard before asynchronous catalog
 certification. Resume below transaction setup and lock acquisition, but recheck

@@ -10,10 +10,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ReplicaId;
 use mz_repr::CatalogItemId;
 use mz_sql::catalog::CatalogItem;
+use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::RoleMetadata;
 
@@ -33,28 +35,25 @@ use crate::catalog::Catalog;
 /// roles surface as a user-facing error instead of panicking later when the persisted SQL is
 /// re-parsed during catalog application.
 ///
-/// Opt-in: callers that perform a read-modify-write of a dependency's `create_sql` (e.g.
-/// `ALTER CONNECTION ... ROTATE KEYS`, see SQL-272) can additionally arm a `create_sql`-hash
-/// check via [`Self::with_dependency_hash_check`]. When armed, `check` re-hashes each
-/// dependency's `create_sql` and fails with [`AdapterError::ConcurrentDependencyMutation`] on a
-/// mismatch. The check must stay opt-in: a benign concurrent `RENAME` rewrites the dependency's
-/// `create_sql` and would otherwise spuriously fail read-only plans like peeks and SUBSCRIBE,
-/// whose optimized dataflows are unaffected by a rename (dependencies are referenced by stable
-/// id).
+/// Opt-in: plans retaining dependency definitions across catalog changes can arm
+/// [`Self::with_dependency_hash_check`]. It checks SQL definitions and collection
+/// bindings, including replacements that preserve SQL. The check stays opt-in:
+/// a concurrent RENAME changes `create_sql` but need not invalidate read-only
+/// plans such as peeks and SUBSCRIBE, whose dataflows use stable IDs.
 #[derive(Debug, Clone)]
 pub struct PlanValidity {
     /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
     /// Objects on which the plan depends.
     dependency_ids: BTreeSet<CatalogItemId>,
-    /// Hash of each dependency's `create_sql` at the time this plan was built. Empty unless
-    /// `check_dependency_hashes` is set. When set, `check` compares the live hash against the
-    /// captured one; a mismatch means the dependency was concurrently modified.
+    /// Captured definition and collection-binding hashes. Empty unless
+    /// `check_dependency_hashes` is set. A mismatch rejects retained preparation.
     dependency_hashes: BTreeMap<CatalogItemId, u64>,
     /// Whether `check` should compare `dependency_hashes` against the catalog. Off by default;
-    /// armed by [`Self::with_dependency_hash_check`] for the narrow set of plans that
-    /// read-modify-write a dependency's `create_sql`.
+    /// armed by [`Self::with_dependency_hash_check`] for plans that require
+    /// unchanged dependency definitions and bindings.
     check_dependency_hashes: bool,
+    target_name: Option<(QualifiedItemName, FullItemName, ConnectionId)>,
     cluster_id: Option<ComputeInstanceId>,
     replica_target: Option<ReplicaId>,
     role_metadata: RoleMetadata,
@@ -73,23 +72,36 @@ impl PlanValidity {
             dependency_ids,
             dependency_hashes: BTreeMap::new(),
             check_dependency_hashes: false,
+            target_name: None,
             cluster_id,
             replica_target,
             role_metadata,
         }
     }
 
-    /// Arm the `create_sql`-hash check on this validity. Use only for plans that
-    /// read-modify-write a dependency's `create_sql` (e.g. `ALTER CONNECTION ... ROTATE KEYS`).
-    /// Snapshots the current `create_sql` of every id already in `dependency_ids`; subsequent
+    /// Arm definition and collection-binding validation for retained plans and
+    /// read-modify-write operations (e.g. `ALTER CONNECTION ... ROTATE KEYS`).
+    /// Captures every id already in `dependency_ids`; subsequent
     /// calls to [`Self::extend_dependencies`] will also capture hashes.
     pub fn with_dependency_hash_check(mut self, catalog: &Catalog) -> Self {
         self.check_dependency_hashes = true;
         self.dependency_hashes = self
             .dependency_ids
             .iter()
-            .filter_map(|id| hash_item_create_sql(catalog, *id).map(|h| (*id, h)))
+            .filter_map(|id| hash_dependency_definition(catalog, *id).map(|h| (*id, h)))
             .collect();
+        self
+    }
+
+    /// Preserve the namespace embedded in a prepared definition's stored SQL.
+    pub fn with_target_name_check(
+        mut self,
+        catalog: &Catalog,
+        name: QualifiedItemName,
+        conn_id: ConnectionId,
+    ) -> Self {
+        let full_name = catalog.resolve_full_name(&name, Some(&conn_id));
+        self.target_name = Some((name, full_name, conn_id));
         self
     }
 
@@ -100,7 +112,7 @@ impl PlanValidity {
     ) {
         for id in ids {
             if self.dependency_ids.insert(id) && self.check_dependency_hashes {
-                if let Some(hash) = hash_item_create_sql(catalog, id) {
+                if let Some(hash) = hash_dependency_definition(catalog, id) {
                     self.dependency_hashes.insert(id, hash);
                 }
             }
@@ -109,10 +121,23 @@ impl PlanValidity {
 
     /// Returns an error if the current catalog no longer has all dependencies, or — when the
     /// hash check is armed via [`Self::with_dependency_hash_check`] — if any dependency's
-    /// `create_sql` has changed since this `PlanValidity` was built.
+    /// definition or collection binding has changed since preparation.
     pub fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
             return Ok(());
+        }
+        if let Some((name, expected, conn_id)) = &self.target_name {
+            if catalog
+                .try_get_schema(
+                    &name.qualifiers.database_spec,
+                    &name.qualifiers.schema_spec,
+                    conn_id,
+                )
+                .is_none()
+                || catalog.resolve_full_name(name, Some(conn_id)) != *expected
+            {
+                return Err(AdapterError::DDLTransactionRace);
+            }
         }
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
@@ -137,10 +162,10 @@ impl PlanValidity {
             }
         }
         // Ids don't mutate and aren't reused, so a missing entry means the dependency was
-        // dropped. When the hash check is armed, a `create_sql` mismatch additionally means the
+        // dropped. When the hash check is armed, a definition/binding mismatch means the
         // dependency was concurrently modified between plan time and now.
         for id in self.dependency_ids.iter() {
-            let Some(entry) = catalog.try_get_entry(id) else {
+            let Some(_) = catalog.try_get_entry(id) else {
                 return Err(AdapterError::ConcurrentDependencyDrop {
                     dependency_kind: "catalog item",
                     dependency_id: id.to_string(),
@@ -148,7 +173,8 @@ impl PlanValidity {
             };
             if self.check_dependency_hashes {
                 if let Some(expected) = self.dependency_hashes.get(id) {
-                    let current = hash_create_sql(entry.create_sql());
+                    let current =
+                        hash_dependency_definition(catalog, *id).expect("dependency exists");
                     if current != *expected {
                         return Err(AdapterError::ConcurrentDependencyMutation {
                             dependency_id: id.to_string(),
@@ -189,17 +215,17 @@ impl PlanValidity {
     }
 }
 
-/// Returns the hash of `id`'s `create_sql`, or `None` if the catalog has no such entry.
-fn hash_item_create_sql(catalog: &Catalog, id: CatalogItemId) -> Option<u64> {
-    catalog
-        .try_get_entry(&id)
-        .map(|entry| hash_create_sql(entry.create_sql()))
-}
-
-fn hash_create_sql(sql: &str) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    sql.hash(&mut h);
-    h.finish()
+/// Hashes the dependency's definition and bindings, or returns None if absent.
+fn hash_dependency_definition(catalog: &Catalog, id: CatalogItemId) -> Option<u64> {
+    catalog.try_get_entry(&id).map(|entry| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        entry.create_sql().hash(&mut h);
+        // A collection replacement can preserve SQL while changing the binding.
+        for id in entry.global_ids() {
+            id.hash(&mut h);
+        }
+        h.finish()
+    })
 }
 
 #[cfg(test)]

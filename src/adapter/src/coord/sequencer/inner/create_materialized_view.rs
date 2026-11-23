@@ -54,6 +54,47 @@ use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, catalog};
 
+/// Retained fixed births may outlive unrelated DDL, but not a change to their
+/// logical dependencies or selected physical imports. Capture from the planning
+/// snapshot, never from the catalog observed after optimization.
+fn extend_materialized_view_dependencies(
+    validity: &mut PlanValidity,
+    catalog: &catalog::Catalog,
+    ids: impl IntoIterator<Item = CatalogItemId>,
+) {
+    let mut pending: Vec<_> = ids.into_iter().collect();
+    let mut dependencies = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if dependencies.insert(id) {
+            if let Some(entry) = catalog.try_get_entry(&id) {
+                pending.extend(entry.uses());
+            }
+        }
+    }
+    validity.extend_dependencies(catalog, dependencies);
+}
+
+fn revalidate_materialized_view_revision(
+    catalog: &catalog::Catalog,
+    validity: &mut PlanValidity,
+    revision: &mut u64,
+    fixed_birth: bool,
+    can_revalidate: bool,
+) -> Result<(), AdapterError> {
+    if *revision != catalog.transient_revision() {
+        if !fixed_birth {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        if !can_revalidate {
+            // Replacement/drop sets require the full structural revision.
+            return Err(AdapterError::DDLTransactionRace);
+        }
+        validity.check(catalog)?;
+        *revision = catalog.transient_revision();
+    }
+    Ok(())
+}
+
 /// Reuses a compatible candidate, or replaces both global plans and their raw
 /// notices using an optimizer restricted to `indexes`. The caller must protect
 /// the final imports at its frozen timestamp before writing the candidate.
@@ -469,13 +510,33 @@ impl Coordinator {
         // ...)` racing with the off-thread optimizer) are caught between
         // stages instead of panicking later when the persisted SQL is
         // re-parsed during catalog application.
-        let validity = PlanValidity::new(
+        let mut validity = PlanValidity::new(
             self.catalog(),
             resolved_ids.items().copied().collect(),
             Some(*cluster_id),
             *target_replica,
             session.role_metadata().clone(),
         );
+        if matches!(explain_ctx, ExplainContext::None)
+            && (refresh_schedule.is_some() || plan.materialized_view.as_of.is_some())
+        {
+            validity = validity
+                .with_dependency_hash_check(self.catalog())
+                .with_target_name_check(
+                    self.catalog(),
+                    plan.name.clone(),
+                    session.conn_id().clone(),
+                );
+            extend_materialized_view_dependencies(
+                &mut validity,
+                self.catalog(),
+                resolved_ids.items().copied().chain(
+                    expr_depends_on
+                        .iter()
+                        .map(|id| self.catalog().resolve_item_id(id)),
+                ),
+            );
+        }
 
         // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {
@@ -523,28 +584,30 @@ impl Coordinator {
     async fn create_materialized_view_optimize(
         &mut self,
         ctx: &ExecuteContext,
-        stage: CreateMaterializedViewOptimize,
+        mut stage: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let mv = &stage.plan.materialized_view;
         let fixed_birth = matches!(stage.explain_ctx, ExplainContext::None)
             && (mv.refresh_schedule.is_some() || mv.as_of.is_some());
-        // Purification has already fixed a refresh timestamp. Replanning raw
-        // SQL could evaluate AT CREATION again at a different snapshot.
-        let invalidated = || {
-            if fixed_birth {
-                AdapterError::DDLTransactionRace
-            } else {
-                AdapterError::CatalogSnapshotChanged
-            }
-        };
-        if self.catalog().transient_revision() != stage.planning_revision {
-            return Err(invalidated());
-        }
+        let can_revalidate = stage.plan.drop_ids.is_empty() && mv.replacement_target.is_none();
+        revalidate_materialized_view_revision(
+            self.catalog(),
+            &mut stage.validity,
+            &mut stage.planning_revision,
+            fixed_birth,
+            can_revalidate,
+        )?;
         let (item_id, global_id) = if matches!(stage.explain_ctx, ExplainContext::None) {
             let ids = self.try_allocate_user_id().await?;
-            if self.catalog().transient_revision() != stage.planning_revision {
+            if let Err(error) = revalidate_materialized_view_revision(
+                self.catalog(),
+                &mut stage.validity,
+                &mut stage.planning_revision,
+                fixed_birth,
+                can_revalidate,
+            ) {
                 self.release_ddl_lock(ctx.session().conn_id());
-                return Err(invalidated());
+                return Err(error);
             }
             let Some(ids) = ids else {
                 self.release_ddl_lock(ctx.session().conn_id());
@@ -559,7 +622,7 @@ impl Coordinator {
             self.allocate_transient_id()
         };
         let CreateMaterializedViewOptimize {
-            validity,
+            mut validity,
             planning_revision,
             plan,
             resolved_ids,
@@ -591,8 +654,9 @@ impl Coordinator {
         let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this MATERIALIZED VIEW.
+        let planning_catalog = self.owned_catalog();
         let mut optimizer = optimize::materialized_view::Optimizer::new(
-            self.owned_catalog().as_optimizer_catalog(),
+            Arc::clone(&planning_catalog).as_optimizer_catalog(),
             compute_instance,
             global_id,
             view_id,
@@ -631,6 +695,18 @@ impl Coordinator {
 
                     let stage = match pipeline() {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
+                            if fixed_birth {
+                                let imports = global_lir_plan
+                                    .df_desc()
+                                    .used_import_ids()
+                                    .into_iter()
+                                    .chain(global_mir_plan.df_desc().used_import_ids());
+                                extend_materialized_view_dependencies(
+                                    &mut validity,
+                                    &planning_catalog,
+                                    imports.map(|id| planning_catalog.resolve_item_id(&id)),
+                                );
+                            }
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateMaterializedViewStage::Explain(
@@ -702,6 +778,8 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let automatic_birth = stage.plan.materialized_view.refresh_schedule.is_none()
             && stage.plan.materialized_view.as_of.is_none();
+        let can_revalidate = stage.plan.drop_ids.is_empty()
+            && stage.plan.materialized_view.replacement_target.is_none();
         let invalidated = || {
             if automatic_birth {
                 AdapterError::CatalogSnapshotChanged
@@ -709,9 +787,15 @@ impl Coordinator {
                 AdapterError::DDLTransactionRace
             }
         };
-        if self.catalog().transient_revision() != stage.planning_revision {
+        if let Err(error) = revalidate_materialized_view_revision(
+            self.catalog(),
+            &mut stage.validity,
+            &mut stage.planning_revision,
+            !automatic_birth,
+            can_revalidate,
+        ) {
             self.release_ddl_lock(ctx.session().conn_id());
-            return Err(invalidated());
+            return Err(error);
         }
         // Validate the replacement target, if one is given.
         if let Some(target_id) = stage.plan.materialized_view.replacement_target {
@@ -807,13 +891,21 @@ impl Coordinator {
         };
 
         // Protection acquisition can apply peer definitions as well.
-        if self.catalog().transient_revision() != stage.planning_revision {
+        if let Err(error) = revalidate_materialized_view_revision(
+            self.catalog(),
+            &mut stage.validity,
+            &mut stage.planning_revision,
+            !automatic_birth,
+            can_revalidate,
+        ) {
             self.release_ddl_lock(ctx.session().conn_id());
-            return Err(invalidated());
+            return Err(error);
         }
+        let authorization_ids = stage.resolved_ids.clone();
+        let replaced_item = stage.plan.replace;
         let CreateMaterializedViewFinish {
-            validity,
-            planning_revision,
+            mut validity,
+            mut planning_revision,
             item_id,
             global_id,
             plan:
@@ -968,9 +1060,13 @@ impl Coordinator {
                         ) =>
                     {
                         self.refresh_catalog(None).await?;
-                        if self.catalog().transient_revision() != planning_revision {
-                            return Err(AdapterError::DDLTransactionRace);
-                        }
+                        revalidate_materialized_view_revision(
+                            self.catalog(),
+                            &mut validity,
+                            &mut planning_revision,
+                            true,
+                            can_revalidate,
+                        )?;
                     }
                     Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                         kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -987,7 +1083,9 @@ impl Coordinator {
                     Err(error) => return Err(error),
                 }
             };
+            let candidate_revision = planning_revision;
             let candidate = Arc::new(candidate);
+            let imports_catalog = self.owned_catalog();
             let mv = candidate
                 .get_entry(&item_id)
                 .materialized_view()
@@ -1021,6 +1119,16 @@ impl Coordinator {
                         )
                     },
                 )?;
+                extend_materialized_view_dependencies(
+                    &mut validity,
+                    &imports_catalog,
+                    global_lir_plan
+                        .df_desc()
+                        .used_import_ids()
+                        .into_iter()
+                        .chain(global_mir_plan.df_desc().used_import_ids())
+                        .map(|id| imports_catalog.resolve_item_id(&id)),
+                );
                 let bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
                 let prepared = client
                     .prepare_read(self.catalog(), &bundle, |_| Ok(Some(read_ts)))
@@ -1045,11 +1153,20 @@ impl Coordinator {
                         Ok(Some(read_ts))
                     })
                     .await?;
-                if self.catalog().transient_revision() != planning_revision {
-                    return Err(AdapterError::DDLTransactionRace);
-                }
+                revalidate_materialized_view_revision(
+                    self.catalog(),
+                    &mut validity,
+                    &mut planning_revision,
+                    true,
+                    can_revalidate,
+                )?;
                 if holds.least_valid_read().less_equal(&read_ts) {
                     break Some(holds);
+                }
+                if planning_revision != candidate_revision {
+                    // Reselection must not add imports from an older candidate
+                    // after validity has advanced to a newer catalog revision.
+                    return Err(AdapterError::DDLTransactionRace);
                 }
                 // Acquisition resamples native frontiers and permission. If
                 // either advanced, reselect paths without advancing AS OF.
@@ -1143,6 +1260,26 @@ impl Coordinator {
                 }),
             )));
         }
+
+        // Catch-up may have changed ACLs or role memberships without changing
+        // input definitions. Recheck before committing, using the same policy
+        // as initial planning. Do not refresh between this check and entering
+        // catalog_transact: its captured revision must fence later changes.
+        revalidate_materialized_view_revision(
+            self.catalog(),
+            &mut validity,
+            &mut planning_revision,
+            true,
+            can_revalidate,
+        )?;
+        mz_sql::rbac::check_create_materialized_view(
+            &self.catalog().for_session(ctx.session()),
+            ctx.session(),
+            &name,
+            cluster_id,
+            replaced_item.into_iter().chain(replacement_target),
+            &authorization_ids,
+        )?;
 
         let transact_result = self
             .catalog_transact_with_context(None, Some(ctx), ops)

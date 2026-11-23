@@ -487,6 +487,53 @@ pub fn check_plan(
     rbac_requirements.validate(catalog, session, resolved_ids)
 }
 
+/// Rechecks catalog-dependent authorization after [`check_plan`] has authorized creation.
+/// The caller must first validate the retained namespace and dependency identities.
+/// SQL-function-body object restrictions are session-fixed and are not checked again.
+pub fn check_create_materialized_view(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    name: &QualifiedItemName,
+    cluster_id: ClusterId,
+    ownership: impl IntoIterator<Item = CatalogItemId>,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    rbac_check_preamble(catalog, session)?;
+    let requirements = materialized_view_requirements(
+        name,
+        cluster_id,
+        ownership,
+        session.role_metadata().current_role,
+    );
+    filter_requirements(catalog, session, requirements).validate(catalog, session, resolved_ids)
+}
+
+fn materialized_view_requirements(
+    name: &QualifiedItemName,
+    cluster_id: ClusterId,
+    ownership: impl IntoIterator<Item = CatalogItemId>,
+    role_id: RoleId,
+) -> RbacRequirements {
+    RbacRequirements {
+        // OR REPLACE and replacement materialized views have independent ownership targets.
+        ownership: ownership.into_iter().map(ObjectId::Item).collect(),
+        privileges: vec![
+            (
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            ),
+            (
+                SystemObjectId::Object(cluster_id.into()),
+                AclMode::CREATE,
+                role_id,
+            ),
+        ],
+        item_usage: &CREATE_ITEM_USAGE,
+        ..Default::default()
+    }
+}
+
 /// Returns true if RBAC is turned on for a session, false otherwise.
 pub fn is_rbac_enabled_for_session(
     system_vars: &SystemVars,
@@ -744,31 +791,15 @@ fn generate_rbac_requirements(
             drop_ids: _,
             if_not_exists: _,
             ambiguous_columns: _,
-        }) => RbacRequirements {
-            // `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` requires ownership of the
-            // target, mirroring `ALTER ... APPLY REPLACEMENT` and `CREATE INDEX`, which require
-            // ownership of the item they act on. `replace` is the separate `CREATE OR REPLACE`
-            // target. Both are optional and independent, so require ownership of whichever are set.
-            ownership: replace
+        }) => materialized_view_requirements(
+            name,
+            materialized_view.cluster_id,
+            replace
                 .iter()
                 .chain(materialized_view.replacement_target.iter())
-                .map(|id| ObjectId::Item(*id))
-                .collect(),
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(materialized_view.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+                .copied(),
+            role_id,
+        ),
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,

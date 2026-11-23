@@ -6,10 +6,10 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** verify the uncommitted fixed-refresh revalidation and commit it.
-Then publish the locally verified CI repairs, triage the next CI build and
-attribute the controller's cold startup. Run final-head acceptance once after
-the remaining repairs, not per change.
+**Next action:** publish the verified repairs and triage the next CI build,
+including the unsupported-upgrade wrapper failure. Measure the controller's
+current cold-open stages before choosing a startup change. Run final-head
+acceptance once after the remaining repairs, not per change.
 
 ## Decisions in force
 
@@ -31,10 +31,6 @@ the remaining repairs, not per change.
 
 ## Outstanding work
 
-- **Fixed-refresh repair.** Uncommitted. Unit checks pass. The concurrency
-  fixture has not run: it lacked the RETAIN HISTORY feature flag, now fixed
-  locally. It uses AT CREATION so changed input contents reveal accidental
-  timestamp resampling. Original reproduction: `fixed-refresh-diagnostic.md`.
 - **CI.** [Build 144427](https://buildkite.com/materialize/test/builds/144427)
   ran runtime jobs and failed. It predates the local repairs listed under
   verified outcomes. Still failing without a repair: the unsupported-upgrade
@@ -42,7 +38,10 @@ the remaining repairs, not per change.
   on conflicts with main. Inventory: `ci-144427/terminal-failures-research.md`.
 - **Controller cold startup.** About 18 s of the roughly 20 s is builtin view
   reconstruction, from older captures. Re-measure on current code before
-  choosing a change. See `controller-cold-start-attribution.md`.
+  choosing a change. The replica metadata shortcut cannot supply exact published
+  column metadata. Adapter-cache reuse alone cannot remove empty-cache startup
+  work. See `controller-cold-start-attribution.md` and
+  `controller-cold-start-options.md`. No cache-contract change is approved.
 - **Final-head acceptance** after the above: lifecycle, DDL and combined
   ingestion, adapter loss, subscriptions, 60s four-index, scheduled-MV suites
   and the version-pair walkthrough.
@@ -64,6 +63,9 @@ and `final-cdc-evidence/`.
 
 Committed since that implementation, with targeted checks:
 
+- Fixed-refresh creation retains its snapshot across unrelated DDL and rejects
+  changed dependencies, namespaces and privileges. The two-adapter regression
+  passes with the repair and fails without it. See `fixed-refresh-outcome.md`.
 - Sink status reports `created` when no observation applies.
 - Status-history coverage is split: exactly the latest five rows survive a
   prune, and a restart delivers `starting` and `running`. No production change.
@@ -100,9 +102,9 @@ Scratch worktrees:
 - `/home/ubuntu/materialize-m3-fixture-checks`: test worktree with the decoder,
   follower and test patches. Preserve its work before reuse.
 
-Replay `fixed-refresh-pending-transfer.json` to move the fixed-refresh fixture
-to the worker. Do not regenerate it from `approved-repair-source-inputs.json`,
-which is already advanced.
+The fixed-refresh overlay is verified in the fixture worktree. Source and binary
+receipts are preserved off-worker in `mv-final-receipts/`. Do not replay old
+transfer packets. Audit the idle worker before replacing its recorded overlay.
 
 Verified debug binaries are in `native-decoder-json-guard/artifacts/`, with
 provenance beside them. Its `testdrive-helper/` holds the matching testdrive

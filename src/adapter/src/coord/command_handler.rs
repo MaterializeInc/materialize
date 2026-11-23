@@ -2184,6 +2184,12 @@ impl Coordinator {
             // advance forward from underneath us.
             let read_holds = self.acquire_query_read_holds(&ids).await?;
 
+            // Acquisition can follow peer DDL. Both CREATE and EXPLAIN must
+            // validate against the catalog used to resolve their inputs.
+            if self.catalog().transient_revision() != query_catalog.transient_revision() {
+                return Err(AdapterError::DDLTransactionRace);
+            }
+
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs
                 .with_options
