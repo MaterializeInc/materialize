@@ -26,7 +26,9 @@
 //
 // Not upstream: `crate::` paths name `differential_dataflow::`, and items
 // upstream's `operators/arrange/mod.rs` defines come from `super`, which is
-// `mz_timely_util::arrange_agent`. Otherwise the file is upstream's, run through rustfmt.
+// `mz_timely_util::arrange_agent`. The trace box carries the publication of
+// `crate::shared_trace`, and the agent can publish it. Otherwise the file is
+// upstream's, run through rustfmt.
 
 //! Shared read access to a trace.
 
@@ -51,6 +53,11 @@ use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFront
 
 // Not upstream: differential's public `ShutdownButton`, which upstream defines in this file.
 use differential_dataflow::operators::arrange::ShutdownButton;
+// Not upstream: publishing to readers on other threads.
+use super::TraceObserver;
+use crate::shared_trace::Shared;
+use std::sync::Arc;
+use timely::scheduling::activate::SyncActivator;
 
 /// A `TraceReader` wrapper which can be imported into other dataflows.
 ///
@@ -191,14 +198,26 @@ impl<Tr: TraceReader> TraceAgent<Tr> {
         &self.operator
     }
 
-    /// Obtain a reference to the inner [`trace_box::TraceBox`]. It is the caller's obligation to maintain
-    /// the trace box and this trace agent's invariants. Specifically, it is undefined behavior
-    /// to mutate the trace box. Keeping strong references can prevent resource reclamation.
+    // Not upstream: upstream's `trace_box_unstable` is omitted, because a caller holding the box
+    // could mutate the trace behind its publication. `observer` serves span inspection.
+    /// A handle that observes the trace's spans without holding the trace.
+    pub fn observer(&self) -> TraceObserver<Tr> {
+        TraceObserver::new(Rc::downgrade(&self.trace))
+    }
+
+    // Not upstream: publishing to readers on other threads.
+    /// Publishes the trace to `shared`, in addition to any points it already backs. See
+    /// [`crate::shared_trace`] for what publishing does.
     ///
-    /// This method is subject to changes and removal and should not be considered part of a stable
-    /// interface.
-    pub fn trace_box_unstable(&self) -> Rc<RefCell<trace_box::TraceBox<Tr>>> {
-        Rc::clone(&self.trace)
+    /// `activator` must schedule the operator that maintains the trace, and `on_seal` fires on this
+    /// thread after every publish that advanced the published `upper`.
+    pub fn publish(
+        &self,
+        shared: Arc<Shared<Tr::Time, Tr::Batch>>,
+        activator: SyncActivator,
+        on_seal: impl Fn() + 'static,
+    ) {
+        self.trace.borrow_mut().attach(shared, activator, on_seal);
     }
 }
 
@@ -608,6 +627,9 @@ pub mod trace_box {
 
     use differential_dataflow::trace::TraceReader;
 
+    // Not upstream: the publication a box carries once published.
+    use crate::shared_trace::Publication;
+
     /// A wrapper around a trace which tracks the frontiers of all referees.
     ///
     /// This is an internal type, unlikely to be useful to higher-level programs, but exposed just in case.
@@ -620,6 +642,10 @@ pub mod trace_box {
         pub(crate) physical_compaction: MutableAntichain<Tr::Time>,
         /// The wrapped trace.
         pub(crate) trace: Tr,
+        // Not upstream: the points the trace is published to. While published, the agents' holds
+        // live in the home point, and the two accumulations above are empty.
+        /// The points the trace is published to, if any.
+        pub(crate) publication: Option<Publication<Tr::Time, Tr::Batch>>,
     }
 
     impl<Tr: TraceReader> TraceBox<Tr> {
@@ -649,6 +675,8 @@ pub mod trace_box {
                 logical_compaction,
                 physical_compaction,
                 trace,
+                // Not upstream: a trace starts unpublished.
+                publication: None,
             }
         }
         /// Borrowed access to the underlying trace.
@@ -664,6 +692,10 @@ pub mod trace_box {
             lower: AntichainRef<Tr::Time>,
             upper: AntichainRef<Tr::Time>,
         ) {
+            // Not upstream: a published trace accumulates its agents' holds in its home point.
+            if self.publication.is_some() {
+                return self.adjust_published_logical(lower, upper);
+            }
             self.logical_compaction
                 .update_iter(upper.iter().cloned().map(|t| (t, 1)));
             self.logical_compaction
@@ -678,6 +710,10 @@ pub mod trace_box {
             lower: AntichainRef<Tr::Time>,
             upper: AntichainRef<Tr::Time>,
         ) {
+            // Not upstream: a published trace accumulates its agents' holds in its home point.
+            if self.publication.is_some() {
+                return self.adjust_published_physical(lower, upper);
+            }
             self.physical_compaction
                 .update_iter(upper.iter().cloned().map(|t| (t, 1)));
             self.physical_compaction

@@ -26,7 +26,9 @@
 //
 // Not upstream: `crate::` paths name `differential_dataflow::`, and items
 // upstream's `operators/arrange/mod.rs` defines come from `super`, which is
-// `mz_timely_util::arrange_agent`. Otherwise the file is upstream's, run through rustfmt.
+// `mz_timely_util::arrange_agent`. Inserts and exertion go through the trace
+// box, which mirrors them into the points the trace is published to, except the
+// seal `drop` makes. Otherwise the file is upstream's, run through rustfmt.
 
 //! Write endpoint for a sequence of batches.
 //!
@@ -76,7 +78,8 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// Exerts merge effort, even without additional updates.
     pub fn exert(&mut self) {
         if let Some(trace) = self.trace.upgrade() {
-            trace.borrow_mut().trace.exert();
+            // Not upstream: the box applies readers' holds and mirrors the merge result.
+            trace.borrow_mut().exert();
         }
     }
 
@@ -86,6 +89,17 @@ impl<Tr: Trace> TraceWriter<Tr> {
     /// or is `Some(time)` for a time less or equal to all updates in its batch
     /// and which is suitable for use as a capability.
     pub fn insert(&mut self, span: SpanOf<Tr>, hint: timely::progress::Stamp<Tr::Time>) {
+        self.insert_with(span, hint, false)
+    }
+
+    // Not upstream: `closing` marks the seal `drop` makes, which the trace box keeps from the
+    // points the trace is published to.
+    fn insert_with(
+        &mut self,
+        span: SpanOf<Tr>,
+        hint: timely::progress::Stamp<Tr::Time>,
+        closing: bool,
+    ) {
         // Something is wrong if not a sequence.
         if !(&self.upper == span.lower()) {
             println!("{:?} vs {:?}", self.upper, span.lower());
@@ -112,7 +126,12 @@ impl<Tr: Trace> TraceWriter<Tr> {
 
         // push data to the trace, if it still exists.
         if let Some(trace) = self.trace.upgrade() {
-            trace.borrow_mut().trace.insert(span);
+            // Not upstream: the box mirrors the span into the points the trace is published to.
+            if closing {
+                trace.borrow_mut().close(span);
+            } else {
+                trace.borrow_mut().insert(span);
+            }
         }
     }
 
@@ -129,6 +148,13 @@ impl<Tr: Trace> TraceWriter<Tr> {
 
 impl<Tr: Trace> Drop for TraceWriter<Tr> {
     fn drop(&mut self) {
-        self.seal(Antichain::new())
+        // Not upstream: `seal`, marked as the closing seal.
+        if !self.upper.is_empty() {
+            self.insert_with(
+                Span::empty(self.upper.clone(), Antichain::new()),
+                timely::progress::Stamp::new(),
+                true,
+            );
+        }
     }
 }
