@@ -249,7 +249,7 @@ pub trait PinningContext {
     /// The builtins planning may have inlined into the catalog item exported
     /// under `id`, found through its dependencies, the user views and pending
     /// replacements among them, and the bodies of the SQL-defined functions
-    /// they call.
+    /// and casts they call.
     ///
     /// Fails with [`PinError::UnknownItem`] when no catalog item is exported
     /// under `id`, with [`PinError::BuiltinRelation`] when any of those
