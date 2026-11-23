@@ -211,8 +211,11 @@ const serveSubscribes = ({
   holdSnapshot?: boolean;
   replica?: ServedReplica;
   metrics?: ServedMetrics;
-  /** Fails the worker CPU or the process metrics subscribe. */
-  failing?: "workerCpu" | "metrics";
+  /**
+   * Fails the worker CPU or the process metrics subscribe. `usageDenied` fails
+   * the worker CPU one as for a role without USAGE on the cluster.
+   */
+  failing?: "workerCpu" | "metrics" | "usageDenied";
 } = {}) => {
   const sessions = replica?.sessions ?? [];
   server.use(
@@ -222,6 +225,10 @@ const serveSubscribes = ({
           connection,
           replicaName: connection.options.cluster_replica,
         });
+        if (failing === "usageDenied") {
+          connection.error('permission denied for CLUSTER "prod"', "42501");
+          return undefined;
+        }
         if (failing === "workerCpu") {
           connection.error(
             "permission denied for SOURCE mz_scheduling_elapsed_raw",
@@ -597,6 +604,22 @@ describe("ClusterWorkers", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
   });
 
+  it("greys out Start measuring, and says why, once a read is denied for lack of USAGE", async () => {
+    await renderWorkers({ r1: "100cc" }, "?replica=r1", {
+      failing: "usageDenied",
+    });
+    await startMeasuring();
+
+    expect(
+      await screen.findByText(/privilege on this cluster to measure/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Start measuring" }),
+    ).toBeDisabled();
+    expect(screen.queryByText(/^Couldn't read worker CPU/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
   it("says the finding leaves the replica's CPU out when its metrics can't be read", async () => {
     await renderWorkers({ r1: "100cc" }, "?replica=r1", { failing: "metrics" });
 
@@ -635,39 +658,6 @@ describe("ClusterWorkers", () => {
       await screen.findByText(/^Reading worker CPU on r2 every 5s/),
     ).toBeVisible();
     await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
-  });
-
-  describe("in a browser tab that's hidden", () => {
-    const setVisibility = (visibilityState: DocumentVisibilityState) => {
-      Object.defineProperty(document, "visibilityState", {
-        configurable: true,
-        get: () => visibilityState,
-      });
-      document.dispatchEvent(new Event("visibilitychange"));
-    };
-
-    afterEach(() => setVisibility("visible"));
-
-    it("closes its session, and reads again once the tab is shown", async () => {
-      const { sessions } = await renderWorkers({ r2: "100cc" }, "?replica=r2");
-      await startMeasuring();
-      await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
-
-      act(() => setVisibility("hidden"));
-
-      expect(
-        await screen.findByText("Paused while this browser tab is hidden."),
-      ).toBeVisible();
-      await waitFor(() => expect(openSessions(sessions)).toEqual([]));
-
-      act(() => setVisibility("visible"));
-
-      expect(
-        await screen.findByText(/^Reading worker CPU on r2 every 5s/),
-      ).toBeVisible();
-      await waitFor(() => expect(openSessions(sessions)).toHaveLength(1));
-      expect(sessions).toHaveLength(2);
-    });
   });
 
   it("reads nothing from the replica until asked to start measuring", async () => {
@@ -809,6 +799,49 @@ describe("ClusterWorkers", () => {
       ).toBeEnabled();
     });
 
+    describe("in a browser tab that's hidden", () => {
+      const setVisibility = (visibilityState: DocumentVisibilityState) => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => visibilityState,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      };
+
+      afterEach(() => setVisibility("visible"));
+
+      it("finishes measuring its minute, then closes its session until the tab is shown", async () => {
+        const replica = await renderReplica(SKEWED);
+        await advance(10_000);
+
+        act(() => setVisibility("hidden"));
+        await advance(40_000);
+
+        expect(
+          screen.getByText(
+            "Measuring r2's 2 workers for a minute (50s of 60s)",
+          ),
+        ).toBeVisible();
+        expect(openSessions(replica.sessions)).toHaveLength(1);
+
+        await advance(10_000);
+
+        expect(
+          screen.getByText(`Measured ${clockTime(0)} to ${clockTime(60_000)}`),
+        ).toBeVisible();
+        expect(
+          screen.getByText("Paused while this browser tab is hidden."),
+        ).toBeVisible();
+        expect(openSessions(replica.sessions)).toEqual([]);
+
+        act(() => setVisibility("visible"));
+        await advanceUntil(() =>
+          expect(screen.getByText(/^Reading worker CPU on r2/)).toBeVisible(),
+        );
+        expect(openSessions(replica.sessions)).toHaveLength(1);
+      });
+    });
+
     it("shows each worker's time for the measured minute, and the picked object's part of it", async () => {
       await renderReplica(SKEWED);
       await advance(60_000);
@@ -892,6 +925,28 @@ describe("ClusterWorkers", () => {
       expect(
         screen.queryByRole("columnheader", { name: /Spread across workers/ }),
       ).not.toBeInTheDocument();
+    });
+
+    it("keeps its report, says why, and disables Measure again when a later read is denied for lack of USAGE", async () => {
+      const replica = await renderReplica(SKEWED);
+      await advance(60_000);
+      const span = `Measured ${clockTime(0)} to ${clockTime(60_000)}`;
+      expect(screen.getByText(span)).toBeVisible();
+
+      openSessions(replica.sessions)[0].connection.error(
+        'permission denied for CLUSTER "prod"',
+        "42501",
+      );
+      await advance(1_000);
+
+      expect(screen.getByText(span)).toBeVisible();
+      expect(
+        screen.getByText(/privilege on this cluster to measure/),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "Measure again" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
     });
 
     it("keeps its report while counters arrive, and on Measure again reports the minute after the click", async () => {

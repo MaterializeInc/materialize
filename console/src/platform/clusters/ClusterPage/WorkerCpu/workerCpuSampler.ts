@@ -149,6 +149,8 @@ export interface WorkerCpuState {
    */
   waitingMs?: number;
   error?: string;
+  /** The failed read's SQLSTATE, where the server gave one. */
+  errorCode?: string;
 }
 
 const INITIAL_WORKER_CPU_STATE: WorkerCpuState = {
@@ -177,7 +179,10 @@ interface WorkerCpuSampler {
     endMs: number,
     annotation: Pick<Measurement, "replicaCpu" | "lag">,
   ) => void;
-  /** Pauses while `hidden`, and resumes a pause it caused once shown. */
+  /**
+   * Pauses while `hidden`, once no measurement is due, and resumes a pause it
+   * caused once shown.
+   */
   setHidden: (hidden: boolean) => void;
   stop: () => void;
 }
@@ -376,11 +381,12 @@ export function createWorkerCpuSampler({
     });
   };
 
-  const fail = (message: string) => {
+  const fail = (message: string, code?: string) => {
     setState({
       ...breakReading(),
       status: "error",
       error: message,
+      errorCode: code,
       waitingMs: undefined,
     });
   };
@@ -521,6 +527,10 @@ export function createWorkerCpuSampler({
       pauseFor("limit", update);
       return;
     }
+    if (isHidden && !(update.isMeasuring ?? state.isMeasuring)) {
+      pauseFor("hidden", update);
+      return;
+    }
     if (Object.keys(update).length > 0) setState(update);
     timer = setTimeout(tick, READ_INTERVAL_MS);
   };
@@ -533,7 +543,7 @@ export function createWorkerCpuSampler({
       const { error, snapshotComplete, isComplete } =
         read.manager.getSnapshot();
       if (error) {
-        fail(error.message);
+        fail(error.message, error.code);
         return;
       }
       if (isComplete || (awaitingSnapshot && snapshotComplete)) {
@@ -554,6 +564,7 @@ export function createWorkerCpuSampler({
       status: "reading",
       pauseReason: undefined,
       error: undefined,
+      errorCode: undefined,
       lagMs: undefined,
       waitingMs: 0,
       stretchStartMs: undefined,
@@ -607,7 +618,11 @@ export function createWorkerCpuSampler({
     },
     setHidden: (hidden) => {
       isHidden = hidden;
-      if (hidden && state.status === "reading") pauseFor("hidden");
+      // A measurement that's due is finished first, and `tick` pauses after
+      // it. Pausing here starts its minute over each time the tab is shown.
+      if (hidden && state.status === "reading" && !state.isMeasuring) {
+        pauseFor("hidden");
+      }
       if (!hidden && state.pauseReason === "hidden") resume();
     },
     stop: () => {

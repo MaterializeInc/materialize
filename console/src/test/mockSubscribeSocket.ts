@@ -33,7 +33,7 @@ export interface MockSubscribeConnection {
    */
   advance: (upper: number, rows?: unknown[][], deletes?: unknown[][]) => void;
   /** Fails the running statement, as for a relation the server doesn't have. */
-  error: (message: string) => void;
+  error: (message: string, code?: string) => void;
   /**
    * Fails the running statement and readies the session for the next one, as
    * the server does when a subscribe's target replica restarts.
@@ -100,8 +100,8 @@ export function mockSubscribeSocket(
         upper = nextUpper;
         send({ type: "Row", payload: progressRow(upper) });
       },
-      error: (message) =>
-        send({ type: "Error", payload: { message, code: "XX000" } }),
+      error: (message, code = "XX000") =>
+        send({ type: "Error", payload: { message, code } }),
       endWithError: (message) => {
         send({ type: "Error", payload: { message, code: "XX000" } });
         send({ type: "ReadyForQuery", payload: "I" });

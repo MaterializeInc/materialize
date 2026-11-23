@@ -1032,6 +1032,18 @@ describe("FirstLook", () => {
     expect(onStart).toHaveBeenCalledOnce();
   });
 
+  it("disables Start measuring and names the missing privilege for a role without USAGE", async () => {
+    const onStart = vi.fn();
+    await renderFirstLook({ status: "idle", onStart, isUsageDenied: true });
+
+    expect(
+      screen.getByRole("button", { name: "Start measuring" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/privilege on this cluster to measure its workers/),
+    ).toBeVisible();
+  });
+
   it("names the worker that has done more than twice the others' average since each object started", async () => {
     await renderFirstLook({ lastReading: lifetimeReading([300, 50, 50, 0]) });
 
