@@ -79,8 +79,8 @@ cargo test -p mz-catalog --test builtin_registry
 ```
 
 * It fails when a function is added, removed, or has a changed property
-  (nullability, error behavior, monotonicity, output type, sqlfunc
-  signature) or a changed `#[sqlfunc]` body. If the failure names removed or
+  (any field recorded in `builtin_registry.json`) or a changed `#[sqlfunc]`
+  body. If the failure names removed or
   changed functions, or a body change that alters results, settle the
   `LIR_VERSION` question below **before** regenerating. A rewrite at the old
   version overwrites that version's entry in `builtin_registry_digests.json`

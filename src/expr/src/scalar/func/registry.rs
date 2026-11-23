@@ -75,7 +75,8 @@ use crate::{
 /// cast errors only when it has a scale. One sample sees one point of each
 /// such property function, so a variant may have several samples, told apart
 /// by `label`. The unlabeled sample is the variant's primary record, keyed by
-/// its canonical name. Labeled samples are keyed `name[label]`.
+/// name as described on [`FuncRegistry`]. Labeled samples are keyed
+/// `name[label]`.
 #[derive(Debug)]
 pub struct Sample<F> {
     pub func: F,
@@ -374,7 +375,8 @@ fn serde_variant_name<F: Serialize + DeserializeOwned>(func: &F) -> &'static str
 ///
 /// A variant's primary record comes from its unlabeled hand-written sample if
 /// there is one, otherwise from a payload-free instance built by `construct`
-/// (see `from_variant_name` on the enums), probed at the column types
+/// (`from_variant_name` on the scalar enums, `from_serde_variant` for the
+/// others), probed at the column types
 /// `natural_inputs` reports for it, if any. Hand-written primaries take
 /// precedence so a constructible variant can still be probed at chosen input
 /// types.
@@ -1532,5 +1534,26 @@ mod tests {
         assert!(payload_has_fields(&VariadicFunc::from(ArrayIndex {
             offset: 0
         })));
+    }
+
+    /// `payload_has_fields` reads the scalar enums' `Variant(Payload)` shape.
+    /// The aggregate and table enums hold their data directly, so a variant
+    /// such as `CsvExtract(2)` would read as payload-free. The gate is still
+    /// sound because `from_serde_variant` constructs only unit variants.
+    #[mz_ore::test]
+    fn variants_constructed_by_serde_name_are_units() {
+        fn check<F: DeserializeOwned + fmt::Debug>() {
+            for name in serde_variants::<F>() {
+                if let Some(func) = from_serde_variant::<F>(name) {
+                    let rendered = format!("{func:?}");
+                    assert!(
+                        !rendered.contains('(') && !rendered.contains('{'),
+                        "`{name}` was constructed with a payload: {rendered}"
+                    );
+                }
+            }
+        }
+        check::<AggregateFunc>();
+        check::<TableFunc>();
     }
 }
